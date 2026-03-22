@@ -83,10 +83,10 @@ app.post("/generate", async (req, res) => {
     await page.setContent(mapHTML, { waitUntil: "networkidle0", timeout: 30000 });
 
     // Attendre que Mapbox soit fully rendered (idle + tuiles chargées)
-    await page.waitForFunction(() => window.__mapReady === true, { timeout: 25000 });
+    await page.waitForFunction(() => window.__mapReady === true, { timeout: 55000 });
 
-    // Petite pause pour laisser les ombres se calculer
-    await new Promise(r => setTimeout(r, 800));
+    // Pause pour laisser les tuiles 3D se charger complètement
+    await new Promise(r => setTimeout(r, 2000));
 
     // ── 3. Screenshot Mapbox ──────────────────────────────────────────────────
     console.log("Taking Mapbox screenshot...");
