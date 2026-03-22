@@ -294,9 +294,7 @@ map.on('load', () => {
   }, labelLayerId);
 
   // Attendre que toutes les tuiles soient chargées
-  map.once('idle', () => {
-    window.__mapReady = true;
-  });
+  setTimeout(() => { window.__mapReady = true; }, 8000);
 });
 
 map.on('error', (e) => {
