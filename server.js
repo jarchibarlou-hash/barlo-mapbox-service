@@ -154,8 +154,8 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
 <html>
 <head>
   <meta charset="utf-8">
-  <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
-  <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
   <style>* { margin: 0; padding: 0; } #map { width: ${w}px; height: ${h}px; }</style>
 </head>
 <body>
@@ -206,8 +206,9 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
 
     // Signal ready
     map.on('idle', () => { window._mapReady = true; });
-    // Fallback: mark ready after 20s even if idle never fires
-    setTimeout(() => { window._mapReady = true; }, 20000);
+    map.on('error', (e) => { console.error('Map error:', e); });
+    // Fallback: mark ready after 15s even if idle never fires
+    setTimeout(() => { window._mapReady = true; }, 15000);
   </script>
 </body>
 </html>`;
@@ -218,10 +219,21 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
   // Use 1x to save memory — 900px is enough for slides
   await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
 
+  // Capture page console for debugging
+  page.on('console', msg => console.log('PAGE:', msg.text()));
+  page.on('pageerror', err => console.error('PAGE ERROR:', err.message));
+
   try {
     await page.setContent(html, { waitUntil: "networkidle2", timeout: 60000 });
-    // Wait for map idle OR fallback timeout
-    await page.waitForFunction("window._mapReady === true", { timeout: 45000 });
+
+    // Try to wait for map ready, but take screenshot regardless after timeout
+    try {
+      await page.waitForFunction("window._mapReady === true", { timeout: 30000 });
+      console.log("Map reported ready via idle/fallback");
+    } catch (e) {
+      console.log("Map not ready after 30s — taking screenshot anyway");
+    }
+
     // Extra buffer for tile rendering
     await new Promise(r => setTimeout(r, 3000));
 
