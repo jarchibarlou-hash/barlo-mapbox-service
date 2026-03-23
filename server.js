@@ -25,13 +25,21 @@ async function getBrowser() {
   if (browserInstance && browserInstance.isConnected()) return browserInstance;
   browserInstance = await puppeteer.launch({
     headless: "new",
+    protocolTimeout: 90000,
     args: [
       "--use-gl=swiftshader",
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu-driver-bug-workarounds",
-      "--single-process",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-sync",
+      "--disable-translate",
+      "--mute-audio",
+      "--no-first-run",
+      "--no-zygote",
+      "--font-render-hinting=none",
     ],
   });
   return browserInstance;
@@ -249,16 +257,26 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
   const page = await browser.newPage();
   await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
 
-  await page.setContent(html, { waitUntil: "networkidle0" });
-  // Wait for map to be fully rendered (tiles + 3D buildings loaded)
-  await page.waitForFunction("window._mapReady === true", { timeout: 25000 });
-  // Extra wait for tile rendering to complete
-  await new Promise(r => setTimeout(r, 2000));
+  // Block unnecessary resources to speed up rendering
+  await page.setRequestInterception(true);
+  page.on('request', (req) => {
+    const rt = req.resourceType();
+    if (['font', 'media'].includes(rt)) req.abort();
+    else req.continue();
+  });
 
-  const screenshot = await page.screenshot({ type: "png", encoding: "binary" });
-  await page.close();
+  try {
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 40000 });
+    // Wait for map to be fully rendered (tiles + 3D buildings loaded)
+    await page.waitForFunction("window._mapReady === true", { timeout: 35000 });
+    // Extra wait for tile rendering to complete
+    await new Promise(r => setTimeout(r, 2000));
 
-  return screenshot;
+    const screenshot = await page.screenshot({ type: "png", encoding: "binary" });
+    return screenshot;
+  } finally {
+    await page.close().catch(() => {});
+  }
 }
 
 // ─── DRAW CANVAS OVERLAYS ─────────────────────────────────────────────────────
@@ -474,9 +492,23 @@ app.post("/generate", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM — closing browser");
+  if (browserInstance) await browserInstance.close().catch(() => {});
+  process.exit(0);
+});
+
+app.listen(PORT, async () => {
   console.log(`BARLO Axo Service on port ${PORT}`);
   console.log(`Engine: Puppeteer + Mapbox GL JS (vrai 3D)`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Supabase: ${SUPABASE_URL ? "OK" : "MISSING"}`);
+  // Pre-warm browser so first request doesn't timeout
+  try {
+    const b = await getBrowser();
+    console.log(`Chromium launched OK (pid ${b.process()?.pid})`);
+  } catch (e) {
+    console.error("Chromium launch FAILED:", e.message);
+  }
 });
