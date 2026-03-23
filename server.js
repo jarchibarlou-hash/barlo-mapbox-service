@@ -91,6 +91,7 @@ async function fetchMicrosoftBuildings(cLat, cLon, radiusM) {
 
       const linksText = await linksResp.text();
       const lines = linksText.split("\n");
+      console.log(`dataset-links.csv: ${lines.length} lines total`);
 
       // Chercher les lignes contenant ce quadkey
       const matchingLines = lines.filter(line => line.includes(qk));
@@ -98,19 +99,29 @@ async function fetchMicrosoftBuildings(cLat, cLon, radiusM) {
         console.log(`No tile found for quadkey ${qk}`);
         continue;
       }
-
       console.log(`Found ${matchingLines.length} tile(s) for quadkey ${qk}`);
+      console.log(`First match raw: ${matchingLines[0].substring(0, 200)}`);
 
-      // Prendre la première URL (format: Location,QuadKey,Size,UploadDate,Url)
-      const tileUrl = matchingLines[0].split(",").pop().trim();
-      if (!tileUrl.startsWith("http")) continue;
-
-      console.log(`Downloading tile: ${tileUrl}`);
+      // Parser CSV : Location,QuadKey,Size,UploadDate,Url
+      // L'URL peut contenir des virgules dans le path donc on prend tout après le 4ème comma
+      const parts = matchingLines[0].split(",");
+      console.log(`Parts count: ${parts.length}`);
+      // L'URL commence par https — trouver l'index
+      const urlIdx = parts.findIndex(p => p.trim().startsWith("https"));
+      const tileUrl = urlIdx >= 0 ? parts.slice(urlIdx).join(",").trim() : parts[parts.length-1].trim();
+      console.log(`Tile URL: ${tileUrl.substring(0, 120)}`);
+      if (!tileUrl.startsWith("https")) {
+        console.log("URL invalid, skipping");
+        continue;
+      }
 
       // 2. Télécharger + décompresser le tile .csv.gz
-      const tileResp = await fetch(tileUrl, { signal: AbortSignal.timeout(20000) });
+      console.log("Downloading tile...");
+      const tileResp = await fetch(tileUrl, { signal: AbortSignal.timeout(25000) });
+      console.log(`Tile response status: ${tileResp.status}`);
       if (!tileResp.ok) {
-        console.log(`Tile download failed: ${tileResp.status}`);
+        const errBody = await tileResp.text();
+        console.log(`Tile download failed: ${tileResp.status} — ${errBody.substring(0,100)}`);
         continue;
       }
 
