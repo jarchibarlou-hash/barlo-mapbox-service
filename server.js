@@ -255,7 +255,7 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
 
   const browser = await getBrowser();
   const page = await browser.newPage();
-  await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
+  await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
 
   // Block unnecessary resources to speed up rendering
   await page.setRequestInterception(true);
@@ -299,29 +299,29 @@ function drawOverlays(ctx, W, H, BH, p) {
   }
 
   const cx = W / 2, cy = H / 2 + H * 0.04;
-  T(cx, cy - 50, "Accès principal ↓", "#d02818", 24, true);
-  T(cx, cy + 10, "Enveloppe constructible", "#d02818", 20);
-  T(cx, cy + 50, `${buildable_fp} m²`, "#1d7a3e", 32, true);
-  T(cx, cy + 82, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 18);
+  T(cx, cy - 30, "Accès principal ↓", "#d02818", 14, true);
+  T(cx, cy + 4, "Enveloppe constructible", "#d02818", 12);
+  T(cx, cy + 26, `${buildable_fp} m²`, "#1d7a3e", 18, true);
+  T(cx, cy + 44, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 11);
 
-  T(cx, cy - 120, `↕ Recul avant : ${setback_front}m`, "#d02818", 18, true);
-  T(cx - W * 0.18, cy + 20, `↔ ${setback_side}m`, "#666", 16);
-  T(cx + W * 0.18, cy + 20, `↔ ${setback_side}m`, "#666", 16);
-  T(cx, cy + 140, `↕ Recul arrière : ${setback_back}m`, "#666", 16);
+  T(cx, cy - 65, `↕ Recul avant : ${setback_front}m`, "#d02818", 11, true);
+  T(cx - W * 0.18, cy + 10, `↔ ${setback_side}m`, "#666", 10);
+  T(cx + W * 0.18, cy + 10, `↔ ${setback_side}m`, "#666", 10);
+  T(cx, cy + 72, `↕ Recul arrière : ${setback_back}m`, "#666", 10);
 
   // Compass
   ctx.save();
-  ctx.translate(W - 80, 80);
-  ctx.beginPath(); ctx.arc(0, 0, 36, 0, 2 * Math.PI);
+  ctx.translate(W - 45, 45);
+  ctx.beginPath(); ctx.arc(0, 0, 20, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fill();
-  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
   ctx.rotate(-(bearing || 30) * Math.PI / 180);
-  ctx.beginPath(); ctx.moveTo(0, -24); ctx.lineTo(-7, -3); ctx.lineTo(0, -10); ctx.lineTo(7, -3); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(-4, -2); ctx.lineTo(0, -6); ctx.lineTo(4, -2); ctx.closePath();
   ctx.fillStyle = "#d02818"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 24); ctx.lineTo(-7, 3); ctx.lineTo(0, 10); ctx.lineTo(7, 3); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, 14); ctx.lineTo(-4, 2); ctx.lineTo(0, 6); ctx.lineTo(4, 2); ctx.closePath();
   ctx.fillStyle = "#bbb"; ctx.fill();
-  ctx.font = "bold 16px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
-  ctx.fillText("N", 0, -30);
+  ctx.font = "bold 10px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.fillText("N", 0, -17);
   ctx.restore();
 
   // Legend
@@ -331,64 +331,63 @@ function drawOverlays(ctx, W, H, BH, p) {
     { type: "rect", fill: "#e8e4de", stroke: "#ccc", label: "Bâtiments 3D" },
     { type: "line", stroke: "#b0a080", opacity: 1, label: "Voirie" },
   ];
-  const legW = 380, legH = 24 + legItems.length * 40 + 20;
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  const legW = 200, legH = 18 + legItems.length * 24 + 14;
+  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
   ctx.fillStyle = "rgba(255,255,255,0.96)";
-  ctx.beginPath(); ctx.roundRect(20, 20, legW, legH, 12); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(12, 12, legW, legH, 8); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-  ctx.strokeStyle = "#e8e5e0"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.strokeStyle = "#e8e5e0"; ctx.lineWidth = 1; ctx.stroke();
 
   legItems.forEach((item, i) => {
-    const iy = 20 + 24 + i * 40;
+    const iy = 12 + 16 + i * 24;
     if (item.type === "rect") {
       ctx.fillStyle = item.fill;
-      ctx.beginPath(); ctx.roundRect(36, iy, 22, 18, 3); ctx.fill();
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(22, iy, 14, 12, 2); ctx.fill();
+      ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
     } else {
-      ctx.beginPath(); ctx.moveTo(36, iy + 9); ctx.lineTo(58, iy + 9);
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(22, iy + 6); ctx.lineTo(36, iy + 6);
+      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2;
       ctx.globalAlpha = item.opacity || 1; ctx.stroke(); ctx.globalAlpha = 1;
     }
-    ctx.font = "16px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 72, iy + 15);
+    ctx.font = "10px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
+    ctx.fillText(item.label, 44, iy + 11);
   });
-  ctx.font = "11px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox © OpenStreetMap", 36, 20 + legH - 10);
+  ctx.font = "7px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
+  ctx.fillText("© Mapbox © OpenStreetMap", 22, 12 + legH - 6);
 
   // Stats bar
-  const BY = H, pad = 40;
+  const BY = H, pad = 20;
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, BY, W, BH);
   ctx.beginPath(); ctx.moveTo(0, BY); ctx.lineTo(W, BY);
-  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 5; ctx.stroke();
+  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 3; ctx.stroke();
 
-  const C1 = pad, C2 = W * 0.25, C3 = W * 0.50, C4 = W * 0.72;
+  const C1 = pad, C2 = W * 0.25, C3 = W * 0.50, C4 = W * 0.75;
   ctx.textAlign = "left";
-  ctx.font = "bold 28px Arial"; ctx.fillStyle = "#111";
-  ctx.fillText("Lecture stratégique du site", C1, BY + 50);
-  ctx.font = "15px Arial"; ctx.fillStyle = "#aaa";
-  ctx.fillText(`${city} · ${district} · Zoning : ${zoning}`, C1, BY + 78);
+  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#111";
+  ctx.fillText("Lecture stratégique du site", C1, BY + 26);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#aaa";
+  ctx.fillText(`${city} · ${district} · Zoning : ${zoning}`, C1, BY + 42);
 
-  ctx.beginPath(); ctx.moveTo(C1, BY + 96); ctx.lineTo(W - pad, BY + 96);
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(C1, BY + 52); ctx.lineTo(W - pad, BY + 52);
+  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1; ctx.stroke();
 
-  ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Surface parcelle", C1, BY + 122);
-  ctx.font = "bold 36px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${site_area} m²`, C1, BY + 162);
-  ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Dimensions", C2, BY + 122);
-  ctx.font = "bold 28px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${land_width}m × ${land_depth}m`, C2, BY + 162);
-  ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Empreinte constructible", C3, BY + 122);
-  ctx.font = "bold 36px Arial"; ctx.fillStyle = "#1d7a3e"; ctx.fillText(`${buildable_fp} m²`, C3, BY + 162);
-  ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Retraits réglementaires", C4, BY + 122);
-  ctx.font = "600 16px Arial"; ctx.fillStyle = "#333";
-  ctx.fillText(`Avant : ${setback_front}m · Côtés : ${setback_side}m`, C4, BY + 148);
-  ctx.fillText(`Arrière : ${setback_back}m`, C4, BY + 172);
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Surface parcelle", C1, BY + 66);
+  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${site_area} m²`, C1, BY + 88);
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Dimensions", C2, BY + 66);
+  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${land_width}m × ${land_depth}m`, C2, BY + 88);
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Empreinte constructible", C3, BY + 66);
+  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#1d7a3e"; ctx.fillText(`${buildable_fp} m²`, C3, BY + 88);
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Retraits réglementaires", C4, BY + 66);
+  ctx.font = "600 10px Arial"; ctx.fillStyle = "#333";
+  ctx.fillText(`Av: ${setback_front}m · Côtés: ${setback_side}m · Arr: ${setback_back}m`, C4, BY + 84);
 
-  ctx.beginPath(); ctx.moveTo(C1, BY + 192); ctx.lineTo(W - pad, BY + 192);
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.font = "13px Arial"; ctx.fillStyle = "#ccc";
-  ctx.fillText((terrain_context || "").substring(0, 100), C1, BY + 220);
-  ctx.textAlign = "right"; ctx.font = "11px Arial"; ctx.fillStyle = "#ddd";
-  ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 16);
+  ctx.beginPath(); ctx.moveTo(C1, BY + 102); ctx.lineTo(W - pad, BY + 102);
+  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.font = "8px Arial"; ctx.fillStyle = "#ccc";
+  ctx.fillText((terrain_context || "").substring(0, 80), C1, BY + 118);
+  ctx.textAlign = "right"; ctx.font = "7px Arial"; ctx.fillStyle = "#ddd";
+  ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 8);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -443,9 +442,9 @@ app.post("/generate", async (req, res) => {
 
     // ── 2. COMPOSITE WITH CANVAS OVERLAYS ─────────────────────────────────────
     const mapImg = await loadImage(mapPng);
-    const W = mapImg.width;   // 1800 (deviceScaleFactor=2)
-    const H = mapImg.height;  // 1800
-    const BH = 260;
+    const W = mapImg.width;   // 900 (deviceScaleFactor=1)
+    const H = mapImg.height;  // 900
+    const BH = 160;
 
     const canvas = createCanvas(W, H + BH);
     const ctx = canvas.getContext("2d");
