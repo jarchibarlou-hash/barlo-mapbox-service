@@ -1,6 +1,7 @@
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 const { createCanvas } = require("canvas");
+const sharp = require("sharp");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -355,6 +356,7 @@ async function enhanceWithDallE(pngBuffer, W, H) {
     const form = new global.FormData();
     const imageBlob = new Blob([pngBuffer], { type: "image/png" });
     form.append("image", imageBlob, "axo.png");
+    form.append("model", "dall-e-2");
     form.append("n", "1");
     form.append("size", "1024x1024");
     form.append("response_format", "b64_json");
