@@ -547,6 +547,78 @@ function renderAxo(canvas, p) {
   ctx.fillText("BARLO · Diagnostic foncier",W-C1,BY+BH-10);
 }
 
+
+// ─── DEBUG endpoint — inspecter le format Microsoft Buildings ─────────────────
+app.get("/debug-ms", async (req, res) => {
+  const cLat = 4.0864637, cLon = 9.7638199; // Douala test
+  const results = { quadkeys: {}, error: null };
+
+  try {
+    const linksUrl = "https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv";
+    const linksResp = await fetch(linksUrl, { signal: AbortSignal.timeout(15000) });
+    if (!linksResp.ok) {
+      return res.json({ error: `dataset-links.csv: ${linksResp.status}` });
+    }
+
+    const linksText = await linksResp.text();
+    const allLines = linksText.split("\n");
+    results.total_lines = allLines.length;
+    results.header = allLines[0];
+
+    for (const level of [9, 8]) {
+      const qk = latLonToQuadkey(cLat, cLon, level);
+      const matching = allLines.filter(l => l.includes(qk));
+      results.quadkeys[`level_${level}_${qk}`] = {
+        count: matching.length,
+        first_line: matching[0]?.substring(0, 300) || "none",
+      };
+
+      if (matching.length > 0) {
+        // Extraire URL
+        const urlMatch = matching[0].match(/https:\/\/[^\s,]+\.csv\.gz/);
+        const parts = matching[0].split(",");
+        const urlFallback = parts.slice(4).join(",").trim();
+        const tileUrl = urlMatch?.[0] || urlFallback;
+
+        results.quadkeys[`level_${level}_${qk}`].url = tileUrl.substring(0, 200);
+
+        if (tileUrl.startsWith("https")) {
+          try {
+            const tileResp = await fetch(tileUrl, { signal: AbortSignal.timeout(20000) });
+            results.quadkeys[`level_${level}_${qk}`].tile_status = tileResp.status;
+
+            if (tileResp.ok) {
+              const buf = Buffer.from(await tileResp.arrayBuffer());
+              results.quadkeys[`level_${level}_${qk}`].tile_size = buf.length;
+
+              // Essayer gunzip
+              try {
+                const dec = await gunzip(buf);
+                const txt = dec.toString("utf8");
+                const lines = txt.split("\n").slice(0, 5);
+                results.quadkeys[`level_${level}_${qk}`].decompress = "gunzip OK";
+                results.quadkeys[`level_${level}_${qk}`].sample_lines = lines.map(l => l.substring(0, 200));
+                break; // On a ce qu'il faut
+              } catch(e) {
+                results.quadkeys[`level_${level}_${qk}`].decompress = `gunzip FAIL: ${e.message}`;
+                // Essayer raw
+                const txt2 = buf.toString("utf8");
+                results.quadkeys[`level_${level}_${qk}`].raw_sample = txt2.substring(0, 500);
+              }
+            }
+          } catch(e) {
+            results.quadkeys[`level_${level}_${qk}`].tile_error = e.message;
+          }
+        }
+      }
+    }
+  } catch(e) {
+    results.error = e.message;
+  }
+
+  return res.json(results);
+});
+
 // ─── ENDPOINT PRINCIPAL ───────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0=Date.now();
