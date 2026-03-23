@@ -154,12 +154,14 @@ function buildMapboxUrl(cLat, cLon, zoom, bearing, pitch, coords, envCoords, w, 
   };
 
   const overlay = `geojson(${encodeURIComponent(JSON.stringify(geojson))})`;
-  const url = `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/${overlay}/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
+  // Custom style with 3D buildings enabled
+  const STYLE = "archibarlou/cmn3lkr2u005q01s76z33c892";
+  const url = `https://api.mapbox.com/styles/v1/${STYLE}/static/${overlay}/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
 
   console.log(`Mapbox URL length: ${url.length} chars`);
   if (url.length > 8192) {
     console.warn("URL too long — falling back to no GeoJSON overlay");
-    return `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
+    return `https://api.mapbox.com/styles/v1/${STYLE}/static/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
   }
   return url;
 }
