@@ -1,18 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// BARLO — generate-slide4-axo — Mapbox Static API + Canvas Overlays
+// BARLO — generate-slide4-axo — Puppeteer + Mapbox GL JS (vrai rendu 3D)
 // ═══════════════════════════════════════════════════════════════════════════════
-// Strategy:
-//   1. Mapbox Static Images API with pitch=55° + bearing → real 3D buildings,
-//      real roads, professional cartography. No synthetic data needed.
-//   2. GeoJSON overlay in the URL → parcel + envelope drawn by Mapbox itself
-//      (perfect geo-alignment, no projection math needed).
-//   3. node-canvas overlays on top → legend, compass, annotations, stats bar.
-//   4. Upload to Supabase → same contract as before for Make.com.
+// Utilise un Chrome headless avec SwiftShader (WebGL software) pour rendre
+// une vraie carte Mapbox GL avec bâtiments 3D extrudés, puis superpose
+// les overlays BARLO avec node-canvas.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
+const puppeteer = require("puppeteer");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -22,18 +19,34 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "mapbox-static" }));
+// Reuse browser instance across requests
+let browserInstance = null;
+async function getBrowser() {
+  if (browserInstance && browserInstance.isConnected()) return browserInstance;
+  browserInstance = await puppeteer.launch({
+    headless: "new",
+    args: [
+      "--use-gl=swiftshader",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu-driver-bug-workarounds",
+      "--single-process",
+    ],
+  });
+  return browserInstance;
+}
+
+app.get("/health", (req, res) => res.json({ ok: true, engine: "puppeteer-mapbox-gl" }));
 
 // ─── GEO HELPERS ──────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
-
 function toM(lat, lon, cLat, cLon) {
   return {
     x: (lon - cLon) * Math.PI / 180 * R_EARTH * Math.cos(cLat * Math.PI / 180),
     y: (lat - cLat) * Math.PI / 180 * R_EARTH,
   };
 }
-
 function brng(p1, p2) {
   const dLon = (p2.lon - p1.lon) * Math.PI / 180;
   const y = Math.sin(dLon) * Math.cos(p2.lat * Math.PI / 180);
@@ -83,21 +96,18 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
   }));
 }
 
-// ─── COMPUTE OPTIMAL ZOOM from parcel size ────────────────────────────────────
+// ─── ZOOM + BEARING ───────────────────────────────────────────────────────────
 function computeZoom(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
-  const extX = Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x));
-  const extY = Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y));
-  const parcelExtent = Math.max(extX, extY, 20);
-  // View should span ~5x parcel for good urban context
-  const targetViewM = parcelExtent * 5;
-  const logicalWidth = 900;
-  const metersPerPixel = targetViewM / logicalWidth;
-  const zoom = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / metersPerPixel);
-  return Math.min(19, Math.max(15, Math.round(zoom * 2) / 2));
+  const ext = Math.max(
+    Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
+    Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
+  );
+  const targetViewM = ext * 5;
+  const mpp = targetViewM / 900;
+  const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
+  return Math.min(19, Math.max(15, Math.round(z * 2) / 2));
 }
-
-// ─── COMPUTE BEARING from parcel orientation ──────────────────────────────────
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   let longest = 0, angle = 0;
@@ -107,64 +117,148 @@ function computeBearing(coords, cLat, cLon) {
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len > longest) { longest = len; angle = Math.atan2(dx, dy) * 180 / Math.PI; }
   }
-  // Offset for nice 3D axo feel
-  const base = ((angle + 45) % 90) + 15;
-  return Math.round(base);
+  return Math.round(((angle + 45) % 90) + 15);
 }
 
-// ─── BUILD MAPBOX STATIC API URL ──────────────────────────────────────────────
-function buildMapboxUrl(cLat, cLon, zoom, bearing, pitch, coords, envCoords, w, h) {
-  const geojson = {
+// ─── RENDER MAP WITH PUPPETEER ────────────────────────────────────────────────
+async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, w, h) {
+  const parcelGeoJSON = {
     type: "FeatureCollection",
     features: [
       {
         type: "Feature",
-        properties: {
-          "stroke": "#d02818",
-          "stroke-width": 3,
-          "stroke-opacity": 1,
-          "fill": "#d02818",
-          "fill-opacity": 0.12,
-        },
+        properties: {},
         geometry: {
           type: "Polygon",
           coordinates: [[
-            ...coords.map(c => [Math.round(c.lon * 1e6) / 1e6, Math.round(c.lat * 1e6) / 1e6]),
-            [Math.round(coords[0].lon * 1e6) / 1e6, Math.round(coords[0].lat * 1e6) / 1e6],
+            ...parcelCoords.map(c => [c.lon, c.lat]),
+            [parcelCoords[0].lon, parcelCoords[0].lat],
           ]],
         },
       },
+    ],
+  };
+  const envGeoJSON = {
+    type: "FeatureCollection",
+    features: [
       {
         type: "Feature",
-        properties: {
-          "stroke": "#d02818",
-          "stroke-width": 2,
-          "stroke-opacity": 0.55,
-          "fill-opacity": 0,
-        },
+        properties: {},
         geometry: {
           type: "Polygon",
           coordinates: [[
-            ...envCoords.map(c => [Math.round(c.lon * 1e6) / 1e6, Math.round(c.lat * 1e6) / 1e6]),
-            [Math.round(envCoords[0].lon * 1e6) / 1e6, Math.round(envCoords[0].lat * 1e6) / 1e6],
+            ...envCoords.map(c => [c.lon, c.lat]),
+            [envCoords[0].lon, envCoords[0].lat],
           ]],
         },
       },
     ],
   };
 
-  const overlay = `geojson(${encodeURIComponent(JSON.stringify(geojson))})`;
-  // streets-v12 has built-in fill-extrusion for 3D buildings at zoom 15+
-  // If you upload a custom style later, replace this with "archibarlou/YOUR_STYLE_ID"
-  const STYLE = "mapbox/streets-v12";
-  const url = `https://api.mapbox.com/styles/v1/${STYLE}/static/${overlay}/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; }
+    #map { width: ${w}px; height: ${h}px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    mapboxgl.accessToken = '${MAPBOX_TOKEN}';
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/light-v11',
+      center: [${center.lon}, ${center.lat}],
+      zoom: ${zoom},
+      bearing: ${bearing},
+      pitch: ${pitch},
+      preserveDrawingBuffer: true,
+      antialias: true,
+    });
 
-  console.log(`Mapbox URL length: ${url.length} chars`);
-  if (url.length > 8192) {
-    console.warn("URL too long — falling back to no GeoJSON overlay");
-    return `https://api.mapbox.com/styles/v1/${STYLE}/static/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
-  }
-  return url;
+    map.on('style.load', () => {
+      // ── 3D BUILDINGS ──────────────────────────────────────────────
+      const layers = map.getStyle().layers;
+      let labelLayerId;
+      for (const layer of layers) {
+        if (layer.type === 'symbol' && layer.layout['text-field']) {
+          labelLayerId = layer.id;
+          break;
+        }
+      }
+
+      map.addLayer({
+        id: '3d-buildings',
+        source: 'composite',
+        'source-layer': 'building',
+        filter: ['==', 'extrude', 'true'],
+        type: 'fill-extrusion',
+        minzoom: 14,
+        paint: {
+          'fill-extrusion-color': '#e8e4de',
+          'fill-extrusion-height': ['coalesce', ['get', 'height'], 6],
+          'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0],
+          'fill-extrusion-opacity': 0.88,
+        },
+      }, labelLayerId);
+
+      // ── PARCEL ────────────────────────────────────────────────────
+      map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+      map.addLayer({
+        id: 'parcel-fill',
+        type: 'fill',
+        source: 'parcel',
+        paint: { 'fill-color': '#d02818', 'fill-opacity': 0.14 },
+      });
+      map.addLayer({
+        id: 'parcel-line',
+        type: 'line',
+        source: 'parcel',
+        paint: { 'line-color': '#d02818', 'line-width': 3 },
+      });
+
+      // ── ENVELOPE ──────────────────────────────────────────────────
+      map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envGeoJSON)} });
+      map.addLayer({
+        id: 'envelope-line',
+        type: 'line',
+        source: 'envelope',
+        paint: {
+          'line-color': '#d02818',
+          'line-width': 2,
+          'line-opacity': 0.55,
+          'line-dasharray': [4, 2],
+        },
+      });
+    });
+
+    // Signal ready after tiles + buildings load
+    map.on('idle', () => {
+      window._mapReady = true;
+    });
+  </script>
+</body>
+</html>`;
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
+
+  await page.setContent(html, { waitUntil: "networkidle0" });
+  // Wait for map to be fully rendered (tiles + 3D buildings loaded)
+  await page.waitForFunction("window._mapReady === true", { timeout: 25000 });
+  // Extra wait for tile rendering to complete
+  await new Promise(r => setTimeout(r, 2000));
+
+  const screenshot = await page.screenshot({ type: "png", encoding: "binary" });
+  await page.close();
+
+  return screenshot;
 }
 
 // ─── DRAW CANVAS OVERLAYS ─────────────────────────────────────────────────────
@@ -186,20 +280,18 @@ function drawOverlays(ctx, W, H, BH, p) {
     ctx.fillText(txt, x, y);
   }
 
-  // ── CENTRAL LABELS ─────────────────────────────────────────────────────────
   const cx = W / 2, cy = H / 2 + H * 0.04;
   T(cx, cy - 50, "Accès principal ↓", "#d02818", 24, true);
   T(cx, cy + 10, "Enveloppe constructible", "#d02818", 20);
   T(cx, cy + 50, `${buildable_fp} m²`, "#1d7a3e", 32, true);
   T(cx, cy + 82, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 18);
 
-  // ── SETBACK ANNOTATIONS ────────────────────────────────────────────────────
   T(cx, cy - 120, `↕ Recul avant : ${setback_front}m`, "#d02818", 18, true);
   T(cx - W * 0.18, cy + 20, `↔ ${setback_side}m`, "#666", 16);
   T(cx + W * 0.18, cy + 20, `↔ ${setback_side}m`, "#666", 16);
   T(cx, cy + 140, `↕ Recul arrière : ${setback_back}m`, "#666", 16);
 
-  // ── COMPASS ────────────────────────────────────────────────────────────────
+  // Compass
   ctx.save();
   ctx.translate(W - 80, 80);
   ctx.beginPath(); ctx.arc(0, 0, 36, 0, 2 * Math.PI);
@@ -214,15 +306,14 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.fillText("N", 0, -30);
   ctx.restore();
 
-  // ── LEGEND ─────────────────────────────────────────────────────────────────
+  // Legend
   const legItems = [
     { type: "rect", fill: "rgba(208,40,24,0.12)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
     { type: "line", stroke: "#d02818", opacity: 0.55, label: "Enveloppe constructible" },
-    { type: "rect", fill: "#e8e6e2", stroke: "#ccc", label: "Bâtiments (Mapbox 3D)" },
+    { type: "rect", fill: "#e8e4de", stroke: "#ccc", label: "Bâtiments 3D" },
     { type: "line", stroke: "#b0a080", opacity: 1, label: "Voirie" },
   ];
   const legW = 380, legH = 24 + legItems.length * 40 + 20;
-
   ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
   ctx.fillStyle = "rgba(255,255,255,0.96)";
   ctx.beginPath(); ctx.roundRect(20, 20, legW, legH, 12); ctx.fill();
@@ -246,7 +337,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.font = "11px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox © OpenStreetMap", 36, 20 + legH - 10);
 
-  // ── STATS BAR ──────────────────────────────────────────────────────────────
+  // Stats bar
   const BY = H, pad = 40;
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, BY, W, BH);
@@ -265,13 +356,10 @@ function drawOverlays(ctx, W, H, BH, p) {
 
   ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Surface parcelle", C1, BY + 122);
   ctx.font = "bold 36px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${site_area} m²`, C1, BY + 162);
-
   ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Dimensions", C2, BY + 122);
   ctx.font = "bold 28px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${land_width}m × ${land_depth}m`, C2, BY + 162);
-
   ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Empreinte constructible", C3, BY + 122);
   ctx.font = "bold 36px Arial"; ctx.fillStyle = "#1d7a3e"; ctx.fillText(`${buildable_fp} m²`, C3, BY + 162);
-
   ctx.font = "12px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Retraits réglementaires", C4, BY + 122);
   ctx.font = "600 16px Arial"; ctx.fillStyle = "#333";
   ctx.fillText(`Avant : ${setback_front}m · Côtés : ${setback_side}m`, C4, BY + 148);
@@ -286,11 +374,11 @@ function drawOverlays(ctx, W, H, BH, p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENDPOINT — same Make.com contract
+// ENDPOINT
 // ═══════════════════════════════════════════════════════════════════════════════
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("→ /generate (Mapbox Static)");
+  console.log("→ /generate (Puppeteer 3D)");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -302,7 +390,7 @@ app.post("/generate", async (req, res) => {
   if (!lead_id || !polygon_points)
     return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN)
-    return res.status(500).json({ error: "MAPBOX_TOKEN non configuré sur Railway" });
+    return res.status(500).json({ error: "MAPBOX_TOKEN non configuré" });
 
   const coords = polygon_points.split("|").map(pt => {
     const [lat, lon] = pt.trim().split(",").map(Number);
@@ -325,32 +413,26 @@ app.post("/generate", async (req, res) => {
   console.log(`View: zoom=${zoom}, bearing=${bearing}°, pitch=${pitch}°`);
 
   try {
-    const mapW = 900, mapH = 900;
-    const mapboxUrl = buildMapboxUrl(cLat, cLon, zoom, bearing, pitch, coords, envelopeCoords, mapW, mapH);
-    console.log("Fetching Mapbox image...");
+    // ── 1. RENDER 3D MAP WITH PUPPETEER ───────────────────────────────────────
+    console.log("Rendering 3D map with Puppeteer...");
+    const mapW = Number(image_size) || 900;
+    const mapH = mapW;
+    const mapPng = await renderMap(
+      { lat: cLat, lon: cLon }, zoom, bearing, pitch,
+      coords, envelopeCoords, mapW, mapH
+    );
+    console.log(`Map rendered: ${mapPng.length} bytes (${Date.now() - t0}ms)`);
 
-    const mbResp = await fetch(mapboxUrl, { signal: AbortSignal.timeout(15000) });
-    if (!mbResp.ok) {
-      const errText = await mbResp.text();
-      console.error(`Mapbox error ${mbResp.status}: ${errText}`);
-      return res.status(502).json({ error: `Mapbox API error: ${mbResp.status}`, detail: errText });
-    }
-
-    const imgBuffer = Buffer.from(await mbResp.arrayBuffer());
-    console.log(`Mapbox image: ${imgBuffer.length} bytes`);
-
-    const mapImg = await loadImage(imgBuffer);
-    const W = mapImg.width;   // 1800 (@2x)
-    const H = mapImg.height;  // 1800 (@2x)
+    // ── 2. COMPOSITE WITH CANVAS OVERLAYS ─────────────────────────────────────
+    const mapImg = await loadImage(mapPng);
+    const W = mapImg.width;   // 1800 (deviceScaleFactor=2)
+    const H = mapImg.height;  // 1800
     const BH = 260;
 
     const canvas = createCanvas(W, H + BH);
     const ctx = canvas.getContext("2d");
-
-    // Base map
     ctx.drawImage(mapImg, 0, 0);
 
-    // Overlays
     drawOverlays(ctx, W, H, BH, {
       site_area: Number(site_area), land_width: Number(land_width),
       land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
@@ -363,6 +445,7 @@ app.post("/generate", async (req, res) => {
     const png = canvas.toBuffer("image/png");
     console.log(`Final PNG: ${png.length} bytes (${Date.now() - t0}ms)`);
 
+    // ── 3. UPLOAD TO SUPABASE ─────────────────────────────────────────────────
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim()
       .replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -382,7 +465,7 @@ app.post("/generate", async (req, res) => {
       path,
       centroid: { lat: cLat, lon: cLon },
       view: { zoom, bearing, pitch },
-      engine: "mapbox-static",
+      engine: "puppeteer-mapbox-gl",
       duration_ms: Date.now() - t0,
     });
   } catch (e) {
@@ -393,7 +476,7 @@ app.post("/generate", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`BARLO Axo Service on port ${PORT}`);
-  console.log(`Engine: Mapbox Static API`);
+  console.log(`Engine: Puppeteer + Mapbox GL JS (vrai 3D)`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Supabase: ${SUPABASE_URL ? "OK" : "MISSING"}`);
 });
