@@ -106,7 +106,7 @@ function generateSynthetic(cLat,cLon,parcelM,radius,roads,osmBuildings) {
   const seed=Math.round(Math.abs(cLat*137.508+cLon*251.663)*1000)%0x7fffffff;
   const rand=seededRand(seed);
   const roadSegs=[];
-  const bufMap={primary:14,secondary:11,tertiary:9,residential:7,unclassified:6,service:5,living_street:5};
+  const bufMap={primary:22,secondary:18,tertiary:15,residential:12,unclassified:10,service:8,living_street:8};
   for(const r of roads){
     const buf=(bufMap[r.type]||5)+2;
     const pts=r.geom.map(p=>toM(p.lat,p.lon,cLat,cLon));
@@ -411,7 +411,7 @@ app.post("/generate",async(req,res)=>{
     console.log(`OSM: ${osm.buildings.length} bâtiments, ${osm.roads.length} routes`);
 
     const pMtrs=coords.map(c=>toM(c.lat,c.lon,cLat,cLon));
-    const synth=generateSynthetic(cLat,cLon,pMtrs,220,osm.roads,osm.buildings);
+    const synth=generateSynthetic(cLat,cLon,pMtrs,180,osm.roads,osm.buildings);
     console.log(`Synthetic: ${synth.length}`);
 
     const allBuildings=[...osm.buildings.map(b=>({...b,isSynth:false})),...synth];
@@ -429,19 +429,7 @@ app.post("/generate",async(req,res)=>{
     let png=canvas.toBuffer("image/png");
     console.log(`Canvas PNG: ${png.length} bytes (${Date.now()-t0}ms)`);
 
-    // Tenter l'amélioration DALL-E (optionnel — fallback sur canvas si échec)
-    // DALL-E 2 edit requiert image 1024x1024 RGBA
-    if (W <= 1024 && H <= 1024) {
-      const enhanced = await enhanceWithDallE(png, W, H);
-      if (enhanced) {
-        png = enhanced;
-        console.log(`DALL-E PNG: ${png.length} bytes (${Date.now()-t0}ms)`);
-      } else {
-        console.log("Using canvas PNG (DALL-E skipped)");
-      }
-    } else {
-      console.log(`Image ${W}x${H} > 1024px — DALL-E skipped, using canvas`);
-    }
+    // DALL-E désactivé (502 Bad Gateway depuis Railway)
 
     const sb=createClient(SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY);
     const slug=String(client_name||"client").toLowerCase().trim().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
