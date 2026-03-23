@@ -100,7 +100,8 @@ function computeBearing(coords, cLat, cLon) {
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len > longest) { longest = len; angle = Math.atan2(dx, dy) * 180 / Math.PI; }
   }
-  return Math.round(((angle + 45) % 90) + 15);
+  let b = Math.round(((angle + 45) % 90) + 15);
+  return ((b % 360) + 360) % 360; // Always 0-360
 }
 
 // ─── FETCH HELPERS ──────────────────────────────────────────────────────────
@@ -143,27 +144,10 @@ function httpsPost(url, body) {
   });
 }
 
-// ─── FETCH MAPBOX STATIC IMAGE ──────────────────────────────────────────────
-async function fetchMapboxStatic(center, zoom, bearing, w, h, parcelCoords, envCoords) {
-  const parcelGeo = {
-    type: "Feature",
-    properties: { "stroke": "#d02818", "stroke-width": 3, "stroke-opacity": 1, "fill": "#d02818", "fill-opacity": 0.12 },
-    geometry: {
-      type: "Polygon",
-      coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]],
-    },
-  };
-  const envGeo = {
-    type: "Feature",
-    properties: { "stroke": "#d02818", "stroke-width": 2, "stroke-opacity": 0.5, "fill-opacity": 0 },
-    geometry: {
-      type: "Polygon",
-      coordinates: [[...envCoords.map(c => [c.lon, c.lat]), [envCoords[0].lon, envCoords[0].lat]]],
-    },
-  };
-  const overlay = encodeURIComponent(JSON.stringify({ type: "FeatureCollection", features: [parcelGeo, envGeo] }));
-  const url = `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/geojson(${overlay})/${center.lon},${center.lat},${zoom},${bearing}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
-  console.log(`Mapbox Static URL: ${url.length} chars`);
+// ─── FETCH MAPBOX STATIC IMAGE (NO GeoJSON, NO @2x) ──────────────────────────
+async function fetchMapboxStatic(center, zoom, bearing, w, h) {
+  const url = `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/${center.lon},${center.lat},${zoom},${bearing}/${w}x${h}?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
+  console.log(`Mapbox Static URL: ${url.substring(0, 120)}... (${url.length} chars)`);
   return httpsGet(url);
 }
 
@@ -201,22 +185,76 @@ async function fetchBuildings(center, radiusM) {
   }
 }
 
-// ─── ISOMETRIC 3D PROJECTION ────────────────────────────────────────────────
-function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoords) {
-  const mPerPx = 156543.03 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom) / 2; // @2x
-  const cx = W / 2, cy = H / 2;
-  const bearingRad = -bearing * Math.PI / 180;
+// ─── MERCATOR PROJECTION FOR MAPBOX STATIC ──────────────────────────────────
+function createProjection(center, zoom, bearing, W, H) {
+  const scale = 256 * Math.pow(2, zoom) / (2 * Math.PI); // Mercator scale
+  const bearingRad = bearing * Math.PI / 180;
 
-  // Isometric offset: how many pixels "up" per meter of building height
-  const heightScale = 1.2 / mPerPx; // ~1.2m real height per pixel offset
+  // Center in Mercator
+  const cxM = scale * (center.lon * Math.PI / 180 + Math.PI);
+  const cyM = scale * (Math.PI - Math.log(Math.tan(Math.PI / 4 + center.lat * Math.PI / 360)));
 
-  function geoToPx(lat, lon) {
-    const dx = (lon - center.lon) * Math.PI / 180 * R_EARTH * Math.cos(center.lat * Math.PI / 180);
-    const dy = (lat - center.lat) * Math.PI / 180 * R_EARTH;
-    const rx = dx * Math.cos(bearingRad) - dy * Math.sin(bearingRad);
-    const ry = dx * Math.sin(bearingRad) + dy * Math.cos(bearingRad);
-    return { x: cx + rx / mPerPx, y: cy - ry / mPerPx };
+  return function geoToPx(lat, lon) {
+    // Convert to Mercator pixels
+    const mx = scale * (lon * Math.PI / 180 + Math.PI);
+    const my = scale * (Math.PI - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)));
+
+    // Offset from center
+    let dx = mx - cxM;
+    let dy = my - cyM;
+
+    // Apply bearing rotation
+    const rx = dx * Math.cos(bearingRad) + dy * Math.sin(bearingRad);
+    const ry = -dx * Math.sin(bearingRad) + dy * Math.cos(bearingRad);
+
+    return {
+      x: W / 2 + rx,
+      y: H / 2 + ry,
+    };
+  };
+}
+
+// ─── DRAW PARCEL AND ENVELOPE ────────────────────────────────────────────────
+function drawParcelAndEnvelope(ctx, geoToPx, parcelCoords, envCoords) {
+  // Draw envelope (dashed line)
+  ctx.strokeStyle = "#d02818";
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.5;
+  ctx.setLineDash([8, 4]);
+  ctx.beginPath();
+  const envPx = envCoords.map(c => geoToPx(c.lat, c.lon));
+  ctx.moveTo(envPx[0].x, envPx[0].y);
+  for (let i = 1; i < envPx.length; i++) {
+    ctx.lineTo(envPx[i].x, envPx[i].y);
   }
+  ctx.closePath();
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // Draw parcel (filled + outline)
+  ctx.fillStyle = "rgba(208, 40, 24, 0.12)";
+  ctx.strokeStyle = "#d02818";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  const parcelPx = parcelCoords.map(c => geoToPx(c.lat, c.lon));
+  ctx.moveTo(parcelPx[0].x, parcelPx[0].y);
+  for (let i = 1; i < parcelPx.length; i++) {
+    ctx.lineTo(parcelPx[i].x, parcelPx[i].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Debug: log first parcel point in pixels
+  console.log(`Parcel first point px: (${parcelPx[0].x.toFixed(1)}, ${parcelPx[0].y.toFixed(1)})`);
+}
+
+// ─── ISOMETRIC 3D PROJECTION ────────────────────────────────────────────────
+function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoords, geoToPx) {
+  // Isometric offset: how many pixels "up" per meter of building height
+  const mPerPx = 156543.03 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
+  const heightScale = 1.2 / mPerPx; // ~1.2m real height per pixel offset
 
   // Check if point is inside parcel (to avoid drawing buildings on parcel)
   const parcelPx = parcelCoords.map(c => geoToPx(c.lat, c.lon));
@@ -300,6 +338,7 @@ function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoo
     ctx.stroke();
   }
 
+  console.log(`Buildings: ${buildingPx.length} in viewport, ${buildings.length} total fetched`);
   return buildingPx.length;
 }
 
@@ -455,31 +494,37 @@ app.post("/generate", async (req, res) => {
 
   try {
     // ── 1. FETCH BASE MAP + BUILDINGS IN PARALLEL ──────────────────────────
-    const mapW = Math.min(Number(image_size) || 900, 1280);
-    const mapH = mapW;
+    const mapW = 1280;
+    const mapH = 1280;
 
     console.log("Fetching base map + buildings in parallel...");
     const [mapBuffer, buildings] = await Promise.all([
-      fetchMapboxStatic({ lat: cLat, lon: cLon }, zoom, bearing, mapW, mapH, coords, envelopeCoords),
+      fetchMapboxStatic({ lat: cLat, lon: cLon }, zoom, bearing, mapW, mapH),
       fetchBuildings({ lat: cLat, lon: cLon }, 300), // 300m radius
     ]);
     console.log(`Base map: ${mapBuffer.length} bytes, Buildings: ${buildings.length} (${Date.now() - t0}ms)`);
 
     // ── 2. COMPOSITE ────────────────────────────────────────────────────────
     const baseImg = await loadImage(mapBuffer);
-    const W = baseImg.width;   // @2x → 1800 or 2560
+    const W = baseImg.width;
     const H = baseImg.height;
     const BH = Math.round(H * 0.12);
 
     const canvas = createCanvas(W, H + BH);
     const ctx = canvas.getContext("2d");
 
-    // Draw base map (roads, labels, parcel/envelope overlay)
+    // Draw base map (roads, labels)
     ctx.drawImage(baseImg, 0, 0);
 
+    // Create projection for buildings and parcel/envelope
+    const geoToPx = createProjection({ lat: cLat, lon: cLon }, zoom, bearing, W, H);
+
     // Draw real 3D buildings from OSM
-    const buildingCount = drawIsoBuildings(ctx, W, H, { lat: cLat, lon: cLon }, zoom, bearing, buildings, coords);
+    const buildingCount = drawIsoBuildings(ctx, W, H, { lat: cLat, lon: cLon }, zoom, bearing, buildings, coords, geoToPx);
     console.log(`Drew ${buildingCount} buildings on canvas (${Date.now() - t0}ms)`);
+
+    // Draw parcel and envelope with canvas
+    drawParcelAndEnvelope(ctx, geoToPx, coords, envelopeCoords);
 
     // Draw overlays (annotations, legend, compass, stats bar)
     drawOverlays(ctx, W, H, BH, {
