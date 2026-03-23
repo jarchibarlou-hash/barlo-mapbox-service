@@ -52,77 +52,101 @@ function brng(p1, p2) {
 
 // ─── Quadkey (Bing Maps tile system) ─────────────────────────────────────────
 function latLonToQuadkey(lat, lon, level) {
-  // Convertir lat/lon en tile x,y puis en quadkey
-  const sinLat = Math.sin(lat * Math.PI / 180);
-  const pixelX = ((lon + 180) / 360) * (1 << level);
-  const pixelY = (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * (1 << level);
-  const tileX = Math.floor(Math.max(0, Math.min(pixelX, (1 << level) - 1)));
-  const tileY = Math.floor(Math.max(0, Math.min(pixelY, (1 << level) - 1)));
-
-  let quadkey = "";
-  for (let i = level; i > 0; i--) {
-    let digit = 0;
-    const mask = 1 << (i - 1);
-    if ((tileX & mask) !== 0) digit += 1;
-    if ((tileY & mask) !== 0) digit += 2;
-    quadkey += digit.toString();
-  }
-  return quadkey;
+  const {tx, ty} = latLonToTileXY(lat, lon, level);
+  return tileXYToQuadkey(tx, ty, level);
 }
 
 // ─── Microsoft Buildings fetch ────────────────────────────────────────────────
-// Format : NDJSON (.csv.gz) — une feature GeoJSON par ligne
 async function fetchMicrosoftBuildings(cLat, cLon, radiusM) {
   console.log("Fetching Microsoft Buildings...");
 
-  for (const level of [9, 8]) {
-    const qk = latLonToQuadkey(cLat, cLon, level);
-    console.log(`Trying quadkey level ${level}: ${qk}`);
+  try {
+    // 1. Télécharger dataset-links.csv
+    const linksUrl = "https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv";
+    const linksResp = await fetch(linksUrl, { signal: AbortSignal.timeout(15000) });
+    if (!linksResp.ok) { console.log(`dataset-links.csv failed: ${linksResp.status}`); return []; }
 
-    try {
-      // 1. Récupérer le dataset-links.csv
-      const linksUrl = "https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv";
-      const linksResp = await fetch(linksUrl, { signal: AbortSignal.timeout(15000) });
-      if (!linksResp.ok) { console.log(`dataset-links.csv failed: ${linksResp.status}`); break; }
+    const linksText = await linksResp.text();
+    const allLines = linksText.split("\n");
+    console.log(`dataset-links.csv: ${allLines.length} lines`);
 
-      const linksText = await linksResp.text();
-      const allLines = linksText.split("\n");
-      console.log(`dataset-links.csv: ${allLines.length} lines`);
-
-      // Trouver les tiles pour ce quadkey
-      const matching = allLines.filter(l => l.includes(`,${qk},`) || l.endsWith(`,${qk}`));
-      console.log(`Matching tiles for ${qk}: ${matching.length}`);
-      if (matching.length === 0) continue;
-
-      // Parser l'URL — format: Location,QuadKey,Size,UploadDate,Url
-      // L'URL contient des virgules dans le path, on reconstruit
-      console.log(`Raw line: ${matching[0].substring(0, 150)}`);
-      const urlMatch = matching[0].match(/(https:\/\/[^\s,]+\.csv\.gz)/);
-      if (!urlMatch) {
-        // Fallback: prendre tout ce qui est après le 4ème comma
-        const parts = matching[0].split(",");
-        const urlParts = parts.slice(4);
-        const tileUrl = urlParts.join(",").trim();
-        console.log(`URL (fallback): ${tileUrl.substring(0, 100)}`);
-        if (tileUrl.startsWith("https")) {
-          const result = await downloadAndParseTile(tileUrl, cLat, cLon, radiusM);
-          if (result.length > 0) return result;
-        }
-        continue;
+    // 2. Calculer les 9 tiles adjacents au niveau 9 (grille 3x3)
+    const level = 9;
+    const { tx, ty } = latLonToTileXY(cLat, cLon, level);
+    const quadkeys = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        quadkeys.push(tileXYToQuadkey(tx+dx, ty+dy, level));
       }
-
-      const tileUrl = urlMatch[1];
-      console.log(`URL: ${tileUrl.substring(0, 100)}`);
-      const result = await downloadAndParseTile(tileUrl, cLat, cLon, radiusM);
-      if (result.length > 0) return result;
-
-    } catch(e) {
-      console.log(`Error level ${level}: ${e.message}`);
     }
-  }
+    console.log(`Searching ${quadkeys.length} adjacent tiles: ${quadkeys.join(", ")}`);
 
-  console.log("Microsoft Buildings fetch failed — using OSM only");
-  return [];
+    // 3. Trouver les URLs pour tous ces quadkeys
+    const tileUrls = [];
+    for (const qk of quadkeys) {
+      const matching = allLines.filter(l => l.includes(qk));
+      if (matching.length > 0) {
+        const line = matching[0];
+        // Format header: Location,QuadKey,Url,Size,UploadDate
+        // ou: Location,QuadKey,Size,UploadDate,Url
+        // On cherche l'URL https directement
+        const urlMatch = line.match(/https:\/\/minedbuildings[^\s,
+]+\.csv\.gz/);
+        if (urlMatch) {
+          tileUrls.push({ qk, url: urlMatch[0] });
+          console.log(`Found tile ${qk}: ${urlMatch[0].substring(0,80)}...`);
+        }
+      }
+    }
+    console.log(`${tileUrls.length} tiles with URLs found`);
+
+    if (tileUrls.length === 0) return [];
+
+    // 4. Télécharger et parser tous les tiles en parallèle (max 4 à la fois)
+    const allBuildings = [];
+    for (let i = 0; i < tileUrls.length; i += 4) {
+      const batch = tileUrls.slice(i, i+4);
+      const results = await Promise.all(batch.map(t => downloadAndParseTile(t.url, cLat, cLon, radiusM)));
+      for (const r of results) allBuildings.push(...r);
+    }
+
+    console.log(`Total Microsoft Buildings in radius: ${allBuildings.length}`);
+    if (allBuildings.length === 0) return [];
+
+    allBuildings.sort((a,b) => {
+      const ca=centroidLL(a.geom), cb=centroidLL(b.geom);
+      return hav(cLat,cLon,ca.lat,ca.lon)-hav(cLat,cLon,cb.lat,cb.lon);
+    });
+    return allBuildings.slice(0, 400);
+
+  } catch(e) {
+    console.log(`fetchMicrosoftBuildings error: ${e.message}`);
+    return [];
+  }
+}
+
+// Convertir lat/lon en tile x,y
+function latLonToTileXY(lat, lon, level) {
+  const sinLat = Math.sin(lat * Math.PI / 180);
+  const px = (lon + 180) / 360 * (1 << level);
+  const py = (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * (1 << level);
+  return {
+    tx: Math.floor(Math.max(0, Math.min(px, (1 << level) - 1))),
+    ty: Math.floor(Math.max(0, Math.min(py, (1 << level) - 1))),
+  };
+}
+
+// Convertir tile x,y en quadkey
+function tileXYToQuadkey(tx, ty, level) {
+  let qk = "";
+  for (let i = level; i > 0; i--) {
+    let digit = 0;
+    const mask = 1 << (i - 1);
+    if (tx & mask) digit += 1;
+    if (ty & mask) digit += 2;
+    qk += digit.toString();
+  }
+  return qk;
 }
 
 async function downloadAndParseTile(tileUrl, cLat, cLon, radiusM) {
@@ -565,7 +589,7 @@ app.get("/debug-ms", async (req, res) => {
     results.total_lines = allLines.length;
     results.header = allLines[0];
 
-    for (const level of [9, 8]) {
+    for (const level of [9, 8, 7]) {
       const qk = latLonToQuadkey(cLat, cLon, level);
       const matching = allLines.filter(l => l.includes(qk));
       results.quadkeys[`level_${level}_${qk}`] = {
