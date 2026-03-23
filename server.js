@@ -121,32 +121,57 @@ async function fetchMicrosoftBuildings(cLat, cLon, radiusM) {
       const text = decompressed.toString("utf8");
       console.log(`Decompressed: ${text.length} chars`);
 
-      // 3. Parser les bâtiments (format: GeoJSON line-delimited)
+      // 3. Parser les bâtiments Microsoft
+      // Format : CSV avec colonne "geometry" contenant du JSON, ou GeoJSON ligne par ligne
       const buildings = [];
       const lines2 = text.split("\n");
+      const firstLine = lines2[0]?.trim() || "";
+      console.log(`Tile format sample: ${firstLine.substring(0,100)}`);
 
-      for (const line of lines2) {
-        if (!line.trim()) continue;
+      // Détecter CSV vs GeoJSON
+      const isCSV = !firstLine.startsWith("{");
+      let startLine = 0;
+      if (isCSV) {
+        startLine = 1; // skip header
+        console.log("CSV format detected");
+      } else {
+        console.log("GeoJSON format detected");
+      }
+
+      for (let li = startLine; li < lines2.length; li++) {
+        const line = lines2[li];
+        if (!line?.trim()) continue;
         try {
-          const feature = JSON.parse(line);
-          if (!feature.geometry || !feature.geometry.coordinates) continue;
+          let coordsRaw = null;
+          let height = 0;
 
-          const coords = feature.geometry.coordinates[0];
-          if (!coords || coords.length < 3) continue;
+          if (isCSV) {
+            // Extraire le JSON de géométrie entre { et }
+            const jsonStart = line.indexOf("{");
+            const jsonEnd = line.lastIndexOf("}");
+            if (jsonStart === -1 || jsonEnd === -1) continue;
+            const jsonStr = line.substring(jsonStart, jsonEnd+1).replace(/""/g, '"');
+            const geomObj = JSON.parse(jsonStr);
+            coordsRaw = geomObj.coordinates?.[0];
+            // Extraire hauteur si présente après le JSON
+            const afterJson = line.substring(jsonEnd+2);
+            if (afterJson) height = parseFloat(afterJson) || 0;
+          } else {
+            const feature = JSON.parse(line);
+            coordsRaw = feature.geometry?.coordinates?.[0];
+            const props = feature.properties || {};
+            height = parseFloat(props.height || props.Height || 0) || 0;
+          }
 
-          // Convertir [lon,lat] → {lat,lon}
-          const geom = coords.map(c => ({ lat: c[1], lon: c[0] }));
+          if (!coordsRaw || coordsRaw.length < 3) continue;
+          const geom = coordsRaw.map(c => ({ lat: c[1], lon: c[0] }));
           const center = centroidLL(geom);
-
-          // Filtrer par rayon
           const dist = hav(cLat, cLon, center.lat, center.lon);
           if (dist > radiusM) continue;
 
-          // Hauteur depuis propriétés si disponible
-          const props = feature.properties || {};
-          const height = props.height || props.Height || 0;
-          const levels = height > 0 ? Math.max(1, Math.round(height / 3.2))
-            : (props.building_levels || 0) || estimateLevels(geom, cLat, cLon);
+          const levels = height > 0
+            ? Math.max(1, Math.round(height / 3.2))
+            : estimateLevels(geom, cLat, cLon);
 
           buildings.push({ geom, levels, name: "", area: estimateArea(geom, cLat, cLon) });
         } catch { continue; }
