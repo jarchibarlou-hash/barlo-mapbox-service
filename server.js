@@ -126,13 +126,19 @@ function httpsGet(url) {
 function httpsPost(url, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
+    const isHttps = u.protocol === "https:";
     const options = {
-      hostname: u.hostname, port: u.port || 443, path: u.pathname,
+      hostname: u.hostname, port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname + u.search,
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) },
     };
-    const client = url.startsWith("https") ? https : http;
+    const client = isHttps ? https : http;
     const req = client.request(options, (resp) => {
+      // Handle redirects
+      if (resp.statusCode === 301 || resp.statusCode === 302) {
+        return httpsPost(resp.headers.location, body).then(resolve).catch(reject);
+      }
       const chunks = [];
       resp.on("data", d => chunks.push(d));
       resp.on("end", () => resolve(Buffer.concat(chunks).toString()));
@@ -146,17 +152,41 @@ function httpsPost(url, body) {
 
 // ─── FETCH MAPBOX STATIC IMAGE (NO GeoJSON, NO @2x) ──────────────────────────
 async function fetchMapboxStatic(center, zoom, bearing, w, h) {
-  const url = `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/${center.lon},${center.lat},${zoom},${bearing}/${w}x${h}?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
+  const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${center.lon},${center.lat},${zoom},${bearing}/${w}x${h}?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
   console.log(`Mapbox Static URL: ${url.substring(0, 120)}... (${url.length} chars)`);
   return httpsGet(url);
 }
 
-// ─── FETCH REAL BUILDINGS FROM OVERPASS ──────────────────────────────────────
+// ─── FETCH REAL BUILDINGS FROM OVERPASS (GET method — more reliable) ─────────
 async function fetchBuildings(center, radiusM) {
   const query = `[out:json][timeout:15];(way["building"](around:${radiusM},${center.lat},${center.lon}););out body;>;out skel qt;`;
   console.log(`Overpass query: radius=${radiusM}m around ${center.lat},${center.lon}`);
   try {
-    const raw = await httpsPost("https://overpass-api.de/api/interpreter", `data=${encodeURIComponent(query)}`);
+    // Try primary then fallback Overpass server
+    const servers = [
+      `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
+      `https://overpass.kumi.systems/api/interpreter?data=${encodeURIComponent(query)}`,
+    ];
+    let raw = null;
+    for (const srv of servers) {
+      try {
+        console.log(`Trying Overpass: ${srv.substring(0, 60)}...`);
+        const rawBuf = await httpsGet(srv);
+        const txt = rawBuf.toString();
+        if (txt.startsWith("<")) {
+          console.warn(`Overpass server returned XML/HTML, trying next...`);
+          continue;
+        }
+        raw = txt;
+        break;
+      } catch (e2) {
+        console.warn(`Overpass server failed: ${e2.message}, trying next...`);
+      }
+    }
+    if (!raw) {
+      console.error("All Overpass servers failed");
+      return [];
+    }
     const data = JSON.parse(raw);
 
     // Build node lookup
