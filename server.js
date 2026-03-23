@@ -71,141 +71,121 @@ function latLonToQuadkey(lat, lon, level) {
 }
 
 // ─── Microsoft Buildings fetch ────────────────────────────────────────────────
-// Stratégie : on essaie plusieurs niveaux de quadkey (9→8→7) pour trouver des tiles
+// Format : NDJSON (.csv.gz) — une feature GeoJSON par ligne
 async function fetchMicrosoftBuildings(cLat, cLon, radiusM) {
   console.log("Fetching Microsoft Buildings...");
 
-  // On essaie quadkey niveau 9 (tile ~5km), puis 8 si pas trouvé
   for (const level of [9, 8]) {
     const qk = latLonToQuadkey(cLat, cLon, level);
     console.log(`Trying quadkey level ${level}: ${qk}`);
 
     try {
-      // 1. Chercher l'URL du tile dans dataset-links.csv
-      const linksUrl = `https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv`;
+      // 1. Récupérer le dataset-links.csv
+      const linksUrl = "https://minedbuildings.z5.web.core.windows.net/global-buildings/dataset-links.csv";
       const linksResp = await fetch(linksUrl, { signal: AbortSignal.timeout(15000) });
-      if (!linksResp.ok) {
-        console.log("dataset-links.csv not accessible");
-        break;
-      }
+      if (!linksResp.ok) { console.log(`dataset-links.csv failed: ${linksResp.status}`); break; }
 
       const linksText = await linksResp.text();
-      const lines = linksText.split("\n");
-      console.log(`dataset-links.csv: ${lines.length} lines total`);
+      const allLines = linksText.split("\n");
+      console.log(`dataset-links.csv: ${allLines.length} lines`);
 
-      // Chercher les lignes contenant ce quadkey
-      const matchingLines = lines.filter(line => line.includes(qk));
-      if (matchingLines.length === 0) {
-        console.log(`No tile found for quadkey ${qk}`);
-        continue;
-      }
-      console.log(`Found ${matchingLines.length} tile(s) for quadkey ${qk}`);
-      console.log(`First match raw: ${matchingLines[0].substring(0, 200)}`);
+      // Trouver les tiles pour ce quadkey
+      const matching = allLines.filter(l => l.includes(`,${qk},`) || l.endsWith(`,${qk}`));
+      console.log(`Matching tiles for ${qk}: ${matching.length}`);
+      if (matching.length === 0) continue;
 
-      // Parser CSV : Location,QuadKey,Size,UploadDate,Url
-      // L'URL peut contenir des virgules dans le path donc on prend tout après le 4ème comma
-      const parts = matchingLines[0].split(",");
-      console.log(`Parts count: ${parts.length}`);
-      // L'URL commence par https — trouver l'index
-      const urlIdx = parts.findIndex(p => p.trim().startsWith("https"));
-      const tileUrl = urlIdx >= 0 ? parts.slice(urlIdx).join(",").trim() : parts[parts.length-1].trim();
-      console.log(`Tile URL: ${tileUrl.substring(0, 120)}`);
-      if (!tileUrl.startsWith("https")) {
-        console.log("URL invalid, skipping");
-        continue;
-      }
-
-      // 2. Télécharger + décompresser le tile .csv.gz
-      console.log("Downloading tile...");
-      const tileResp = await fetch(tileUrl, { signal: AbortSignal.timeout(25000) });
-      console.log(`Tile response status: ${tileResp.status}`);
-      if (!tileResp.ok) {
-        const errBody = await tileResp.text();
-        console.log(`Tile download failed: ${tileResp.status} — ${errBody.substring(0,100)}`);
+      // Parser l'URL — format: Location,QuadKey,Size,UploadDate,Url
+      // L'URL contient des virgules dans le path, on reconstruit
+      console.log(`Raw line: ${matching[0].substring(0, 150)}`);
+      const urlMatch = matching[0].match(/(https:\/\/[^\s,]+\.csv\.gz)/);
+      if (!urlMatch) {
+        // Fallback: prendre tout ce qui est après le 4ème comma
+        const parts = matching[0].split(",");
+        const urlParts = parts.slice(4);
+        const tileUrl = urlParts.join(",").trim();
+        console.log(`URL (fallback): ${tileUrl.substring(0, 100)}`);
+        if (tileUrl.startsWith("https")) {
+          const result = await downloadAndParseTile(tileUrl, cLat, cLon, radiusM);
+          if (result.length > 0) return result;
+        }
         continue;
       }
 
-      const tileBuffer = Buffer.from(await tileResp.arrayBuffer());
-      console.log(`Tile downloaded: ${tileBuffer.length} bytes`);
-
-      const decompressed = await gunzip(tileBuffer);
-      const text = decompressed.toString("utf8");
-      console.log(`Decompressed: ${text.length} chars`);
-
-      // 3. Parser les bâtiments Microsoft
-      // Format : CSV avec colonne "geometry" contenant du JSON, ou GeoJSON ligne par ligne
-      const buildings = [];
-      const lines2 = text.split("\n");
-      const firstLine = lines2[0]?.trim() || "";
-      console.log(`Tile format sample: ${firstLine.substring(0,100)}`);
-
-      // Détecter CSV vs GeoJSON
-      const isCSV = !firstLine.startsWith("{");
-      let startLine = 0;
-      if (isCSV) {
-        startLine = 1; // skip header
-        console.log("CSV format detected");
-      } else {
-        console.log("GeoJSON format detected");
-      }
-
-      for (let li = startLine; li < lines2.length; li++) {
-        const line = lines2[li];
-        if (!line?.trim()) continue;
-        try {
-          let coordsRaw = null;
-          let height = 0;
-
-          if (isCSV) {
-            // Extraire le JSON de géométrie entre { et }
-            const jsonStart = line.indexOf("{");
-            const jsonEnd = line.lastIndexOf("}");
-            if (jsonStart === -1 || jsonEnd === -1) continue;
-            const jsonStr = line.substring(jsonStart, jsonEnd+1).replace(/""/g, '"');
-            const geomObj = JSON.parse(jsonStr);
-            coordsRaw = geomObj.coordinates?.[0];
-            // Extraire hauteur si présente après le JSON
-            const afterJson = line.substring(jsonEnd+2);
-            if (afterJson) height = parseFloat(afterJson) || 0;
-          } else {
-            const feature = JSON.parse(line);
-            coordsRaw = feature.geometry?.coordinates?.[0];
-            const props = feature.properties || {};
-            height = parseFloat(props.height || props.Height || 0) || 0;
-          }
-
-          if (!coordsRaw || coordsRaw.length < 3) continue;
-          const geom = coordsRaw.map(c => ({ lat: c[1], lon: c[0] }));
-          const center = centroidLL(geom);
-          const dist = hav(cLat, cLon, center.lat, center.lon);
-          if (dist > radiusM) continue;
-
-          const levels = height > 0
-            ? Math.max(1, Math.round(height / 3.2))
-            : estimateLevels(geom, cLat, cLon);
-
-          buildings.push({ geom, levels, name: "", area: estimateArea(geom, cLat, cLon) });
-        } catch { continue; }
-      }
-
-      console.log(`Microsoft Buildings in radius: ${buildings.length}`);
-
-      if (buildings.length > 0) {
-        // Trier par distance (painter's algo)
-        buildings.sort((a, b) => {
-          const ca = centroidLL(a.geom), cb = centroidLL(b.geom);
-          return hav(cLat, cLon, ca.lat, ca.lon) - hav(cLat, cLon, cb.lat, cb.lon);
-        });
-        return buildings.slice(0, 300); // max 300 bâtiments
-      }
+      const tileUrl = urlMatch[1];
+      console.log(`URL: ${tileUrl.substring(0, 100)}`);
+      const result = await downloadAndParseTile(tileUrl, cLat, cLon, radiusM);
+      if (result.length > 0) return result;
 
     } catch(e) {
-      console.log(`Error fetching quadkey ${qk}:`, e.message);
+      console.log(`Error level ${level}: ${e.message}`);
     }
   }
 
   console.log("Microsoft Buildings fetch failed — using OSM only");
   return [];
+}
+
+async function downloadAndParseTile(tileUrl, cLat, cLon, radiusM) {
+  console.log("Downloading tile...");
+  const tileResp = await fetch(tileUrl, { signal: AbortSignal.timeout(25000) });
+  console.log(`Tile status: ${tileResp.status}`);
+  if (!tileResp.ok) { console.log(`Tile failed: ${tileResp.status}`); return []; }
+
+  const tileBuffer = Buffer.from(await tileResp.arrayBuffer());
+  console.log(`Tile size: ${tileBuffer.length} bytes`);
+
+  // Décompression — essayer gunzip puis zlib puis raw
+  let text = "";
+  try {
+    const decompressed = await gunzip(tileBuffer);
+    text = decompressed.toString("utf8");
+    console.log(`Gunzip OK: ${text.length} chars`);
+  } catch(e1) {
+    console.log(`Gunzip failed: ${e1.message}, trying raw...`);
+    try {
+      text = tileBuffer.toString("utf8");
+      console.log(`Raw text: ${text.length} chars`);
+    } catch(e2) {
+      console.log(`All decompress failed`);
+      return [];
+    }
+  }
+
+  // Log les 3 premières lignes pour debug
+  const sampleLines = text.split("\n").slice(0, 3);
+  sampleLines.forEach((l, i) => console.log(`Line ${i}: ${l.substring(0, 120)}`));
+
+  // Parser NDJSON
+  const buildings = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const feature = JSON.parse(line);
+      const coordsRaw = feature?.geometry?.coordinates?.[0];
+      if (!coordsRaw || coordsRaw.length < 3) continue;
+
+      const geom = coordsRaw.map(c => ({ lat: c[1], lon: c[0] }));
+      const center = centroidLL(geom);
+      if (hav(cLat, cLon, center.lat, center.lon) > radiusM) continue;
+
+      const props = feature.properties || {};
+      const height = parseFloat(props.height || props.Height || 0) || 0;
+      const levels = height > 0
+        ? Math.max(1, Math.round(height / 3.2))
+        : estimateLevels(geom, cLat, cLon);
+
+      buildings.push({ geom, levels, name: "", area: estimateArea(geom, cLat, cLon) });
+    } catch { continue; }
+  }
+
+  console.log(`Parsed ${buildings.length} buildings in radius`);
+  if (buildings.length > 0) {
+    buildings.sort((a,b) => {
+      const ca=centroidLL(a.geom), cb=centroidLL(b.geom);
+      return hav(cLat,cLon,ca.lat,ca.lon)-hav(cLat,cLon,cb.lat,cb.lon);
+    });
+  }
+  return buildings.slice(0, 300);
 }
 
 function estimateLevels(geom, cLat, cLon) {
@@ -420,16 +400,19 @@ function renderAxo(canvas, p) {
   ctx.strokeStyle="#d02818"; ctx.lineWidth=2;
   ctx.setLineDash([10,5]); ctx.stroke(); ctx.setLineDash([]);
 
-  // ── Annotations ───────────────────────────────────────────────────────────
-  function drawText(x,y,txt,color,size,bold=false,anchor="center") {
+  // ── Annotations, boussole, légende SUR l'image ──────────────────────────────
+
+  function T(x,y,txt,color,size,bold=false,anchor="center") {
     ctx.font=`${bold?"700":"500"} ${size}px Arial`;
     ctx.textAlign=anchor;
-    ctx.strokeStyle="white"; ctx.lineWidth=5;
+    ctx.strokeStyle="white"; ctx.lineWidth=5; ctx.lineJoin="round";
     ctx.strokeText(txt,x,y);
     ctx.fillStyle=color; ctx.fillText(txt,x,y);
   }
 
   const pCtr=axo(0,0,0,sc,cx,cy);
+
+  // Segment nord — accès principal
   let maxLat=-Infinity,northIdx=0;
   for(let i=0;i<coords.length-1;i++){
     const ml=(coords[i].lat+coords[(i+1)%coords.length].lat)/2;
@@ -438,48 +421,87 @@ function renderAxo(canvas, p) {
   const pm0=parcelPts[northIdx],pm1=parcelPts[(northIdx+1)%parcelPts.length];
   const midM={x:(pm0.x+pm1.x)/2,y:(pm0.y+pm1.y)/2};
   const midAxo=axo(midM.x,midM.y,0,sc,cx,cy);
+
+  // Retrait avant
   const fA=axo(midM.x,midM.y,0,sc,cx,cy);
   const fB=axo(midM.x,midM.y+setback_front,0,sc,cx,cy);
-
   ctx.beginPath(); ctx.moveTo(fA.x,fA.y); ctx.lineTo(fB.x,fB.y);
   ctx.strokeStyle="#d02818"; ctx.lineWidth=1.5;
   ctx.setLineDash([6,3]); ctx.stroke(); ctx.setLineDash([]);
-  drawText((fA.x+fB.x)/2,(fA.y+fB.y)/2-10,`+${setback_front}m`,"#d02818",13,true);
-  drawText(midAxo.x,midAxo.y-18,"Accès principal","#d02818",12,true);
-  drawText(pCtr.x,pCtr.y+14,`${land_width}m × ${land_depth}m`,"#333",11);
+  T((fA.x+fB.x)/2,(fA.y+fB.y)/2-10,`+${setback_front}m`,"#d02818",12,true);
+
+  // Retrait côté
+  const si=Math.floor(parcelPts.length*0.25)%parcelPts.length;
+  const sA=axo(parcelPts[si].x,parcelPts[si].y,0,sc,cx,cy);
+  const sB=axo(parcelPts[si].x-setback_side,parcelPts[si].y,0,sc,cx,cy);
+  ctx.beginPath(); ctx.moveTo(sA.x,sA.y); ctx.lineTo(sB.x,sB.y);
+  ctx.strokeStyle="#555"; ctx.lineWidth=1.2;
+  ctx.setLineDash([5,3]); ctx.stroke(); ctx.setLineDash([]);
+  T((sA.x+sB.x)/2,(sA.y+sB.y)/2-8,`+${setback_side}m`,"#555",11);
+
+  // Retrait arrière
+  const bi=Math.floor(parcelPts.length*0.6)%parcelPts.length;
+  const bA=axo(parcelPts[bi].x,parcelPts[bi].y,0,sc,cx,cy);
+  const bB=axo(parcelPts[bi].x,parcelPts[bi].y-setback_back,0,sc,cx,cy);
+  ctx.beginPath(); ctx.moveTo(bA.x,bA.y); ctx.lineTo(bB.x,bB.y);
+  ctx.strokeStyle="#555"; ctx.lineWidth=1.2;
+  ctx.setLineDash([5,3]); ctx.stroke(); ctx.setLineDash([]);
+  T((bA.x+bB.x)/2,(bA.y+bB.y)/2-8,`+${setback_back}m`,"#555",11);
+
+  // Côte largeur
+  const dA=axo(parcelPts[0].x,parcelPts[0].y,0,sc,cx,cy);
+  const dB=axo(parcelPts[1%parcelPts.length].x,parcelPts[1%parcelPts.length].y,0,sc,cx,cy);
+  ctx.strokeStyle="#555"; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(dA.x,dA.y-14); ctx.lineTo(dB.x,dB.y-14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(dA.x,dA.y-8); ctx.lineTo(dA.x,dA.y-22); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(dB.x,dB.y-8); ctx.lineTo(dB.x,dB.y-22); ctx.stroke();
+  T((dA.x+dB.x)/2,(dA.y+dB.y)/2-26,`${land_width}m`,"#222",13,true);
+
+  // Labels sur parcelle
+  T(midAxo.x,midAxo.y-22,"Accès principal","#d02818",13,true);
+  T(pCtr.x,pCtr.y-8,"Enveloppe constructible","#d02818",11);
+  T(pCtr.x,pCtr.y+10,`${buildable_fp} m²`,"#1d7a3e",15,true);
+  T(pCtr.x,pCtr.y+26,`${site_area} m² · ${land_width}×${land_depth}m`,"#444",10);
 
   // ── Boussole ──────────────────────────────────────────────────────────────
   ctx.save();
-  ctx.translate(W-52,52);
-  ctx.beginPath(); ctx.arc(0,0,22,0,2*Math.PI);
-  ctx.fillStyle="white"; ctx.fill();
-  ctx.strokeStyle="#e0dbd4"; ctx.lineWidth=1; ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(0,-16); ctx.lineTo(-4,-2); ctx.lineTo(0,-6); ctx.lineTo(4,-2);
+  ctx.translate(W-54,54);
+  ctx.beginPath(); ctx.arc(0,0,24,0,2*Math.PI);
+  ctx.fillStyle="white"; ctx.fill(); ctx.strokeStyle="#ccc"; ctx.lineWidth=1; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,-17); ctx.lineTo(-5,-2); ctx.lineTo(0,-7); ctx.lineTo(5,-2);
   ctx.closePath(); ctx.fillStyle="#1a1a1a"; ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(0,16); ctx.lineTo(-4,2); ctx.lineTo(0,6); ctx.lineTo(4,2);
-  ctx.closePath(); ctx.fillStyle="#cccccc"; ctx.fill();
-  ctx.font="bold 9px Arial"; ctx.textAlign="center";
-  ctx.fillStyle="#1a1a1a"; ctx.fillText("N",0,-20);
+  ctx.beginPath(); ctx.moveTo(0,17); ctx.lineTo(-5,2); ctx.lineTo(0,7); ctx.lineTo(5,2);
+  ctx.closePath(); ctx.fillStyle="#aaa"; ctx.fill();
+  ctx.font="bold 11px Arial"; ctx.textAlign="center"; ctx.fillStyle="#1a1a1a";
+  ctx.fillText("N",0,-22);
   ctx.restore();
 
-  // ── Légende ───────────────────────────────────────────────────────────────
+  // ── Légende (haut gauche) ─────────────────────────────────────────────────
+  const legItems=[
+    {type:"rect",fill:"#f2e2e0",stroke:"#d02818",label:`Parcelle — ${site_area} m²`},
+    {type:"dash",stroke:"#d02818",label:"Enveloppe constructible"},
+    {type:"rect",fill:"#f5f3ef",stroke:"#ccc",label:"Bâtiments existants"},
+  ];
+  const legPad=10, legLH=22;
+  const legW=215, legH=legPad*2+legItems.length*legLH+2;
   ctx.fillStyle="white";
-  ctx.beginPath(); ctx.roundRect(12,12,190,70,5);
-  ctx.fill(); ctx.strokeStyle="#e4e0d8"; ctx.lineWidth=1; ctx.stroke();
-  ctx.fillStyle="#f2e2e0";
-  ctx.beginPath(); ctx.roundRect(22,22,12,10,2);
-  ctx.fill(); ctx.strokeStyle="#d02818"; ctx.lineWidth=2; ctx.stroke();
-  ctx.font="10px Arial"; ctx.fillStyle="#444"; ctx.textAlign="left";
-  ctx.fillText(`Parcelle (${site_area} m²)`,40,32);
-  ctx.beginPath(); ctx.moveTo(22,43); ctx.lineTo(34,43);
-  ctx.strokeStyle="#d02818"; ctx.lineWidth=1.5;
-  ctx.setLineDash([5,2]); ctx.stroke(); ctx.setLineDash([]);
-  ctx.font="10px Arial"; ctx.fillStyle="#444";
-  ctx.fillText("Enveloppe constructible",40,48);
-  ctx.font="7px Arial"; ctx.fillStyle="#bbb";
-  ctx.fillText("© Microsoft Buildings · © OpenStreetMap",22,64);
+  ctx.beginPath(); ctx.roundRect(12,12,legW,legH,6);
+  ctx.fill(); ctx.strokeStyle="#e0ddd8"; ctx.lineWidth=1; ctx.stroke();
+  legItems.forEach((item,i)=>{
+    const iy=12+legPad+i*legLH;
+    if(item.type==="rect"){
+      ctx.fillStyle=item.fill;
+      ctx.beginPath(); ctx.roundRect(22,iy,14,12,2);
+      ctx.fill(); ctx.strokeStyle=item.stroke; ctx.lineWidth=2; ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.moveTo(22,iy+6); ctx.lineTo(36,iy+6);
+      ctx.strokeStyle=item.stroke; ctx.lineWidth=2;
+      ctx.setLineDash([5,2]); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.font="11px Arial"; ctx.fillStyle="#333"; ctx.textAlign="left";
+    ctx.fillText(item.label,42,iy+10);
+  });
+
 
   // ── Bande stats ───────────────────────────────────────────────────────────
   const BY=H;
