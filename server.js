@@ -8,6 +8,7 @@ app.use(express.json({ limit: "2mb" }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -330,6 +331,67 @@ function renderAxo(canvas,p) {
   ctx.textAlign="right";ctx.font="7px Arial";ctx.fillStyle="#ddd";ctx.fillText("BARLO · Diagnostic foncier",W-C1,BY+BH-10);
 }
 
+
+// ─── DALL-E img2img — amélioration du rendu axo ───────────────────────────────
+async function enhanceWithDallE(pngBuffer, W, H) {
+  if (!OPENAI_API_KEY) {
+    console.log("No OpenAI key — skipping enhancement");
+    return null;
+  }
+
+  console.log("Enhancing with DALL-E...");
+
+  try {
+    // DALL-E 2 edit endpoint — prend une image PNG + mask + prompt
+    // On utilise l'image directement sans mask (variation)
+    const { FormData, Blob } = await import("node:buffer").then(() => ({
+      FormData: global.FormData || require("undici").FormData,
+      Blob: global.Blob,
+    })).catch(() => ({ FormData: null, Blob: null }));
+
+    // Utiliser fetch avec FormData natif Node 18+
+    const form = new global.FormData();
+
+    // L'image doit être carré RGBA PNG pour DALL-E edit
+    const imageBlob = new Blob([pngBuffer], { type: "image/png" });
+    form.append("image", imageBlob, "axo.png");
+    form.append("prompt",
+      "Photorealistic axonometric architectural site analysis render. " +
+      "White and light gray buildings with strong directional shadows. " +
+      "Clean beige roads. Red dashed outline for the target parcel. " +
+      "Style: Hektar parametric solutions, professional urban planning diagram. " +
+      "Keep exact same building positions and geometry. High quality render."
+    );
+    form.append("n", "1");
+    form.append("size", `${W}x${H}`);
+    form.append("response_format", "b64_json");
+
+    const resp = await fetch("https://api.openai.com/v1/images/edits", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
+      body: form,
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      console.log(`DALL-E error ${resp.status}: ${err.substring(0, 200)}`);
+      return null;
+    }
+
+    const data = await resp.json();
+    const b64 = data.data?.[0]?.b64_json;
+    if (!b64) { console.log("No b64_json in response"); return null; }
+
+    console.log("DALL-E enhancement OK");
+    return Buffer.from(b64, "base64");
+
+  } catch(e) {
+    console.log(`DALL-E failed: ${e.message}`);
+    return null;
+  }
+}
+
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate",async(req,res)=>{
   const t0=Date.now();
@@ -369,8 +431,22 @@ app.post("/generate",async(req,res)=>{
       setback_front:Number(setback_front),setback_side:Number(setback_side),setback_back:Number(setback_back),
       city:city||"",district:district||"",zoning:zoning||"",terrain_context:terrain_context||""});
 
-    const png=canvas.toBuffer("image/png");
-    console.log(`PNG: ${png.length} bytes (${Date.now()-t0}ms)`);
+    let png=canvas.toBuffer("image/png");
+    console.log(`Canvas PNG: ${png.length} bytes (${Date.now()-t0}ms)`);
+
+    // Tenter l'amélioration DALL-E (optionnel — fallback sur canvas si échec)
+    // DALL-E 2 edit requiert image 1024x1024 RGBA
+    if (W <= 1024 && H <= 1024) {
+      const enhanced = await enhanceWithDallE(png, W, H);
+      if (enhanced) {
+        png = enhanced;
+        console.log(`DALL-E PNG: ${png.length} bytes (${Date.now()-t0}ms)`);
+      } else {
+        console.log("Using canvas PNG (DALL-E skipped)");
+      }
+    } else {
+      console.log(`Image ${W}x${H} > 1024px — DALL-E skipped, using canvas`);
+    }
 
     const sb=createClient(SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY);
     const slug=String(client_name||"client").toLowerCase().trim().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"");
