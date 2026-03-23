@@ -350,23 +350,16 @@ async function enhanceWithDallE(pngBuffer, W, H) {
     })).catch(() => ({ FormData: null, Blob: null }));
 
     // Utiliser fetch avec FormData natif Node 18+
+    // DALL-E 2 variations — pas besoin de mask
+    // L'image doit être carré PNG max 4MB
     const form = new global.FormData();
-
-    // L'image doit être carré RGBA PNG pour DALL-E edit
     const imageBlob = new Blob([pngBuffer], { type: "image/png" });
     form.append("image", imageBlob, "axo.png");
-    form.append("prompt",
-      "Photorealistic axonometric architectural site analysis render. " +
-      "White and light gray buildings with strong directional shadows. " +
-      "Clean beige roads. Red dashed outline for the target parcel. " +
-      "Style: Hektar parametric solutions, professional urban planning diagram. " +
-      "Keep exact same building positions and geometry. High quality render."
-    );
     form.append("n", "1");
-    form.append("size", `${W}x${H}`);
+    form.append("size", "1024x1024");
     form.append("response_format", "b64_json");
 
-    const resp = await fetch("https://api.openai.com/v1/images/edits", {
+    const resp = await fetch("https://api.openai.com/v1/images/variations", {
       method: "POST",
       headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
       body: form,
