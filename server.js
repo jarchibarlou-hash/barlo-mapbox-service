@@ -1,10 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // BARLO — generate-slide4-axo — Puppeteer + Mapbox GL JS (vrai rendu 3D)
 // ═══════════════════════════════════════════════════════════════════════════════
-// Utilise un Chrome headless avec SwiftShader (WebGL software) pour rendre
-// une vraie carte Mapbox GL avec bâtiments 3D extrudés, puis superpose
-// les overlays BARLO avec node-canvas.
-// ═══════════════════════════════════════════════════════════════════════════════
 
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
@@ -19,13 +15,14 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 
-// Reuse browser instance across requests
+// ─── BROWSER MANAGEMENT ─────────────────────────────────────────────────────
 let browserInstance = null;
 async function getBrowser() {
   if (browserInstance && browserInstance.isConnected()) return browserInstance;
+  console.log("Launching Chromium...");
   browserInstance = await puppeteer.launch({
     headless: "new",
-    protocolTimeout: 90000,
+    protocolTimeout: 120000,
     args: [
       "--use-gl=swiftshader",
       "--no-sandbox",
@@ -40,8 +37,10 @@ async function getBrowser() {
       "--no-first-run",
       "--no-zygote",
       "--font-render-hinting=none",
+      "--disable-accelerated-2d-canvas",
     ],
   });
+  console.log(`Chromium OK (pid ${browserInstance.process()?.pid})`);
   return browserInstance;
 }
 
@@ -114,7 +113,7 @@ function computeZoom(coords, cLat, cLon) {
   const targetViewM = ext * 5;
   const mpp = targetViewM / 900;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(19, Math.max(15, Math.round(z * 2) / 2));
+  return Math.min(18, Math.max(15, Math.round(z * 2) / 2));
 }
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -132,35 +131,23 @@ function computeBearing(coords, cLat, cLon) {
 async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, w, h) {
   const parcelGeoJSON = {
     type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: {},
-        geometry: {
-          type: "Polygon",
-          coordinates: [[
-            ...parcelCoords.map(c => [c.lon, c.lat]),
-            [parcelCoords[0].lon, parcelCoords[0].lat],
-          ]],
-        },
+    features: [{
+      type: "Feature", properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]],
       },
-    ],
+    }],
   };
   const envGeoJSON = {
     type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: {},
-        geometry: {
-          type: "Polygon",
-          coordinates: [[
-            ...envCoords.map(c => [c.lon, c.lat]),
-            [envCoords[0].lon, envCoords[0].lat],
-          ]],
-        },
+    features: [{
+      type: "Feature", properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [[...envCoords.map(c => [c.lon, c.lat]), [envCoords[0].lon, envCoords[0].lat]]],
       },
-    ],
+    }],
   };
 
   const html = `<!DOCTYPE html>
@@ -169,10 +156,7 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
   <meta charset="utf-8">
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
-  <style>
-    * { margin: 0; padding: 0; }
-    #map { width: ${w}px; height: ${h}px; }
-  </style>
+  <style>* { margin: 0; padding: 0; } #map { width: ${w}px; height: ${h}px; }</style>
 </head>
 <body>
   <div id="map"></div>
@@ -190,23 +174,15 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
     });
 
     map.on('style.load', () => {
-      // ── 3D BUILDINGS ──────────────────────────────────────────────
+      // 3D buildings
       const layers = map.getStyle().layers;
       let labelLayerId;
       for (const layer of layers) {
-        if (layer.type === 'symbol' && layer.layout['text-field']) {
-          labelLayerId = layer.id;
-          break;
-        }
+        if (layer.type === 'symbol' && layer.layout['text-field']) { labelLayerId = layer.id; break; }
       }
-
       map.addLayer({
-        id: '3d-buildings',
-        source: 'composite',
-        'source-layer': 'building',
-        filter: ['==', 'extrude', 'true'],
-        type: 'fill-extrusion',
-        minzoom: 14,
+        id: '3d-buildings', source: 'composite', 'source-layer': 'building',
+        filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 14,
         paint: {
           'fill-extrusion-color': '#e8e4de',
           'fill-extrusion-height': ['coalesce', ['get', 'height'], 6],
@@ -215,62 +191,39 @@ async function renderMap(center, zoom, bearing, pitch, parcelCoords, envCoords, 
         },
       }, labelLayerId);
 
-      // ── PARCEL ────────────────────────────────────────────────────
+      // Parcel
       map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-      map.addLayer({
-        id: 'parcel-fill',
-        type: 'fill',
-        source: 'parcel',
-        paint: { 'fill-color': '#d02818', 'fill-opacity': 0.14 },
-      });
-      map.addLayer({
-        id: 'parcel-line',
-        type: 'line',
-        source: 'parcel',
-        paint: { 'line-color': '#d02818', 'line-width': 3 },
-      });
+      map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+        paint: { 'fill-color': '#d02818', 'fill-opacity': 0.14 } });
+      map.addLayer({ id: 'parcel-line', type: 'line', source: 'parcel',
+        paint: { 'line-color': '#d02818', 'line-width': 3 } });
 
-      // ── ENVELOPE ──────────────────────────────────────────────────
+      // Envelope
       map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envGeoJSON)} });
-      map.addLayer({
-        id: 'envelope-line',
-        type: 'line',
-        source: 'envelope',
-        paint: {
-          'line-color': '#d02818',
-          'line-width': 2,
-          'line-opacity': 0.55,
-          'line-dasharray': [4, 2],
-        },
-      });
+      map.addLayer({ id: 'envelope-line', type: 'line', source: 'envelope',
+        paint: { 'line-color': '#d02818', 'line-width': 2, 'line-opacity': 0.55, 'line-dasharray': [4, 2] } });
     });
 
-    // Signal ready after tiles + buildings load
-    map.on('idle', () => {
-      window._mapReady = true;
-    });
+    // Signal ready
+    map.on('idle', () => { window._mapReady = true; });
+    // Fallback: mark ready after 20s even if idle never fires
+    setTimeout(() => { window._mapReady = true; }, 20000);
   </script>
 </body>
 </html>`;
 
   const browser = await getBrowser();
   const page = await browser.newPage();
+
+  // Use 1x to save memory — 900px is enough for slides
   await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
 
-  // Block unnecessary resources to speed up rendering
-  await page.setRequestInterception(true);
-  page.on('request', (req) => {
-    const rt = req.resourceType();
-    if (['font', 'media'].includes(rt)) req.abort();
-    else req.continue();
-  });
-
   try {
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 40000 });
-    // Wait for map to be fully rendered (tiles + 3D buildings loaded)
-    await page.waitForFunction("window._mapReady === true", { timeout: 35000 });
-    // Extra wait for tile rendering to complete
-    await new Promise(r => setTimeout(r, 2000));
+    await page.setContent(html, { waitUntil: "networkidle2", timeout: 60000 });
+    // Wait for map idle OR fallback timeout
+    await page.waitForFunction("window._mapReady === true", { timeout: 45000 });
+    // Extra buffer for tile rendering
+    await new Promise(r => setTimeout(r, 3000));
 
     const screenshot = await page.screenshot({ type: "png", encoding: "binary" });
     return screenshot;
@@ -299,29 +252,29 @@ function drawOverlays(ctx, W, H, BH, p) {
   }
 
   const cx = W / 2, cy = H / 2 + H * 0.04;
-  T(cx, cy - 30, "Accès principal ↓", "#d02818", 14, true);
-  T(cx, cy + 4, "Enveloppe constructible", "#d02818", 12);
-  T(cx, cy + 26, `${buildable_fp} m²`, "#1d7a3e", 18, true);
-  T(cx, cy + 44, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 11);
+  T(cx, cy - 50, "Accès principal ↓", "#d02818", 20, true);
+  T(cx, cy - 10, "Enveloppe constructible", "#d02818", 16);
+  T(cx, cy + 24, `${buildable_fp} m²`, "#1d7a3e", 28, true);
+  T(cx, cy + 52, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 14);
 
-  T(cx, cy - 65, `↕ Recul avant : ${setback_front}m`, "#d02818", 11, true);
-  T(cx - W * 0.18, cy + 10, `↔ ${setback_side}m`, "#666", 10);
-  T(cx + W * 0.18, cy + 10, `↔ ${setback_side}m`, "#666", 10);
-  T(cx, cy + 72, `↕ Recul arrière : ${setback_back}m`, "#666", 10);
+  T(cx, cy - 100, `↕ Recul avant : ${setback_front}m`, "#d02818", 14, true);
+  T(cx - W * 0.20, cy + 10, `↔ ${setback_side}m`, "#666", 13);
+  T(cx + W * 0.20, cy + 10, `↔ ${setback_side}m`, "#666", 13);
+  T(cx, cy + 90, `↕ Recul arrière : ${setback_back}m`, "#666", 13);
 
   // Compass
   ctx.save();
-  ctx.translate(W - 45, 45);
-  ctx.beginPath(); ctx.arc(0, 0, 20, 0, 2 * Math.PI);
+  ctx.translate(W - 50, 50);
+  ctx.beginPath(); ctx.arc(0, 0, 24, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fill();
-  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1.5; ctx.stroke();
   ctx.rotate(-(bearing || 30) * Math.PI / 180);
-  ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(-4, -2); ctx.lineTo(0, -6); ctx.lineTo(4, -2); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(-5, -2); ctx.lineTo(0, -7); ctx.lineTo(5, -2); ctx.closePath();
   ctx.fillStyle = "#d02818"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 14); ctx.lineTo(-4, 2); ctx.lineTo(0, 6); ctx.lineTo(4, 2); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, 16); ctx.lineTo(-5, 2); ctx.lineTo(0, 7); ctx.lineTo(5, 2); ctx.closePath();
   ctx.fillStyle = "#bbb"; ctx.fill();
-  ctx.font = "bold 10px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
-  ctx.fillText("N", 0, -17);
+  ctx.font = "bold 11px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.fillText("N", 0, -20);
   ctx.restore();
 
   // Legend
@@ -331,63 +284,64 @@ function drawOverlays(ctx, W, H, BH, p) {
     { type: "rect", fill: "#e8e4de", stroke: "#ccc", label: "Bâtiments 3D" },
     { type: "line", stroke: "#b0a080", opacity: 1, label: "Voirie" },
   ];
-  const legW = 200, legH = 18 + legItems.length * 24 + 14;
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
+  const legW = 260, legH = 20 + legItems.length * 28 + 16;
+  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
   ctx.fillStyle = "rgba(255,255,255,0.96)";
-  ctx.beginPath(); ctx.roundRect(12, 12, legW, legH, 8); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(14, 14, legW, legH, 10); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-  ctx.strokeStyle = "#e8e5e0"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.strokeStyle = "#e8e5e0"; ctx.lineWidth = 1.5; ctx.stroke();
 
   legItems.forEach((item, i) => {
-    const iy = 12 + 16 + i * 24;
+    const iy = 14 + 18 + i * 28;
     if (item.type === "rect") {
       ctx.fillStyle = item.fill;
-      ctx.beginPath(); ctx.roundRect(22, iy, 14, 12, 2); ctx.fill();
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(28, iy, 16, 14, 3); ctx.fill();
+      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2; ctx.stroke();
     } else {
-      ctx.beginPath(); ctx.moveTo(22, iy + 6); ctx.lineTo(36, iy + 6);
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(28, iy + 7); ctx.lineTo(44, iy + 7);
+      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5;
       ctx.globalAlpha = item.opacity || 1; ctx.stroke(); ctx.globalAlpha = 1;
     }
-    ctx.font = "10px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 44, iy + 11);
+    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
+    ctx.fillText(item.label, 54, iy + 12);
   });
-  ctx.font = "7px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox © OpenStreetMap", 22, 12 + legH - 6);
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
+  ctx.fillText("© Mapbox © OpenStreetMap", 28, 14 + legH - 8);
 
   // Stats bar
-  const BY = H, pad = 20;
+  const BY = H, pad = 24;
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, BY, W, BH);
   ctx.beginPath(); ctx.moveTo(0, BY); ctx.lineTo(W, BY);
-  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 4; ctx.stroke();
 
-  const C1 = pad, C2 = W * 0.25, C3 = W * 0.50, C4 = W * 0.75;
+  const C1 = pad, C2 = W * 0.25, C3 = W * 0.50, C4 = W * 0.74;
   ctx.textAlign = "left";
-  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#111";
-  ctx.fillText("Lecture stratégique du site", C1, BY + 26);
-  ctx.font = "9px Arial"; ctx.fillStyle = "#aaa";
-  ctx.fillText(`${city} · ${district} · Zoning : ${zoning}`, C1, BY + 42);
+  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#111";
+  ctx.fillText("Lecture stratégique du site", C1, BY + 34);
+  ctx.font = "11px Arial"; ctx.fillStyle = "#aaa";
+  ctx.fillText(`${city} · ${district} · Zoning : ${zoning}`, C1, BY + 52);
 
-  ctx.beginPath(); ctx.moveTo(C1, BY + 52); ctx.lineTo(W - pad, BY + 52);
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(C1, BY + 64); ctx.lineTo(W - pad, BY + 64);
+  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
 
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Surface parcelle", C1, BY + 66);
-  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${site_area} m²`, C1, BY + 88);
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Dimensions", C2, BY + 66);
-  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${land_width}m × ${land_depth}m`, C2, BY + 88);
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Empreinte constructible", C3, BY + 66);
-  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#1d7a3e"; ctx.fillText(`${buildable_fp} m²`, C3, BY + 88);
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Retraits réglementaires", C4, BY + 66);
-  ctx.font = "600 10px Arial"; ctx.fillStyle = "#333";
-  ctx.fillText(`Av: ${setback_front}m · Côtés: ${setback_side}m · Arr: ${setback_back}m`, C4, BY + 84);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Surface parcelle", C1, BY + 80);
+  ctx.font = "bold 26px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${site_area} m²`, C1, BY + 108);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Dimensions", C2, BY + 80);
+  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${land_width}m × ${land_depth}m`, C2, BY + 108);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Empreinte constructible", C3, BY + 80);
+  ctx.font = "bold 26px Arial"; ctx.fillStyle = "#1d7a3e"; ctx.fillText(`${buildable_fp} m²`, C3, BY + 108);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Retraits réglementaires", C4, BY + 80);
+  ctx.font = "600 13px Arial"; ctx.fillStyle = "#333";
+  ctx.fillText(`Avant : ${setback_front}m · Côtés : ${setback_side}m`, C4, BY + 100);
+  ctx.fillText(`Arrière : ${setback_back}m`, C4, BY + 118);
 
-  ctx.beginPath(); ctx.moveTo(C1, BY + 102); ctx.lineTo(W - pad, BY + 102);
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.font = "8px Arial"; ctx.fillStyle = "#ccc";
-  ctx.fillText((terrain_context || "").substring(0, 80), C1, BY + 118);
-  ctx.textAlign = "right"; ctx.font = "7px Arial"; ctx.fillStyle = "#ddd";
-  ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 8);
+  ctx.beginPath(); ctx.moveTo(C1, BY + 132); ctx.lineTo(W - pad, BY + 132);
+  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.font = "10px Arial"; ctx.fillStyle = "#ccc";
+  ctx.fillText((terrain_context || "").substring(0, 90), C1, BY + 152);
+  ctx.textAlign = "right"; ctx.font = "8px Arial"; ctx.fillStyle = "#ddd";
+  ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 10);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -430,7 +384,6 @@ app.post("/generate", async (req, res) => {
   console.log(`View: zoom=${zoom}, bearing=${bearing}°, pitch=${pitch}°`);
 
   try {
-    // ── 1. RENDER 3D MAP WITH PUPPETEER ───────────────────────────────────────
     console.log("Rendering 3D map with Puppeteer...");
     const mapW = Number(image_size) || 900;
     const mapH = mapW;
@@ -440,11 +393,11 @@ app.post("/generate", async (req, res) => {
     );
     console.log(`Map rendered: ${mapPng.length} bytes (${Date.now() - t0}ms)`);
 
-    // ── 2. COMPOSITE WITH CANVAS OVERLAYS ─────────────────────────────────────
+    // Composite with canvas overlays
     const mapImg = await loadImage(mapPng);
-    const W = mapImg.width;   // 900 (deviceScaleFactor=1)
-    const H = mapImg.height;  // 900
-    const BH = 160;
+    const W = mapImg.width;
+    const H = mapImg.height;
+    const BH = 180;
 
     const canvas = createCanvas(W, H + BH);
     const ctx = canvas.getContext("2d");
@@ -462,7 +415,7 @@ app.post("/generate", async (req, res) => {
     const png = canvas.toBuffer("image/png");
     console.log(`Final PNG: ${png.length} bytes (${Date.now() - t0}ms)`);
 
-    // ── 3. UPLOAD TO SUPABASE ─────────────────────────────────────────────────
+    // Upload to Supabase
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim()
       .replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -477,9 +430,7 @@ app.post("/generate", async (req, res) => {
     console.log(`Done: ${pd.publicUrl} (${Date.now() - t0}ms)`);
 
     return res.json({
-      ok: true,
-      public_url: pd.publicUrl,
-      path,
+      ok: true, public_url: pd.publicUrl, path,
       centroid: { lat: cLat, lon: cLon },
       view: { zoom, bearing, pitch },
       engine: "puppeteer-mapbox-gl",
@@ -503,10 +454,9 @@ app.listen(PORT, async () => {
   console.log(`Engine: Puppeteer + Mapbox GL JS (vrai 3D)`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Supabase: ${SUPABASE_URL ? "OK" : "MISSING"}`);
-  // Pre-warm browser so first request doesn't timeout
+  // Pre-warm browser at startup
   try {
-    const b = await getBrowser();
-    console.log(`Chromium launched OK (pid ${b.process()?.pid})`);
+    await getBrowser();
   } catch (e) {
     console.error("Chromium launch FAILED:", e.message);
   }
