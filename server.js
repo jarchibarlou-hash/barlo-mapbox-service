@@ -154,8 +154,9 @@ function buildMapboxUrl(cLat, cLon, zoom, bearing, pitch, coords, envCoords, w, 
   };
 
   const overlay = `geojson(${encodeURIComponent(JSON.stringify(geojson))})`;
-  // Custom style with 3D buildings enabled
-  const STYLE = "archibarlou/cmn3lkr2u005q01s76z33c892";
+  // streets-v12 has built-in fill-extrusion for 3D buildings at zoom 15+
+  // If you upload a custom style later, replace this with "archibarlou/YOUR_STYLE_ID"
+  const STYLE = "mapbox/streets-v12";
   const url = `https://api.mapbox.com/styles/v1/${STYLE}/static/${overlay}/${cLon.toFixed(6)},${cLat.toFixed(6)},${zoom},${bearing},${pitch}/${w}x${h}@2x?access_token=${MAPBOX_TOKEN}&logo=false&attribution=false`;
 
   console.log(`Mapbox URL length: ${url.length} chars`);
