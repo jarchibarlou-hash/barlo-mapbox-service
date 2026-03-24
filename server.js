@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "15.0-openai-recompose" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "16.0-trees-roads" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -452,7 +452,7 @@ function drawOverlays(ctx, W, H, BH, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v15 (Hektar + OpenAI + recompose) ═══");
+  console.log("═══ /generate v16 (trees + roads texture) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -568,14 +568,23 @@ STYLE TO APPLY:
 - Building rooftops: pure white #ffffff
 - Building sunlit faces: warm off-white #f5f3ef
 - Building shadow faces: warm medium gray #9a9690
-- Cast shadows on ground: solid warm gray #c4c0b8
-- Roads: warm beige #eae4d4 with subtle darker borders #ccc4ae
-- Red parcel fill: keep semi-transparent rose/pink
-- Red parcel outline #d02818: keep clearly visible, solid line
-- Dashed red envelope #d02818: keep clearly visible
-- Add small stylized trees (round canopy, top-down silhouette) in open spaces between buildings where ground is visible
-- No text, no labels, no annotations anywhere on the map
-- Professional urban planning quality suitable for 1000€/month architectural report`);
+- Cast shadows on ground: solid warm gray #c4c0b8, pronounced and directional
+- Roads: warm taupe #d4c9b0 slightly darker than background, with visible sidewalk strips #e8e2d4 on each side, subtle texture suggesting asphalt
+- Main roads slightly wider with a center line suggestion
+- Red parcel fill: semi-transparent rose/pink, keep exactly
+- Red parcel outline #d02818: clearly visible solid line
+- Dashed red envelope #d02818: clearly visible
+
+VEGETATION — VERY IMPORTANT:
+- Add many small stylized trees throughout: round canopy viewed from above, dark olive green #5a6e3a with lighter highlight #7a9050
+- Trees should vary in size (small, medium, large) and opacity (0.7 to 1.0) for natural depth
+- Place trees: along road sidewalks regularly spaced, in courtyards between buildings, in any open green spaces or parks visible
+- At least 20-30 trees visible across the scene
+- Some trees can partially overlap building edges for realism
+- If any park or green area is visible, fill it with grass texture #c8d4a0 and dense trees
+
+No text, no labels, no annotations anywhere on the map.
+Professional urban planning quality suitable for 1000€/month architectural report.`);
 
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
@@ -656,7 +665,7 @@ STYLE TO APPLY:
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v15 (Hektar + OpenAI + recompose) on port ${PORT}`);
+  console.log(`BARLO v16 (trees + roads) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
