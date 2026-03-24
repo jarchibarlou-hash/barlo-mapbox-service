@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "FINAL-FROZEN-v41" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "42.0-zones-canvas-fixed" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -267,18 +267,9 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       },
     }, labelLayerId);
 
-    // ── Parcelle — flat rouge au sol, SOUS les bâtiments ────────────
-    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.18 } }, '3d-buildings');
-    map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
-
-    // ── Enveloppe constructible — tirets rouges, SOUS les bâtiments ──
-    map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
-    map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5,
-               'line-dasharray': [5, 3], 'line-opacity': 0.85 } }, '3d-buildings');
+    // ── PAS de parcelle ni enveloppe dans Mapbox ─────────────────────
+    // Elles seront dessinées en node-canvas après OpenAI
+    // → position GPS exacte garantie, jamais déplacées par l'IA
   });
 
   let rendered = false;
@@ -517,10 +508,65 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 
+
+// ─── GPS → PIXEL (projection Mercator avec bearing) ──────────────────────────
+function gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H) {
+  const scale = 256 * Math.pow(2, zoom);
+  const toMX = (lng) => (lng + 180) / 360 * scale;
+  const toMY = (lat) => {
+    const s = Math.sin(lat * Math.PI / 180);
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * scale;
+  };
+  const cx = toMX(cLon), cy = toMY(cLat);
+  const dx = toMX(lon) - cx;
+  const dy = toMY(lat) - cy;
+  // Rotation bearing
+  const rad = bearing * Math.PI / 180;
+  const rx = dx * Math.cos(rad) - dy * Math.sin(rad);
+  const ry = dx * Math.sin(rad) + dy * Math.cos(rad);
+  return { x: W / 2 + rx, y: H / 2 + ry };
+}
+
+// ─── DESSIN PARCELLE + ENVELOPPE — POSITION GPS EXACTE ───────────────────────
+function drawZones(ctx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing) {
+  const toP = (c) => gpsToPixel(c.lat, c.lon, cLat, cLon, zoom, bearing, W, H);
+
+  // ── Fill parcelle rouge semi-transparent ─────────────────────────────────
+  const parcelPts = coords.map(toP);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(parcelPts[0].x, parcelPts[0].y);
+  parcelPts.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.closePath();
+  ctx.fillStyle = "rgba(208,40,24,0.22)";
+  ctx.fill();
+  // Contour rouge solide
+  ctx.strokeStyle = "#d02818";
+  ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Enveloppe constructible — tirets rouges ───────────────────────────────
+  const envPts = envelopeCoords.map(toP);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(envPts[0].x, envPts[0].y);
+  envPts.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.closePath();
+  ctx.strokeStyle = "#d02818";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.setLineDash([10, 6]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate FINAL FROZEN v41 ═══");
+  console.log("═══ /generate v42 (zones canvas GPS exact) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -578,6 +624,7 @@ app.post("/generate", async (req, res) => {
     const ctx = canvas.getContext("2d");
     const mapImg = await loadImage(screenshotBuf);
     ctx.drawImage(mapImg, 0, 0);
+    drawZones(ctx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing);
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
 
     const png = canvas.toBuffer("image/png");
@@ -612,7 +659,7 @@ app.post("/generate", async (req, res) => {
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high"); // préserver la géométrie source
-        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS - DO NOT CHANGE ANYTHING:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Keep EXACTLY the red parcel and dashed red envelope at their exact positions\n- Do NOT move, add or remove any building or road\n- Do NOT shift or resize the parcel\n\nBUILDINGS - MANDATORY - DO NOT CHANGE:\n- Building rooftops: BRIGHT PURE WHITE #ffffff - stark and clean\n- Building sunlit vertical faces: PURE WHITE #ffffff to very light #faf9f6\n- Building shadow vertical faces: warm gray #9a9690\n- Building EDGES AND OUTLINES: MANDATORY strong black lines #1a1a1a on ALL edges and corners - bold, crisp, architectural ink style - this is non-negotiable\n- Cast shadows: solid warm gray #c4c0b8, sharp and directional\n\nGROUND AND VEGETATION - MANDATORY - DO NOT CHANGE:\n- Ground between buildings inside blocks: fresh vivid green #7ab83a with slight warm softness - NOT neon, NOT artificial, natural sunlit grass\n- Grass texture: visible fine grain #6aa030 with subtle warm tone\n- Trees: round canopy top-view, rich dark green #3d7a1a with highlight #5aaa28, vary sizes and opacity 0.7-1.0\n- Tree shadows: dark green #2d5a12\n- Place trees densely: along every sidewalk, in every open space, in all courtyards - at least 30 trees\n- Ground is predominantly GREEN inside blocks - vivid and natural\n\nROADS - MANDATORY - DO NOT CHANGE:\n- Roads MUST respect their exact width from the original image - do not make them thinner\n- Road surface: warm sandy beige #d4c49a with visible asphalt grain texture\n- Road borders/curbs: darker #b8a478, sharp line separating road from sidewalk\n- Sidewalks: narrow cream strip #ede4cc between road and grass\n- Main roads: wider with subtle center dashed line\n- All roads are CLEARLY sandy/beige colored - strong contrast with green blocks\n- Road grid is prominent and immediately readable as urban infrastructure\n\nBLOCK STRUCTURE - MANDATORY - DO NOT CHANGE:\n- Each city block is an island of green + buildings COMPLETELY SURROUNDED by roads\n- Roads on ALL 4 sides of every block\n- Green stays STRICTLY INSIDE each block - NEVER crosses roads\n- Road edges are hard sharp lines - no blending\n- Urban grid is crystal clear: blocks are separated islands\n\nSITE PARCEL - MANDATORY:\n- Parcel stays at its EXACT position - do NOT move or resize it\n- Parcel does NOT overlap roads - stays strictly inside its block\n- Inside parcel: semi-transparent warm red/rose fill #d02818 at 20% opacity\n- Dashed red envelope line inside parcel: clearly visible #d02818\n- Parcel reads as a highlighted plot within the green block\n\nNo text, no labels, no annotations.\nOutput: premium urban planning illustration - white buildings with black edges, vivid green blocks, sandy beige roads, highlighted red parcel.");
+        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS - DO NOT CHANGE ANYTHING:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Keep EXACTLY the red parcel and dashed red envelope at their exact positions\n- Do NOT move, add or remove any building or road\n- Do NOT shift or resize the parcel\n\nBUILDINGS - MANDATORY - DO NOT CHANGE:\n- Building rooftops: BRIGHT PURE WHITE #ffffff - stark and clean\n- Building sunlit vertical faces: PURE WHITE #ffffff to very light #faf9f6\n- Building shadow vertical faces: warm gray #9a9690\n- Building EDGES AND OUTLINES: MANDATORY strong black lines #1a1a1a on ALL edges and corners - bold, crisp, architectural ink style - this is non-negotiable\n- Cast shadows: solid warm gray #c4c0b8, sharp and directional\n\nGROUND AND VEGETATION - MANDATORY - DO NOT CHANGE:\n- Ground between buildings inside blocks: fresh vivid green #7ab83a with slight warm softness - NOT neon, NOT artificial, natural sunlit grass\n- Grass texture: visible fine grain #6aa030 with subtle warm tone\n- Trees: round canopy top-view, rich dark green #3d7a1a with highlight #5aaa28, vary sizes and opacity 0.7-1.0\n- Tree shadows: dark green #2d5a12\n- Place trees densely: along every sidewalk, in every open space, in all courtyards - at least 30 trees\n- Ground is predominantly GREEN inside blocks - vivid and natural\n\nROADS - MANDATORY - DO NOT CHANGE:\n- Roads MUST respect their exact width from the original image - do not make them thinner\n- Road surface: warm sandy beige #d4c49a with visible asphalt grain texture\n- Road borders/curbs: darker #b8a478, sharp line separating road from sidewalk\n- Sidewalks: narrow cream strip #ede4cc between road and grass\n- Main roads: wider with subtle center dashed line\n- All roads are CLEARLY sandy/beige colored - strong contrast with green blocks\n- Road grid is prominent and immediately readable as urban infrastructure\n\nBLOCK STRUCTURE - MANDATORY - DO NOT CHANGE:\n- Each city block is an island of green + buildings COMPLETELY SURROUNDED by roads\n- Roads on ALL 4 sides of every block\n- Green stays STRICTLY INSIDE each block - NEVER crosses roads\n- Road edges are hard sharp lines - no blending\n- Urban grid is crystal clear: blocks are separated islands\n\nSITE AREA:\n- There is an open plot visible in the scene - leave it as empty sandy ground #e8d4b8\n- Do NOT add vegetation inside the empty plot\n- Do NOT draw any red outlines - they will be added separately\n\nNo text, no labels, no annotations.\nOutput: premium urban planning illustration - white buildings with black edges, vivid green blocks, sandy beige roads, highlighted red parcel.");
 
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
@@ -636,6 +683,8 @@ app.post("/generate", async (req, res) => {
           const finalCtx = finalCanvas.getContext("2d");
           const enhancedMapImg = await loadImage(enhancedMapBuf);
           finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
+          // Parcelle + enveloppe dessinées EN DERNIER par-dessus tout — position GPS exacte
+          drawZones(finalCtx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
 
@@ -681,7 +730,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO FINAL FROZEN v41 on port ${PORT}`);
+  console.log(`BARLO v42 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
