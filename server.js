@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "36.0-v16prompt-exact" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "37.0-black-edges-vivid-green" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -520,7 +520,7 @@ function drawSolarArc(ctx, W, H, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v36 (v16 prompt exact + zones flat) ═══");
+  console.log("═══ /generate v37 (black edges + vivid green) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -612,7 +612,7 @@ app.post("/generate", async (req, res) => {
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high"); // préserver la géométrie source
-        form.append("prompt", "Restyle this axonometric urban planning map into a professional architectural diagram in the exact style of Hektar (parametric solutions AB).\n\nCRITICAL - GEOMETRY PRESERVATION:\n- Keep EXACTLY the same camera angle, pitch and bearing\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout\n- Keep EXACTLY the red highlighted parcel at its exact position and shape\n- Keep the dashed red envelope line at its exact position\n- Do NOT move, add or remove any building or road\n- Do NOT change the composition or crop\n\nSTYLE TO APPLY:\n- Background and ground: warm cream #f2f0ec\n- Building rooftops: pure white #ffffff\n- Building sunlit faces: warm off-white #f5f3ef\n- Building shadow faces: warm medium gray #9a9690\n- Cast shadows on ground: solid warm gray #c4c0b8, pronounced and directional\n- Roads: warm taupe #d4c9b0 slightly darker than background, with visible sidewalk strips #e8e2d4 on each side, subtle texture suggesting asphalt\n- Main roads slightly wider with a center line suggestion\n- Red parcel fill: semi-transparent rose/pink, keep exactly\n- Red parcel outline #d02818: clearly visible solid line\n- Dashed red envelope #d02818: clearly visible\n\nVEGETATION - VERY IMPORTANT:\n- Add many small stylized trees throughout: round canopy viewed from above, dark olive green #5a6e3a with lighter highlight #7a9050\n- Trees should vary in size (small, medium, large) and opacity (0.7 to 1.0) for natural depth\n- Place trees: along road sidewalks regularly spaced, in courtyards between buildings, in any open green spaces or parks visible\n- At least 20-30 trees visible across the scene\n- Some trees can partially overlap building edges for realism\n- If any park or green area is visible, fill it with grass texture #c8d4a0 and dense trees\n\nNo text, no labels, no annotations anywhere on the map.\nProfessional urban planning quality suitable for 1000 EUR/month architectural report.");
+        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network\n- Keep EXACTLY the red parcel and dashed red envelope at their exact positions\n- Do NOT move, add or remove any building or road\n\nBUILDINGS - CRITICAL:\n- Building rooftops: BRIGHT PURE WHITE #ffffff, stark and clean\n- Building sunlit vertical faces: PURE WHITE #ffffff to very light warm white #faf9f6\n- Building shadow vertical faces: warm gray #9a9690\n- Building EDGES AND OUTLINES: MANDATORY strong black lines #1a1a1a on ALL edges, corners and roof lines - this is the most important visual element - make them bold, crisp, architectural - like a physical scale model with inked edges\n- Cast shadows: solid warm gray #c4c0b8, sharp and directional\n- The contrast between pure white buildings and black edges is THE defining visual quality\n\nGROUND AND VEGETATION - CRITICAL:\n- Ground between buildings: vivid fresh green #7ab83a - NOT pale, NOT khaki, NOT beige - VIVID GREEN\n- Grass texture: visible fine grain, medium-dark green #6aa832\n- Trees: round canopy top-view, VIVID dark green #3d7a1a with bright highlight #5aaa28\n- Tree shadows on ground: dark green #2d5a12\n- Place trees densely: along every sidewalk, in every open space, in all courtyards\n- At least 30-40 trees visible, covering most open ground areas\n- Parks and open areas: filled with rich green grass texture #7ab83a and dense tree canopies\n- The ground should be predominantly GREEN, not cream or beige\n\nROADS:\n- Road surface: warm light beige #e8e0cc\n- Road borders: slightly darker #d4c9b0\n- Sidewalks: cream #f0ece0\n\nPARCEL:\n- Red fill: semi-transparent rose/pink, flat on ground, under buildings\n- Red outline #d02818: clearly visible\n- Dashed red envelope #d02818: clearly visible\n\nNo text, no labels, no annotations.\nOutput: premium urban planning illustration, physical architectural model aesthetic with vivid green landscape.");
 
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
@@ -681,7 +681,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v36 on port ${PORT}`);
+  console.log(`BARLO v37 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
