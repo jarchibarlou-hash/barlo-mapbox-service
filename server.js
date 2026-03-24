@@ -244,11 +244,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-color': [
           'interpolate', ['linear'],
           ['coalesce', ['get', 'height'], 6],
-          0,  '#ffffff',   // toits : blanc pur
-          4,  '#ffffff',   // face lumière : blanc pur
-          10, '#f0ede8',   // milieu : très légèrement teinté
-          20, '#d8d4cc',   // face ombre
-          40, '#b0aca4',   // ombre profonde
+          0,  '#ffffff',   // toits : blanc pur Hektar
+          4,  '#f5f3ef',   // face lumière : blanc chaud
+          10, '#e8e4dc',   // milieu
+          20, '#c8c4bc',   // face ombre : gris chaud
+          40, '#9a9690',   // ombre profonde Hektar
         ],
         'fill-extrusion-height': [
           'case',
