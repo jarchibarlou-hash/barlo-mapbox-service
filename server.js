@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "16.0-trees-roads" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "17.0-constraints" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -421,11 +421,13 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.beginPath(); ctx.moveTo(C1, BY + 76); ctx.lineTo(W - pad, BY + 76);
   ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
 
-  // Stats
+  // Stats enrichies avec ratio constructible
+  const ratio = Math.round(buildable_fp / site_area * 100);
   const stats = [
     { label: "Surface parcelle", val: `${site_area} m²`, col: C1, color: "#111" },
     { label: "Dimensions", val: `${land_width}m × ${land_depth}m`, col: C2, color: "#111" },
     { label: "Empreinte constructible", val: `${buildable_fp} m²`, col: C3, color: "#1d7a3e" },
+    { label: "Ratio constructible", val: `${ratio}%`, col: C3 + 160, color: "#1d7a3e" },
   ];
   stats.forEach(s => {
     ctx.font = "10px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText(s.label, s.col, BY + 96);
@@ -449,10 +451,216 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 16);
 }
 
+// ─── FETCH NOM DE RUE NOMINATIM ───────────────────────────────────────────────
+async function fetchStreetName(lat, lon) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=17`;
+    const r = await fetch(url, { headers: { "User-Agent": "BARLO-diagnostic/1.0" } });
+    const j = await r.json();
+    const addr = j.address || {};
+    return addr.road || addr.street || addr.pedestrian || addr.path || null;
+  } catch { return null; }
+}
+
+// ─── DRAW CONSTRAINTS ────────────────────────────────────────────────────────
+// Dessine les annotations de contraintes sur la carte (par-dessus l'image enhanced)
+// Coordonnées pixel : on projette les coords GPS → pixels via zoom/bearing/center
+function gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H) {
+  // Projection Mercator simplifiée
+  const scale = 256 * Math.pow(2, zoom);
+  const toMercX = (lng) => (lng + 180) / 360 * scale;
+  const toMercY = (lat) => {
+    const s = Math.sin(lat * Math.PI / 180);
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * scale;
+  };
+  const cx = toMercX(cLon), cy = toMercY(cLat);
+  const px = toMercX(lon) - cx;
+  const py = toMercY(lat) - cy;
+  // Rotation bearing
+  const rad = bearing * Math.PI / 180;
+  const rx = px * Math.cos(rad) - py * Math.sin(rad);
+  const ry = px * Math.sin(rad) + py * Math.cos(rad);
+  return { x: W / 2 + rx, y: H / 2 + ry };
+}
+
+function drawConstraints(ctx, W, H, p) {
+  const {
+    coords, envelopeCoords, cLat, cLon, zoom, bearing,
+    setback_front, setback_side, setback_back,
+    buildable_fp, site_area, land_width, land_depth,
+    streetNames,
+  } = p;
+
+  const toP = (lat, lon) => gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H);
+
+  // ── Ratio constructible — badge central sur la parcelle ──────────────────
+  const ratio = Math.round(buildable_fp / site_area * 100);
+  const parcelPts = coords.map(c => toP(c.lat, c.lon));
+  const cx = parcelPts.reduce((s, p) => s + p.x, 0) / parcelPts.length;
+  const cy = parcelPts.reduce((s, p) => s + p.y, 0) / parcelPts.length;
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.18)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 2;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath(); ctx.roundRect(cx - 52, cy - 28, 104, 52, 8); ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.font = "bold 22px Arial"; ctx.fillStyle = "#d02818"; ctx.textAlign = "center";
+  ctx.fillText(`${ratio}%`, cx, cy + 2);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#888";
+  ctx.fillText("CONSTRUCTIBLE", cx, cy + 17);
+  ctx.restore();
+
+  // ── Flèches retraits réglementaires ──────────────────────────────────────
+  // On dessine des flèches double-sens entre bord parcelle et bord enveloppe
+  // Pour chaque côté : midpoint parcelle → midpoint enveloppe
+  const n = coords.length;
+  const sides = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const midParcel = {
+      lat: (coords[i].lat + coords[j].lat) / 2,
+      lon: (coords[i].lon + coords[j].lon) / 2,
+    };
+    const midEnv = {
+      lat: (envelopeCoords[i].lat + envelopeCoords[j].lat) / 2,
+      lon: (envelopeCoords[i].lon + envelopeCoords[j].lon) / 2,
+    };
+    sides.push({ midParcel, midEnv, index: i });
+  }
+
+  // Déterminer les retraits par côté (front=avant, side=côtés, back=arrière)
+  // Le côté "avant" est celui avec la latitude max (le plus au nord = face à la rue)
+  const setbacks = sides.map((s, i) => {
+    const avgLat = (coords[i].lat + coords[(i + 1) % n].lat) / 2;
+    const maxLat = Math.max(...coords.map(c => c.lat));
+    const minLat = Math.min(...coords.map(c => c.lat));
+    if (Math.abs(avgLat - maxLat) < 0.00005) return { ...s, val: setback_front, label: `Av. ${setback_front}m`, color: "#d02818" };
+    if (Math.abs(avgLat - minLat) < 0.00005) return { ...s, val: setback_back, label: `Ar. ${setback_back}m`, color: "#e07010" };
+    return { ...s, val: setback_side, label: `${setback_side}m`, color: "#c05000" };
+  });
+
+  setbacks.forEach(s => {
+    const pA = toP(s.midParcel.lat, s.midParcel.lon);
+    const pB = toP(s.midEnv.lat, s.midEnv.lon);
+    const dist = Math.sqrt((pB.x - pA.x) ** 2 + (pB.y - pA.y) ** 2);
+    if (dist < 4) return; // trop petit, pas de flèche
+
+    ctx.save();
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 2]);
+
+    // Ligne double-sens
+    ctx.beginPath(); ctx.moveTo(pA.x, pA.y); ctx.lineTo(pB.x, pB.y); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Pointe flèche A
+    const angle = Math.atan2(pB.y - pA.y, pB.x - pA.x);
+    const drawArrow = (x, y, ang) => {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 7 * Math.cos(ang - 0.4), y - 7 * Math.sin(ang - 0.4));
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 7 * Math.cos(ang + 0.4), y - 7 * Math.sin(ang + 0.4));
+      ctx.strokeStyle = s.color; ctx.lineWidth = 1.5; ctx.stroke();
+    };
+    drawArrow(pA.x, pA.y, angle + Math.PI);
+    drawArrow(pB.x, pB.y, angle);
+
+    // Label au milieu
+    const mx = (pA.x + pB.x) / 2, my = (pA.y + pB.y) / 2;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    const tw = ctx.measureText(s.label).width;
+    ctx.fillRect(mx - tw / 2 - 3, my - 9, tw + 6, 14);
+    ctx.font = "bold 10px Arial"; ctx.fillStyle = s.color; ctx.textAlign = "center";
+    ctx.fillText(s.label, mx, my + 2);
+    ctx.restore();
+  });
+
+  // ── Orientation solaire ───────────────────────────────────────────────────
+  // Le nord est à bearing degrés depuis le haut de l'image
+  // On dessine un arc solaire en bas-droite de la carte
+  const SX = W - 90, SY = H - 90, SR = 38;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.12)"; ctx.shadowBlur = 8;
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.beginPath(); ctx.arc(SX, SY, SR + 8, 0, 2 * Math.PI); ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#e8e4dc"; ctx.lineWidth = 1; ctx.stroke();
+
+  // Arc solaire (est→sud→ouest = 90°→180°→270° depuis nord)
+  const northRad = -(bearing) * Math.PI / 180 - Math.PI / 2;
+  const sunriseAngle = northRad + Math.PI / 2;  // Est
+  const sunsetAngle = northRad + 3 * Math.PI / 2; // Ouest
+
+  ctx.beginPath();
+  ctx.arc(SX, SY, SR - 4, sunriseAngle, sunsetAngle);
+  const grad = ctx.createLinearGradient(
+    SX + Math.cos(sunriseAngle) * SR, SY + Math.sin(sunriseAngle) * SR,
+    SX + Math.cos(sunsetAngle) * SR, SY + Math.sin(sunsetAngle) * SR
+  );
+  grad.addColorStop(0, "rgba(255,160,0,0.3)");
+  grad.addColorStop(0.5, "rgba(255,200,0,0.5)");
+  grad.addColorStop(1, "rgba(255,100,0,0.3)");
+  ctx.strokeStyle = grad; ctx.lineWidth = 6; ctx.stroke();
+
+  // Icône soleil au milieu de l'arc (sud)
+  const sunAngle = northRad + Math.PI; // Sud = direction du soleil en Afrique subsaharienne
+  const sunX = SX + Math.cos(sunAngle) * (SR - 4);
+  const sunY = SY + Math.sin(sunAngle) * (SR - 4);
+  ctx.fillStyle = "#f0a000";
+  ctx.beginPath(); ctx.arc(sunX, sunY, 5, 0, 2 * Math.PI); ctx.fill();
+
+  // Labels cardinaux
+  ctx.font = "bold 9px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#888";
+  const dirs = [
+    { label: "N", angle: northRad },
+    { label: "S", angle: northRad + Math.PI },
+    { label: "E", angle: northRad + Math.PI / 2 },
+    { label: "O", angle: northRad - Math.PI / 2 },
+  ];
+  dirs.forEach(d => {
+    const dx = SX + Math.cos(d.angle) * (SR + 2);
+    const dy = SY + Math.sin(d.angle) * (SR + 2);
+    ctx.fillStyle = d.label === "N" ? "#d02818" : "#999";
+    ctx.font = d.label === "N" ? "bold 10px Arial" : "9px Arial";
+    ctx.fillText(d.label, dx, dy + 3);
+  });
+  ctx.restore();
+
+  // ── Noms de rues ─────────────────────────────────────────────────────────
+  if (streetNames && streetNames.length > 0) {
+    streetNames.forEach(street => {
+      if (!street.name || !street.point) return;
+      const sp = toP(street.point.lat, street.point.lon);
+      if (sp.x < 0 || sp.x > W || sp.y < 0 || sp.y > H) return;
+
+      ctx.save();
+      const label = street.name;
+      const typeLabel = street.type === "primary" ? "• PRINCIPALE" : "• secondaire";
+      const tw = Math.max(ctx.measureText(label).width + 16, 80);
+
+      ctx.shadowColor = "rgba(0,0,0,0.1)"; ctx.shadowBlur = 6;
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.beginPath(); ctx.roundRect(sp.x - tw / 2, sp.y - 18, tw, 32, 4); ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = street.type === "primary" ? "#b08040" : "#ccc4ae";
+      ctx.lineWidth = 1; ctx.stroke();
+
+      ctx.font = "bold 10px Arial"; ctx.fillStyle = "#555"; ctx.textAlign = "center";
+      ctx.fillText(label, sp.x, sp.y - 4);
+      ctx.font = "8px Arial";
+      ctx.fillStyle = street.type === "primary" ? "#b08040" : "#999";
+      ctx.fillText(typeLabel, sp.x, sp.y + 10);
+      ctx.restore();
+    });
+  }
+}
+
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v16 (trees + roads texture) ═══");
+  console.log("═══ /generate v17 (constraints + streets + solar) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -603,17 +811,68 @@ Professional urban planning quality suitable for 1000€/month architectural rep
           const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           console.log(`OpenAI enhanced map: ${enhancedMapBuf.length} bytes`);
 
-          // ── Recomposer : enhanced map + légende/boussole/bande stats ──────
-          // Canvas final = 1280×1480 (même dimensions que l'original)
+          // ── Recomposer : enhanced map + contraintes + légende/boussole/bande stats ──
           const W = 1280, H = 1280, BH = 200;
           const finalCanvas = createCanvas(W, H + BH);
           const finalCtx = finalCanvas.getContext("2d");
 
-          // 1. Dessiner l'image enhanced OpenAI redimensionnée à 1280×1280
+          // 1. Image enhanced OpenAI → 1280×1280
           const enhancedMapImg = await loadImage(enhancedMapBuf);
           finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
 
-          // 2. Redessiner les overlays (légende, boussole, bande stats) par-dessus
+          // 2. Fetch noms de rues Nominatim pour les 4 côtés de la parcelle
+          const streetNames = [];
+          try {
+            const sides = [
+              { // côté avant (nord)
+                lat: Math.max(...coords.map(c => c.lat)),
+                lon: coords.reduce((s, c) => s + c.lon, 0) / coords.length,
+              },
+              { // côté est
+                lat: coords.reduce((s, c) => s + c.lat, 0) / coords.length,
+                lon: Math.max(...coords.map(c => c.lon)),
+              },
+              { // côté sud
+                lat: Math.min(...coords.map(c => c.lat)),
+                lon: coords.reduce((s, c) => s + c.lon, 0) / coords.length,
+              },
+              { // côté ouest
+                lat: coords.reduce((s, c) => s + c.lat, 0) / coords.length,
+                lon: Math.min(...coords.map(c => c.lon)),
+              },
+            ];
+            const seen = new Set();
+            for (const side of sides) {
+              // Décaler légèrement vers l'extérieur pour tomber sur la rue
+              const offsetLat = side.lat + (side.lat - cLat) * 0.0008;
+              const offsetLon = side.lon + (side.lon - cLon) * 0.0008;
+              const name = await fetchStreetName(offsetLat, offsetLon);
+              if (name && !seen.has(name)) {
+                seen.add(name);
+                // Déterminer type de rue (simplifié : si côté nord/est = principal)
+                const type = sides.indexOf(side) <= 1 ? "primary" : "secondary";
+                streetNames.push({ name, point: { lat: offsetLat, lon: offsetLon }, type });
+              }
+            }
+            console.log(`Streets found: ${streetNames.map(s => s.name).join(", ")}`);
+          } catch (e) {
+            console.warn("Nominatim error:", e.message);
+          }
+
+          // 3. Annotations contraintes par-dessus la carte enhanced
+          drawConstraints(finalCtx, W, H, {
+            coords, envelopeCoords, cLat, cLon, zoom, bearing,
+            setback_front: Number(setback_front),
+            setback_side: Number(setback_side),
+            setback_back: Number(setback_back),
+            buildable_fp: Number(buildable_fp),
+            site_area: Number(site_area),
+            land_width: Number(land_width),
+            land_depth: Number(land_depth),
+            streetNames,
+          });
+
+          // 4. Légende + boussole + bande stats par-dessus tout
           drawOverlays(finalCtx, W, H, BH, {
             site_area: Number(site_area), land_width: Number(land_width),
             land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
@@ -665,7 +924,7 @@ Professional urban planning quality suitable for 1000€/month architectural rep
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v16 (trees + roads) on port ${PORT}`);
+  console.log(`BARLO v17 (constraints + streets + solar) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
