@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "10.0" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "13.0-hektar-style" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -128,9 +128,78 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
   mapboxgl.accessToken = '${mapboxToken}';
 
+  const hektarStyle = {
+    "version": 8,
+    "name": "Hektar",
+    "sources": {
+      "mapbox-streets": {
+        "type": "vector",
+        "url": "mapbox://mapbox.mapbox-streets-v8"
+      },
+      "mapbox-terrain": {
+        "type": "vector",
+        "url": "mapbox://mapbox.mapbox-terrain-v2"
+      },
+      "composite": {
+        "type": "vector",
+        "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2"
+      }
+    },
+    "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+    "sprite": "mapbox://sprites/mapbox/light-v11",
+    "layers": [
+      // Fond crème Hektar
+      { "id": "background", "type": "background",
+        "paint": { "background-color": "#f2f0ec" } },
+
+      // Eau
+      { "id": "water", "type": "fill",
+        "source": "composite", "source-layer": "water",
+        "paint": { "fill-color": "#c8dce8" } },
+
+      // Végétation / parcs
+      { "id": "landuse-park", "type": "fill",
+        "source": "composite", "source-layer": "landuse",
+        "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
+        "paint": { "fill-color": "#e0ddd4" } },
+
+      // Zones urbaines (légèrement plus foncé que fond)
+      { "id": "landuse-urban", "type": "fill",
+        "source": "composite", "source-layer": "landuse",
+        "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
+        "paint": { "fill-color": "#ebe8e2" } },
+
+      // Routes — case (bordure)
+      { "id": "road-case-secondary", "type": "line",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+
+      { "id": "road-case-street", "type": "line",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+
+      // Routes — surface beige Hektar
+      { "id": "road-fill-secondary", "type": "line",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+
+      { "id": "road-fill-street", "type": "line",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+    ]
+  };
+
   const map = new mapboxgl.Map({
     container: 'map',
-    style: 'mapbox://styles/mapbox/light-v11',
+    style: hektarStyle,
     center: [${center.lon}, ${center.lat}],
     zoom: ${zoom},
     bearing: ${bearing},
@@ -154,27 +223,8 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       position: [1.15, 195, 40],
     });
 
-    // ── Masquer labels de rues (trop chargé) ─────────────────────────
-    const style = map.getStyle();
-    for (const layer of style.layers) {
-      if (layer.type === 'symbol') {
-        // Garder uniquement les noms de rues principales
-        const isRoadLabel = layer['source-layer'] === 'road' ||
-          (layer.id && (layer.id.includes('road-label') || layer.id.includes('street-label')));
-        if (!isRoadLabel) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
-        }
-      }
-    }
-
-    // ── Trouver label layer pour insertion ────────────────────────────
-    let labelLayerId;
-    for (const layer of style.layers) {
-      if (layer.type === 'symbol' && layer.layout && layer.layout['text-field']) {
-        labelLayerId = layer.id;
-        break;
-      }
-    }
+    // Style custom Hektar = pas de labels du tout, labelLayerId inutile
+    const labelLayerId = undefined;
 
     // ── Bâtiments 3D avec variation de hauteur ────────────────────────
     // On utilise fill-extrusion avec une expression qui ajoute de la variabilité
@@ -187,24 +237,20 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       type: 'fill-extrusion',
       minzoom: 13,
       paint: {
-        // Couleur basée sur la hauteur pour effet de profondeur réaliste
+        // Style Hektar : toit blanc, faces progressives du clair au sombre
         'fill-extrusion-color': [
           'interpolate', ['linear'],
           ['coalesce', ['get', 'height'], 6],
-          0,  '#ece8e0',
-          5,  '#e8e4dc',
-          10, '#e2ded6',
-          20, '#d8d4cc',
-          35, '#ccc8c0',
-          60, '#c0bcb4',
+          0,  '#ffffff',   // toits : blanc pur Hektar
+          4,  '#f5f3ef',   // face lumière : blanc chaud
+          10, '#e8e4dc',   // milieu
+          20, '#c8c4bc',   // face ombre : gris chaud
+          40, '#9a9690',   // ombre profonde Hektar
         ],
-        // Hauteur avec multiplicateur + variabilité via expression
-        // On amplifie légèrement les hauteurs pour meilleure lisibilité 3D
         'fill-extrusion-height': [
           'case',
           ['has', 'height'],
           ['*', ['get', 'height'], 1.6],
-          // Bâtiments sans hauteur connue : estimation par surface approximative
           8
         ],
         'fill-extrusion-base': [
@@ -213,7 +259,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
           ['*', ['get', 'min_height'], 1.6],
           0
         ],
-        'fill-extrusion-opacity': 0.95,
+        'fill-extrusion-opacity': 1.0,
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
@@ -403,7 +449,7 @@ function drawOverlays(ctx, W, H, BH, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v10 (Browserless + Mapbox GL 3D) ═══");
+  console.log("═══ /generate v13 (Hektar style custom + Mapbox GL 3D) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -499,7 +545,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v10 on port ${PORT}`);
+  console.log(`BARLO v13 (Hektar style) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
 });
