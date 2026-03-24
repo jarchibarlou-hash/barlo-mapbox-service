@@ -23,7 +23,7 @@ const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 app.get("/health", (req, res) => res.json({
   ok: true,
   engine: "browserless-mapbox-gl-3d",
-  version: "9.0",
+  version: "9.1",
   browserless: BROWSERLESS_TOKEN ? "configured" : "MISSING",
   mapbox: MAPBOX_TOKEN ? "configured" : "MISSING",
 }));
@@ -422,7 +422,7 @@ app.post("/generate", async (req, res) => {
 
   const zoom = computeZoom(coords, cLat, cLon);
   const bearing = computeBearing(coords, cLat, cLon);
-  console.log(`View: zoom=${zoom}, bearing=${bearing}°, pitch=55°`);
+  console.log(`View: zoom=${zoom}, bearing=${bearing}°, pitch=62°`);
 
   let browser;
   try {
@@ -500,7 +500,7 @@ app.post("/generate", async (req, res) => {
     return res.json({
       ok: true, public_url: pd.publicUrl, path,
       centroid: { lat: cLat, lon: cLon },
-      view: { zoom, bearing, pitch: 55 },
+      view: { zoom, bearing, pitch: 62 },
       engine: "browserless-mapbox-gl-3d-v9",
       duration_ms: Date.now() - t0,
     });
@@ -516,7 +516,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO Axo Service v9.0 on port ${PORT}`);
+  console.log(`BARLO Axo Service v9.1 on port ${PORT}`);
   console.log(`Engine: Browserless + Mapbox GL 3D`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING — sign up at browserless.io"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
