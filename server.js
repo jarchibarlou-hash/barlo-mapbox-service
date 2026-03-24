@@ -572,6 +572,71 @@ function drawZones(ctx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing)
   ctx.restore();
 }
 
+// ─── HTML MAPBOX ZONES ONLY — fond transparent, même perspective ──────────────
+function generateZonesHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
+  const parcelGeoJSON = {
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
+  };
+  const envelopeGeoJSON = {
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
+  };
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1280px; height: 1280px; overflow: hidden; background: transparent; }
+  #map { width: 1280px; height: 1280px; }
+  .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-group { display: none !important; }
+</style>
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+</head>
+<body>
+<div id="map"></div>
+<script>
+(function() {
+  mapboxgl.accessToken = '${mapboxToken}';
+  const transparentStyle = {
+    "version": 8, "name": "Transparent",
+    "sources": {},
+    "layers": [{ "id": "background", "type": "background", "paint": { "background-color": "rgba(0,0,0,0)" } }]
+  };
+  const map = new mapboxgl.Map({
+    container: 'map', style: transparentStyle,
+    center: [${center.lon}, ${center.lat}],
+    zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
+    antialias: true, preserveDrawingBuffer: true,
+    fadeDuration: 0, interactive: false,
+  });
+  map.addControl = function() {};
+  map.on('style.load', () => {
+    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.22 } });
+    map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
+      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } });
+    map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
+    map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
+      paint: { 'line-color': '#d02818', 'line-width': 2.5,
+               'line-dasharray': [5, 3], 'line-opacity': 0.85 } });
+  });
+  let rendered = false;
+  map.on('idle', () => {
+    if (rendered) return;
+    rendered = true;
+    setTimeout(() => { window.__MAP_READY = true; }, 1500);
+  });
+  setTimeout(() => { window.__MAP_READY = true; }, 15000);
+})();
+</script>
+</body>
+</html>`;
+}
+
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
