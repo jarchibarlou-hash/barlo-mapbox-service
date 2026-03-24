@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "19.0-clean-constraints" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "20.0-final" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -267,17 +267,15 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       },
     }, labelLayerId);
 
-    // ── Parcelle — fill-extrusion légère pour visibilité 3D ──────────
+    // ── Parcelle — flat fill au sol (pas d'extrusion) ────────────────
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({
-      id: 'parcel-fill-3d',
-      type: 'fill-extrusion',
+      id: 'parcel-fill',
+      type: 'fill',
       source: 'parcel',
       paint: {
-        'fill-extrusion-color': '#d02818',
-        'fill-extrusion-height': 0.5,
-        'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.25,
+        'fill-color': '#d02818',
+        'fill-opacity': 0.15,
       },
     });
     map.addLayer({
@@ -291,30 +289,49 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       },
     });
 
-    // ── Enveloppe constructible ───────────────────────────────────────
+    // ── Enveloppe réglementaire (reculs) — tirets rouges ─────────────
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
+    map.addLayer({
+      id: 'envelope-fill',
+      type: 'fill',
+      source: 'envelope',
+      paint: {
+        'fill-color': '#1a3a5c',
+        'fill-opacity': 0.12,
+      },
+    });
     map.addLayer({
       id: 'envelope-outline',
       type: 'line',
       source: 'envelope',
       paint: {
-        'line-color': '#d02818',
-        'line-width': 2.5,
-        'line-dasharray': [5, 3],
-        'line-opacity': 0.85,
+        'line-color': '#1a3a5c',
+        'line-width': 2,
+        'line-dasharray': [6, 3],
+        'line-opacity': 0.8,
       },
     });
 
-    // ── Volume constructible (extrusion translucide) ──────────────────
+    // ── Noms de rues natifs Mapbox — style gris fin sur route ────────
     map.addLayer({
-      id: 'envelope-volume',
-      type: 'fill-extrusion',
-      source: 'envelope',
+      id: 'road-labels',
+      type: 'symbol',
+      source: 'composite',
+      'source-layer': 'road',
+      filter: ['in', 'class', 'primary', 'secondary', 'tertiary', 'street'],
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['DIN Pro Regular', 'Arial Unicode MS Regular'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 15, 10, 18, 13],
+        'text-max-angle': 30,
+        'symbol-placement': 'line',
+        'text-padding': 10,
+        'text-letter-spacing': 0.05,
+      },
       paint: {
-        'fill-extrusion-color': '#1d7a3e',
-        'fill-extrusion-height': 12,
-        'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.12,
+        'text-color': '#7a6a50',
+        'text-halo-color': 'rgba(255,255,255,0.85)',
+        'text-halo-width': 2,
       },
     });
   });
@@ -332,266 +349,70 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 </html>`;
 }
 
-// ─── OVERLAYS CANVAS ──────────────────────────────────────────────────────────
-function drawOverlays(ctx, W, H, BH, p) {
-  const { site_area, land_width, land_depth, buildable_fp,
-    setback_front, setback_side, setback_back,
-    city, district, zoning, terrain_context, bearing } = p;
-
-  // ── Boussole ─────────────────────────────────────────────────────────────
-  ctx.save();
-  ctx.translate(W - 58, 58);
-  // Ombre douce
-  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
-  ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
-  ctx.fillStyle = "rgba(255,255,255,0.96)"; ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
-  // Flèche orientée selon bearing
-  ctx.rotate(-(bearing || 0) * Math.PI / 180);
-  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
-  ctx.fillStyle = "#d02818"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
-  ctx.fillStyle = "#ccc"; ctx.fill();
-  ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
-  ctx.fillText("N", 0, -22);
-  ctx.restore();
-
-  // ── Légende ───────────────────────────────────────────────────────────────
-  const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
-    { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
-
-    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D" },
-  ];
-  const legPad = 14, legLH = 26, legW = 300;
-  const legH = legPad * 2 + legItems.length * legLH + 10;
-
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
-  ctx.fillStyle = "rgba(255,255,255,0.97)";
-  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.restore();
-
-  legItems.forEach((item, i) => {
-    const iy = 16 + legPad + i * legLH;
-    ctx.save();
-    if (item.type === "rect") {
-      ctx.fillStyle = item.fill;
-      ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
-    } else {
-      ctx.beginPath(); ctx.moveTo(28, iy + 6); ctx.lineTo(44, iy + 6);
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5;
-      ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
-    }
-    ctx.restore();
-    ctx.font = "12px Arial, Helvetica, sans-serif";
-    ctx.fillStyle = "#444"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 52, iy + 11);
-  });
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-
-  // ── Bande stats ───────────────────────────────────────────────────────────
-  const BY = H;
-
-  // Fond blanc avec ombre subtile en haut
-  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, BY, W, BH);
-
-  // Ligne rouge top
-  ctx.beginPath(); ctx.moveTo(0, BY); ctx.lineTo(W, BY);
-  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 4; ctx.stroke();
-
-  const pad = 32;
-  const C1 = pad, C2 = W * 0.26, C3 = W * 0.52, C4 = W * 0.76;
-
-  ctx.textAlign = "left";
-
-  // Titre
-  ctx.font = "bold 20px Arial"; ctx.fillStyle = "#111";
-  ctx.fillText("Lecture stratégique du site", C1, BY + 42);
-  ctx.font = "11px Arial"; ctx.fillStyle = "#aaa";
-  ctx.fillText(`${city}  ·  ${district}  ·  Zoning : ${zoning}`, C1, BY + 62);
-
-  // Séparateur
-  ctx.beginPath(); ctx.moveTo(C1, BY + 76); ctx.lineTo(W - pad, BY + 76);
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
-
-  // Stats enrichies avec ratio constructible
-  const ratio = Math.round(buildable_fp / site_area * 100);
-  const stats = [
-    { label: "Surface parcelle", val: `${site_area} m²`, col: C1, color: "#111" },
-    { label: "Dimensions", val: `${land_width}m × ${land_depth}m`, col: C2, color: "#111" },
-    { label: "Empreinte constructible", val: `${buildable_fp} m²`, col: C3, color: "#1d7a3e" },
-    { label: "Ratio constructible", val: `${ratio}%`, col: C3 + 160, color: "#1d7a3e" },
-  ];
-  stats.forEach(s => {
-    ctx.font = "10px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText(s.label, s.col, BY + 96);
-    ctx.font = `bold 26px Arial`; ctx.fillStyle = s.color; ctx.fillText(s.val, s.col, BY + 128);
-  });
-
-  // Retraits
-  ctx.font = "10px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Retraits réglementaires", C4, BY + 96);
-  ctx.font = "600 13px Arial"; ctx.fillStyle = "#555";
-  ctx.fillText(`Avant : ${setback_front}m  ·  Côtés : ${setback_side}m`, C4, BY + 114);
-  ctx.fillText(`Arrière : ${setback_back}m`, C4, BY + 132);
-
-  // Séparateur bas
-  ctx.beginPath(); ctx.moveTo(C1, BY + 148); ctx.lineTo(W - pad, BY + 148);
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
-
-  // Terrain context + signature
-  ctx.font = "11px Arial"; ctx.fillStyle = "#ccc";
-  ctx.fillText((terrain_context || "").substring(0, 100), C1, BY + BH - 16);
-  ctx.textAlign = "right"; ctx.font = "9px Arial"; ctx.fillStyle = "#ddd";
-  ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 16);
-}
-
-// ─── LÉGENDE + BOUSSOLE SEULES (sans bande stats) ────────────────────────────
-function drawLegendAndCompass(ctx, W, H, p) {
-  const { site_area, bearing } = p;
-
-  // Boussole haut droite
-  ctx.save();
-  ctx.translate(W - 58, 58);
-  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
-  ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
-  ctx.fillStyle = "rgba(255,255,255,0.96)"; ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.rotate(-(bearing || 0) * Math.PI / 180);
-  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
-  ctx.fillStyle = "#d02818"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
-  ctx.fillStyle = "#ccc"; ctx.fill();
-  ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
-  ctx.fillText("N", 0, -22);
-  ctx.restore();
-
-  // Légende haut gauche
-  const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
-    { type: "dash", stroke: "rgba(26,58,92,0.6)", fill: "rgba(26,58,92,0.15)", label: "Zone constructible" },
-    { type: "dash", stroke: "#d02818", label: "Enveloppe réglementaire" },
-    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D" },
-  ];
-  const legPad = 14, legLH = 26, legW = 300;
-  const legH = legPad * 2 + legItems.length * legLH + 10;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
-  ctx.fillStyle = "rgba(255,255,255,0.97)";
-  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.restore();
-  legItems.forEach((item, i) => {
-    const iy = 16 + legPad + i * legLH;
-    ctx.save();
-    if (item.type === "rect") {
-      ctx.fillStyle = item.fill;
-      ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
-    } else {
-      if (item.fill) {
-        ctx.fillStyle = item.fill;
-        ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
-      }
-      ctx.beginPath(); ctx.moveTo(28, iy + 6); ctx.lineTo(44, iy + 6);
-      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5;
-      ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
-    }
-    ctx.restore();
-    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 52, iy + 11);
-  });
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-}
-
-
+// ─── FETCH NOM DE RUE NOMINATIM ───────────────────────────────────────────────
 async function fetchStreetName(lat, lon) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=17`;
     const r = await fetch(url, { headers: { "User-Agent": "BARLO-diagnostic/1.0" } });
     const j = await r.json();
     const addr = j.address || {};
-    return addr.road || addr.street || addr.pedestrian || addr.path || null;
+    return addr.road || addr.street || addr.pedestrian || null;
   } catch { return null; }
 }
 
-// ─── DRAW CONSTRAINTS ────────────────────────────────────────────────────────
-// Dessine les annotations de contraintes sur la carte (par-dessus l'image enhanced)
-// Coordonnées pixel : on projette les coords GPS → pixels via zoom/bearing/center
-function gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H) {
-  // Projection Mercator simplifiée
-  const scale = 256 * Math.pow(2, zoom);
-  const toMercX = (lng) => (lng + 180) / 360 * scale;
-  const toMercY = (lat) => {
-    const s = Math.sin(lat * Math.PI / 180);
-    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * scale;
-  };
-  const cx = toMercX(cLon), cy = toMercY(cLat);
-  const px = toMercX(lon) - cx;
-  const py = toMercY(lat) - cy;
-  // Rotation bearing
-  const rad = bearing * Math.PI / 180;
-  const rx = px * Math.cos(rad) - py * Math.sin(rad);
-  const ry = px * Math.sin(rad) + py * Math.cos(rad);
-  return { x: W / 2 + rx, y: H / 2 + ry };
-}
+// ─── OVERLAYS CANVAS — légende + boussole + arc solaire + noms rues ──────────
+function drawOverlays(ctx, W, H, p) {
+  const { site_area, bearing, streetData } = p;
 
-function drawConstraints(ctx, W, H, p) {
-  const {
-    coords, envelopeCoords, cLat, cLon, zoom, bearing,
-    setback_front, setback_side, setback_back,
-    buildable_fp, site_area, land_width, land_depth,
-    streetNames,
-  } = p;
+  // ── Boussole haut droite ──────────────────────────────────────────────────
+  ctx.save();
+  ctx.translate(W - 58, 58);
+  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
+  ctx.fillStyle = "rgba(255,255,255,0.96)"; ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.rotate(-(bearing || 0) * Math.PI / 180);
+  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
+  ctx.fillStyle = "#d02818"; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
+  ctx.fillStyle = "#ccc"; ctx.fill();
+  ctx.rotate((bearing || 0) * Math.PI / 180);
+  ctx.font = "bold 16px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.fillText("N", 0, -24);
+  ctx.restore();
 
-  const toP = (lat, lon) => gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H);
-
-  // ── Buildable footprint — zone bleu nuit transparent ─────────────────────
-  // On dessine l'envelopeCoords comme zone constructible en bleu
-  const envPts = envelopeCoords.map(c => toP(c.lat, c.lon));
-  if (envPts.length >= 3) {
+  // ── Légende haut gauche ───────────────────────────────────────────────────
+  const legItems = [
+    { type: "rect", fill: "rgba(208,40,24,0.15)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
+    { type: "rect", fill: "rgba(26,58,92,0.12)", stroke: "rgba(26,58,92,0.8)", dash: true, label: "Zone constructible" },
+    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D" },
+  ];
+  const legPad = 14, legLH = 26, legW = 300;
+  const legH = legPad * 2 + legItems.length * legLH + 10;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "rgba(255,255,255,0.97)";
+  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.restore();
+  legItems.forEach((item, i) => {
+    const iy = 16 + legPad + i * legLH;
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(envPts[0].x, envPts[0].y);
-    envPts.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.closePath();
-    ctx.fillStyle = "rgba(26,58,92,0.15)"; // #1a3a5c 15%
-    ctx.fill();
-    // Contour bleu nuit
-    ctx.strokeStyle = "rgba(26,58,92,0.6)";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 4]);
-    ctx.stroke();
+    ctx.fillStyle = item.fill;
+    ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
+    if (item.dash) { ctx.setLineDash([4, 2]); }
+    ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
-  }
+    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
+    ctx.fillText(item.label, 52, iy + 11);
+  });
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
+  ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
 
-  // ── Parcelle — contour rouge au sol (dessiné par-dessus pour visibilité) ─
-  const parcelPts = coords.map(c => toP(c.lat, c.lon));
-  if (parcelPts.length >= 3) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(parcelPts[0].x, parcelPts[0].y);
-    parcelPts.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.closePath();
-    ctx.fillStyle = "rgba(208,40,24,0.12)";
-    ctx.fill();
-    ctx.strokeStyle = "#d02818";
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // ── Course du soleil — grand cercle bas-droite ────────────────────────────
+  // ── Arc solaire bas droite — grand et visible ─────────────────────────────
   const SX = W - 120, SY = H - 120, SR = 75;
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 14;
@@ -606,10 +427,9 @@ function drawConstraints(ctx, W, H, p) {
   const sunriseAngle = northRad + Math.PI / 2;
   const sunsetAngle = northRad + 3 * Math.PI / 2;
 
-  // Halo
   ctx.beginPath(); ctx.arc(SX, SY, SR - 8, sunriseAngle, sunsetAngle);
   ctx.strokeStyle = "rgba(255,180,0,0.15)"; ctx.lineWidth = 18; ctx.stroke();
-  // Arc principal
+
   ctx.beginPath(); ctx.arc(SX, SY, SR - 8, sunriseAngle, sunsetAngle);
   const grad = ctx.createLinearGradient(
     SX + Math.cos(sunriseAngle) * SR, SY + Math.sin(sunriseAngle) * SR,
@@ -620,7 +440,6 @@ function drawConstraints(ctx, W, H, p) {
   grad.addColorStop(1, "rgba(255,80,0,0.6)");
   ctx.strokeStyle = grad; ctx.lineWidth = 8; ctx.stroke();
 
-  // Soleil
   const sunAngle = northRad + Math.PI;
   const sunX = SX + Math.cos(sunAngle) * (SR - 8);
   const sunY = SY + Math.sin(sunAngle) * (SR - 8);
@@ -634,54 +453,33 @@ function drawConstraints(ctx, W, H, p) {
   ctx.fillStyle = "#f5c000"; ctx.beginPath(); ctx.arc(sunX, sunY, 7, 0, 2 * Math.PI); ctx.fill();
   ctx.fillStyle = "#f0a000"; ctx.beginPath(); ctx.arc(sunX, sunY, 4, 0, 2 * Math.PI); ctx.fill();
 
-  // E / O
-  const eX = SX + Math.cos(sunriseAngle) * (SR + 3), eY = SY + Math.sin(sunriseAngle) * (SR + 3);
-  const oX = SX + Math.cos(sunsetAngle) * (SR + 3), oY = SY + Math.sin(sunsetAngle) * (SR + 3);
+  const eX = SX + Math.cos(sunriseAngle) * (SR + 4), eY = SY + Math.sin(sunriseAngle) * (SR + 4);
+  const oX = SX + Math.cos(sunsetAngle) * (SR + 4), oY = SY + Math.sin(sunsetAngle) * (SR + 4);
   ctx.font = "bold 11px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#c08020";
   ctx.fillText("E", eX, eY + 4); ctx.fillText("O", oX, oY + 4);
-
-  // N plus gros
   const nX = SX + Math.cos(northRad) * (SR + 6), nY = SY + Math.sin(northRad) * (SR + 6);
-  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#d02818"; ctx.textAlign = "center";
-  ctx.fillText("N", nX, nY + 5);
-  // S
+  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#d02818"; ctx.fillText("N", nX, nY + 5);
   const sX = SX + Math.cos(northRad + Math.PI) * (SR + 4), sY = SY + Math.sin(northRad + Math.PI) * (SR + 4);
-  ctx.font = "11px Arial"; ctx.fillStyle = "#999";
-  ctx.fillText("S", sX, sY + 4);
-
+  ctx.font = "11px Arial"; ctx.fillStyle = "#999"; ctx.fillText("S", sX, sY + 4);
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "center";
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 20);
   ctx.restore();
 
-  // ── Noms de rues style Mapbox — texte gris fin sur la route ──────────────
-  if (streetNames && streetNames.length > 0) {
-    streetNames.forEach(street => {
-      if (!street.name || !street.point) return;
-      const sp = toP(street.point.lat, street.point.lon);
-      if (sp.x < 60 || sp.x > W - 60 || sp.y < 60 || sp.y > H - 60) return;
-
+  // ── Noms de rues style Mapbox — gris fin sur route ────────────────────────
+  if (streetData && streetData.length > 0) {
+    streetData.forEach(s => {
+      if (!s.name || !s.px || !s.py) return;
+      if (s.px < 40 || s.px > W - 40 || s.py < 40 || s.py > H - 40) return;
       ctx.save();
-      // Angle de la rue dans l'image (bearing + orientation de la rue)
-      const streetAngle = (street.angle || 0) - bearing * Math.PI / 180;
-
-      ctx.translate(sp.x, sp.y);
-      ctx.rotate(streetAngle);
-
-      const label = street.name;
-      const isPrimary = street.type === "primary";
-
-      // Halo blanc derrière le texte (style Mapbox)
-      ctx.font = isPrimary ? "bold 11px Arial" : "10px Arial";
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.lineWidth = 3;
-      ctx.lineJoin = "round";
-      ctx.textAlign = "center";
+      ctx.translate(s.px, s.py);
+      ctx.rotate(s.angle || 0);
+      const label = s.name;
+      ctx.font = s.primary ? "bold 11px Arial" : "10px Arial";
+      ctx.strokeStyle = "rgba(255,255,255,0.88)";
+      ctx.lineWidth = 3; ctx.lineJoin = "round"; ctx.textAlign = "center";
       ctx.strokeText(label, 0, 0);
-
-      // Texte gris
-      ctx.fillStyle = isPrimary ? "#6b5c3e" : "#8a7a60";
+      ctx.fillStyle = s.primary ? "#6b5c3e" : "#8a7a60";
       ctx.fillText(label, 0, 0);
-
       ctx.restore();
     });
   }
@@ -690,7 +488,7 @@ function drawConstraints(ctx, W, H, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v19 (clean constraints — no text on map) ═══");
+  console.log("═══ /generate v20 (final — Mapbox zones + OpenAI style + canvas overlays) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -742,26 +540,40 @@ app.post("/generate", async (req, res) => {
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
 
-    // Compositing
-    const W = 1280, H = 1280, BH = 200;
-    const canvas = createCanvas(W, H + BH);
+    // ── Fetch noms de rues Nominatim (avant OpenAI pour gain de temps) ────
+    const streetData = [];
+    try {
+      const sides = [
+        { lat: Math.max(...coords.map(c => c.lat)) + 0.0003, lon: cLon, primary: true, angle: -0.3 },
+        { lat: cLat, lon: Math.max(...coords.map(c => c.lon)) + 0.0003, primary: false, angle: 0.3 },
+        { lat: Math.min(...coords.map(c => c.lat)) - 0.0003, lon: cLon, primary: false, angle: -0.3 },
+        { lat: cLat, lon: Math.min(...coords.map(c => c.lon)) - 0.0003, primary: false, angle: 0.3 },
+      ];
+      const seen = new Set();
+      for (const side of sides) {
+        const name = await fetchStreetName(side.lat, side.lon);
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          // Position pixel approximative (centre de l'image décalé vers le côté)
+          const fracX = side.lon > cLon ? 0.75 : (side.lon < cLon ? 0.25 : 0.5);
+          const fracY = side.lat > cLat ? 0.2 : (side.lat < cLat ? 0.75 : 0.5);
+          streetData.push({ name, px: fracX * 1280, py: fracY * 1280, primary: side.primary, angle: side.angle });
+        }
+      }
+      console.log(`Streets: ${streetData.map(s => s.name).join(", ")}`);
+    } catch (e) { console.warn("Nominatim:", e.message); }
+
+    // Compositing base (1280×1280 — pas de bande stats)
+    const W = 1280, H = 1280;
+    const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     const mapImg = await loadImage(screenshotBuf);
     ctx.drawImage(mapImg, 0, 0);
 
-    drawOverlays(ctx, W, H, BH, {
-      site_area: Number(site_area), land_width: Number(land_width),
-      land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
-      setback_front: Number(setback_front), setback_side: Number(setback_side),
-      setback_back: Number(setback_back),
-      city: city || "", district: district || "", zoning: zoning || "",
-      terrain_context: terrain_context || "", bearing,
-    });
-
     const png = canvas.toBuffer("image/png");
-    console.log(`PNG: ${png.length} bytes (${Date.now() - t0}ms)`);
+    console.log(`PNG base: ${png.length} bytes (${Date.now() - t0}ms)`);
 
-    // Upload Supabase — image de base (slide_4_axo)
+    // Upload base
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim()
       .replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -771,172 +583,87 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     console.log(`✓ Base uploaded: ${pd.publicUrl} (${Date.now() - t0}ms)`);
 
-    // Post-processing OpenAI gpt-image-1 — style Hektar
-    let enhancedUrl = pd.publicUrl; // fallback = image de base si OpenAI échoue
+    // OpenAI gpt-image-1 — stylisation Hektar (sans zones, sans texte)
+    let enhancedUrl = pd.publicUrl;
     if (OPENAI_API_KEY) {
       try {
         console.log("Calling OpenAI gpt-image-1 edits...");
-
-        // Envoyer uniquement la partie carte 1280×1280 (sans bande stats)
-        // redimensionnée en 1024×1024 pour OpenAI
         const resizedCanvas = createCanvas(1024, 1024);
         const resizedCtx = resizedCanvas.getContext("2d");
         const fullImg = await loadImage(png);
-        resizedCtx.drawImage(fullImg, 0, 0, 1280, 1280, 0, 0, 1024, 1024);
+        resizedCtx.drawImage(fullImg, 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
 
         const form = new FormData();
         form.append("model", "gpt-image-1");
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
         form.append("size", "1024x1024");
-        form.append("input_fidelity", "high"); // préserver la géométrie source
+        form.append("input_fidelity", "high");
         form.append("prompt", `Restyle this axonometric urban planning map into a professional architectural diagram in the exact style of Hektar (parametric solutions AB).
 
 CRITICAL — GEOMETRY PRESERVATION:
 - Keep EXACTLY the same camera angle, pitch and bearing
 - Keep EXACTLY the same building footprints, positions and heights
 - Keep EXACTLY the same road network layout
-- Keep EXACTLY the red highlighted parcel at its exact position and shape
-- Keep the dashed red envelope line at its exact position
-- Do NOT move, add or remove any building or road
+- Keep EXACTLY the red parcel outline and pink fill at its exact ground-level position — it is a FLAT ground surface, NOT raised
+- Keep the blue dashed zone outline at its exact position — it is also FLAT on the ground
+- Do NOT move, add, or remove any building, road or zone outline
 - Do NOT change the composition or crop
-
-PARCEL — VERY IMPORTANT:
-- The red parcel is a FLAT GROUND-LEVEL surface — it lies flat on the ground like a plot of land
-- Do NOT raise it, do NOT extrude it, do NOT make it look like a raised platform or a roof
-- It must appear as a flat pink/rose semi-transparent fill sitting on the ground surface
-- The red outline #d02818 must follow the exact ground-level shape
 
 STYLE TO APPLY:
 - Background and ground: warm cream #f2f0ec
-- Building rooftops: pure white #ffffff
-- Building sunlit faces: warm off-white #f5f3ef
+- Building rooftops: pure white #ffffff with thin dark edge lines #333 marking corners — ESSENTIAL for architectural quality
+- Building sunlit faces: warm off-white #f5f3ef with visible edge lines
 - Building shadow faces: warm medium gray #9a9690
-- Building edges: thin dark lines #444 clearly marking building outlines and corners — this is essential for architectural quality
 - Cast shadows on ground: solid warm gray #c4c0b8, pronounced and directional
-- Roads: warm taupe #d4c9b0 slightly darker than background, with visible sidewalk strips #e8e2d4 on each side, subtle texture suggesting asphalt
-- Main roads slightly wider with a center line suggestion
-- Red parcel fill: flat semi-transparent rose/pink on the ground
-- Red parcel outline #d02818: clearly visible solid line at ground level
-- Dashed red envelope #d02818: clearly visible at ground level
+- Roads: warm taupe #d4c9b0 with sidewalk strips #e8e2d4, subtle asphalt texture
+- Red parcel fill: flat semi-transparent rose/pink on ground level
+- Red parcel outline #d02818: solid, clearly visible at ground level
+- Blue dashed zone outline: keep exactly as is
 
-VEGETATION — VERY IMPORTANT:
-- Add many small stylized trees throughout: round canopy viewed from above, dark olive green #5a6e3a with lighter highlight #7a9050
-- Trees should vary in size (small, medium, large) and opacity (0.7 to 1.0) for natural depth
-- Place trees: along road sidewalks regularly spaced, in courtyards between buildings, in any open green spaces or parks visible
-- At least 20-30 trees visible across the scene
-- Some trees can partially overlap building edges for realism
-- If any park or green area is visible, fill it with grass texture #c8d4a0 and dense trees
+VEGETATION:
+- Add many stylized trees: round canopy top-view, dark olive green #5a6e3a, lighter highlight #7a9050
+- Vary sizes and opacity (0.7–1.0) for depth
+- Place along sidewalks, in courtyards, open spaces — at least 25 trees
+- Green areas filled with #c8d4a0 grass and dense trees
 
-ABSOLUTELY NO TEXT anywhere on the map — no street names, no labels, no numbers, no annotations.
-Professional urban planning quality suitable for 1000€/month architectural report.`);
+ABSOLUTELY NO TEXT, no labels, no street names, no numbers anywhere on the map.
+Professional urban planning quality.`);
 
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
-          headers: {
-            "Authorization": `Bearer ${OPENAI_API_KEY}`,
-            ...form.getHeaders(),
-          },
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() },
           body: form,
         });
-
         const oaiJson = await oaiRes.json();
-        console.log(`OpenAI response status: ${oaiRes.status} (${Date.now() - t0}ms)`);
+        console.log(`OpenAI status: ${oaiRes.status} (${Date.now() - t0}ms)`);
 
         if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
-          // Décoder b64 → buffer PNG enhanced (1024×1024, carte seulement)
           const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
-          console.log(`OpenAI enhanced map: ${enhancedMapBuf.length} bytes`);
 
-          // ── Recomposer : enhanced map + contraintes + légende + boussole ──
-          // Pas de bande stats — canvas final = 1280×1280 uniquement
-          const W = 1280, H = 1280;
+          // Recomposer : enhanced 1024→1280 + légende + boussole + soleil + rues
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
+          const enhancedImg = await loadImage(enhancedMapBuf);
+          finalCtx.drawImage(enhancedImg, 0, 0, W, H);
 
-          // 1. Image enhanced OpenAI → 1280×1280
-          const enhancedMapImg = await loadImage(enhancedMapBuf);
-          finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
-
-          // 2. Fetch noms de rues Nominatim pour les 4 côtés de la parcelle
-          const streetNames = [];
-          try {
-            const sides = [
-              { // côté avant (nord)
-                lat: Math.max(...coords.map(c => c.lat)),
-                lon: coords.reduce((s, c) => s + c.lon, 0) / coords.length,
-              },
-              { // côté est
-                lat: coords.reduce((s, c) => s + c.lat, 0) / coords.length,
-                lon: Math.max(...coords.map(c => c.lon)),
-              },
-              { // côté sud
-                lat: Math.min(...coords.map(c => c.lat)),
-                lon: coords.reduce((s, c) => s + c.lon, 0) / coords.length,
-              },
-              { // côté ouest
-                lat: coords.reduce((s, c) => s + c.lat, 0) / coords.length,
-                lon: Math.min(...coords.map(c => c.lon)),
-              },
-            ];
-            const seen = new Set();
-            for (const side of sides) {
-              // Décaler légèrement vers l'extérieur pour tomber sur la rue
-              const offsetLat = side.lat + (side.lat - cLat) * 0.0008;
-              const offsetLon = side.lon + (side.lon - cLon) * 0.0008;
-              const name = await fetchStreetName(offsetLat, offsetLon);
-              if (name && !seen.has(name)) {
-                seen.add(name);
-                // Déterminer type de rue (simplifié : si côté nord/est = principal)
-                const type = sides.indexOf(side) <= 1 ? "primary" : "secondary";
-                streetNames.push({ name, point: { lat: offsetLat, lon: offsetLon }, type, angle: sides.indexOf(side) % 2 === 0 ? 0 : Math.PI / 2 });
-              }
-            }
-            console.log(`Streets found: ${streetNames.map(s => s.name).join(", ")}`);
-          } catch (e) {
-            console.warn("Nominatim error:", e.message);
-          }
-
-          // 3. Annotations contraintes par-dessus la carte enhanced
-          drawConstraints(finalCtx, W, H, {
-            coords, envelopeCoords, cLat, cLon, zoom, bearing,
-            setback_front: Number(setback_front),
-            setback_side: Number(setback_side),
-            setback_back: Number(setback_back),
-            buildable_fp: Number(buildable_fp),
-            site_area: Number(site_area),
-            land_width: Number(land_width),
-            land_depth: Number(land_depth),
-            streetNames,
-          });
-
-          // 4. Légende + boussole uniquement (pas de bande stats)
-          drawLegendAndCompass(finalCtx, W, H, {
-            site_area: Number(site_area),
-            bearing,
-          });
+          // Overlays node-canvas par-dessus
+          drawOverlays(finalCtx, W, H, { site_area: Number(site_area), bearing, streetData });
 
           const finalPng = finalCanvas.toBuffer("image/png");
-          console.log(`Final enhanced PNG: ${finalPng.length} bytes (${Date.now() - t0}ms)`);
-
-          // Upload enhanced final sur Supabase
           const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
             enhancedUrl = pd2.publicUrl;
             console.log(`✓ Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
-          } else {
-            console.warn("Enhanced upload error:", ue2.message);
           }
         } else {
-          console.warn("OpenAI no image data:", JSON.stringify(oaiJson).substring(0, 300));
+          console.warn("OpenAI no data:", JSON.stringify(oaiJson).substring(0, 300));
         }
       } catch (oaiErr) {
-        console.warn("OpenAI error (continuing with base):", oaiErr.message);
+        console.warn("OpenAI error:", oaiErr.message);
       }
-    } else {
-      console.log("OPENAI_API_KEY absent — skipping enhancement");
     }
 
     return res.json({
@@ -958,7 +685,7 @@ Professional urban planning quality suitable for 1000€/month architectural rep
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v19 (clean constraints) on port ${PORT}`);
+  console.log(`BARLO v20 (final) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
