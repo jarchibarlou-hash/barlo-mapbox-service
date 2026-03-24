@@ -1,9 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// BARLO — generate-slide4-axo — Mapbox Static + Overpass + Canvas Isometric 3D
+// BARLO — slide_4_axo — OSM Raster Tiles + Overpass + Canvas Isometric 3D
 // ═══════════════════════════════════════════════════════════════════════════════
-// 1. Mapbox Static API → fond de carte (routes, labels, terrain)
-// 2. Overpass API → vrais bâtiments OSM autour de la parcelle
-// 3. node-canvas → extrusion isométrique des bâtiments + overlays BARLO
+// 1. OpenStreetMap raster tiles → fond de carte (routes, labels, terrain)
+//    → Simples PNG via HTTP, AUCUNE clé API, fonctionne toujours
+// 2. Overpass API (GET) → vrais bâtiments OSM autour de la parcelle
+// 3. node-canvas → extrusion isométrique 3D + overlays BARLO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const express = require("express");
@@ -18,9 +19,8 @@ app.use(express.json({ limit: "2mb" }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "static-overpass-iso3d" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "osm-tiles-overpass-iso3d", version: "7.0" }));
 
 // ─── GEO HELPERS ──────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
@@ -79,7 +79,7 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
   }));
 }
 
-// ─── ZOOM + BEARING ───────────────────────────────────────────────────────────
+// ─── ZOOM CALCULATION ────────────────────────────────────────────────────────
 function computeZoom(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const ext = Math.max(
@@ -91,202 +91,264 @@ function computeZoom(coords, cLat, cLon) {
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(18, Math.max(15, Math.round(z * 2) / 2));
 }
-function computeBearing(coords, cLat, cLon) {
-  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
-  let longest = 0, angle = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const j = (i + 1) % pts.length;
-    const dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len > longest) { longest = len; angle = Math.atan2(dx, dy) * 180 / Math.PI; }
-  }
-  let b = Math.round(((angle + 45) % 90) + 15);
-  return ((b % 360) + 360) % 360; // Always 0-360
-}
 
-// ─── FETCH HELPERS ──────────────────────────────────────────────────────────
-function httpsGet(url) {
+// ─── HTTP FETCH (supports redirects, custom headers) ─────────────────────────
+function httpFetch(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    const client = url.startsWith("https") ? https : http;
-    client.get(url, (resp) => {
+    const u = new URL(url);
+    const isHttps = u.protocol === "https:";
+    const options = {
+      hostname: u.hostname,
+      port: u.port || (isHttps ? 443 : 80),
+      path: u.pathname + u.search,
+      method: "GET",
+      headers: {
+        "User-Agent": "BARLO-AxoService/7.0 (diagnostic-foncier; contact@barlo.app)",
+        ...headers,
+      },
+    };
+    const client = isHttps ? https : http;
+    client.request(options, (resp) => {
       if (resp.statusCode === 301 || resp.statusCode === 302) {
-        return httpsGet(resp.headers.location).then(resolve).catch(reject);
+        return httpFetch(resp.headers.location, headers).then(resolve).catch(reject);
       }
       const chunks = [];
       resp.on("data", d => chunks.push(d));
       resp.on("end", () => {
         const buf = Buffer.concat(chunks);
-        if (resp.statusCode !== 200) reject(new Error(`HTTP ${resp.statusCode}: ${buf.toString().substring(0, 200)}`));
-        else resolve(buf);
+        if (resp.statusCode !== 200) {
+          reject(new Error(`HTTP ${resp.statusCode} from ${u.hostname}: ${buf.toString().substring(0, 200)}`));
+        } else {
+          resolve(buf);
+        }
       });
       resp.on("error", reject);
-    }).on("error", reject);
-  });
-}
-function httpsPost(url, body) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const isHttps = u.protocol === "https:";
-    const options = {
-      hostname: u.hostname, port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname + u.search,
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) },
-    };
-    const client = isHttps ? https : http;
-    const req = client.request(options, (resp) => {
-      // Handle redirects
-      if (resp.statusCode === 301 || resp.statusCode === 302) {
-        return httpsPost(resp.headers.location, body).then(resolve).catch(reject);
-      }
-      const chunks = [];
-      resp.on("data", d => chunks.push(d));
-      resp.on("end", () => resolve(Buffer.concat(chunks).toString()));
-      resp.on("error", reject);
-    });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
+    }).on("error", reject).end();
   });
 }
 
-// ─── FETCH MAPBOX STATIC IMAGE (NO GeoJSON, NO @2x) ──────────────────────────
-async function fetchMapboxStatic(center, zoom, bearing, w, h) {
-  const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${center.lon},${center.lat},${zoom},${bearing}/${w}x${h}?access_token=${MAPBOX_TOKEN}&attribution=false&logo=false`;
-  console.log(`Mapbox Static URL: ${url.substring(0, 120)}... (${url.length} chars)`);
-  return httpsGet(url);
+// ═══════════════════════════════════════════════════════════════════════════════
+// OSM RASTER TILES — guaranteed to work, no API key needed
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TILE_SIZE = 256;
+
+// Convert lon/lat to fractional tile coordinates
+function lon2tileF(lon, z) { return (lon + 180) / 360 * Math.pow(2, z); }
+function lat2tileF(lat, z) {
+  const latRad = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, z);
 }
 
-// ─── FETCH REAL BUILDINGS FROM OVERPASS (GET method — more reliable) ─────────
-async function fetchBuildings(center, radiusM) {
-  const query = `[out:json][timeout:15];(way["building"](around:${radiusM},${center.lat},${center.lon}););out body;>;out skel qt;`;
-  console.log(`Overpass query: radius=${radiusM}m around ${center.lat},${center.lon}`);
-  try {
-    // Try primary then fallback Overpass server
-    const servers = [
-      `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
-      `https://overpass.kumi.systems/api/interpreter?data=${encodeURIComponent(query)}`,
-    ];
-    let raw = null;
-    for (const srv of servers) {
-      try {
-        console.log(`Trying Overpass: ${srv.substring(0, 60)}...`);
-        const rawBuf = await httpsGet(srv);
-        const txt = rawBuf.toString();
-        if (txt.startsWith("<")) {
-          console.warn(`Overpass server returned XML/HTML, trying next...`);
-          continue;
-        }
-        raw = txt;
-        break;
-      } catch (e2) {
-        console.warn(`Overpass server failed: ${e2.message}, trying next...`);
-      }
-    }
-    if (!raw) {
-      console.error("All Overpass servers failed");
-      return [];
-    }
-    const data = JSON.parse(raw);
+// Fetch a single OSM tile
+async function fetchTile(tx, ty, z) {
+  // Use multiple tile servers for reliability (OSM round-robin)
+  const servers = ["a", "b", "c"];
+  const s = servers[(tx + ty) % 3];
+  const url = `https://${s}.tile.openstreetmap.org/${z}/${tx}/${ty}.png`;
+  return httpFetch(url);
+}
 
-    // Build node lookup
-    const nodes = {};
-    for (const el of data.elements) {
-      if (el.type === "node") nodes[el.id] = { lat: el.lat, lon: el.lon };
-    }
+// Fetch and stitch tiles into a canvas of size WxH centered on (lat,lon) at zoom
+async function fetchTileCanvas(center, zoom, W, H) {
+  // Integer zoom for tiles
+  const z = Math.floor(zoom);
 
-    // Extract building polygons
-    const buildings = [];
-    for (const el of data.elements) {
-      if (el.type === "way" && el.tags && el.tags.building) {
-        const coords = (el.nodes || []).map(nid => nodes[nid]).filter(Boolean);
-        if (coords.length >= 3) {
-          const levels = parseInt(el.tags["building:levels"]) || 0;
-          const height = parseFloat(el.tags.height) || (levels > 0 ? levels * 3 : 4 + Math.random() * 5);
-          buildings.push({ coords, height, tags: el.tags });
-        }
-      }
+  // Center tile coordinates (fractional)
+  const cTileX = lon2tileF(center.lon, z);
+  const cTileY = lat2tileF(center.lat, z);
+
+  // How many tiles we need to cover the canvas
+  const halfTilesX = Math.ceil(W / TILE_SIZE / 2) + 1;
+  const halfTilesY = Math.ceil(H / TILE_SIZE / 2) + 1;
+
+  const startTX = Math.floor(cTileX) - halfTilesX;
+  const endTX = Math.floor(cTileX) + halfTilesX;
+  const startTY = Math.floor(cTileY) - halfTilesY;
+  const endTY = Math.floor(cTileY) + halfTilesY;
+
+  // Pixel offset: where does the center tile start on our canvas?
+  // Center of canvas (W/2, H/2) = center of the fractional tile position
+  const originPxX = W / 2 - (cTileX - startTX) * TILE_SIZE;
+  const originPxY = H / 2 - (cTileY - startTY) * TILE_SIZE;
+
+  // Fetch all tiles in parallel
+  const tilesToFetch = [];
+  for (let ty = startTY; ty <= endTY; ty++) {
+    for (let tx = startTX; tx <= endTX; tx++) {
+      // Wrap tile X around the world
+      const maxTile = Math.pow(2, z);
+      const wrappedTX = ((tx % maxTile) + maxTile) % maxTile;
+      if (ty < 0 || ty >= maxTile) continue; // skip invalid Y tiles
+      tilesToFetch.push({
+        tx: wrappedTX, ty, z,
+        canvasX: originPxX + (tx - startTX) * TILE_SIZE,
+        canvasY: originPxY + (ty - startTY) * TILE_SIZE,
+      });
     }
-    console.log(`Overpass: ${buildings.length} buildings found`);
-    return buildings;
-  } catch (e) {
-    console.error("Overpass error:", e.message);
-    return [];
   }
+
+  console.log(`Fetching ${tilesToFetch.length} OSM tiles at zoom ${z}...`);
+
+  // Fetch tiles with concurrency limit (max 6 parallel)
+  const tileImages = [];
+  const BATCH = 6;
+  for (let i = 0; i < tilesToFetch.length; i += BATCH) {
+    const batch = tilesToFetch.slice(i, i + BATCH);
+    const results = await Promise.allSettled(
+      batch.map(async (t) => {
+        try {
+          const buf = await fetchTile(t.tx, t.ty, t.z);
+          const img = await loadImage(buf);
+          return { ...t, img };
+        } catch (e) {
+          console.warn(`Tile ${t.z}/${t.tx}/${t.ty} failed: ${e.message}`);
+          return { ...t, img: null };
+        }
+      })
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value.img) {
+        tileImages.push(r.value);
+      }
+    }
+  }
+
+  console.log(`Got ${tileImages.length}/${tilesToFetch.length} tiles`);
+
+  // Create canvas and draw tiles
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+
+  // Fill background (in case some tiles fail)
+  ctx.fillStyle = "#f2efe9";
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw each tile
+  for (const t of tileImages) {
+    ctx.drawImage(t.img, Math.round(t.canvasX), Math.round(t.canvasY), TILE_SIZE, TILE_SIZE);
+  }
+
+  return canvas;
 }
 
-// ─── MERCATOR PROJECTION FOR MAPBOX STATIC ──────────────────────────────────
-function createProjection(center, zoom, bearing, W, H) {
-  const scale = 256 * Math.pow(2, zoom) / (2 * Math.PI); // Mercator scale
-  const bearingRad = bearing * Math.PI / 180;
+// ─── GEO → PIXEL PROJECTION (matches OSM tile math exactly) ────────────────
+function createTileProjection(center, zoom, W, H) {
+  const z = Math.floor(zoom);
+  const scale = Math.pow(2, z) * TILE_SIZE; // total pixels for the world at this zoom
 
-  // Center in Mercator
-  const cxM = scale * (center.lon * Math.PI / 180 + Math.PI);
-  const cyM = scale * (Math.PI - Math.log(Math.tan(Math.PI / 4 + center.lat * Math.PI / 360)));
+  // Center in world pixel coordinates
+  const cPixelX = (center.lon + 180) / 360 * scale;
+  const cLatRad = center.lat * Math.PI / 180;
+  const cPixelY = (1 - Math.log(Math.tan(cLatRad) + 1 / Math.cos(cLatRad)) / Math.PI) / 2 * scale;
 
   return function geoToPx(lat, lon) {
-    // Convert to Mercator pixels
-    const mx = scale * (lon * Math.PI / 180 + Math.PI);
-    const my = scale * (Math.PI - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)));
-
-    // Offset from center
-    let dx = mx - cxM;
-    let dy = my - cyM;
-
-    // Apply bearing rotation
-    const rx = dx * Math.cos(bearingRad) + dy * Math.sin(bearingRad);
-    const ry = -dx * Math.sin(bearingRad) + dy * Math.cos(bearingRad);
-
+    const px = (lon + 180) / 360 * scale;
+    const latRad = lat * Math.PI / 180;
+    const py = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * scale;
     return {
-      x: W / 2 + rx,
-      y: H / 2 + ry,
+      x: W / 2 + (px - cPixelX),
+      y: H / 2 + (py - cPixelY),
     };
   };
 }
 
-// ─── DRAW PARCEL AND ENVELOPE ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// OVERPASS — real OSM buildings (GET method + fallback servers)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function fetchBuildings(center, radiusM) {
+  const query = `[out:json][timeout:15];(way["building"](around:${radiusM},${center.lat},${center.lon}););out body;>;out skel qt;`;
+  console.log(`Overpass: radius=${radiusM}m around ${center.lat.toFixed(5)},${center.lon.toFixed(5)}`);
+
+  const servers = [
+    `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
+    `https://overpass.kumi.systems/api/interpreter?data=${encodeURIComponent(query)}`,
+    `https://maps.mail.ru/osm/tools/overpass/api/interpreter?data=${encodeURIComponent(query)}`,
+  ];
+
+  for (const url of servers) {
+    try {
+      console.log(`  Trying: ${new URL(url).hostname}...`);
+      const buf = await httpFetch(url);
+      const txt = buf.toString();
+      if (txt.startsWith("<") || txt.startsWith("<!")) {
+        console.warn(`  → returned HTML/XML, skipping`);
+        continue;
+      }
+      const data = JSON.parse(txt);
+
+      // Build node lookup
+      const nodes = {};
+      for (const el of data.elements) {
+        if (el.type === "node") nodes[el.id] = { lat: el.lat, lon: el.lon };
+      }
+
+      // Extract building polygons
+      const buildings = [];
+      for (const el of data.elements) {
+        if (el.type === "way" && el.tags && el.tags.building) {
+          const coords = (el.nodes || []).map(nid => nodes[nid]).filter(Boolean);
+          if (coords.length >= 3) {
+            const levels = parseInt(el.tags["building:levels"]) || 0;
+            const height = parseFloat(el.tags.height) || (levels > 0 ? levels * 3 : 4 + Math.random() * 5);
+            buildings.push({ coords, height, tags: el.tags });
+          }
+        }
+      }
+      console.log(`  → ${buildings.length} buildings found`);
+      return buildings;
+    } catch (e) {
+      console.warn(`  → failed: ${e.message}`);
+    }
+  }
+
+  console.error("All Overpass servers failed — 0 buildings");
+  return [];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DRAWING FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function drawParcelAndEnvelope(ctx, geoToPx, parcelCoords, envCoords) {
   // Draw envelope (dashed line)
+  ctx.save();
   ctx.strokeStyle = "#d02818";
-  ctx.lineWidth = 2;
-  ctx.globalAlpha = 0.5;
-  ctx.setLineDash([8, 4]);
+  ctx.lineWidth = 2.5;
+  ctx.globalAlpha = 0.6;
+  ctx.setLineDash([10, 5]);
   ctx.beginPath();
   const envPx = envCoords.map(c => geoToPx(c.lat, c.lon));
   ctx.moveTo(envPx[0].x, envPx[0].y);
-  for (let i = 1; i < envPx.length; i++) {
-    ctx.lineTo(envPx[i].x, envPx[i].y);
-  }
+  for (let i = 1; i < envPx.length; i++) ctx.lineTo(envPx[i].x, envPx[i].y);
   ctx.closePath();
   ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 1;
+  ctx.restore();
 
-  // Draw parcel (filled + outline)
-  ctx.fillStyle = "rgba(208, 40, 24, 0.12)";
+  // Draw parcel (filled + solid outline)
+  ctx.save();
+  ctx.fillStyle = "rgba(208, 40, 24, 0.15)";
   ctx.strokeStyle = "#d02818";
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 3.5;
   ctx.beginPath();
   const parcelPx = parcelCoords.map(c => geoToPx(c.lat, c.lon));
   ctx.moveTo(parcelPx[0].x, parcelPx[0].y);
-  for (let i = 1; i < parcelPx.length; i++) {
-    ctx.lineTo(parcelPx[i].x, parcelPx[i].y);
-  }
+  for (let i = 1; i < parcelPx.length; i++) ctx.lineTo(parcelPx[i].x, parcelPx[i].y);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+  ctx.restore();
 
-  // Debug: log first parcel point in pixels
-  console.log(`Parcel first point px: (${parcelPx[0].x.toFixed(1)}, ${parcelPx[0].y.toFixed(1)})`);
+  console.log(`Parcel px: (${parcelPx[0].x.toFixed(0)}, ${parcelPx[0].y.toFixed(0)}) to (${parcelPx[2] ? parcelPx[2].x.toFixed(0) : "?"}, ${parcelPx[2] ? parcelPx[2].y.toFixed(0) : "?"})`);
+  return parcelPx;
 }
 
-// ─── ISOMETRIC 3D PROJECTION ────────────────────────────────────────────────
-function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoords, geoToPx) {
-  // Isometric offset: how many pixels "up" per meter of building height
-  const mPerPx = 156543.03 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
-  const heightScale = 1.2 / mPerPx; // ~1.2m real height per pixel offset
+function drawIsoBuildings(ctx, W, H, center, zoom, buildings, parcelCoords, geoToPx) {
+  const z = Math.floor(zoom);
+  const mPerPx = 156543.03 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, z);
+  const heightScale = 1.0 / mPerPx;
 
-  // Check if point is inside parcel (to avoid drawing buildings on parcel)
+  // Parcel hit-test
   const parcelPx = parcelCoords.map(c => geoToPx(c.lat, c.lon));
   function inParcel(px, py) {
     let inside = false;
@@ -297,7 +359,6 @@ function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoo
     return inside;
   }
 
-  // Convert buildings to pixel coords and sort back-to-front
   const buildingPx = buildings.map(b => {
     const footprint = b.coords.map(c => geoToPx(c.lat, c.lon));
     const centroid = {
@@ -305,43 +366,32 @@ function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoo
       y: footprint.reduce((s, p) => s + p.y, 0) / footprint.length,
     };
     return { footprint, height: b.height, centroid };
-  }).filter(b => {
-    // Filter out buildings whose centroid is inside parcel
-    return !inParcel(b.centroid.x, b.centroid.y);
-  }).filter(b => {
-    // Filter out buildings completely outside viewport
-    return b.footprint.some(p => p.x > -50 && p.x < W + 50 && p.y > -50 && p.y < H + 50);
-  });
+  }).filter(b => !inParcel(b.centroid.x, b.centroid.y))
+    .filter(b => b.footprint.some(p => p.x > -50 && p.x < W + 50 && p.y > -50 && p.y < H + 50));
 
-  // Sort by Y (back to front) so nearer buildings overlap farther ones
+  // Sort back-to-front
   buildingPx.sort((a, b) => a.centroid.y - b.centroid.y);
 
   const colors = {
-    top: "#f2eeE8",
-    front: "#ddd8cf",
-    side: "#cac4ba",
-    stroke: "#b5afa5",
+    top: "#f0ece4",
+    front: "#dbd6cc",
+    side: "#c8c2b8",
+    stroke: "#b0aa9e",
   };
 
   for (const b of buildingPx) {
     const hPx = b.height * heightScale;
     const fp = b.footprint;
 
-    // Draw side faces (for edges where the "front" is visible)
+    // Draw visible walls
     ctx.strokeStyle = colors.stroke;
     ctx.lineWidth = 0.5;
-
-    // Draw right/front side walls
     for (let i = 0; i < fp.length; i++) {
       const j = (i + 1) % fp.length;
       const p1 = fp[i], p2 = fp[j];
-
-      // Only draw walls that face "forward" (positive y direction = toward viewer)
       const nx = -(p2.y - p1.y);
       const ny = p2.x - p1.x;
-
       if (ny > 0 || nx > 0) {
-        // Front-facing wall
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
@@ -354,12 +404,10 @@ function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoo
       }
     }
 
-    // Draw roof (top face)
+    // Draw roof
     ctx.beginPath();
     ctx.moveTo(fp[0].x, fp[0].y - hPx);
-    for (let i = 1; i < fp.length; i++) {
-      ctx.lineTo(fp[i].x, fp[i].y - hPx);
-    }
+    for (let i = 1; i < fp.length; i++) ctx.lineTo(fp[i].x, fp[i].y - hPx);
     ctx.closePath();
     ctx.fillStyle = colors.top;
     ctx.fill();
@@ -368,20 +416,19 @@ function drawIsoBuildings(ctx, W, H, center, zoom, bearing, buildings, parcelCoo
     ctx.stroke();
   }
 
-  console.log(`Buildings: ${buildingPx.length} in viewport, ${buildings.length} total fetched`);
+  console.log(`Drew ${buildingPx.length} iso buildings (${buildings.length} total from Overpass)`);
   return buildingPx.length;
 }
 
-// ─── DRAW OVERLAYS ──────────────────────────────────────────────────────────
 function drawOverlays(ctx, W, H, BH, p) {
   const {
     site_area, land_width, land_depth, buildable_fp,
     setback_front, setback_side, setback_back,
-    city, district, zoning, terrain_context, bearing, buildingCount,
+    city, district, zoning, terrain_context, buildingCount,
   } = p;
 
   function T(x, y, txt, color, size, bold = false, anchor = "center") {
-    ctx.font = `${bold ? "700" : "500"} ${size}px Arial`;
+    ctx.font = `${bold ? "700" : "500"} ${size}px Arial, Helvetica, sans-serif`;
     ctx.textAlign = anchor;
     ctx.strokeStyle = "rgba(255,255,255,0.92)";
     ctx.lineWidth = size > 14 ? 5 : 3.5;
@@ -396,19 +443,18 @@ function drawOverlays(ctx, W, H, BH, p) {
   T(cx, cy - 10, "Enveloppe constructible", "#d02818", 16);
   T(cx, cy + 24, `${buildable_fp} m²`, "#1d7a3e", 28, true);
   T(cx, cy + 52, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 14);
-
   T(cx, cy - 100, `↕ Recul avant : ${setback_front}m`, "#d02818", 14, true);
   T(cx - W * 0.20, cy + 10, `↔ ${setback_side}m`, "#666", 13);
   T(cx + W * 0.20, cy + 10, `↔ ${setback_side}m`, "#666", 13);
   T(cx, cy + 90, `↕ Recul arrière : ${setback_back}m`, "#666", 13);
 
-  // Compass
+  // ─── Compass (north-up) ──────────────────────
   ctx.save();
   ctx.translate(W - 60, 60);
   ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fill();
   ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.rotate(-(bearing || 30) * Math.PI / 180);
+  // No rotation — always north-up
   ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -2); ctx.lineTo(0, -8); ctx.lineTo(5, -2); ctx.closePath();
   ctx.fillStyle = "#d02818"; ctx.fill();
   ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 2); ctx.lineTo(0, 8); ctx.lineTo(5, 2); ctx.closePath();
@@ -417,19 +463,22 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.fillText("N", 0, -22);
   ctx.restore();
 
-  // Legend
+  // ─── Legend ──────────────────────────────────
   const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.12)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
-    { type: "line", stroke: "#d02818", opacity: 0.55, label: "Enveloppe constructible" },
-    { type: "rect", fill: "#f2eee8", stroke: "#b5afa5", label: `Bâtiments voisinage (${buildingCount})` },
-    { type: "line", stroke: "#b0a080", opacity: 1, label: "Voirie" },
+    { type: "rect", fill: "rgba(208,40,24,0.15)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
+    { type: "line", stroke: "#d02818", dash: true, label: "Enveloppe constructible" },
+    { type: "rect", fill: "#f0ece4", stroke: "#b0aa9e", label: `Bâtiments 3D (${buildingCount})` },
+    { type: "line", stroke: "#999", label: "Voirie OSM" },
   ];
-  const legW = 300, legH = 22 + legItems.length * 30 + 16;
+  const legW = 290, legH = 22 + legItems.length * 30 + 16;
+
+  ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
   ctx.fillStyle = "rgba(255,255,255,0.96)";
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 10); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
   ctx.strokeStyle = "#e8e5e0"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
 
   legItems.forEach((item, i) => {
     const iy = 16 + 20 + i * 30;
@@ -440,15 +489,17 @@ function drawOverlays(ctx, W, H, BH, p) {
     } else {
       ctx.beginPath(); ctx.moveTo(30, iy + 7); ctx.lineTo(48, iy + 7);
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5;
-      ctx.globalAlpha = item.opacity || 1; ctx.stroke(); ctx.globalAlpha = 1;
+      if (item.dash) ctx.setLineDash([5, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
     ctx.font = "13px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
     ctx.fillText(item.label, 58, iy + 13);
   });
   ctx.font = "9px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox © OpenStreetMap", 30, 16 + legH - 8);
+  ctx.fillText("© OpenStreetMap contributors", 30, 16 + legH - 8);
 
-  // Stats bar
+  // ─── Stats bar ──────────────────────────────
   const BY = H, pad = 30;
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, BY, W, BH);
@@ -489,7 +540,7 @@ function drawOverlays(ctx, W, H, BH, p) {
 // ═══════════════════════════════════════════════════════════════════════════════
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("→ /generate (Static + Overpass + Iso3D)");
+  console.log("═══ /generate (OSM Tiles + Overpass + Iso3D) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -500,8 +551,6 @@ app.post("/generate", async (req, res) => {
 
   if (!lead_id || !polygon_points)
     return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
-  if (!MAPBOX_TOKEN)
-    return res.status(500).json({ error: "MAPBOX_TOKEN non configuré" });
 
   const coords = polygon_points.split("|").map(pt => {
     const [lat, lon] = pt.trim().split(",").map(Number);
@@ -511,7 +560,7 @@ app.post("/generate", async (req, res) => {
 
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
-  console.log(`Centroïde: ${cLat.toFixed(6)}, ${cLon.toFixed(6)}`);
+  console.log(`Centre: ${cLat.toFixed(6)}, ${cLon.toFixed(6)}`);
 
   const envelopeCoords = computeEnvelope(
     coords, cLat, cLon,
@@ -519,57 +568,51 @@ app.post("/generate", async (req, res) => {
   );
 
   const zoom = computeZoom(coords, cLat, cLon);
-  const bearing = computeBearing(coords, cLat, cLon);
-  console.log(`View: zoom=${zoom}, bearing=${bearing}°`);
+  console.log(`Zoom: ${zoom}`);
 
   try {
-    // ── 1. FETCH BASE MAP + BUILDINGS IN PARALLEL ──────────────────────────
-    const mapW = 1280;
-    const mapH = 1280;
+    const W = 1280;
+    const H = 1280;
+    const BH = Math.round(H * 0.12); // stats bar height
 
-    console.log("Fetching base map + buildings in parallel...");
-    const [mapBuffer, buildings] = await Promise.all([
-      fetchMapboxStatic({ lat: cLat, lon: cLon }, zoom, bearing, mapW, mapH),
-      fetchBuildings({ lat: cLat, lon: cLon }, 300), // 300m radius
+    // ── 1. FETCH TILES + BUILDINGS IN PARALLEL ─────────────────────────────
+    console.log("Fetching OSM tiles + Overpass buildings in parallel...");
+    const [tileCanvas, buildings] = await Promise.all([
+      fetchTileCanvas({ lat: cLat, lon: cLon }, zoom, W, H),
+      fetchBuildings({ lat: cLat, lon: cLon }, 300),
     ]);
-    console.log(`Base map: ${mapBuffer.length} bytes, Buildings: ${buildings.length} (${Date.now() - t0}ms)`);
+    console.log(`Tiles done, Buildings: ${buildings.length} (${Date.now() - t0}ms)`);
 
-    // ── 2. COMPOSITE ────────────────────────────────────────────────────────
-    const baseImg = await loadImage(mapBuffer);
-    const W = baseImg.width;
-    const H = baseImg.height;
-    const BH = Math.round(H * 0.12);
+    // ── 2. COMPOSITE FINAL IMAGE ───────────────────────────────────────────
+    const finalCanvas = createCanvas(W, H + BH);
+    const ctx = finalCanvas.getContext("2d");
 
-    const canvas = createCanvas(W, H + BH);
-    const ctx = canvas.getContext("2d");
+    // Draw tile base map
+    ctx.drawImage(tileCanvas, 0, 0);
 
-    // Draw base map (roads, labels)
-    ctx.drawImage(baseImg, 0, 0);
+    // Create geo→pixel projection (matches tile math exactly)
+    const geoToPx = createTileProjection({ lat: cLat, lon: cLon }, zoom, W, H);
 
-    // Create projection for buildings and parcel/envelope
-    const geoToPx = createProjection({ lat: cLat, lon: cLon }, zoom, bearing, W, H);
+    // Draw 3D buildings
+    const buildingCount = drawIsoBuildings(ctx, W, H, { lat: cLat, lon: cLon }, zoom, buildings, coords, geoToPx);
 
-    // Draw real 3D buildings from OSM
-    const buildingCount = drawIsoBuildings(ctx, W, H, { lat: cLat, lon: cLon }, zoom, bearing, buildings, coords, geoToPx);
-    console.log(`Drew ${buildingCount} buildings on canvas (${Date.now() - t0}ms)`);
-
-    // Draw parcel and envelope with canvas
+    // Draw parcel + envelope
     drawParcelAndEnvelope(ctx, geoToPx, coords, envelopeCoords);
 
-    // Draw overlays (annotations, legend, compass, stats bar)
+    // Draw overlays
     drawOverlays(ctx, W, H, BH, {
       site_area: Number(site_area), land_width: Number(land_width),
       land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
       setback_front: Number(setback_front), setback_side: Number(setback_side),
       setback_back: Number(setback_back),
       city: city || "", district: district || "", zoning: zoning || "",
-      terrain_context: terrain_context || "", bearing, buildingCount,
+      terrain_context: terrain_context || "", buildingCount,
     });
 
-    const png = canvas.toBuffer("image/png");
+    const png = finalCanvas.toBuffer("image/png");
     console.log(`Final PNG: ${png.length} bytes, ${W}x${H + BH} (${Date.now() - t0}ms)`);
 
-    // ── 3. UPLOAD TO SUPABASE ─────────────────────────────────────────────
+    // ── 3. UPLOAD TO SUPABASE ──────────────────────────────────────────────
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim()
       .replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -581,14 +624,15 @@ app.post("/generate", async (req, res) => {
     if (ue) return res.status(500).json({ error: ue.message });
 
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(path);
-    console.log(`Done: ${pd.publicUrl} (${Date.now() - t0}ms)`);
+    console.log(`✓ Done: ${pd.publicUrl} (${Date.now() - t0}ms)`);
 
     return res.json({
       ok: true, public_url: pd.publicUrl, path,
       centroid: { lat: cLat, lon: cLon },
-      view: { zoom, bearing },
+      zoom,
       buildings_count: buildingCount,
-      engine: "static-overpass-iso3d",
+      tiles: "osm-raster",
+      engine: "osm-tiles-overpass-iso3d",
       duration_ms: Date.now() - t0,
     });
   } catch (e) {
@@ -598,8 +642,8 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO Axo Service on port ${PORT}`);
-  console.log(`Engine: Mapbox Static + Overpass + Canvas Isometric 3D`);
-  console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
+  console.log(`BARLO Axo Service v7.0 on port ${PORT}`);
+  console.log(`Engine: OSM Raster Tiles + Overpass + Canvas Iso3D`);
+  console.log(`No Mapbox token needed for base map`);
   console.log(`Supabase: ${SUPABASE_URL ? "OK" : "MISSING"}`);
 });
