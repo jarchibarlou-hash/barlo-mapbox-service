@@ -2,6 +2,8 @@ const express = require("express");
 const puppeteer = require("puppeteer-core");
 const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
+const FormData = require("form-data");
+const fetch = require("node-fetch");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -11,8 +13,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "13.0-hektar-style" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "14.0-openai-edits" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -449,7 +452,7 @@ function drawOverlays(ctx, W, H, BH, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v13 (Hektar style custom + Mapbox GL 3D) ═══");
+  console.log("═══ /generate v14 (Hektar style + OpenAI edits) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -520,21 +523,95 @@ app.post("/generate", async (req, res) => {
     const png = canvas.toBuffer("image/png");
     console.log(`PNG: ${png.length} bytes (${Date.now() - t0}ms)`);
 
-    // Upload Supabase
+    // Upload Supabase — image de base (slide_4_axo)
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim()
       .replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-    const path = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}.png`;
-    const { error: ue } = await sb.storage.from("massing-images").upload(path, png, { contentType: "image/png", upsert: true });
+    const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}.png`;
+    const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     if (ue) return res.status(500).json({ error: ue.message });
+    const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
+    console.log(`✓ Base uploaded: ${pd.publicUrl} (${Date.now() - t0}ms)`);
 
-    const { data: pd } = sb.storage.from("massing-images").getPublicUrl(path);
-    console.log(`✓ Done: ${pd.publicUrl} (${Date.now() - t0}ms)`);
+    // Post-processing OpenAI gpt-image-1 — style Hektar
+    let enhancedUrl = pd.publicUrl; // fallback = image de base si OpenAI échoue
+    if (OPENAI_API_KEY) {
+      try {
+        console.log("Calling OpenAI gpt-image-1 edits...");
 
-    return res.json({ ok: true, public_url: pd.publicUrl, path,
+        // Redimensionner à 1024x1024 pour OpenAI (carré requis)
+        const resizedCanvas = createCanvas(1024, 1024);
+        const resizedCtx = resizedCanvas.getContext("2d");
+        const fullImg = await loadImage(png);
+        // On crop la partie carte uniquement (1280x1280), on ignore la bande stats
+        resizedCtx.drawImage(fullImg, 0, 0, 1280, 1280, 0, 0, 1024, 1024);
+        const pngResized = resizedCanvas.toBuffer("image/png");
+
+        const form = new FormData();
+        form.append("model", "gpt-image-1");
+        form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
+        form.append("size", "1024x1024");
+        form.append("prompt", `Transform this axonometric urban map into a professional architectural site analysis diagram in the exact style of Hektar parametric solutions.
+
+STRICT: Keep exactly the same camera angle, building positions, road network, and red parcel outline. Do NOT move or add buildings.
+
+STYLE:
+- Warm cream background #f2f0ec
+- Building rooftops pure white #ffffff
+- Building light face warm white #f5f3ef
+- Building shadow face warm gray #9a9690
+- Strong cast shadows #c4c0b8
+- Roads beige #eae4d4 with borders #ccc4ae
+- No text or labels on map
+- Red parcel outline #d02818 clearly visible
+- Dashed red envelope line clearly visible
+- Professional architectural quality`);
+
+        const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${OPENAI_API_KEY}`,
+            ...form.getHeaders(),
+          },
+          body: form,
+        });
+
+        const oaiJson = await oaiRes.json();
+        console.log(`OpenAI response status: ${oaiRes.status} (${Date.now() - t0}ms)`);
+
+        if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
+          // Décoder b64 → buffer PNG
+          const enhancedBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
+
+          // Upload enhanced sur Supabase
+          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, enhancedBuf, { contentType: "image/png", upsert: true });
+          if (!ue2) {
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl;
+            console.log(`✓ Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          } else {
+            console.warn("Enhanced upload error:", ue2.message);
+          }
+        } else {
+          console.warn("OpenAI no image data:", JSON.stringify(oaiJson).substring(0, 300));
+        }
+      } catch (oaiErr) {
+        console.warn("OpenAI error (continuing with base):", oaiErr.message);
+      }
+    } else {
+      console.log("OPENAI_API_KEY absent — skipping enhancement");
+    }
+
+    return res.json({
+      ok: true,
+      public_url: pd.publicUrl,           // image Mapbox de base
+      enhanced_url: enhancedUrl,           // image OpenAI enhanced (ou base si échec)
+      path: basePath,
       centroid: { lat: cLat, lon: cLon },
       view: { zoom, bearing, pitch: 58 },
-      duration_ms: Date.now() - t0 });
+      duration_ms: Date.now() - t0
+    });
 
   } catch (e) {
     console.error("Error:", e.message || e);
@@ -545,7 +622,8 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v13 (Hektar style) on port ${PORT}`);
+  console.log(`BARLO v14 (Hektar + OpenAI edits) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
+  console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
 });
