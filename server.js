@@ -1,20 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// BARLO — slide_4_axo v8 — TRUE AXONOMETRIC 3D MASSING VIEW
+// BARLO — slide_4_axo v9 — BROWSERLESS + MAPBOX GL 3D
 // ═══════════════════════════════════════════════════════════════════════════════
-// Rendu 100% vectoriel isométrique via node-canvas :
-//   • Overpass API → bâtiments + routes réels OSM
-//   • Projection axonométrique 30° (vue sud-est → nord-ouest)
-//   • Bâtiments voisins extrudés en 3D
-//   • Parcelle + enveloppe constructible
-//   • Overlays BARLO (légende, boussole, stats bar)
-// Aucune tuile raster — tout est dessiné en vecteur
+// Vrai rendu Mapbox GL JS avec bâtiments 3D (fill-extrusion) via Browserless.io
+// Puppeteer se connecte à un Chrome cloud (Browserless) qui a le vrai WebGL
+// → screenshot de la carte 3D → compositing overlays BARLO → upload Supabase
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const express = require("express");
-const https = require("https");
-const http = require("http");
+const puppeteer = require("puppeteer-core");
 const { createClient } = require("@supabase/supabase-js");
-const { createCanvas } = require("canvas");
+const { createCanvas, loadImage } = require("canvas");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -22,20 +17,25 @@ app.use(express.json({ limit: "2mb" }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
+const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "axo-iso3d-vector", version: "8.0" }));
+app.get("/health", (req, res) => res.json({
+  ok: true,
+  engine: "browserless-mapbox-gl-3d",
+  version: "9.0",
+  browserless: BROWSERLESS_TOKEN ? "configured" : "MISSING",
+  mapbox: MAPBOX_TOKEN ? "configured" : "MISSING",
+}));
 
 // ─── GEO HELPERS ──────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
-
-// Convert lat/lon to meters from a center point
-function geoToM(lat, lon, cLat, cLon) {
+function toM(lat, lon, cLat, cLon) {
   return {
-    east: (lon - cLon) * Math.PI / 180 * R_EARTH * Math.cos(cLat * Math.PI / 180),
-    north: (lat - cLat) * Math.PI / 180 * R_EARTH,
+    x: (lon - cLon) * Math.PI / 180 * R_EARTH * Math.cos(cLat * Math.PI / 180),
+    y: (lat - cLat) * Math.PI / 180 * R_EARTH,
   };
 }
-
 function brng(p1, p2) {
   const dLon = (p2.lon - p1.lon) * Math.PI / 180;
   const y = Math.sin(dLon) * Math.cos(p2.lat * Math.PI / 180);
@@ -46,7 +46,7 @@ function brng(p1, p2) {
 
 // ─── ENVELOPPE CONSTRUCTIBLE ──────────────────────────────────────────────────
 function computeEnvelope(coords, cLat, cLon, front, side, back) {
-  const pts = coords.map(c => geoToM(c.lat, c.lon, cLat, cLon));
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const n = pts.length;
   let maxLat = -Infinity, rb = 0;
   for (let i = 0; i < n - 1; i++) {
@@ -59,20 +59,19 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
     return d < 45 ? front : d < 135 ? side : back;
   }
   function offSeg(p1, p2, dist) {
-    const dx = p2.east - p1.east, dy = p2.north - p1.north;
-    const len = Math.sqrt(dx * dx + dy * dy) + 0.001;
+    const dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.sqrt(dx * dx + dy * dy) + 0.001;
     return {
-      p1: { east: p1.east - dy / len * dist, north: p1.north + dx / len * dist },
-      p2: { east: p2.east - dy / len * dist, north: p2.north + dx / len * dist },
+      p1: { x: p1.x - dy / len * dist, y: p1.y + dx / len * dist },
+      p2: { x: p2.x - dy / len * dist, y: p2.y + dx / len * dist },
     };
   }
   function intersect(s1, s2) {
-    const d1x = s1.p2.east - s1.p1.east, d1y = s1.p2.north - s1.p1.north;
-    const d2x = s2.p2.east - s2.p1.east, d2y = s2.p2.north - s2.p1.north;
+    const d1x = s1.p2.x - s1.p1.x, d1y = s1.p2.y - s1.p1.y;
+    const d2x = s2.p2.x - s2.p1.x, d2y = s2.p2.y - s2.p1.y;
     const den = d1x * d2y - d1y * d2x;
-    if (Math.abs(den) < 1e-10) return { east: (s1.p2.east + s2.p1.east) / 2, north: (s1.p2.north + s2.p1.north) / 2 };
-    const t = ((s2.p1.east - s1.p1.east) * d2y - (s2.p1.north - s1.p1.north) * d2x) / den;
-    return { east: s1.p1.east + t * d1x, north: s1.p1.north + t * d1y };
+    if (Math.abs(den) < 1e-10) return { x: (s1.p2.x + s2.p1.x) / 2, y: (s1.p2.y + s2.p1.y) / 2 };
+    const t = ((s2.p1.x - s1.p1.x) * d2y - (s2.p1.y - s1.p1.y) * d2x) / den;
+    return { x: s1.p1.x + t * d1x, y: s1.p1.y + t * d1y };
   }
   const segs = [];
   for (let i = 0; i < n; i++) {
@@ -80,503 +79,272 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
     segs.push(offSeg(pts[i], pts[(i + 1) % n], setSB(b)));
   }
   const envM = segs.map((_, i) => intersect(segs[(i + n - 1) % n], segs[i]));
-  // Return in meters (east, north) directly
-  return envM;
+  return envM.map(m => ({
+    lat: cLat + m.y / R_EARTH * 180 / Math.PI,
+    lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
+  }));
+}
+
+// ─── ZOOM CALCULATION ────────────────────────────────────────────────────────
+function computeZoom(coords, cLat, cLon) {
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  const ext = Math.max(
+    Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
+    Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
+  );
+  const targetViewM = ext * 4;
+  const mpp = targetViewM / 900;
+  const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
+  return Math.min(17.5, Math.max(15, Math.round(z * 4) / 4));
+}
+
+function computeBearing(coords, cLat, cLon) {
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  let longest = 0, angle = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    const dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > longest) { longest = len; angle = Math.atan2(dx, dy) * 180 / Math.PI; }
+  }
+  return ((Math.round(angle + 30) % 360) + 360) % 360;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AXONOMETRIC PROJECTION
+// GENERATE MAPBOX GL HTML PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
-// View from south-east looking north-west, 30° angle
-// east → screen right+down, north → screen left+down, height → screen up
-
-function createAxoProjection(scale, W, H, offsetY) {
-  // Axonometric angles (standard architectural axo: 30°/60° or 45°/45°)
-  const angle = Math.PI / 6; // 30 degrees
-  const cosA = Math.cos(angle);
-  const sinA = Math.sin(angle);
-  const cx = W / 2;
-  const cy = H / 2 + (offsetY || 0);
-
-  return function project(east, north, height) {
-    // east = meters east from center
-    // north = meters north from center
-    // height = meters above ground
-    const sx = (east - north) * cosA * scale;
-    const sy = (east + north) * sinA * scale - height * scale;
-    return {
-      x: cx + sx,
-      y: cy + sy,
-    };
+function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
+  const parcelGeoJSON = {
+    type: "Feature",
+    geometry: {
+      type: "Polygon",
+      coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]],
+    },
   };
-}
+  const envelopeGeoJSON = {
+    type: "Feature",
+    geometry: {
+      type: "Polygon",
+      coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]],
+    },
+  };
 
-// ─── HTTP FETCH (with redirects + User-Agent) ────────────────────────────────
-function httpFetch(url) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const isHttps = u.protocol === "https:";
-    const options = {
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      path: u.pathname + u.search,
-      method: "GET",
-      headers: { "User-Agent": "BARLO-AxoService/8.0 (diagnostic-foncier)" },
-    };
-    const client = isHttps ? https : http;
-    client.request(options, (resp) => {
-      if (resp.statusCode === 301 || resp.statusCode === 302) {
-        return httpFetch(resp.headers.location).then(resolve).catch(reject);
-      }
-      const chunks = [];
-      resp.on("data", d => chunks.push(d));
-      resp.on("end", () => {
-        const buf = Buffer.concat(chunks);
-        if (resp.statusCode !== 200) reject(new Error(`HTTP ${resp.statusCode}: ${buf.toString().substring(0, 200)}`));
-        else resolve(buf);
-      });
-      resp.on("error", reject);
-    }).on("error", reject).end();
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; }
+  body { width: 1280px; height: 1280px; overflow: hidden; }
+  #map { width: 1280px; height: 1280px; }
+</style>
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+</head>
+<body>
+<div id="map"></div>
+<script>
+  mapboxgl.accessToken = '${mapboxToken}';
+
+  const map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [${center.lon}, ${center.lat}],
+    zoom: ${zoom},
+    bearing: ${bearing},
+    pitch: 55,
+    antialias: true,
+    preserveDrawingBuffer: true,
+    fadeDuration: 0,
   });
-}
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// OVERPASS — fetch buildings + roads
-// ═══════════════════════════════════════════════════════════════════════════════
-async function fetchOSMData(center, radiusM) {
-  const query = `[out:json][timeout:20];(
-    way["building"](around:${radiusM},${center.lat},${center.lon});
-    way["highway"](around:${radiusM},${center.lat},${center.lon});
-  );out body;>;out skel qt;`;
-
-  console.log(`Overpass: radius=${radiusM}m around ${center.lat.toFixed(5)},${center.lon.toFixed(5)}`);
-
-  const servers = [
-    `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
-    `https://overpass.kumi.systems/api/interpreter?data=${encodeURIComponent(query)}`,
-    `https://maps.mail.ru/osm/tools/overpass/api/interpreter?data=${encodeURIComponent(query)}`,
-  ];
-
-  for (const url of servers) {
-    try {
-      console.log(`  Trying: ${new URL(url).hostname}...`);
-      const buf = await httpFetch(url);
-      const txt = buf.toString();
-      if (txt.startsWith("<") || txt.startsWith("<!")) {
-        console.warn(`  → returned HTML/XML, skipping`);
-        continue;
+  map.on('style.load', () => {
+    // ─── 3D BUILDINGS ──────────────────────────────────────────────────
+    const layers = map.getStyle().layers;
+    let labelLayerId;
+    for (const layer of layers) {
+      if (layer.type === 'symbol' && layer.layout['text-field']) {
+        labelLayerId = layer.id;
+        break;
       }
-      const data = JSON.parse(txt);
-
-      // Build node lookup
-      const nodes = {};
-      for (const el of data.elements) {
-        if (el.type === "node") nodes[el.id] = { lat: el.lat, lon: el.lon };
-      }
-
-      // Extract buildings
-      const buildings = [];
-      for (const el of data.elements) {
-        if (el.type === "way" && el.tags && el.tags.building) {
-          const coords = (el.nodes || []).map(nid => nodes[nid]).filter(Boolean);
-          if (coords.length >= 3) {
-            const levels = parseInt(el.tags["building:levels"]) || 0;
-            const height = parseFloat(el.tags.height) || (levels > 0 ? levels * 3 : 3 + Math.random() * 6);
-            buildings.push({ coords, height, tags: el.tags });
-          }
-        }
-      }
-
-      // Extract roads
-      const roads = [];
-      for (const el of data.elements) {
-        if (el.type === "way" && el.tags && el.tags.highway) {
-          const coords = (el.nodes || []).map(nid => nodes[nid]).filter(Boolean);
-          if (coords.length >= 2) {
-            const hw = el.tags.highway;
-            // Road width based on type
-            let width = 4;
-            if (["primary", "trunk"].includes(hw)) width = 10;
-            else if (["secondary"].includes(hw)) width = 8;
-            else if (["tertiary", "unclassified"].includes(hw)) width = 6;
-            else if (["residential", "living_street"].includes(hw)) width = 5;
-            else if (["service", "track"].includes(hw)) width = 3;
-            else if (["footway", "path", "cycleway"].includes(hw)) width = 2;
-            roads.push({ coords, width, type: hw, name: el.tags.name || "" });
-          }
-        }
-      }
-
-      console.log(`  → ${buildings.length} buildings, ${roads.length} roads`);
-      return { buildings, roads };
-    } catch (e) {
-      console.warn(`  → failed: ${e.message}`);
     }
-  }
 
-  console.error("All Overpass servers failed");
-  return { buildings: [], roads: [] };
-}
+    map.addLayer({
+      id: '3d-buildings',
+      source: 'composite',
+      'source-layer': 'building',
+      filter: ['==', 'extrude', 'true'],
+      type: 'fill-extrusion',
+      minzoom: 14,
+      paint: {
+        'fill-extrusion-color': [
+          'interpolate', ['linear'], ['get', 'height'],
+          0, '#e8e4dc',
+          15, '#ddd8d0',
+          30, '#d5d0c8',
+        ],
+        'fill-extrusion-height': ['get', 'height'],
+        'fill-extrusion-base': ['get', 'min_height'],
+        'fill-extrusion-opacity': 0.85,
+      },
+    }, labelLayerId);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DRAWING FUNCTIONS — ALL IN AXONOMETRIC PROJECTION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ─── Ground plane ───────────────────────────────────────────────────────────
-function drawGroundPlane(ctx, project, extentM) {
-  const e = extentM;
-  // Draw subtle ground grid
-  ctx.strokeStyle = "#e8e4de";
-  ctx.lineWidth = 0.5;
-
-  const step = 20; // 20m grid
-  for (let i = -e; i <= e; i += step) {
-    const p1 = project(i, -e, 0);
-    const p2 = project(i, e, 0);
-    ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-    const p3 = project(-e, i, 0);
-    const p4 = project(e, i, 0);
-    ctx.beginPath(); ctx.moveTo(p3.x, p3.y); ctx.lineTo(p4.x, p4.y); ctx.stroke();
-  }
-}
-
-// ─── Roads ──────────────────────────────────────────────────────────────────
-function drawRoads(ctx, project, roads, cLat, cLon) {
-  // Draw road surfaces
-  for (const road of roads) {
-    const pts = road.coords.map(c => {
-      const m = geoToM(c.lat, c.lon, cLat, cLon);
-      return project(m.east, m.north, 0);
+    // ─── PARCEL FILL ────────────────────────────────────────────────────
+    map.addSource('parcel', {
+      type: 'geojson',
+      data: ${JSON.stringify(parcelGeoJSON)},
+    });
+    map.addLayer({
+      id: 'parcel-fill',
+      type: 'fill-extrusion',
+      source: 'parcel',
+      paint: {
+        'fill-extrusion-color': '#d02818',
+        'fill-extrusion-height': 0.5,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.25,
+      },
+    });
+    map.addLayer({
+      id: 'parcel-outline',
+      type: 'line',
+      source: 'parcel',
+      paint: {
+        'line-color': '#d02818',
+        'line-width': 3,
+        'line-opacity': 0.9,
+      },
     });
 
-    if (pts.length < 2) continue;
+    // ─── ENVELOPE ───────────────────────────────────────────────────────
+    map.addSource('envelope', {
+      type: 'geojson',
+      data: ${JSON.stringify(envelopeGeoJSON)},
+    });
+    map.addLayer({
+      id: 'envelope-outline',
+      type: 'line',
+      source: 'envelope',
+      paint: {
+        'line-color': '#d02818',
+        'line-width': 2,
+        'line-dasharray': [4, 3],
+        'line-opacity': 0.6,
+      },
+    });
 
-    // Road surface (wider, light)
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.strokeStyle = "#d5d0c8";
-    ctx.lineWidth = road.width * 0.8;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.stroke();
-
-    // Road center line (thinner, slightly darker)
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.strokeStyle = "#c8c2b8";
-    ctx.lineWidth = Math.max(1, road.width * 0.3);
-    ctx.setLineDash([4, 4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-}
-
-// ─── Buildings (isometric 3D extrusion) ─────────────────────────────────────
-function drawBuildings(ctx, project, buildings, cLat, cLon, parcelMCoords) {
-  // Check if centroid is inside parcel
-  function inPolygon(px, py, poly) {
-    let inside = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const xi = poly[i].east, yi = poly[i].north;
-      const xj = poly[j].east, yj = poly[j].north;
-      if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi)
-        inside = !inside;
-    }
-    return inside;
-  }
-
-  // Convert buildings to meters + compute centroid sort key
-  const buildingData = buildings.map(b => {
-    const mCoords = b.coords.map(c => geoToM(c.lat, c.lon, cLat, cLon));
-    const centroid = {
-      east: mCoords.reduce((s, p) => s + p.east, 0) / mCoords.length,
-      north: mCoords.reduce((s, p) => s + p.north, 0) / mCoords.length,
-    };
-    return { mCoords, height: b.height, centroid };
-  }).filter(b => {
-    // Skip buildings inside the parcel
-    return !inPolygon(b.centroid.east, b.centroid.north, parcelMCoords);
+    // ─── BUILDABLE VOLUME (extruded envelope, translucent green) ────────
+    map.addLayer({
+      id: 'envelope-volume',
+      type: 'fill-extrusion',
+      source: 'envelope',
+      paint: {
+        'fill-extrusion-color': '#1d7a3e',
+        'fill-extrusion-height': 12,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.08,
+      },
+    });
   });
 
-  // Sort back-to-front for isometric: draw buildings farther from viewer first
-  // Viewer is at south-east → sort by (east + north) ascending
-  buildingData.sort((a, b) => (a.centroid.east + a.centroid.north) - (b.centroid.east + b.centroid.north));
+  // ─── SIGNAL WHEN MAP IS FULLY RENDERED ──────────────────────────────
+  map.on('idle', () => {
+    // Wait a bit more for all tiles and 3D to settle
+    setTimeout(() => {
+      window.__MAP_READY = true;
+    }, 2000);
+  });
 
-  const colors = {
-    top: "#eae5db",
-    frontLight: "#ddd8ce",  // south-facing walls
-    frontDark: "#cbc5bb",   // west-facing walls
-    stroke: "#b5b0a5",
-  };
-
-  let drawn = 0;
-  for (const b of buildingData) {
-    const fp = b.mCoords;
-    const h = b.height;
-
-    // Project all points at ground and roof level
-    const ground = fp.map(p => project(p.east, p.north, 0));
-    const roof = fp.map(p => project(p.east, p.north, h));
-
-    // Check if any point is visible on canvas (rough check)
-    const anyVisible = ground.some(p => p.x > -200 && p.x < 1480 && p.y > -200 && p.y < 1480);
-    if (!anyVisible) continue;
-
-    // Draw visible walls
-    for (let i = 0; i < fp.length; i++) {
-      const j = (i + 1) % fp.length;
-      const g1 = ground[i], g2 = ground[j];
-      const r1 = roof[i], r2 = roof[j];
-
-      // Wall normal to determine facing direction
-      const dx = fp[j].east - fp[i].east;
-      const dy = fp[j].north - fp[i].north;
-      // Cross product with view direction to determine visibility
-      // View from south-east: visible if wall faces south or east
-      const faceSouth = dy < 0; // wall faces south (toward viewer)
-      const faceEast = dx > 0;  // wall faces east (toward viewer)
-
-      if (faceSouth || faceEast) {
-        ctx.beginPath();
-        ctx.moveTo(g1.x, g1.y);
-        ctx.lineTo(g2.x, g2.y);
-        ctx.lineTo(r2.x, r2.y);
-        ctx.lineTo(r1.x, r1.y);
-        ctx.closePath();
-        ctx.fillStyle = faceEast && !faceSouth ? colors.frontDark : colors.frontLight;
-        ctx.fill();
-        ctx.strokeStyle = colors.stroke;
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-      }
-    }
-
-    // Draw roof
-    ctx.beginPath();
-    ctx.moveTo(roof[0].x, roof[0].y);
-    for (let i = 1; i < roof.length; i++) ctx.lineTo(roof[i].x, roof[i].y);
-    ctx.closePath();
-    ctx.fillStyle = colors.top;
-    ctx.fill();
-    ctx.strokeStyle = colors.stroke;
-    ctx.lineWidth = 0.6;
-    ctx.stroke();
-
-    drawn++;
-  }
-
-  console.log(`Drew ${drawn} iso buildings (${buildings.length} total from Overpass)`);
-  return drawn;
+  // Fallback: mark ready after 20s no matter what
+  setTimeout(() => {
+    window.__MAP_READY = true;
+  }, 20000);
+</script>
+</body>
+</html>`;
 }
 
-// ─── Parcel (ground polygon, highlighted) ───────────────────────────────────
-function drawParcel(ctx, project, parcelMCoords) {
-  // Ground-level polygon
-  const pts = parcelMCoords.map(p => project(p.east, p.north, 0));
-
-  // Fill
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(208, 40, 24, 0.18)";
-  ctx.fill();
-
-  // Solid outline
-  ctx.strokeStyle = "#d02818";
-  ctx.lineWidth = 3;
-  ctx.stroke();
-}
-
-// ─── Envelope (dashed outline on ground) ────────────────────────────────────
-function drawEnvelope(ctx, project, envelopeMCoords) {
-  const pts = envelopeMCoords.map(p => project(p.east, p.north, 0));
-
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.closePath();
-  ctx.strokeStyle = "#d02818";
-  ctx.lineWidth = 2;
-  ctx.globalAlpha = 0.6;
-  ctx.setLineDash([10, 5]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 1;
-}
-
-// ─── Buildable volume (3D extruded envelope — translucent) ──────────────────
-function drawBuildableVolume(ctx, project, envelopeMCoords, maxHeight) {
-  const h = maxHeight || 12; // default R+3 = 12m
-  const ground = envelopeMCoords.map(p => project(p.east, p.north, 0));
-  const top = envelopeMCoords.map(p => project(p.east, p.north, h));
-
-  // Draw transparent walls
-  for (let i = 0; i < envelopeMCoords.length; i++) {
-    const j = (i + 1) % envelopeMCoords.length;
-    const dx = envelopeMCoords[j].east - envelopeMCoords[i].east;
-    const dy = envelopeMCoords[j].north - envelopeMCoords[i].north;
-    const faceSouth = dy < 0;
-    const faceEast = dx > 0;
-
-    if (faceSouth || faceEast) {
-      ctx.beginPath();
-      ctx.moveTo(ground[i].x, ground[i].y);
-      ctx.lineTo(ground[j].x, ground[j].y);
-      ctx.lineTo(top[j].x, top[j].y);
-      ctx.lineTo(top[i].x, top[i].y);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(29, 122, 62, 0.08)";
-      ctx.fill();
-      ctx.strokeStyle = "rgba(29, 122, 62, 0.35)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([6, 4]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
-
-  // Top face
-  ctx.beginPath();
-  ctx.moveTo(top[0].x, top[0].y);
-  for (let i = 1; i < top.length; i++) ctx.lineTo(top[i].x, top[i].y);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(29, 122, 62, 0.06)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(29, 122, 62, 0.4)";
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([6, 4]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-}
-
-// ─── Setback dimension lines ────────────────────────────────────────────────
-function drawSetbackLines(ctx, project, parcelMCoords, envelopeMCoords, setbacks) {
-  // Find approximate edge midpoints for annotation placement
-  if (parcelMCoords.length < 3 || envelopeMCoords.length < 3) return;
-
-  function midpoint(arr, i, j) {
-    return {
-      east: (arr[i % arr.length].east + arr[j % arr.length].east) / 2,
-      north: (arr[i % arr.length].north + arr[j % arr.length].north) / 2,
-    };
-  }
-
-  // Simple approach: put setback labels near parcel edges
-  const pMid = midpoint(parcelMCoords, 0, 1); // "front" edge
-  const fp = project(pMid.east, pMid.north + 2, 1);
-  drawLabel(ctx, fp.x, fp.y, `${setbacks.front}m`, "#d02818", 12, true);
-
-  const pMidBack = midpoint(parcelMCoords, 2, 3);
-  const fb = project(pMidBack.east, pMidBack.north - 2, 1);
-  drawLabel(ctx, fb.x, fb.y, `${setbacks.back}m`, "#888", 11);
-
-  const pMidLeft = midpoint(parcelMCoords, 1, 2);
-  const fl = project(pMidLeft.east - 2, pMidLeft.north, 1);
-  drawLabel(ctx, fl.x, fl.y, `${setbacks.side}m`, "#888", 11);
-
-  const pMidRight = midpoint(parcelMCoords, 3, 0);
-  const fr = project(pMidRight.east + 2, pMidRight.north, 1);
-  drawLabel(ctx, fr.x, fr.y, `${setbacks.side}m`, "#888", 11);
-}
-
-// ─── Label helper ───────────────────────────────────────────────────────────
-function drawLabel(ctx, x, y, txt, color, size, bold) {
-  ctx.font = `${bold ? "700" : "500"} ${size}px Arial, Helvetica, sans-serif`;
-  ctx.textAlign = "center";
-  // White halo
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = size > 12 ? 4 : 3;
-  ctx.lineJoin = "round";
-  ctx.strokeText(txt, x, y);
-  // Text
-  ctx.fillStyle = color;
-  ctx.fillText(txt, x, y);
-}
-
-// ─── Overlays (legend, compass, annotations, stats bar) ─────────────────────
-function drawOverlays(ctx, W, H, BH, project, parcelMCoords, p) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// DRAW OVERLAYS ON SCREENSHOT (canvas compositing)
+// ═══════════════════════════════════════════════════════════════════════════════
+function drawOverlays(ctx, W, H, BH, p) {
   const {
     site_area, land_width, land_depth, buildable_fp,
     setback_front, setback_side, setback_back,
-    city, district, zoning, terrain_context, buildingCount,
+    city, district, zoning, terrain_context, bearing,
   } = p;
 
-  // ─── Center annotation ──────────────────
-  const parcelCenter = {
-    east: parcelMCoords.reduce((s, p2) => s + p2.east, 0) / parcelMCoords.length,
-    north: parcelMCoords.reduce((s, p2) => s + p2.north, 0) / parcelMCoords.length,
-  };
-  const pc = project(parcelCenter.east, parcelCenter.north, 0);
+  function T(x, y, txt, color, size, bold = false, anchor = "center") {
+    ctx.font = `${bold ? "700" : "500"} ${size}px Arial, Helvetica, sans-serif`;
+    ctx.textAlign = anchor;
+    ctx.strokeStyle = "rgba(255,255,255,0.92)";
+    ctx.lineWidth = size > 14 ? 5 : 3.5;
+    ctx.lineJoin = "round";
+    ctx.strokeText(txt, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(txt, x, y);
+  }
 
-  drawLabel(ctx, pc.x, pc.y - 40, "Enveloppe constructible", "#d02818", 15);
-  drawLabel(ctx, pc.x, pc.y - 16, `${buildable_fp} m²`, "#1d7a3e", 24, true);
-  drawLabel(ctx, pc.x, pc.y + 10, `${site_area} m² · ${land_width}×${land_depth}m`, "#666", 12);
+  const cx = W / 2, cy = H / 2;
+  T(cx, cy - 30, "Enveloppe constructible", "#d02818", 16);
+  T(cx, cy + 6, `${buildable_fp} m²`, "#1d7a3e", 28, true);
+  T(cx, cy + 34, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 13);
 
-  // "Accès principal" at front edge
-  const frontMid = {
-    east: (parcelMCoords[0].east + parcelMCoords[1 % parcelMCoords.length].east) / 2,
-    north: (parcelMCoords[0].north + parcelMCoords[1 % parcelMCoords.length].north) / 2,
-  };
-  const fmp = project(frontMid.east, frontMid.north + 8, 0);
-  drawLabel(ctx, fmp.x, fmp.y, "Accès principal ↓", "#d02818", 16, true);
+  // Setback labels
+  T(cx, cy - 80, `↕ Recul avant : ${setback_front}m`, "#d02818", 13, true);
+  T(cx - W * 0.18, cy, `↔ ${setback_side}m`, "#666", 12);
+  T(cx + W * 0.18, cy, `↔ ${setback_side}m`, "#666", 12);
+  T(cx, cy + 70, `↕ Recul arrière : ${setback_back}m`, "#666", 12);
 
-  // ─── Compass (north arrow, top-right) ──────
+  // ─── Compass ──────────────────────
   ctx.save();
-  ctx.translate(W - 60, 60);
-  ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
+  ctx.translate(W - 55, 55);
+  ctx.beginPath(); ctx.arc(0, 0, 26, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fill();
-  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1.5; ctx.stroke();
-  // North is "up-left" in our axo view
-  const nAngle = -Math.PI / 6; // 30° left of vertical (matches axo north)
-  ctx.rotate(nAngle);
-  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -2); ctx.lineTo(0, -8); ctx.lineTo(5, -2); ctx.closePath();
+  ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.rotate(-(bearing || 0) * Math.PI / 180);
+  ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(-4, -2); ctx.lineTo(0, -7); ctx.lineTo(4, -2); ctx.closePath();
   ctx.fillStyle = "#d02818"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 2); ctx.lineTo(0, 8); ctx.lineTo(5, 2); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, 16); ctx.lineTo(-4, 2); ctx.lineTo(0, 7); ctx.lineTo(4, 2); ctx.closePath();
   ctx.fillStyle = "#bbb"; ctx.fill();
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
-  ctx.fillText("N", 0, -22);
+  ctx.font = "bold 11px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.fillText("N", 0, -20);
   ctx.restore();
 
-  // ─── Legend ──────────────────────────────
+  // ─── Legend ──────────────────────
   const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.18)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
-    { type: "line", stroke: "#d02818", dash: true, label: "Enveloppe constructible" },
-    { type: "rect", fill: "#eae5db", stroke: "#b5b0a5", label: `Bâtiments 3D (${buildingCount})` },
+    { type: "rect", fill: "rgba(208,40,24,0.25)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
+    { type: "line", stroke: "#d02818", label: "Enveloppe constructible" },
+    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D Mapbox" },
     { type: "rect", fill: "rgba(29,122,62,0.08)", stroke: "rgba(29,122,62,0.4)", label: "Volume constructible" },
-    { type: "line", stroke: "#d5d0c8", label: "Voirie" },
   ];
-  const legW = 290, legH = 22 + legItems.length * 28 + 16;
-
+  const legW = 280, legH = 20 + legItems.length * 26 + 12;
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.06)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
   ctx.fillStyle = "rgba(255,255,255,0.96)";
-  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 10); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
   ctx.shadowColor = "transparent";
   ctx.strokeStyle = "#e8e5e0"; ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
 
   legItems.forEach((item, i) => {
-    const iy = 16 + 18 + i * 28;
+    const iy = 16 + 16 + i * 26;
     if (item.type === "rect") {
       ctx.fillStyle = item.fill;
-      ctx.beginPath(); ctx.roundRect(30, iy, 16, 12, 2); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(28, iy, 16, 12, 2); ctx.fill();
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
     } else {
-      ctx.beginPath(); ctx.moveTo(30, iy + 6); ctx.lineTo(46, iy + 6);
+      ctx.beginPath(); ctx.moveTo(28, iy + 6); ctx.lineTo(44, iy + 6);
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5;
-      if (item.dash) ctx.setLineDash([5, 3]);
-      ctx.stroke(); ctx.setLineDash([]);
+      ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.font = "12px Arial"; ctx.fillStyle = "#555"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 56, iy + 11);
+    ctx.fillText(item.label, 52, iy + 11);
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© OpenStreetMap contributors", 30, 16 + legH - 6);
+  ctx.fillText("© Mapbox © OpenStreetMap", 28, 16 + legH - 6);
 
-  // ─── Stats bar ──────────────────────────
+  // ─── Stats bar ──────────────────
   const BY = H, pad = 30;
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, BY, W, BH);
@@ -593,7 +361,8 @@ function drawOverlays(ctx, W, H, BH, project, parcelMCoords, p) {
   ctx.beginPath(); ctx.moveTo(C1, BY + 72); ctx.lineTo(W - pad, BY + 72);
   ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1.5; ctx.stroke();
 
-  ctx.font = "10px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Surface parcelle", C1, BY + 90);
+  ctx.font = "10px Arial"; ctx.fillStyle = "#bbb";
+  ctx.fillText("Surface parcelle", C1, BY + 90);
   ctx.font = "bold 28px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${site_area} m²`, C1, BY + 122);
   ctx.font = "10px Arial"; ctx.fillStyle = "#bbb"; ctx.fillText("Dimensions", C2, BY + 90);
   ctx.font = "bold 22px Arial"; ctx.fillStyle = "#111"; ctx.fillText(`${land_width}m × ${land_depth}m`, C2, BY + 122);
@@ -613,11 +382,11 @@ function drawOverlays(ctx, W, H, BH, project, parcelMCoords, p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENDPOINT
+// MAIN ENDPOINT
 // ═══════════════════════════════════════════════════════════════════════════════
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate (Axonometric Iso3D Massing) ═══");
+  console.log("═══ /generate (Browserless + Mapbox GL 3D) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -628,6 +397,10 @@ app.post("/generate", async (req, res) => {
 
   if (!lead_id || !polygon_points)
     return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
+  if (!MAPBOX_TOKEN)
+    return res.status(500).json({ error: "MAPBOX_TOKEN non configuré" });
+  if (!BROWSERLESS_TOKEN)
+    return res.status(500).json({ error: "BROWSERLESS_TOKEN non configuré — inscription gratuite sur browserless.io" });
 
   // Parse polygon
   const coords = polygon_points.split("|").map(pt => {
@@ -640,87 +413,76 @@ app.post("/generate", async (req, res) => {
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
   console.log(`Centre: ${cLat.toFixed(6)}, ${cLon.toFixed(6)}`);
 
-  // Convert parcel to meters
-  const parcelMCoords = coords.map(c => geoToM(c.lat, c.lon, cLat, cLon));
-
-  // Compute envelope in meters
-  const envelopeMCoords = computeEnvelope(
+  // Compute envelope
+  const envelopeCoords = computeEnvelope(
     coords, cLat, cLon,
     Number(setback_front), Number(setback_side), Number(setback_back)
   );
 
-  // Calculate axo scale: fit parcel + surroundings in canvas
-  const parcelExtent = Math.max(
-    Math.max(...parcelMCoords.map(p => Math.abs(p.east))),
-    Math.max(...parcelMCoords.map(p => Math.abs(p.north))),
-    15
-  );
-  const viewExtent = parcelExtent * 5; // Show 5x parcel size for context
+  const zoom = computeZoom(coords, cLat, cLon);
+  const bearing = computeBearing(coords, cLat, cLon);
+  console.log(`View: zoom=${zoom}, bearing=${bearing}°, pitch=55°`);
 
-  const W = 1280;
-  const H = 1280;
-  const BH = Math.round(H * 0.12);
-
-  // Scale: pixels per meter in the axo projection
-  // Factor 0.35 accounts for the axo angle compression
-  const axoScale = (W * 0.35) / viewExtent;
-  console.log(`Parcel extent: ${parcelExtent.toFixed(0)}m, View: ${viewExtent.toFixed(0)}m, Scale: ${axoScale.toFixed(2)} px/m`);
-
+  let browser;
   try {
-    // ── 1. FETCH OSM DATA ──────────────────────────────────────────────────
-    const osmData = await fetchOSMData({ lat: cLat, lon: cLon }, Math.round(viewExtent));
-    console.log(`OSM data fetched (${Date.now() - t0}ms)`);
+    // ── 1. CONNECT TO BROWSERLESS ──────────────────────────────────────
+    console.log("Connecting to Browserless...");
+    browser = await puppeteer.connect({
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}`,
+    });
+    console.log(`Connected to Browserless (${Date.now() - t0}ms)`);
 
-    // ── 2. CREATE CANVAS + PROJECTION ──────────────────────────────────────
+    // ── 2. RENDER MAPBOX GL 3D ─────────────────────────────────────────
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
+
+    const html = generateMapHTML(
+      { lat: cLat, lon: cLon }, zoom, bearing,
+      coords, envelopeCoords, MAPBOX_TOKEN
+    );
+
+    // Set page content and wait for Mapbox to load
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
+    console.log(`Page loaded (${Date.now() - t0}ms), waiting for map render...`);
+
+    // Wait for map to signal ready
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 25000 });
+    console.log(`Map rendered (${Date.now() - t0}ms)`);
+
+    // Take screenshot
+    const screenshotBuffer = await page.screenshot({
+      type: "png",
+      clip: { x: 0, y: 0, width: 1280, height: 1280 },
+    });
+    console.log(`Screenshot: ${screenshotBuffer.length} bytes (${Date.now() - t0}ms)`);
+
+    await page.close();
+
+    // ── 3. COMPOSITE OVERLAYS ──────────────────────────────────────────
+    const mapImg = await loadImage(screenshotBuffer);
+    const W = 1280, H = 1280;
+    const BH = Math.round(H * 0.12);
+
     const canvas = createCanvas(W, H + BH);
     const ctx = canvas.getContext("2d");
 
-    // Background
-    ctx.fillStyle = "#f5f2ec";
-    ctx.fillRect(0, 0, W, H);
+    // Draw the Mapbox 3D screenshot
+    ctx.drawImage(mapImg, 0, 0);
 
-    // Axonometric projection — shift center slightly up to leave room for stats bar
-    const project = createAxoProjection(axoScale, W, H, -H * 0.05);
-
-    // ── 3. DRAW SCENE (back-to-front) ──────────────────────────────────────
-
-    // Ground grid
-    drawGroundPlane(ctx, project, viewExtent);
-
-    // Roads
-    drawRoads(ctx, project, osmData.roads, cLat, cLon);
-
-    // Buildings (isometric 3D)
-    const buildingCount = drawBuildings(ctx, project, osmData.buildings, cLat, cLon, parcelMCoords);
-
-    // Parcel outline (ground level)
-    drawParcel(ctx, project, parcelMCoords);
-
-    // Envelope (dashed, ground level)
-    drawEnvelope(ctx, project, envelopeMCoords);
-
-    // Buildable volume (translucent 3D box)
-    drawBuildableVolume(ctx, project, envelopeMCoords, 12);
-
-    // Setback dimension lines
-    drawSetbackLines(ctx, project, parcelMCoords, envelopeMCoords, {
-      front: Number(setback_front), side: Number(setback_side), back: Number(setback_back),
-    });
-
-    // ── 4. OVERLAYS ────────────────────────────────────────────────────────
-    drawOverlays(ctx, W, H, BH, project, parcelMCoords, {
+    // Draw BARLO overlays
+    drawOverlays(ctx, W, H, BH, {
       site_area: Number(site_area), land_width: Number(land_width),
       land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
       setback_front: Number(setback_front), setback_side: Number(setback_side),
       setback_back: Number(setback_back),
       city: city || "", district: district || "", zoning: zoning || "",
-      terrain_context: terrain_context || "", buildingCount,
+      terrain_context: terrain_context || "", bearing,
     });
 
     const png = canvas.toBuffer("image/png");
     console.log(`Final PNG: ${png.length} bytes, ${W}x${H + BH} (${Date.now() - t0}ms)`);
 
-    // ── 5. UPLOAD TO SUPABASE ──────────────────────────────────────────────
+    // ── 4. UPLOAD TO SUPABASE ──────────────────────────────────────────
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim()
       .replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -737,20 +499,25 @@ app.post("/generate", async (req, res) => {
     return res.json({
       ok: true, public_url: pd.publicUrl, path,
       centroid: { lat: cLat, lon: cLon },
-      buildings_count: buildingCount,
-      roads_count: osmData.roads.length,
-      engine: "axo-iso3d-vector-v8",
+      view: { zoom, bearing, pitch: 55 },
+      engine: "browserless-mapbox-gl-3d-v9",
       duration_ms: Date.now() - t0,
     });
+
   } catch (e) {
-    console.error("Error:", e);
-    return res.status(500).json({ error: String(e) });
+    console.error("Error:", e.message || e);
+    return res.status(500).json({ error: String(e.message || e) });
+  } finally {
+    if (browser) {
+      try { browser.disconnect(); } catch (_) {}
+    }
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO Axo Service v8.0 on port ${PORT}`);
-  console.log(`Engine: Axonometric Iso3D Vector (pure canvas)`);
-  console.log(`No Mapbox/tiles needed — 100% vector rendering`);
+  console.log(`BARLO Axo Service v9.0 on port ${PORT}`);
+  console.log(`Engine: Browserless + Mapbox GL 3D`);
+  console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING — sign up at browserless.io"}`);
+  console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Supabase: ${SUPABASE_URL ? "OK" : "MISSING"}`);
 });
