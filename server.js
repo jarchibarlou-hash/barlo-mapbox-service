@@ -92,10 +92,10 @@ function computeZoom(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const targetViewM = ext * 4;
+  const targetViewM = ext * 2.5; // closer zoom — parcelle plus visible
   const mpp = targetViewM / 900;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(17.5, Math.max(15, Math.round(z * 4) / 4));
+  return Math.min(17.5, Math.max(16, Math.round(z * 4) / 4));
 }
 
 function computeBearing(coords, cLat, cLon) {
@@ -152,13 +152,21 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     center: [${center.lon}, ${center.lat}],
     zoom: ${zoom},
     bearing: ${bearing},
-    pitch: 55,
+    pitch: 62,
     antialias: true,
     preserveDrawingBuffer: true,
     fadeDuration: 0,
   });
 
   map.on('style.load', () => {
+    // Better lighting for 3D depth and shadows
+    map.setLight({
+      anchor: 'viewport',
+      color: '#ffffff',
+      intensity: 0.4,
+      position: [1.5, 210, 30],
+    });
+
     // ─── 3D BUILDINGS ──────────────────────────────────────────────────
     const layers = map.getStyle().layers;
     let labelLayerId;
@@ -179,13 +187,15 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': [
           'interpolate', ['linear'], ['get', 'height'],
-          0, '#e8e4dc',
-          15, '#ddd8d0',
-          30, '#d5d0c8',
+          0, '#e6e1d8',
+          8, '#dbd6cc',
+          20, '#d0cbc2',
+          40, '#c5c0b8',
         ],
-        'fill-extrusion-height': ['get', 'height'],
-        'fill-extrusion-base': ['get', 'min_height'],
-        'fill-extrusion-opacity': 0.85,
+        'fill-extrusion-height': ['*', ['get', 'height'], 1.8],
+        'fill-extrusion-base': ['*', ['get', 'min_height'], 1.8],
+        'fill-extrusion-opacity': 0.92,
+        'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
 
@@ -199,10 +209,10 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       type: 'fill-extrusion',
       source: 'parcel',
       paint: {
-        'fill-extrusion-color': '#d02818',
-        'fill-extrusion-height': 0.5,
+        'fill-extrusion-color': '#c02010',
+        'fill-extrusion-height': 1,
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.25,
+        'fill-extrusion-opacity': 0.3,
       },
     });
     map.addLayer({
@@ -210,9 +220,9 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       type: 'line',
       source: 'parcel',
       paint: {
-        'line-color': '#d02818',
-        'line-width': 3,
-        'line-opacity': 0.9,
+        'line-color': '#c02010',
+        'line-width': 3.5,
+        'line-opacity': 0.95,
       },
     });
 
@@ -240,25 +250,25 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       source: 'envelope',
       paint: {
         'fill-extrusion-color': '#1d7a3e',
-        'fill-extrusion-height': 12,
+        'fill-extrusion-height': 14,
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.08,
+        'fill-extrusion-opacity': 0.1,
       },
     });
   });
 
   // ─── SIGNAL WHEN MAP IS FULLY RENDERED ──────────────────────────────
   map.on('idle', () => {
-    // Wait a bit more for all tiles and 3D to settle
+    // Wait extra time for all 3D tiles and extrusions to fully render
     setTimeout(() => {
       window.__MAP_READY = true;
-    }, 2000);
+    }, 3000);
   });
 
-  // Fallback: mark ready after 20s no matter what
+  // Fallback: mark ready after 25s no matter what
   setTimeout(() => {
     window.__MAP_READY = true;
-  }, 20000);
+  }, 25000);
 </script>
 </body>
 </html>`;
@@ -285,16 +295,7 @@ function drawOverlays(ctx, W, H, BH, p) {
     ctx.fillText(txt, x, y);
   }
 
-  const cx = W / 2, cy = H / 2;
-  T(cx, cy - 30, "Enveloppe constructible", "#d02818", 16);
-  T(cx, cy + 6, `${buildable_fp} m²`, "#1d7a3e", 28, true);
-  T(cx, cy + 34, `${site_area} m² · ${land_width}×${land_depth}m`, "#555", 13);
-
-  // Setback labels
-  T(cx, cy - 80, `↕ Recul avant : ${setback_front}m`, "#d02818", 13, true);
-  T(cx - W * 0.18, cy, `↔ ${setback_side}m`, "#666", 12);
-  T(cx + W * 0.18, cy, `↔ ${setback_side}m`, "#666", 12);
-  T(cx, cy + 70, `↕ Recul arrière : ${setback_back}m`, "#666", 12);
+  // (No overlay text on map — cleaner look, data in stats bar + legend)
 
   // ─── Compass ──────────────────────
   ctx.save();
