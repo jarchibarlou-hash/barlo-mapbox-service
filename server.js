@@ -64,7 +64,7 @@ function computeZoom(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const targetViewM = ext * 5.5;
+  const targetViewM = ext * 3.0;
   const mpp = targetViewM / 1280;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(17, Math.max(15.5, Math.round(z * 4) / 4));
@@ -313,7 +313,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   const legItems = [
     { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
     { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
-    { type: "rect", fill: "rgba(29,122,62,0.1)", stroke: "rgba(29,122,62,0.5)", label: `Volume constructible — ${buildable_fp} m²` },
+
     { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
