@@ -67,7 +67,7 @@ function computeZoom(coords, cLat, cLon) {
   const targetViewM = ext * 3.0;
   const mpp = targetViewM / 1280;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(17, Math.max(15.5, Math.round(z * 4) / 4));
+  return Math.min(17.5, Math.max(16, Math.round(z * 4) / 4));
 }
 
 function computeBearing(coords, cLat, cLon) {
@@ -410,6 +410,7 @@ app.post("/generate", async (req, res) => {
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
     terrain_context, city, district, zoning,
     slide_name = "slide_4_axo",
+    zoom: zoomOverride = null,
   } = req.body;
 
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
@@ -428,7 +429,7 @@ app.post("/generate", async (req, res) => {
   const envelopeCoords = computeEnvelope(coords, cLat, cLon,
     Number(setback_front), Number(setback_side), Number(setback_back));
 
-  const zoom = computeZoom(coords, cLat, cLon);
+  const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   const bearing = computeBearing(coords, cLat, cLon);
   console.log(`zoom=${zoom} bearing=${bearing}° pitch=58°`);
 
