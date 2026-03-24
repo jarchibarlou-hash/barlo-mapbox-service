@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "23.0-final" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "24.0-final" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -244,11 +244,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-color': [
           'interpolate', ['linear'],
           ['coalesce', ['get', 'height'], 6],
-          0,  '#ffffff',   // toits : blanc pur Hektar
-          4,  '#f5f3ef',   // face lumière : blanc chaud
-          10, '#e8e4dc',   // milieu
-          20, '#c8c4bc',   // face ombre : gris chaud
-          40, '#9a9690',   // ombre profonde Hektar
+          0,  '#ffffff',   // toits : blanc pur
+          4,  '#ffffff',   // face lumière : blanc pur
+          10, '#f0ede8',   // milieu : très légèrement teinté
+          20, '#d8d4cc',   // face ombre
+          40, '#b0aca4',   // ombre profonde
         ],
         'fill-extrusion-height': [
           'case',
@@ -272,7 +272,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // soient rendus par-dessus → effet "bâtiment en premier plan"
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.15 } }, '3d-buildings');
+      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.18 } }, '3d-buildings');
     // Outline parcelle après bâtiments pour rester visible
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } });
@@ -280,9 +280,9 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // ── Zone constructible — rouge foncé, opacité légère ─────────────
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-fill', type: 'fill', source: 'envelope',
-      paint: { 'fill-color': '#6b0f0f', 'fill-opacity': 0.10 } }, '3d-buildings');
+      paint: { 'fill-color': '#1a3a8c', 'fill-opacity': 0.12 } }, '3d-buildings');
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#8b1a0a', 'line-width': 2.5, 'line-dasharray': [6, 3], 'line-opacity': 1 } });
+      paint: { 'line-color': '#1a3a8c', 'line-width': 2.5, 'line-dasharray': [6, 3], 'line-opacity': 1 } });
 
     // ── Noms de rues natifs Mapbox ────────────────────────────────────
     map.addLayer({
@@ -341,7 +341,7 @@ function drawOverlays(ctx, W, H, p) {
   // Légende haut gauche
   const legItems = [
     { fill: "rgba(208,40,24,0.15)", stroke: "#d02818", dash: false, label: "Parcelle — " + site_area + " m²" },
-    { fill: "rgba(26,58,92,0.12)", stroke: "rgba(26,58,92,0.9)", dash: true, label: "Zone constructible" },
+    { fill: "rgba(26,58,140,0.12)", stroke: "rgba(26,58,140,0.9)", dash: true, label: "Zone constructible (reculs)" },
     { fill: "#e8e4dc", stroke: "#c8c4bc", dash: false, label: "Bâtiment existant" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
@@ -416,7 +416,7 @@ function drawOverlays(ctx, W, H, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v23 (zones sous bâtiments + zone constructible rouge foncé) ═══");
+  console.log("═══ /generate v24 (bâtiments blancs + arêtes noires + zones distinctes + verts vifs) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -612,7 +612,7 @@ Professional urban planning quality suitable for 1000€/month architectural rep
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v23 (final) on port ${PORT}`);
+  console.log(`BARLO v24 (final) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
