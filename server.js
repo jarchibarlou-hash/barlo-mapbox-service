@@ -273,16 +273,16 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#d02818', 'fill-opacity': 0.18 } }, '3d-buildings');
-    // Outline parcelle après bâtiments pour rester visible
+    // Outline AUSSI avant 3d-buildings → bâtiments passent PAR-DESSUS la limite
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } });
+      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
 
-    // ── Zone constructible — rouge foncé, opacité légère ─────────────
+    // ── Zone constructible — bleu, sous les bâtiments ────────────────
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-fill', type: 'fill', source: 'envelope',
       paint: { 'fill-color': '#1a3a8c', 'fill-opacity': 0.12 } }, '3d-buildings');
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#1a3a8c', 'line-width': 2.5, 'line-dasharray': [6, 3], 'line-opacity': 1 } });
+      paint: { 'line-color': '#1a3a8c', 'line-width': 2.5, 'line-dasharray': [6, 3], 'line-opacity': 0.9 } }, '3d-buildings');
 
     // ── Noms de rues natifs Mapbox ────────────────────────────────────
     map.addLayer({
