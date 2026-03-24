@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "42.0-zones-canvas-fixed" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "43.0-zones-mapbox-overlay" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -267,9 +267,18 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       },
     }, labelLayerId);
 
-    // ── PAS de parcelle ni enveloppe dans Mapbox ─────────────────────
-    // Elles seront dessinées en node-canvas après OpenAI
-    // → position GPS exacte garantie, jamais déplacées par l'IA
+    // ── Parcelle — flat rouge au sol, SOUS les bâtiments ────────────
+    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.22 } }, '3d-buildings');
+    map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
+      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
+
+    // ── Enveloppe constructible — tirets rouges, SOUS les bâtiments ──
+    map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
+    map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
+      paint: { 'line-color': '#d02818', 'line-width': 2.5,
+               'line-dasharray': [5, 3], 'line-opacity': 0.85 } }, '3d-buildings');
   });
 
   let rendered = false;
@@ -509,7 +518,7 @@ function drawSolarArc(ctx, W, H, p) {
 }
 
 
-// ─── GPS → PIXEL (projection Mercator avec bearing) ──────────────────────────
+// ─── GPS → PIXEL (kept for reference) ──────────────────────────────────────────
 function gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H) {
   const scale = 256 * Math.pow(2, zoom);
   const toMX = (lng) => (lng + 180) / 360 * scale;
@@ -566,7 +575,7 @@ function drawZones(ctx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing)
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v42 (zones canvas GPS exact) ═══");
+  console.log("═══ /generate v43 (zones Mapbox screenshot overlay) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -624,7 +633,6 @@ app.post("/generate", async (req, res) => {
     const ctx = canvas.getContext("2d");
     const mapImg = await loadImage(screenshotBuf);
     ctx.drawImage(mapImg, 0, 0);
-    drawZones(ctx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing);
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
 
     const png = canvas.toBuffer("image/png");
@@ -683,8 +691,26 @@ app.post("/generate", async (req, res) => {
           const finalCtx = finalCanvas.getContext("2d");
           const enhancedMapImg = await loadImage(enhancedMapBuf);
           finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
-          // Parcelle + enveloppe dessinées EN DERNIER par-dessus tout — position GPS exacte
-          drawZones(finalCtx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing);
+          // ── Screenshot zones Mapbox — même perspective exacte ──────────
+          // Reconnecter browser si nécessaire
+          if (!browser.isConnected()) {
+            browser = await puppeteer.connect({
+              browserWSEndpoint: "wss://chrome.browserless.io?token=" + BROWSERLESS_TOKEN,
+            });
+          }
+          const zonesPage = await browser.newPage();
+          await zonesPage.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
+          const zonesHtml = generateZonesHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
+          await zonesPage.setContent(zonesHtml, { waitUntil: "networkidle0", timeout: 20000 });
+          await zonesPage.waitForFunction("window.__MAP_READY === true", { timeout: 15000 });
+          const zonesBuf = await zonesPage.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+          await zonesPage.close();
+          console.log("Zones screenshot: " + zonesBuf.length + " bytes");
+
+          // Composer zones par-dessus enhanced
+          const zonesImg = await loadImage(zonesBuf);
+          finalCtx.drawImage(zonesImg, 0, 0, W, H);
+
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
 
@@ -730,7 +756,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v42 on port ${PORT}`);
+  console.log(`BARLO v43 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
