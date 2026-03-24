@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "29.0-v16+zones" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "30.0-FINAL" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -412,10 +412,110 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 16);
 }
 
+
+// ─── LÉGENDE + BOUSSOLE (v16 exact) ──────────────────────────────────────────
+function drawLegendCompass(ctx, W, H, p) {
+  const { site_area, bearing } = p;
+
+  // Boussole haut droite — identique v16
+  ctx.save();
+  ctx.translate(W - 58, 58);
+  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
+  ctx.fillStyle = "rgba(255,255,255,0.96)"; ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.rotate(-(bearing || 0) * Math.PI / 180);
+  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
+  ctx.fillStyle = "#d02818"; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
+  ctx.fillStyle = "#ccc"; ctx.fill();
+  ctx.rotate((bearing || 0) * Math.PI / 180);
+  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.fillText("N", 0, -22);
+  ctx.restore();
+
+  // Légende haut gauche — identique v16 + zone bleue
+  const legItems = [
+    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
+    { type: "dash", fill: "rgba(26,58,140,0.12)", stroke: "#1a3a8c", label: "Zone constructible (reculs)" },
+    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiment existant" },
+  ];
+  const legPad = 14, legLH = 26, legW = 300;
+  const legH = legPad * 2 + legItems.length * legLH + 10;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "rgba(255,255,255,0.97)";
+  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.restore();
+  legItems.forEach((item, i) => {
+    const iy = 16 + legPad + i * legLH;
+    ctx.save();
+    ctx.fillStyle = item.fill;
+    ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
+    if (item.type === "dash") ctx.setLineDash([4, 2]);
+    ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
+    ctx.fillText(item.label, 52, iy + 11);
+  });
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
+  ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
+}
+
+// ─── ARC SOLAIRE (de v19) ─────────────────────────────────────────────────────
+function drawSolarArc(ctx, W, H, p) {
+  const { bearing } = p;
+  const SX = W - 120, SY = H - 120, SR = 75;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 14;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath(); ctx.arc(SX, SY, SR + 14, 0, 2 * Math.PI); ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e8e4dc"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(SX, SY, SR - 10, 0, 2 * Math.PI); ctx.stroke();
+  const northRad = -(bearing) * Math.PI / 180 - Math.PI / 2;
+  const sunriseAngle = northRad + Math.PI / 2;
+  const sunsetAngle = northRad + 3 * Math.PI / 2;
+  ctx.beginPath(); ctx.arc(SX, SY, SR - 8, sunriseAngle, sunsetAngle);
+  ctx.strokeStyle = "rgba(255,180,0,0.15)"; ctx.lineWidth = 18; ctx.stroke();
+  ctx.beginPath(); ctx.arc(SX, SY, SR - 8, sunriseAngle, sunsetAngle);
+  const grad = ctx.createLinearGradient(
+    SX + Math.cos(sunriseAngle) * SR, SY + Math.sin(sunriseAngle) * SR,
+    SX + Math.cos(sunsetAngle) * SR, SY + Math.sin(sunsetAngle) * SR);
+  grad.addColorStop(0, "rgba(255,140,0,0.6)");
+  grad.addColorStop(0.5, "rgba(255,200,0,0.9)");
+  grad.addColorStop(1, "rgba(255,80,0,0.6)");
+  ctx.strokeStyle = grad; ctx.lineWidth = 8; ctx.stroke();
+  const sunAngle = northRad + Math.PI;
+  const sunX = SX + Math.cos(sunAngle) * (SR - 8), sunY = SY + Math.sin(sunAngle) * (SR - 8);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(sunX + Math.cos(a) * 8, sunY + Math.sin(a) * 8);
+    ctx.lineTo(sunX + Math.cos(a) * 12, sunY + Math.sin(a) * 12);
+    ctx.strokeStyle = "#f0a000"; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.fillStyle = "#f5c000"; ctx.beginPath(); ctx.arc(sunX, sunY, 7, 0, 2 * Math.PI); ctx.fill();
+  ctx.fillStyle = "#f0a000"; ctx.beginPath(); ctx.arc(sunX, sunY, 4, 0, 2 * Math.PI); ctx.fill();
+  const eX = SX + Math.cos(sunriseAngle) * (SR + 4), eY = SY + Math.sin(sunriseAngle) * (SR + 4);
+  const oX = SX + Math.cos(sunsetAngle) * (SR + 4), oY = SY + Math.sin(sunsetAngle) * (SR + 4);
+  ctx.font = "bold 11px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#c08020";
+  ctx.fillText("E", eX, eY + 4); ctx.fillText("O", oX, oY + 4);
+  const nX = SX + Math.cos(northRad) * (SR + 6), nY = SY + Math.sin(northRad) * (SR + 6);
+  ctx.font = "bold 16px Arial"; ctx.fillStyle = "#d02818"; ctx.fillText("N", nX, nY + 5);
+  const sX = SX + Math.cos(northRad + Math.PI) * (SR + 4), sY = SY + Math.sin(northRad + Math.PI) * (SR + 4);
+  ctx.font = "11px Arial"; ctx.fillStyle = "#999"; ctx.fillText("S", sX, sY + 4);
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "center";
+  ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 20);
+  ctx.restore();
+}
+
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v29 (v16 exact + zones flat sous bâtiments) ═══");
+  console.log("═══ /generate v30 FINAL (v16 style + zones flat + soleil) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -566,25 +666,19 @@ Professional urban planning quality suitable for 1000€/month architectural rep
           const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           console.log(`OpenAI enhanced map: ${enhancedMapBuf.length} bytes`);
 
-          // ── Recomposer : enhanced map + légende/boussole/bande stats ──────
-          // Canvas final = 1280×1480 (même dimensions que l'original)
-          const W = 1280, H = 1280, BH = 200;
-          const finalCanvas = createCanvas(W, H + BH);
+          // ── Recomposer : enhanced map + légende + boussole + arc solaire ──
+          // Canvas final = 1280×1280 (sans bande stats)
+          const W = 1280, H = 1280;
+          const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
-
-          // 1. Dessiner l'image enhanced OpenAI redimensionnée à 1280×1280
           const enhancedMapImg = await loadImage(enhancedMapBuf);
           finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
 
-          // 2. Redessiner les overlays (légende, boussole, bande stats) par-dessus
-          drawOverlays(finalCtx, W, H, BH, {
-            site_area: Number(site_area), land_width: Number(land_width),
-            land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
-            setback_front: Number(setback_front), setback_side: Number(setback_side),
-            setback_back: Number(setback_back),
-            city: city || "", district: district || "", zoning: zoning || "",
-            terrain_context: terrain_context || "", bearing,
-          });
+          // Légende + boussole (v16) par-dessus
+          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
+
+          // Arc solaire bas droite
+          drawSolarArc(finalCtx, W, H, { bearing });
 
           const finalPng = finalCanvas.toBuffer("image/png");
           console.log(`Final enhanced PNG: ${finalPng.length} bytes (${Date.now() - t0}ms)`);
@@ -628,7 +722,7 @@ Professional urban planning quality suitable for 1000€/month architectural rep
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v29 (v16+zones) on port ${PORT}`);
+  console.log(`BARLO v30 FINAL on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
