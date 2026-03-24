@@ -28,7 +28,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 app.get("/health", (req, res) => res.json({
   ok: true, engine: "browserless-mapbox-gl-3d",
-  version: "32.0-ultimate",
+  version: "33.0-rouge-final",
   features: ["cache", "style-reference", "flat-zones", "solar-arc", "no-stats-band"]
 }));
 
@@ -219,22 +219,22 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({
       id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#2255cc', 'fill-opacity': 0.18 },
+      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.18 },
     }, '3d-buildings');
     map.addLayer({
       id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#1a44bb', 'line-width': 2.5, 'line-opacity': 1 },
+      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 },
     }, '3d-buildings');
 
     // ── ENVELOPPE CONSTRUCTIBLE — flat bleue tirets, SOUS les bâtiments ───
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({
       id: 'envelope-fill', type: 'fill', source: 'envelope',
-      paint: { 'fill-color': '#1a3a8c', 'fill-opacity': 0.09 },
+      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.08 },
     }, '3d-buildings');
     map.addLayer({
       id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#1a3a8c', 'line-width': 2, 'line-dasharray': [6, 3], 'line-opacity': 0.85 },
+      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.85 },
     }, '3d-buildings');
 
   });
@@ -265,18 +265,18 @@ function drawOverlays(ctx, W, H, p) {
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
   ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
-  ctx.fillStyle = "#1a44bb"; ctx.fill();
+  ctx.fillStyle = "#d02818"; ctx.fill();
   ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
   ctx.fillStyle = "#ccc"; ctx.fill();
   ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#1a44bb";
+  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
   ctx.fillText("N", 0, -22);
   ctx.restore();
 
   // ── Légende haut gauche ───────────────────────────────────────────────────
   const legItems = [
-    { fill: "rgba(34,85,204,0.18)", stroke: "#1a44bb", dash: false, label: `Parcelle — ${site_area} m²` },
-    { fill: "rgba(26,58,140,0.09)", stroke: "#1a3a8c", dash: true,  label: "Zone constructible (reculs)" },
+    { fill: "rgba(208,40,24,0.18)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
+    { fill: "rgba(208,40,24,0.08)", stroke: "#d02818", dash: true,  label: "Zone constructible (reculs)" },
     { fill: "#e8e4dc",              stroke: "#c8c4bc", dash: false, label: "Bâtiment existant" },
   ];
   const legPad = 14, legLH = 26, legW = 310;
@@ -446,7 +446,7 @@ async function fetchSupabaseImage(url) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v32 ULTIMATE ═══");
+  console.log("═══ /generate v33 (rouge + cache + style-ref) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -629,7 +629,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v32 ULTIMATE on port ${PORT}`);
+  console.log(`BARLO v33 FINAL on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN      ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY    ? "OK" : "MISSING"}`);
