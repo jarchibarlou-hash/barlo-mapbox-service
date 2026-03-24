@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "14.0-openai-edits" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "15.0-openai-recompose" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -452,7 +452,7 @@ function drawOverlays(ctx, W, H, BH, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v14 (Hektar style + OpenAI edits) ═══");
+  console.log("═══ /generate v15 (Hektar + OpenAI + recompose) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -539,11 +539,11 @@ app.post("/generate", async (req, res) => {
       try {
         console.log("Calling OpenAI gpt-image-1 edits...");
 
-        // Redimensionner à 1024x1024 pour OpenAI (carré requis)
+        // Envoyer uniquement la partie carte 1280×1280 (sans bande stats)
+        // redimensionnée en 1024×1024 pour OpenAI
         const resizedCanvas = createCanvas(1024, 1024);
         const resizedCtx = resizedCanvas.getContext("2d");
         const fullImg = await loadImage(png);
-        // On crop la partie carte uniquement (1280x1280), on ignore la bande stats
         resizedCtx.drawImage(fullImg, 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
 
@@ -551,21 +551,31 @@ app.post("/generate", async (req, res) => {
         form.append("model", "gpt-image-1");
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
         form.append("size", "1024x1024");
-        form.append("prompt", `Transform this axonometric urban map into a professional architectural site analysis diagram in the exact style of Hektar parametric solutions.
+        form.append("input_fidelity", "high"); // préserver la géométrie source
+        form.append("prompt", `Restyle this axonometric urban planning map into a professional architectural diagram in the exact style of Hektar (parametric solutions AB).
 
-STRICT: Keep exactly the same camera angle, building positions, road network, and red parcel outline. Do NOT move or add buildings.
+CRITICAL — GEOMETRY PRESERVATION:
+- Keep EXACTLY the same camera angle, pitch and bearing
+- Keep EXACTLY the same building footprints, positions and heights
+- Keep EXACTLY the same road network layout
+- Keep EXACTLY the red highlighted parcel at its exact position and shape
+- Keep the dashed red envelope line at its exact position
+- Do NOT move, add or remove any building or road
+- Do NOT change the composition or crop
 
-STYLE:
-- Warm cream background #f2f0ec
-- Building rooftops pure white #ffffff
-- Building light face warm white #f5f3ef
-- Building shadow face warm gray #9a9690
-- Strong cast shadows #c4c0b8
-- Roads beige #eae4d4 with borders #ccc4ae
-- No text or labels on map
-- Red parcel outline #d02818 clearly visible
-- Dashed red envelope line clearly visible
-- Professional architectural quality`);
+STYLE TO APPLY:
+- Background and ground: warm cream #f2f0ec
+- Building rooftops: pure white #ffffff
+- Building sunlit faces: warm off-white #f5f3ef
+- Building shadow faces: warm medium gray #9a9690
+- Cast shadows on ground: solid warm gray #c4c0b8
+- Roads: warm beige #eae4d4 with subtle darker borders #ccc4ae
+- Red parcel fill: keep semi-transparent rose/pink
+- Red parcel outline #d02818: keep clearly visible, solid line
+- Dashed red envelope #d02818: keep clearly visible
+- Add small stylized trees (round canopy, top-down silhouette) in open spaces between buildings where ground is visible
+- No text, no labels, no annotations anywhere on the map
+- Professional urban planning quality suitable for 1000€/month architectural report`);
 
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
@@ -580,12 +590,36 @@ STYLE:
         console.log(`OpenAI response status: ${oaiRes.status} (${Date.now() - t0}ms)`);
 
         if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
-          // Décoder b64 → buffer PNG
-          const enhancedBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
+          // Décoder b64 → buffer PNG enhanced (1024×1024, carte seulement)
+          const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
+          console.log(`OpenAI enhanced map: ${enhancedMapBuf.length} bytes`);
 
-          // Upload enhanced sur Supabase
+          // ── Recomposer : enhanced map + légende/boussole/bande stats ──────
+          // Canvas final = 1280×1480 (même dimensions que l'original)
+          const W = 1280, H = 1280, BH = 200;
+          const finalCanvas = createCanvas(W, H + BH);
+          const finalCtx = finalCanvas.getContext("2d");
+
+          // 1. Dessiner l'image enhanced OpenAI redimensionnée à 1280×1280
+          const enhancedMapImg = await loadImage(enhancedMapBuf);
+          finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
+
+          // 2. Redessiner les overlays (légende, boussole, bande stats) par-dessus
+          drawOverlays(finalCtx, W, H, BH, {
+            site_area: Number(site_area), land_width: Number(land_width),
+            land_depth: Number(land_depth), buildable_fp: Number(buildable_fp),
+            setback_front: Number(setback_front), setback_side: Number(setback_side),
+            setback_back: Number(setback_back),
+            city: city || "", district: district || "", zoning: zoning || "",
+            terrain_context: terrain_context || "", bearing,
+          });
+
+          const finalPng = finalCanvas.toBuffer("image/png");
+          console.log(`Final enhanced PNG: ${finalPng.length} bytes (${Date.now() - t0}ms)`);
+
+          // Upload enhanced final sur Supabase
           const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, enhancedBuf, { contentType: "image/png", upsert: true });
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
             enhancedUrl = pd2.publicUrl;
@@ -622,7 +656,7 @@ STYLE:
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v14 (Hektar + OpenAI edits) on port ${PORT}`);
+  console.log(`BARLO v15 (Hektar + OpenAI + recompose) on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
