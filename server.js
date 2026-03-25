@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.0-massing-centered" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.0-massing-gps-centroid" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -88,50 +88,78 @@ function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
   const offset_y = (envelope_d - dCapped) / 2;
   return { w: Math.round(wCapped * 10) / 10, d: Math.round(dCapped * 10) / 10, offset_x, offset_y };
 }
-// ─── POLYGONE GPS DU BÂTIMENT MASSING (v50 — CORRIGÉ) ────────────────────────
-// v49 bug: utilisait le bearing d'affichage (longest+30°) au lieu de l'orientation réelle
-// v50 fix: travaille en mètres, centré sur centroïde enveloppe, aligné avec son plus long côté
+// ─── POLYGONE GPS DU BÂTIMENT MASSING (v51 — GPS CENTROID DIRECT) ────────────
+// v50 bug: centroïde en mètres + rotation causait un décalage mystérieux
+// v51 fix: approche la plus simple possible — centroïde GPS direct, aligné axe le plus long
 function computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy) {
-  // Convertir l'enveloppe en mètres (même repère que toM)
-  const envPts = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  // ── DIAGNOSTIC : log chaque sommet de l'enveloppe ──
+  console.log(`┌── computeMassingPolygon v51 ──`);
+  console.log(`│ Parcel centroid: ${cLat.toFixed(7)}, ${cLon.toFixed(7)}`);
+  console.log(`│ Massing dims: ${mw}m × ${md}m`);
+  envelopeCoords.forEach((c, i) => console.log(`│ Envelope[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
 
-  // Centroïde de l'enveloppe en mètres
-  const cx = envPts.reduce((s, p) => s + p.x, 0) / envPts.length;
-  const cy = envPts.reduce((s, p) => s + p.y, 0) / envPts.length;
+  // ── Centroïde GPS direct de l'enveloppe (pas de conversion en mètres) ──
+  const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
+  const eLon = envelopeCoords.reduce((s, p) => s + p.lon, 0) / envelopeCoords.length;
+  console.log(`│ Envelope GPS centroid: ${eLat.toFixed(7)}, ${eLon.toFixed(7)}`);
 
-  // Trouver le plus long côté de l'enveloppe pour déterminer son orientation réelle
+  // ── Vérifier distance centroïde enveloppe ↔ centroïde parcelle ──
+  const distM = Math.sqrt(
+    Math.pow((eLon - cLon) * Math.PI / 180 * R_EARTH * Math.cos(cLat * Math.PI / 180), 2) +
+    Math.pow((eLat - cLat) * Math.PI / 180 * R_EARTH, 2)
+  );
+  console.log(`│ Distance envelope↔parcel centroid: ${distM.toFixed(1)}m`);
+
+  // ── Trouver l'orientation du plus long côté de l'enveloppe (en mètres) ──
+  const envPts = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon)); // ref = envelope centroid
   let longest = 0, edgeAngle = 0;
   for (let i = 0; i < envPts.length; i++) {
     const j = (i + 1) % envPts.length;
     const dx = envPts[j].x - envPts[i].x;
     const dy = envPts[j].y - envPts[i].y;
     const len = Math.sqrt(dx * dx + dy * dy);
+    console.log(`│ Edge[${i}→${j}]: len=${len.toFixed(1)}m angle=${(Math.atan2(dy, dx) * 180 / Math.PI).toFixed(1)}°`);
     if (len > longest) {
       longest = len;
-      edgeAngle = Math.atan2(dy, dx); // angle standard (math, pas compass)
+      edgeAngle = Math.atan2(dy, dx);
     }
   }
+  console.log(`│ Longest edge: ${longest.toFixed(1)}m at ${(edgeAngle * 180 / Math.PI).toFixed(1)}°`);
 
-  // Vecteurs unitaires : u le long du plus long côté, v perpendiculaire
+  // ── Vecteurs unitaires : u le long du plus long côté, v perpendiculaire ──
   const ux = Math.cos(edgeAngle), uy = Math.sin(edgeAngle);
   const vx = -uy, vy = ux;
 
-  // mw le long de u (largeur = plus long côté), md le long de v (profondeur)
+  // ── mw le long de u, md le long de v — centrés sur centroïde enveloppe ──
   const hw = mw / 2, hd = md / 2;
 
-  // 4 coins en mètres, centrés sur le centroïde de l'enveloppe
+  // ── 4 coins en mètres (ref = envelope centroid, donc centre = 0,0) ──
   const cornersM = [
-    { x: cx - hw * ux - hd * vx, y: cy - hw * uy - hd * vy },
-    { x: cx + hw * ux - hd * vx, y: cy + hw * uy - hd * vy },
-    { x: cx + hw * ux + hd * vx, y: cy + hw * uy + hd * vy },
-    { x: cx - hw * ux + hd * vx, y: cy - hw * uy + hd * vy },
+    { x: -hw * ux - hd * vx, y: -hw * uy - hd * vy },
+    { x: +hw * ux - hd * vx, y: +hw * uy - hd * vy },
+    { x: +hw * ux + hd * vx, y: +hw * uy + hd * vy },
+    { x: -hw * ux + hd * vx, y: -hw * uy + hd * vy },
   ];
 
-  // Reconvertir en GPS
-  return cornersM.map(m => ({
-    lat: cLat + m.y / R_EARTH * 180 / Math.PI,
-    lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
+  // ── Reconvertir en GPS (ref = envelope centroid GPS) ──
+  const result = cornersM.map(m => ({
+    lat: eLat + m.y / R_EARTH * 180 / Math.PI,
+    lon: eLon + m.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
   }));
+
+  // ── Diagnostic : vérifier que le centroïde du massing = centroïde de l'enveloppe ──
+  const mLat = result.reduce((s, p) => s + p.lat, 0) / result.length;
+  const mLon = result.reduce((s, p) => s + p.lon, 0) / result.length;
+  const checkDist = Math.sqrt(
+    Math.pow((mLon - eLon) * Math.PI / 180 * R_EARTH * Math.cos(eLat * Math.PI / 180), 2) +
+    Math.pow((mLat - eLat) * Math.PI / 180 * R_EARTH, 2)
+  );
+  result.forEach((c, i) => console.log(`│ Massing[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+  console.log(`│ Massing centroid: ${mLat.toFixed(7)}, ${mLon.toFixed(7)}`);
+  console.log(`│ Massing↔Envelope centroid offset: ${checkDist.toFixed(3)}m (should be ~0)`);
+  console.log(`└── end computeMassingPolygon v51 ──`);
+
+  return result;
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
@@ -613,7 +641,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v49 ═══", JSON.stringify(req.body).slice(0, 200));
+  console.log("═══ /generate-massing v51 ═══", JSON.stringify(req.body).slice(0, 300));
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
@@ -645,8 +673,21 @@ app.post("/generate-massing", async (req, res) => {
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
+  // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
+  const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  const envMinX = Math.min(...envPtsDbg.map(p => p.x)), envMaxX = Math.max(...envPtsDbg.map(p => p.x));
+  const envMinY = Math.min(...envPtsDbg.map(p => p.y)), envMaxY = Math.max(...envPtsDbg.map(p => p.y));
+  const actualEnvW = envMaxX - envMinX, actualEnvD = envMaxY - envMinY;
+  console.log(`┌── ENVELOPE DIAGNOSTIC ──`);
+  console.log(`│ Sheet envelope: ${envW}m × ${envD}m`);
+  console.log(`│ Actual computed envelope bbox: ${actualEnvW.toFixed(1)}m × ${actualEnvD.toFixed(1)}m`);
+  console.log(`│ Parcel centroid: ${cLat.toFixed(7)}, ${cLon.toFixed(7)}`);
+  console.log(`│ Setbacks: front=${setback_front} side=${setback_side} back=${setback_back}`);
+  coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+  console.log(`└── end ENVELOPE DIAGNOSTIC ──`);
   const bearing = computeBearing(coords, cLat, cLon);
   const zoom = computeZoom(coords, cLat, cLon);
+  console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
   const massingCoords = computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy);
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -746,7 +787,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50-massing-centered on port ${PORT}`);
+  console.log(`BARLO v51-gps-centroid on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
