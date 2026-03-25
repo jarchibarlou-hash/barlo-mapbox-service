@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.0-massing-gps-centroid" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.1-smart-scenarios-budget" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -88,6 +88,306 @@ function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
   const offset_y = (envelope_d - dCapped) / 2;
   return { w: Math.round(wCapped * 10) / 10, d: Math.round(dCapped * 10) / 10, offset_x, offset_y };
 }
+// ─── MOTEUR DE SCÉNARIOS v52 — DATA-DRIVEN ──────────────────────────────────
+// Basé sur les 23 feuilles du source of truth :
+//   RULES_SCENARIOS  → ratios fp par primary_driver (5 profils)
+//   RULES_ZONING     → COS (vos_ratio) par zoning_type
+//   RULES_HEKTAR     → massing_mode (COMPACT/BALANCED/SPREAD) par saturation
+//   SCENARIOS_FR     → S1=Référence/BALANCED, S2=Étalée/SPREAD, S3=Compacte/COMPACT
+//   VARIABLES        → formulaire client (program_main, target_surface, max_floors...)
+//
+// Le commerce (USAGE_MIXTE) vient du FORMULAIRE CLIENT, pas du scénario.
+// Les ratios viennent du primary_driver, pas d'un ratio fixe.
+// La FORME (hauteur vs étalement) vient du massing_mode par scénario.
+//
+
+// Ratios d'emprise par primary_driver (depuis RULES_SCENARIOS)
+const FP_RATIOS = {
+  MAX_CAPACITE:       { A: 0.95, B: 0.85, C: 0.70 },
+  RENTABILITE:        { A: 0.90, B: 0.80, C: 0.65 },
+  SECURISATION_RISQUE:{ A: 0.80, B: 0.70, C: 0.60 },
+  MIXTE_PROGRAMME:    { A: 0.85, B: 0.75, C: 0.65 },
+  PHASAGE_FONCIER:    { A: 0.80, B: 0.70, C: 0.60 },
+};
+
+// COS par zoning_type (depuis RULES_ZONING)
+const ZONING_COS = {
+  URBAIN: 0.60, PERIURBAIN: 0.40, PAVILLON: 0.30,
+  RURAL: 0.20, MIXTE: 0.50, Z_DEFAULT: 0.40,
+};
+
+// Massing modes par scénario (depuis SCENARIOS_FR)
+// S1/A = Référence (BALANCED), S2/B = Étalée (SPREAD), S3/C = Compacte (COMPACT)
+const SCENARIO_MASSING_MODE = { A: "BALANCED", B: "SPREAD", C: "COMPACT" };
+
+// Multiplicateur de niveaux par massing_mode
+// COMPACT = hauteur max, BALANCED = modéré, SPREAD = bas
+function levelMultiplier(mode) {
+  if (mode === "COMPACT") return 1.0;
+  if (mode === "BALANCED") return 0.65;
+  return 0.35; // SPREAD
+}
+
+function computeSmartScenarios({
+  site_area, envelope_w, envelope_d, envelope_area: env_area_override,
+  zoning_type = "URBAIN", floor_height = 3.2,
+  primary_driver = "MAX_CAPACITE",
+  max_floors = 99, max_height_m = 99,
+  program_main = "", target_surface_m2 = 0,
+  site_saturation_level = "MEDIUM",
+  financial_rigidity_score = 0,
+  density_band = "", risk_adjusted = 0,
+  feasibility_posture = "BALANCED",
+  scenario_A_role = "", scenario_B_role = "", scenario_C_role = "",
+  // ── BUDGET & ATTENTES CLIENT (depuis PIPELINE) ──
+  budget_range = 0, budget_band = "", budget_tension = 0,
+  standing_level = "STANDARD",
+  target_units = 0,
+  rent_score = 0, capacity_score = 0, mix_score = 0, phase_score = 0, risk_score = 0,
+  density_pressure_factor = 1,
+  driver_intensity = "MEDIUM",
+  strategic_position = "",
+}) {
+  const envelope_area = env_area_override || (envelope_w * envelope_d);
+  const cos = ZONING_COS[zoning_type] || 0.40;
+  const max_sdp = cos * site_area;
+  const max_fp = Math.min(cos * site_area, envelope_area);
+  const ratios = FP_RATIOS[primary_driver] || FP_RATIOS.MAX_CAPACITE;
+
+  // ── BUDGET MODULATION ──
+  // budget_tension : 0–1 (0=confortable, 1=très tendu)
+  // Si budget tendu → favoriser COMPACT (moins d'emprise, + de niveaux = moins cher au m²)
+  // Si budget large → autoriser SPREAD (confort, espaces verts, standing)
+  const bt = Math.max(0, Math.min(1, Number(budget_tension) || 0));
+  const fri = Math.max(0, Math.min(1, Number(financial_rigidity_score) || 0));
+  // Pression budgétaire combinée : tension + rigidité financière
+  const budgetPressure = (bt + fri) / 2;
+
+  // ── STANDING MODULATION ──
+  // PREMIUM → plus de marge, emprise réduite, hauteur confort
+  // ECONOMIQUE → emprise max, optimisation densité
+  const standingFactor = {
+    PREMIUM: 0.85, HAUT: 0.90, STANDARD: 1.0, ECONOMIQUE: 1.08, ECO: 1.08,
+  }[String(standing_level).toUpperCase()] || 1.0;
+
+  // ── DENSITY PRESSURE ──
+  const dpf = Math.max(0.5, Math.min(2.0, Number(density_pressure_factor) || 1));
+
+  // ── DRIVER INTENSITY ──
+  // HIGH → accentue les différences entre scénarios
+  // LOW → scénarios plus proches les uns des autres
+  const intensitySpread = { HIGH: 1.3, MEDIUM: 1.0, LOW: 0.7 }[String(driver_intensity).toUpperCase()] || 1.0;
+
+  const absMaxLevels = Math.min(
+    Number(max_floors) || 99,
+    Math.floor((Number(max_height_m) || 99) / floor_height),
+    10
+  );
+
+  const isMixte = /mixte|mixed/i.test(program_main);
+  const commerceLevels = isMixte ? 1 : 0;
+
+  console.log(`┌── SCENARIO ENGINE v52.1 (data-driven + budget) ──`);
+  console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d}=${envelope_area}m²`);
+  console.log(`│ zoning=${zoning_type} COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
+  console.log(`│ driver=${primary_driver} intensity=${driver_intensity} ratios=[${ratios.A}/${ratios.B}/${ratios.C}]`);
+  console.log(`│ max_floors=${max_floors} max_height=${max_height_m}m → absMaxLevels=${absMaxLevels}`);
+  console.log(`│ program=${program_main} commerce=${commerceLevels} saturation=${site_saturation_level}`);
+  console.log(`│ budget_range=${budget_range} band=${budget_band} tension=${bt} rigidity=${fri} → pressure=${budgetPressure.toFixed(2)}`);
+  console.log(`│ standing=${standing_level} (factor=${standingFactor}) density_pressure=${dpf}`);
+  console.log(`│ scores: rent=${rent_score} cap=${capacity_score} mix=${mix_score} phase=${phase_score} risk=${risk_score}`);
+
+  const results = {};
+  for (const label of ["A", "B", "C"]) {
+    const baseRatio = ratios[label];
+    const mode = SCENARIO_MASSING_MODE[label];
+
+    // ── Modulation du ratio emprise par budget + standing + densité ──
+    // SPREAD : sensible au budget (si tendu → réduire), sensible au standing (premium → réduire)
+    // COMPACT : insensible au budget (déjà petit)
+    // BALANCED : modération
+    let budgetMod = 1.0;
+    if (mode === "SPREAD") {
+      // Budget tendu → réduire emprise spread (économiser), budget large → boost
+      budgetMod = 1.0 + (0.5 - budgetPressure) * 0.20 * intensitySpread;
+    } else if (mode === "COMPACT") {
+      // Budget tendu → légèrement agrandir emprise compact (pragmatisme)
+      budgetMod = 1.0 + budgetPressure * 0.08;
+    }
+
+    let ratio = baseRatio * standingFactor * budgetMod;
+    // Density pressure : forte pression → pousser vers plus d'emprise
+    ratio = ratio * (1 + (dpf - 1) * 0.15);
+    ratio = Math.max(0.30, Math.min(0.98, ratio));
+
+    let fp = Math.round(Math.min(max_fp * ratio, envelope_area * ratio));
+    fp = Math.max(50, fp);
+
+    // ── Niveaux : massing_mode + modulation budget ──
+    let baseLevelMult = levelMultiplier(mode);
+    // Budget tendu + COMPACT → pousser encore plus de niveaux (vertical = économique)
+    if (budgetPressure > 0.5 && mode === "COMPACT") {
+      baseLevelMult = Math.min(1.0, baseLevelMult + (budgetPressure - 0.5) * 0.3);
+    }
+    // Budget large + SPREAD → réduire niveaux (confort, horizontal)
+    if (budgetPressure < 0.3 && mode === "SPREAD") {
+      baseLevelMult = Math.max(0.20, baseLevelMult - (0.3 - budgetPressure) * 0.2);
+    }
+
+    let levels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
+    levels = Math.min(levels, absMaxLevels);
+
+    // Si le client a une cible SDP, on essaie de s'en approcher
+    if (target_surface_m2 > 0 && fp > 0) {
+      const idealLevels = Math.ceil(target_surface_m2 * ratio / fp);
+      const modeLevels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
+      levels = Math.max(1, Math.min(Math.round((idealLevels + modeLevels) / 2), absMaxLevels));
+    }
+
+    // Si cible en nombre de logements → estimer SDP nécessaire
+    if (target_units > 0 && target_surface_m2 <= 0 && fp > 0) {
+      const avgUnitSize = standing_level === "PREMIUM" ? 90 : standing_level === "ECONOMIQUE" ? 55 : 70;
+      const neededSdp = target_units * avgUnitSize;
+      const idealLevels = Math.ceil(neededSdp / fp);
+      const modeLevels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
+      levels = Math.max(1, Math.min(Math.round((idealLevels + modeLevels) / 2), absMaxLevels));
+    }
+
+    const height = Math.round(levels * floor_height * 10) / 10;
+    const sdp = fp * levels;
+    const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
+
+    let compliance;
+    if (cosRatio <= 1.05) compliance = "CONFORME";
+    else if (cosRatio <= 1.30) compliance = "DEROGATION_POSSIBLE";
+    else compliance = "AMBITIEUX_HORS_COS";
+
+    // Coût estimé au m² (indicatif, basé sur standing + zoning)
+    const costPerM2Base = { PREMIUM: 450, HAUT: 380, STANDARD: 300, ECONOMIQUE: 230, ECO: 230 }[String(standing_level).toUpperCase()] || 300;
+    const zoningCostMult = { URBAIN: 1.15, PERIURBAIN: 1.0, PAVILLON: 0.95, RURAL: 0.85, MIXTE: 1.05 }[zoning_type] || 1.0;
+    const estimatedCost = Math.round(sdp * costPerM2Base * zoningCostMult);
+    const budgetFit = budget_range > 0 ? (estimatedCost <= budget_range * 1.1 ? "DANS_BUDGET" : estimatedCost <= budget_range * 1.3 ? "BUDGET_TENDU" : "HORS_BUDGET") : "N/A";
+
+    const roles = {
+      A: scenario_A_role || "INTENSIFICATION",
+      B: scenario_B_role || "ALTERNATIVE_EQUILIBREE",
+      C: scenario_C_role || "PHASAGE_PROGRESSIF",
+    };
+    const labels_fr = {
+      A: "Scenario de reference",
+      B: "Variante etalee",
+      C: "Variante compacte",
+    };
+    const accents = { A: "#2a5298", B: "#1e8449", C: "#d35400" };
+
+    results[label] = {
+      fp_m2: fp, levels, height_m: height,
+      commerce_levels: commerceLevels,
+      massing_mode: mode,
+      sdp_m2: sdp,
+      cos_compliance: compliance,
+      cos_ratio_pct: Math.round(cosRatio * 100),
+      role: roles[label],
+      label_fr: labels_fr[label],
+      accent_color: accents[label],
+      estimated_cost: estimatedCost,
+      budget_fit: budgetFit,
+      ratio_used: Math.round(ratio * 100) / 100,
+    };
+  }
+
+  // ── POST-TRAITEMENT : garantir la différenciation visuelle ──
+  const r = results;
+
+  // C(COMPACT) ≥ A(BALANCED) ≥ B(SPREAD) en niveaux
+  if (r.C.levels <= r.A.levels && absMaxLevels > r.A.levels) {
+    r.C.levels = Math.min(r.A.levels + 1, absMaxLevels);
+  }
+  if (r.B.levels >= r.A.levels && r.A.levels > 1) {
+    r.B.levels = Math.max(1, r.A.levels - 1);
+  }
+  for (const label of ["A", "B", "C"]) {
+    r[label].height_m = Math.round(r[label].levels * floor_height * 10) / 10;
+    r[label].sdp_m2 = r[label].fp_m2 * r[label].levels;
+    const cr = max_sdp > 0 ? r[label].sdp_m2 / max_sdp : 0;
+    r[label].cos_ratio_pct = Math.round(cr * 100);
+    r[label].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
+  }
+
+  // Emprise : au moins 15% diff entre B(spread) et C(compact)
+  if (r.B.fp_m2 > 0 && r.C.fp_m2 > 0) {
+    const diff = Math.abs(r.B.fp_m2 - r.C.fp_m2) / Math.max(r.B.fp_m2, r.C.fp_m2);
+    if (diff < 0.15) {
+      r.B.fp_m2 = Math.round(Math.min(r.B.fp_m2 * 1.10, envelope_area * 0.95));
+      r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.85);
+      r.C.fp_m2 = Math.max(r.C.fp_m2, 50);
+      r.B.sdp_m2 = r.B.fp_m2 * r.B.levels;
+      r.C.sdp_m2 = r.C.fp_m2 * r.C.levels;
+    }
+  }
+
+  const meta = {
+    zoning_type, primary_driver, cos, floor_height,
+    max_sdp: Math.round(max_sdp), absMaxLevels,
+    envelope_area: Math.round(envelope_area),
+    program_main, commerce_levels: commerceLevels,
+    site_saturation_level, ratios_used: ratios,
+    budget_pressure: Math.round(budgetPressure * 100) / 100,
+    standing_level, standing_factor: standingFactor,
+    density_pressure_factor: dpf,
+    driver_intensity, intensity_spread: intensitySpread,
+    scores: { rent_score, capacity_score, mix_score, phase_score, risk_score },
+  };
+
+  console.log(`│ A(REF):     fp=${r.A.fp_m2}m² × ${r.A.levels}niv = ${r.A.sdp_m2}m² SDP (${r.A.cos_ratio_pct}% COS) [${r.A.massing_mode}] ${r.A.cos_compliance} cost=${r.A.estimated_cost} ${r.A.budget_fit}`);
+  console.log(`│ B(SPREAD):  fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}% COS) [${r.B.massing_mode}] ${r.B.cos_compliance} cost=${r.B.estimated_cost} ${r.B.budget_fit}`);
+  console.log(`│ C(COMPACT): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}% COS) [${r.C.massing_mode}] ${r.C.cos_compliance} cost=${r.C.estimated_cost} ${r.C.budget_fit}`);
+  console.log(`└── end SCENARIO ENGINE v52.1 ──`);
+
+  return { A: r.A, B: r.B, C: r.C, meta };
+}
+// ─── ENDPOINT /compute-scenarios — DIAGNOSTIC / DEBUG ────────────────────────
+app.post("/compute-scenarios", (req, res) => {
+  const p = req.body;
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
+    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
+  }
+  const scenarios = computeSmartScenarios({
+    site_area: Number(p.site_area),
+    envelope_w: Number(p.envelope_w),
+    envelope_d: Number(p.envelope_d),
+    envelope_area: Number(p.envelope_area) || undefined,
+    zoning_type: p.zoning_type || "URBAIN",
+    floor_height: Number(p.floor_height) || 3.2,
+    primary_driver: p.primary_driver || "MAX_CAPACITE",
+    max_floors: Number(p.max_floors) || 99,
+    max_height_m: Number(p.max_height_m) || 99,
+    program_main: p.program_main || "",
+    target_surface_m2: Number(p.target_surface_m2) || 0,
+    site_saturation_level: p.site_saturation_level || "MEDIUM",
+    financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
+    density_band: p.density_band || "",
+    risk_adjusted: Number(p.risk_adjusted) || 0,
+    feasibility_posture: p.feasibility_posture || "BALANCED",
+    scenario_A_role: p.scenario_A_role || "",
+    scenario_B_role: p.scenario_B_role || "",
+    scenario_C_role: p.scenario_C_role || "",
+    budget_range: Number(p.budget_range) || 0,
+    budget_band: p.budget_band || "",
+    budget_tension: Number(p.budget_tension) || 0,
+    standing_level: p.standing_level || "STANDARD",
+    target_units: Number(p.target_units) || 0,
+    rent_score: Number(p.rent_score) || 0,
+    capacity_score: Number(p.capacity_score) || 0,
+    mix_score: Number(p.mix_score) || 0,
+    phase_score: Number(p.phase_score) || 0,
+    risk_score: Number(p.risk_score) || 0,
+    density_pressure_factor: Number(p.density_pressure_factor) || 1,
+    driver_intensity: p.driver_intensity || "MEDIUM",
+    strategic_position: p.strategic_position || "",
+  });
+  return res.json({ ok: true, scenarios });
+});
 // ─── POLYGONE GPS DU BÂTIMENT MASSING (v51 — GPS CENTROID DIRECT) ────────────
 // v50 bug: centroïde en mètres + rotation causait un décalage mystérieux
 // v51 fix: approche la plus simple possible — centroïde GPS direct, aligné axe le plus long
@@ -641,28 +941,99 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v51 ═══", JSON.stringify(req.body).slice(0, 300));
+  console.log("═══ /generate-massing v52 ═══", JSON.stringify(req.body).slice(0, 300));
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
-    fp_m2, envelope_w, envelope_d,
-    massing_levels, height_m,
-    commerce_levels = 0, floor_height = 3.2,
-    massing_label = "A", scenario_role = "",
-    accent_color = "#2a5298", slide_name,
+    envelope_w, envelope_d,
+    massing_label = "A", slide_name,
     style_ref_url = null,
+    // ── Mode classique (valeurs pré-calculées par la sheet) ──
+    fp_m2: fp_m2_raw, massing_levels: levels_raw, height_m: height_raw,
+    commerce_levels: commerce_raw = 0, floor_height: fh_raw = 3.2,
+    scenario_role: role_raw = "", accent_color: accent_raw = "#2a5298",
+    // ── Mode smart (calcul serveur) ──
+    compute_scenario = false,
+    zoning_type = "URBAIN",
+    // ── Tous les paramètres PIPELINE pour le moteur intelligent ──
+    primary_driver, max_floors, max_height_m,
+    program_main, target_surface_m2, target_units,
+    site_saturation_level, financial_rigidity_score,
+    density_band, risk_adjusted, feasibility_posture,
+    scenario_A_role, scenario_B_role, scenario_C_role,
+    budget_range, budget_band, budget_tension,
+    standing_level, rent_score, capacity_score,
+    mix_score, phase_score, risk_score,
+    density_pressure_factor, driver_intensity, strategic_position,
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
-  if (!fp_m2 || !envelope_w || !envelope_d) return res.status(400).json({ error: "fp_m2, envelope_w, envelope_d obligatoires" });
-  if (!massing_levels) return res.status(400).json({ error: "massing_levels obligatoire" });
-  const slideName = slide_name || ("massing_" + massing_label.toLowerCase());
-  const fp = Number(fp_m2);
+  if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
   const envW = Number(envelope_w);
   const envD = Number(envelope_d);
-  const levels = Number(massing_levels);
-  const totalH = Number(height_m) || levels * Number(floor_height);
-  const commerceH = Number(commerce_levels) * Number(floor_height);
-  const habitationLevels = levels - Number(commerce_levels);
+  const floorH = Number(fh_raw) || 3.2;
+  const label = String(massing_label).toUpperCase();
+
+  // ── Déterminer les paramètres du scénario ──
+  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor;
+
+  if (compute_scenario || !fp_m2_raw || !levels_raw) {
+    // MODE SMART : le moteur calcule tout
+    if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
+    const scenarios = computeSmartScenarios({
+      site_area: Number(site_area),
+      envelope_w: envW,
+      envelope_d: envD,
+      zoning_type: String(zoning_type),
+      floor_height: floorH,
+      primary_driver: primary_driver || "MAX_CAPACITE",
+      max_floors: Number(max_floors) || 99,
+      max_height_m: Number(max_height_m) || 99,
+      program_main: program_main || "",
+      target_surface_m2: Number(target_surface_m2) || 0,
+      target_units: Number(target_units) || 0,
+      site_saturation_level: site_saturation_level || "MEDIUM",
+      financial_rigidity_score: Number(financial_rigidity_score) || 0,
+      density_band: density_band || "",
+      risk_adjusted: Number(risk_adjusted) || 0,
+      feasibility_posture: feasibility_posture || "BALANCED",
+      scenario_A_role: scenario_A_role || "",
+      scenario_B_role: scenario_B_role || "",
+      scenario_C_role: scenario_C_role || "",
+      budget_range: Number(budget_range) || 0,
+      budget_band: budget_band || "",
+      budget_tension: Number(budget_tension) || 0,
+      standing_level: standing_level || "STANDARD",
+      rent_score: Number(rent_score) || 0,
+      capacity_score: Number(capacity_score) || 0,
+      mix_score: Number(mix_score) || 0,
+      phase_score: Number(phase_score) || 0,
+      risk_score: Number(risk_score) || 0,
+      density_pressure_factor: Number(density_pressure_factor) || 1,
+      driver_intensity: driver_intensity || "MEDIUM",
+      strategic_position: strategic_position || "",
+    });
+    const sc = scenarios[label] || scenarios.A;
+    fp = sc.fp_m2;
+    levels = sc.levels;
+    totalH = sc.height_m;
+    commerceLevels = sc.commerce_levels;
+    scenarioRole = sc.label_fr;
+    accentColor = sc.accent_color;
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} (${sc.cos_compliance})`);
+  } else {
+    // MODE CLASSIQUE : valeurs de la sheet
+    fp = Number(fp_m2_raw);
+    levels = Number(levels_raw);
+    totalH = Number(height_raw) || levels * floorH;
+    commerceLevels = Number(commerce_raw);
+    scenarioRole = String(role_raw);
+    accentColor = String(accent_raw);
+    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
+  }
+
+  const slideName = slide_name || ("massing_" + label.toLowerCase());
+  const commerceH = commerceLevels * floorH;
+  const habitationLevels = levels - commerceLevels;
   const { w: mw, d: md, offset_x: ox, offset_y: oy } = computeMassingDimensions(fp, envW, envD);
   console.log(`fp_m2=${fp} → ${mw}m×${md}m offset[${ox.toFixed(1)},${oy.toFixed(1)}]`);
   const coords = polygon_points.split("|").map(pt => {
@@ -701,7 +1072,7 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalH, commerce_levels: Number(commerce_levels), floor_height: Number(floor_height), accent_color }, MAPBOX_TOKEN);
+      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -711,9 +1082,9 @@ app.post("/generate-massing", async (req, res) => {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0, W, H);
     drawMassingOverlays(ctx, W, H, {
-      site_area: Number(site_area), bearing, label: massing_label,
-      levels, commerce_levels: Number(commerce_levels), habitation_levels: habitationLevels,
-      total_height: totalH, floor_height: Number(floor_height), fp_m2: Math.round(fp), accent_color, scenario_role,
+      site_area: Number(site_area), bearing, label,
+      levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
+      total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -758,9 +1129,9 @@ app.post("/generate-massing", async (req, res) => {
           const fCanvas = createCanvas(W, H);
           fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
           drawMassingOverlays(fCanvas.getContext("2d"), W, H, {
-            site_area: Number(site_area), bearing, label: massing_label,
-            levels, commerce_levels: Number(commerce_levels), habitation_levels: habitationLevels,
-            total_height: totalH, floor_height: Number(floor_height), fp_m2: Math.round(fp), accent_color, scenario_role,
+            site_area: Number(site_area), bearing, label,
+            levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
+            total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
           });
           const finalPng = fCanvas.toBuffer("image/png");
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
@@ -774,8 +1145,10 @@ app.post("/generate-massing", async (req, res) => {
     }
     return res.json({
       ok: true, cached: false, public_url: pd.publicUrl, enhanced_url: enhancedUrl,
-      massing_label, fp_m2: fp, mw, md, offset_x: ox, offset_y: oy,
-      levels, total_height: totalH, centroid: { lat: cLat, lon: cLon },
+      massing_label: label, fp_m2: fp, mw, md, offset_x: ox, offset_y: oy,
+      levels, total_height: totalH, commerce_levels: commerceLevels,
+      scenario_role: scenarioRole, accent_color: accentColor,
+      centroid: { lat: cLat, lon: cLon },
       view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0,
     });
   } catch (e) {
@@ -787,7 +1160,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51-gps-centroid on port ${PORT}`);
+  console.log(`BARLO v52-smart-scenarios on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
