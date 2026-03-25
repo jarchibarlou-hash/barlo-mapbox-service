@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.1-smart-scenarios-budget" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.2-debug" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -349,8 +349,19 @@ function computeSmartScenarios({
 // ─── ENDPOINT /compute-scenarios — DIAGNOSTIC / DEBUG ────────────────────────
 app.post("/compute-scenarios", (req, res) => {
   const p = req.body;
+  // DEBUG: log what Make actually sends
+  console.log(">>> /compute-scenarios received body:", JSON.stringify(p));
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
-    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
+    return res.status(400).json({
+      error: "site_area, envelope_w, envelope_d obligatoires",
+      debug_received: {
+        site_area: p.site_area,
+        envelope_w: p.envelope_w,
+        envelope_d: p.envelope_d,
+        all_keys: Object.keys(p),
+        raw_body_sample: JSON.stringify(p).substring(0, 500)
+      }
+    });
   }
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
