@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "47.0-FROZEN" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "48.0-style-ref" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -516,7 +516,7 @@ function drawSolarArc(ctx, W, H, p) {
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v47 FROZEN ═══");
+  console.log("═══ /generate v48 (style-ref) ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -524,6 +524,7 @@ app.post("/generate", async (req, res) => {
     terrain_context, city, district, zoning,
     slide_name = "slide_4_axo",
     zoom: zoomOverride = null,
+    style_ref_url = null, // URL image de référence de style (ex: slide_4_axo_v46_enhanced.png)
   } = req.body;
 
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
@@ -606,6 +607,24 @@ app.post("/generate", async (req, res) => {
         const form = new FormData();
         form.append("model", "gpt-image-1");
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
+
+        // Injection image de référence de style si fournie
+        if (style_ref_url) {
+          try {
+            console.log("Fetching style reference: " + style_ref_url);
+            const refRes = await fetch(style_ref_url);
+            if (refRes.ok) {
+              const refBuf = Buffer.from(await refRes.arrayBuffer());
+              // Resize en 1024x1024
+              const refCanvas = createCanvas(1024, 1024);
+              const refCtx = refCanvas.getContext("2d");
+              refCtx.drawImage(await loadImage(refBuf), 0, 0, 1024, 1024);
+              const refPng = refCanvas.toBuffer("image/png");
+              form.append("image", refPng, { filename: "style_ref.png", contentType: "image/png" });
+              console.log("Style reference injected (" + refBuf.length + " bytes)");
+            }
+          } catch (e) { console.warn("Style ref fetch error:", e.message); }
+        }
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high"); // préserver la géométrie source
         form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\nPARCEL ZONE - NON-NEGOTIABLE:\n- There is a RED/PINK semi-transparent zone visible on the ground\n- DO NOT MOVE IT under any circumstances\n- DO NOT RESIZE IT\n- DO NOT RECOLOR IT beyond keeping it red/pink semi-transparent\n- It must stay at EXACTLY the same position, same shape, same size\n- The dashed red outline around it must also stay at exact same position\n- This zone is GPS-fixed and must not drift even 1 pixel\n\nBUILDINGS - MANDATORY:\n- Building rooftops: BRIGHT PURE WHITE #ffffff\n- Building sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Building shadow faces: warm gray #9a9690\n- Building EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\nGROUND AND VEGETATION - MANDATORY:\n- Ground inside blocks: fresh vivid green #7ab83a, slightly warm, natural sunlit grass\n- Grass texture: visible fine grain #6aa030\n- Trees: round canopy top-view, dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks and in open spaces - at least 30 trees\n- Ground is predominantly GREEN inside blocks\n\nROADS - MANDATORY:\n- Road surface: warm sandy beige #d4c49a with asphalt grain texture\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n- Roads are clearly sandy/beige, strong contrast with green blocks\n- Road grid is prominent and legible\n\nBLOCK STRUCTURE - MANDATORY:\n- Each block is surrounded by roads on all 4 sides\n- Green stays strictly inside blocks, never crosses roads\n- Block boundaries are sharp hard lines\n\nNo text, no labels, no annotations.");
@@ -676,7 +695,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v47 FROZEN on port ${PORT}`);
+  console.log(`BARLO v48 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
