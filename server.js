@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.4-fix" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.5-stable" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -346,12 +346,11 @@ function computeSmartScenarios({
 
   return { A: r.A, B: r.B, C: r.C, meta };
 }
-// ─── ENDPOINT /compute-scenarios — DIAGNOSTIC / DEBUG ────────────────────────
+// ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
-  let p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
-  const ct = req.headers["content-type"] || "NONE";
+  const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
-    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires", debug: { ct, bodyType: typeof req.body, keys: Object.keys(p), sample: JSON.stringify(req.body).substring(0, 300) } });
+    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
