@@ -5,14 +5,17 @@ const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
 const app = express();
+// Parse JSON, text, and urlencoded bodies — capture EVERYTHING Make might send
 app.use(express.json({ limit: "2mb" }));
+app.use(express.text({ limit: "2mb", type: "*/*" }));
+app.use(express.urlencoded({ limit: "2mb", extended: true }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.2-debug" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.3-deep-debug" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -349,17 +352,23 @@ function computeSmartScenarios({
 // ─── ENDPOINT /compute-scenarios — DIAGNOSTIC / DEBUG ────────────────────────
 app.post("/compute-scenarios", (req, res) => {
   const p = req.body;
-  // DEBUG: log what Make actually sends
-  console.log(">>> /compute-scenarios received body:", JSON.stringify(p));
+  // DEBUG v52.3: capture ANY body format Make sends
+  let p = req.body;
+  const contentType = req.headers["content-type"] || "NONE";
+  const rawBody = typeof p === "string" ? p : JSON.stringify(p);
+  // If body came as string (text/*), try to parse it as JSON
+  if (typeof p === "string") {
+    try { p = JSON.parse(p); } catch (e) { p = {}; }
+  }
+  console.log(">>> CT:", contentType, "| body type:", typeof req.body, "| keys:", Object.keys(p).length);
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({
       error: "site_area, envelope_w, envelope_d obligatoires",
-      debug_received: {
-        site_area: p.site_area,
-        envelope_w: p.envelope_w,
-        envelope_d: p.envelope_d,
-        all_keys: Object.keys(p),
-        raw_body_sample: JSON.stringify(p).substring(0, 500)
+      debug: {
+        content_type: contentType,
+        body_typeof: typeof req.body,
+        keys: Object.keys(p),
+        raw_sample: rawBody.substring(0, 300)
       }
     });
   }
