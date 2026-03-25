@@ -4,19 +4,15 @@ const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
-
 const app = express();
 app.use(express.json({ limit: "2mb" }));
-
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "48.0-style-ref+massing-v2" }));
-
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "49.0-massing-fix" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -32,7 +28,6 @@ function brng(p1, p2) {
     Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
-
 function computeEnvelope(coords, cLat, cLon, front, side, back) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const n = pts.length;
@@ -61,7 +56,6 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
     lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
   }));
 }
-
 function computeZoom(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const ext = Math.max(
@@ -72,7 +66,6 @@ function computeZoom(coords, cLat, cLon) {
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(17.5, Math.max(16, Math.round(z * 4) / 4));
 }
-
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   let longest = 0, angle = 0;
@@ -84,11 +77,7 @@ function computeBearing(coords, cLat, cLon) {
   }
   return ((Math.round(angle + 30) % 360) + 360) % 360;
 }
-
 // ─── CALCUL DIMENSIONNEL MASSING ──────────────────────────────────────────────
-// fp_m2 = empreinte exacte du scénario (fp_A/B/C depuis PIPELINE)
-// envelope_w/d = dimensions de l'enveloppe constructible (depuis PIPELINE)
-// → bâtiment centré dans l'enveloppe, proportions respectées
 function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
   const ratio = envelope_w / envelope_d;
   const w = Math.sqrt(fp_m2 * ratio);
@@ -99,27 +88,35 @@ function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
   const offset_y = (envelope_d - dCapped) / 2;
   return { w: Math.round(wCapped * 10) / 10, d: Math.round(dCapped * 10) / 10, offset_x, offset_y };
 }
-
-// ─── POLYGONE GPS DU BÂTIMENT MASSING ────────────────────────────────────────
+// ─── POLYGONE GPS DU BÂTIMENT MASSING (v49 — CORRIGÉ) ────────────────────────
+// v48 bug: partait du topIdx avec rotation (bearing-90) → massing hors parcelle
+// v49 fix: centré sur le centroïde de l'enveloppe, orienté selon bearing parcelle
 function computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy) {
-  const envPts = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
-  let topIdx = 0;
-  envPts.forEach((p, i) => { if (p.y > envPts[topIdx].y) topIdx = i; });
-  const origin = envPts[topIdx];
-  const rad = (bearing - 90) * Math.PI / 180;
-  const ax = { x: Math.cos(rad), y: Math.sin(rad) };
-  const ay = { x: -Math.sin(rad), y: Math.cos(rad) };
-  return [
-    { dx: ox,      dy: -oy },
-    { dx: ox + mw, dy: -oy },
-    { dx: ox + mw, dy: -(oy + md) },
-    { dx: ox,      dy: -(oy + md) },
-  ].map(c => ({
-    lat: cLat + (origin.y + c.dx * ax.y + c.dy * ay.y) / R_EARTH * 180 / Math.PI,
-    lon: cLon + (origin.x + c.dx * ax.x + c.dy * ay.x) / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
-  }));
-}
+  // Centroïde de l'enveloppe (plus robuste que topIdx)
+  const envCLat = envelopeCoords.reduce((s, c) => s + c.lat, 0) / envelopeCoords.length;
+  const envCLon = envelopeCoords.reduce((s, c) => s + c.lon, 0) / envelopeCoords.length;
 
+  // Bearing en radians (direction "avant" de la parcelle)
+  const bRad = bearing * Math.PI / 180;
+
+  // Axes locaux alignés avec le bearing de la parcelle
+  // axe X = perpendiculaire au bearing (droite), axe Y = direction du bearing (avant)
+  const axX = { dlat: -Math.cos(bRad) / R_EARTH * 180 / Math.PI,
+                dlon:  Math.sin(bRad) / (R_EARTH * Math.cos(envCLat * Math.PI / 180)) * 180 / Math.PI };
+  const axY = { dlat:  Math.sin(bRad) / R_EARTH * 180 / Math.PI,
+                dlon:  Math.cos(bRad) / (R_EARTH * Math.cos(envCLat * Math.PI / 180)) * 180 / Math.PI };
+
+  // Demi-dimensions du massing
+  const hw = mw / 2, hd = md / 2;
+
+  // 4 coins du massing centré sur le centroïde de l'enveloppe
+  return [
+    { lat: envCLat + (-hw) * axX.dlat + ( hd) * axY.dlat, lon: envCLon + (-hw) * axX.dlon + ( hd) * axY.dlon },
+    { lat: envCLat + ( hw) * axX.dlat + ( hd) * axY.dlat, lon: envCLon + ( hw) * axX.dlon + ( hd) * axY.dlon },
+    { lat: envCLat + ( hw) * axX.dlat + (-hd) * axY.dlat, lon: envCLon + ( hw) * axX.dlon + (-hd) * axY.dlon },
+    { lat: envCLat + (-hw) * axX.dlat + (-hd) * axY.dlat, lon: envCLon + (-hw) * axX.dlon + (-hd) * axY.dlon },
+  ];
+}
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
   const parcelGeoJSON = {
@@ -131,7 +128,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
-
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -220,7 +216,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 </body>
 </html>`;
 }
-
 // ─── HTML MAPBOX GL — MASSING ─────────────────────────────────────────────────
 function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
   const toGeoJSON = (coords) => ({
@@ -234,7 +229,6 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   };
   const commerceH = massingParams.commerce_levels * massingParams.floor_height;
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
-
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -283,13 +277,11 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
 })();
 </script></body></html>`;
 }
-
 // ─── OVERLAYS CANVAS — SLIDE 4 AXO ───────────────────────────────────────────
 function drawOverlays(ctx, W, H, BH, p) {
   const { site_area, land_width, land_depth, buildable_fp,
     setback_front, setback_side, setback_back,
     city, district, zoning, terrain_context, bearing } = p;
-
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -305,7 +297,6 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
   ctx.fillText("N", 0, -22);
   ctx.restore();
-
   const legItems = [
     { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
     { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
@@ -335,7 +326,6 @@ function drawOverlays(ctx, W, H, BH, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-
   const BY = H;
   ctx.fillStyle = "#ffffff"; ctx.fillRect(0, BY, W, BH);
   ctx.beginPath(); ctx.moveTo(0, BY); ctx.lineTo(W, BY);
@@ -363,7 +353,6 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.textAlign = "right"; ctx.font = "9px Arial"; ctx.fillStyle = "#ddd";
   ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 16);
 }
-
 // ─── LÉGENDE + BOUSSOLE — SLIDE 4 AXO ────────────────────────────────────────
 function drawLegendCompass(ctx, W, H, p) {
   const { site_area, bearing } = p;
@@ -412,7 +401,6 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
 }
-
 // ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
 function drawSolarArc(ctx, W, H, p) {
   const { bearing } = p;
@@ -455,10 +443,8 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
   ctx.restore();
 }
-
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role }) {
-  // Boussole
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -473,15 +459,12 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.rotate((bearing || 0) * Math.PI / 180);
   ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -22);
   ctx.restore();
-
-  // Légende massing
   const legItems = [
     { fill: "rgba(208,40,24,0.22)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
     { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Enveloppe constructible" },
     commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
     { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv.` },
   ].filter(Boolean);
-
   const legPad = 14, legLH = 26, legW = 340;
   const legH = legPad * 2 + legItems.length * legLH + 52;
   ctx.save();
@@ -490,13 +473,11 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
-
   ctx.font = "bold 14px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.textAlign = "left";
   ctx.fillText(`Option ${label}`, 28, 16 + legPad + 2);
   ctx.font = "12px Arial"; ctx.fillStyle = "#555";
   ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28, 16 + legPad + 18);
   if (scenario_role) { ctx.font = "italic 11px Arial"; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28, 16 + legPad + 34); }
-
   legItems.forEach((item, i) => {
     const iy = 16 + legPad + 48 + i * legLH;
     ctx.save();
@@ -509,16 +490,12 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
-
-  // Arc solaire bas-droite
   drawSolarArc(ctx, W, H, { bearing });
 }
-
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v48 (style-ref) ═══");
-
+  console.log("═══ /generate v49 (style-ref) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -527,29 +504,24 @@ app.post("/generate", async (req, res) => {
     zoom: zoomOverride = null,
     style_ref_url = null,
   } = req.body;
-
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
   if (!BROWSERLESS_TOKEN) return res.status(500).json({ error: "BROWSERLESS_TOKEN manquant" });
-
   const coords = polygon_points.split("|").map(pt => {
     const [lat, lon] = pt.trim().split(",").map(Number);
     return { lat, lon };
   }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
-
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   const bearing = computeBearing(coords, cLat, cLon);
   console.log(`zoom=${zoom} bearing=${bearing}° pitch=58°`);
-
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
     console.log(`Connected (${Date.now() - t0}ms)`);
-
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
@@ -558,21 +530,18 @@ app.post("/generate", async (req, res) => {
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
-
     const W = 1280, H = 1280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
     const png = canvas.toBuffer("image/png");
-
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
     const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}.png`;
     const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     if (ue) return res.status(500).json({ error: ue.message });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
-
     let enhancedUrl = pd.publicUrl;
     if (OPENAI_API_KEY) {
       try {
@@ -617,7 +586,6 @@ app.post("/generate", async (req, res) => {
         }
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
-
     return res.json({ ok: true, public_url: pd.publicUrl, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
     console.error("Error:", e.message || e);
@@ -626,36 +594,23 @@ app.post("/generate", async (req, res) => {
     if (browser) { try { browser.disconnect(); } catch (_) {} }
   }
 });
-
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v2 ═══", JSON.stringify(req.body).slice(0, 200));
-
+  console.log("═══ /generate-massing v49 ═══", JSON.stringify(req.body).slice(0, 200));
   const {
     lead_id, client_name, polygon_points,
-    site_area,       // plot_area_m2
-    setback_front,   // setback_front_m
-    setback_side,    // setback_side_m
-    setback_back,    // setback_back_m
-    fp_m2,           // fp_A_m2 / fp_B_m2 / fp_C_m2 — empreinte exacte depuis PIPELINE
-    envelope_w,      // envelope_w_m — depuis PIPELINE
-    envelope_d,      // envelope_d_m — depuis PIPELINE
-    massing_levels,  // levels_A / levels_B / levels_C — depuis PIPELINE
-    height_m,        // height_A_m / height_B_m / height_C_m — depuis PIPELINE
-    commerce_levels = 0,
-    floor_height = 3.2,
-    massing_label = "A",
-    scenario_role = "",
-    accent_color = "#2a5298",
-    slide_name,
+    site_area, setback_front, setback_side, setback_back,
+    fp_m2, envelope_w, envelope_d,
+    massing_levels, height_m,
+    commerce_levels = 0, floor_height = 3.2,
+    massing_label = "A", scenario_role = "",
+    accent_color = "#2a5298", slide_name,
     style_ref_url = null,
   } = req.body;
-
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!fp_m2 || !envelope_w || !envelope_d) return res.status(400).json({ error: "fp_m2, envelope_w, envelope_d obligatoires" });
   if (!massing_levels) return res.status(400).json({ error: "massing_levels obligatoire" });
-
   const slideName = slide_name || ("massing_" + massing_label.toLowerCase());
   const fp = Number(fp_m2);
   const envW = Number(envelope_w);
@@ -664,40 +619,25 @@ app.post("/generate-massing", async (req, res) => {
   const totalH = Number(height_m) || levels * Number(floor_height);
   const commerceH = Number(commerce_levels) * Number(floor_height);
   const habitationLevels = levels - Number(commerce_levels);
-
-  // Calcul dimensions depuis fp + proportions enveloppe
   const { w: mw, d: md, offset_x: ox, offset_y: oy } = computeMassingDimensions(fp, envW, envD);
   console.log(`fp_m2=${fp} → ${mw}m×${md}m offset[${ox.toFixed(1)},${oy.toFixed(1)}]`);
-
   const coords = polygon_points.split("|").map(pt => {
     const [lat, lon] = pt.trim().split(",").map(Number);
     return { lat, lon };
   }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
-
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
   const bearing = computeBearing(coords, cLat, cLon);
   const zoom = computeZoom(coords, cLat, cLon);
   const massingCoords = computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy);
-
-  // Cache Supabase
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const folder = `hektar/${String(lead_id).trim()}_${slug}`;
   const basePath = `${folder}/${slideName}.png`;
   const enhancedPath = `${folder}/${slideName}_enhanced.png`;
-
-  try {
-    const { data: files } = await sb.storage.from("massing-images").list(folder);
-    const cached = files?.find(f => f.name === slideName + "_enhanced.png");
-    if (cached) {
-      const { data: pd } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-      return res.json({ ok: true, cached: true, public_url: pd.publicUrl, enhanced_url: pd.publicUrl, massing_label, fp_m2: fp, mw, md, duration_ms: Date.now() - t0 });
-    }
-  } catch (e) { console.warn("Cache check:", e.message); }
-
+  // Cache disabled for debugging
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
@@ -709,7 +649,6 @@ app.post("/generate-massing", async (req, res) => {
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     await page.close();
-
     const W = 1280, H = 1280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
@@ -720,10 +659,8 @@ app.post("/generate-massing", async (req, res) => {
       total_height: totalH, floor_height: Number(floor_height), fp_m2: Math.round(fp), accent_color, scenario_role,
     });
     const png = canvas.toBuffer("image/png");
-
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
-
     let enhancedUrl = pd.publicUrl;
     if (OPENAI_API_KEY) {
       try {
@@ -778,7 +715,6 @@ app.post("/generate-massing", async (req, res) => {
         }
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
-
     return res.json({
       ok: true, cached: false, public_url: pd.publicUrl, enhanced_url: enhancedUrl,
       massing_label, fp_m2: fp, mw, md, offset_x: ox, offset_y: oy,
@@ -792,10 +728,9 @@ app.post("/generate-massing", async (req, res) => {
     if (browser) { try { browser.disconnect(); } catch (_) {} }
   }
 });
-
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v48+massing-v2 on port ${PORT}`);
+  console.log(`BARLO v49-massing-fix on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
