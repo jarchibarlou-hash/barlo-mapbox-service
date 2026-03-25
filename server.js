@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "53.1-floor-labels" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.5-stable" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -571,25 +571,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: toGeoJSON(massingCoords).geometry,
   };
-  const fH = massingParams.floor_height;
-  const gap = 0.15; // gap between floors for visual separation
-  const commerceL = massingParams.commerce_levels || 0;
-  const bureauL = massingParams.bureau_levels || 0;
-  const totalLevels = Math.round(massingParams.total_height / fH);
-  const habitationL = totalLevels - commerceL - bureauL;
-  // Build per-floor layer JS code
-  const floorColors = { commerce: "#e8a030", bureau: "#4a90d9", habitation: "#ffffff" };
-  let floorLayersJS = "";
-  for (let i = 0; i < totalLevels; i++) {
-    const base = i * fH + (i > 0 ? gap : 0);
-    const top = (i + 1) * fH - (i < totalLevels - 1 ? gap : 0);
-    let usage, color;
-    if (i < commerceL) { usage = "commerce"; color = floorColors.commerce; }
-    else if (i < commerceL + bureauL) { usage = "bureau"; color = floorColors.bureau; }
-    else { usage = "habitation"; color = floorColors.habitation; }
-    floorLayersJS += `map.addSource("floor-${i}",{type:"geojson",data:${JSON.stringify(massingFeature)}});`;
-    floorLayersJS += `map.addLayer({id:"floor-${i}",type:"fill-extrusion",source:"floor-${i}",paint:{"fill-extrusion-color":"${color}","fill-extrusion-height":${top.toFixed(2)},"fill-extrusion-base":${base.toFixed(2)},"fill-extrusion-opacity":0.95,"fill-extrusion-vertical-gradient":false}});`;
-  }
+  const commerceH = massingParams.commerce_levels * massingParams.floor_height;
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -613,7 +595,6 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     {id:"road-fill-str",type:"line",source:"composite","source-layer":"road",filter:["match",["get","class"],["street","street_limited","service"],true,false],layout:{"line-cap":"round","line-join":"round"},paint:{"line-color":"#eae4d4","line-width":["interpolate",["linear"],["zoom"],14,1,18,4]}}
   ]};
   const map=new mapboxgl.Map({container:"map",style:hektarStyle,center:[${center.lon},${center.lat}],zoom:${zoom},bearing:${bearing},pitch:58,antialias:true,preserveDrawingBuffer:true,fadeDuration:0,interactive:false});
-  document.getElementById("map").__mapboxgl_map=map;
   map.addControl=function(){};
   map.on("style.load",()=>{
     map.setLight({anchor:"map",color:"#fff8f0",intensity:0.55,position:[1.15,195,40]});
@@ -628,9 +609,10 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addLayer({id:"parcel-outline",type:"line",source:"parcel",paint:{"line-color":"#d02818","line-width":3,"line-opacity":1}},"3d-buildings");
     map.addSource("envelope",{type:"geojson",data:${JSON.stringify(toGeoJSON(envelopeCoords))}});
     map.addLayer({id:"envelope-outline",type:"line",source:"envelope",paint:{"line-color":"#d02818","line-width":2,"line-dasharray":[5,3],"line-opacity":0.8}},"3d-buildings");
-    ${floorLayersJS}
-    map.addSource("massing-outline",{type:"geojson",data:${JSON.stringify(massingFeature)}});
-    map.addLayer({id:"massing-footprint",type:"line",source:"massing-outline",paint:{"line-color":"${massingParams.accent_color}","line-width":3,"line-opacity":1}});
+    map.addSource("massing",{type:"geojson",data:${JSON.stringify(massingFeature)}});
+    ${commerceH > 0 ? `map.addLayer({id:"massing-commerce",type:"fill-extrusion",source:"massing",paint:{"fill-extrusion-color":"#e8a030","fill-extrusion-height":${commerceH},"fill-extrusion-base":0,"fill-extrusion-opacity":0.95,"fill-extrusion-vertical-gradient":true}});` : ""}
+    map.addLayer({id:"massing-habitation",type:"fill-extrusion",source:"massing",paint:{"fill-extrusion-color":"#ffffff","fill-extrusion-height":${massingParams.total_height},"fill-extrusion-base":${commerceH},"fill-extrusion-opacity":0.95,"fill-extrusion-vertical-gradient":true}});
+    map.addLayer({id:"massing-footprint",type:"line",source:"massing",paint:{"line-color":"${massingParams.accent_color}","line-width":3,"line-opacity":1}});
   });
   let ready=false;
   map.on("idle",()=>{if(ready)return;ready=true;setTimeout(()=>{window.__MAP_READY=true;},2500);});
@@ -804,72 +786,8 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
   ctx.restore();
 }
-// ─── FLOOR LABELS — m² par étage directement sur le bâtiment ─────────────────
-function drawFloorLabels(ctx, W, H, { bx, by, levels, commerce_levels, bureau_levels = 0, floor_height, total_height, fp_m2, zoom }) {
-  // Estimate pixels-per-meter based on zoom level at pitch 58°
-  // At zoom 17, roughly 1.2px per meter; scale doubles per zoom level
-  const pxPerM = 1.2 * Math.pow(2, zoom - 17);
-  const buildingPixelH = total_height * pxPerM * 0.6; // foreshortened by pitch ~58°
-  const floorPixelH = floor_height * pxPerM * 0.6;
-
-  // Building top is above the centroid in the image (3D perspective)
-  const topY = by - buildingPixelH;
-  const labelX = bx + 60; // offset to the right of the building
-
-  // Draw a thin connecting line from building to labels
-  ctx.save();
-  ctx.strokeStyle = "rgba(0,0,0,0.15)";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(bx + 20, topY);
-  ctx.lineTo(labelX - 4, topY);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  const floorColors = { commerce: "#e8a030", bureau: "#4a90d9", habitation: "#ffffff" };
-  const floorTextColors = { commerce: "#8a5010", bureau: "#1a4a80", habitation: "#555" };
-  const floorBgColors = { commerce: "rgba(232,160,48,0.15)", bureau: "rgba(74,144,217,0.15)", habitation: "rgba(255,255,255,0.85)" };
-
-  for (let i = levels - 1; i >= 0; i--) {
-    let usage;
-    if (i < commerce_levels) usage = "commerce";
-    else if (i < commerce_levels + bureau_levels) usage = "bureau";
-    else usage = "habitation";
-
-    const floorLabel = i === 0 ? "RDC" : `R+${i}`;
-    const floorY = topY + (levels - 1 - i) * floorPixelH;
-
-    // Label background pill
-    const text = `${floorLabel} · ${fp_m2}m²`;
-    ctx.font = "bold 10px Arial";
-    const tw = ctx.measureText(text).width;
-
-    ctx.fillStyle = floorBgColors[usage];
-    ctx.beginPath();
-    ctx.roundRect(labelX, floorY - 7, tw + 18, 16, 4);
-    ctx.fill();
-    ctx.strokeStyle = floorColors[usage];
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Color dot
-    ctx.fillStyle = floorColors[usage];
-    ctx.beginPath();
-    ctx.arc(labelX + 6, floorY, 3, 0, 2 * Math.PI);
-    ctx.fill();
-
-    // Text
-    ctx.font = "bold 10px Arial";
-    ctx.fillStyle = floorTextColors[usage];
-    ctx.textAlign = "left";
-    ctx.fillText(text, labelX + 13, floorY + 3.5);
-  }
-  ctx.restore();
-}
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, bureau_levels = 0, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role }) {
-  // ── Compass rose (top-right) ──
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role }) {
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -884,54 +802,27 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.rotate((bearing || 0) * Math.PI / 180);
   ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -22);
   ctx.restore();
-
-  // ── Build per-floor breakdown ──
-  const floorBreakdown = [];
-  for (let i = 0; i < levels; i++) {
-    let usage, color, colorStroke;
-    if (i < commerce_levels) { usage = "Commerce"; color = "#e8a030"; colorStroke = "#c07020"; }
-    else if (i < commerce_levels + bureau_levels) { usage = "Bureau"; color = "#4a90d9"; colorStroke = "#2a6ab0"; }
-    else { usage = "Habitation"; color = "#ffffff"; colorStroke = "#333"; }
-    const floorLabel = i === 0 ? "RDC" : `R+${i}`;
-    floorBreakdown.push({ floorLabel, usage, color, colorStroke, m2: fp_m2 });
-  }
-
-  // ── Legend items (zone + usage types) ──
   const legItems = [
     { fill: "rgba(208,40,24,0.22)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
     { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Enveloppe constructible" },
-    commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. · ${commerce_levels * fp_m2} m²` },
-    bureau_levels > 0 && { fill: "#4a90d9", stroke: "#2a6ab0", dash: false, label: `Bureau — ${bureau_levels} niv. · ${bureau_levels * fp_m2} m²` },
-    habitation_levels > 0 && { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv. · ${habitation_levels * fp_m2} m²` },
+    commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
+    { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv.` },
   ].filter(Boolean);
-
-  // ── Per-floor detail rows ──
-  const floorRows = floorBreakdown.map(f => `${f.floorLabel} — ${f.usage} — ${f.m2} m²`);
-
-  const legPad = 14, legLH = 24, legW = 370;
-  const headerH = 52;
-  const legendH = legItems.length * legLH;
-  const floorSectionH = 20 + floorRows.length * 18; // title + rows
-  const legH = legPad * 2 + headerH + legendH + floorSectionH + 16;
-
+  const legPad = 14, legLH = 26, legW = 340;
+  const legH = legPad * 2 + legItems.length * legLH + 52;
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
   ctx.fillStyle = "rgba(255,255,255,0.97)";
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
-
-  // ── Header ──
   ctx.font = "bold 14px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.textAlign = "left";
   ctx.fillText(`Option ${label}`, 28, 16 + legPad + 2);
   ctx.font = "12px Arial"; ctx.fillStyle = "#555";
-  const totalSDP = levels * fp_m2;
-  ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m² · SDP ${totalSDP}m²`, 28, 16 + legPad + 18);
+  ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28, 16 + legPad + 18);
   if (scenario_role) { ctx.font = "italic 11px Arial"; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28, 16 + legPad + 34); }
-
-  // ── Legend color blocks ──
   legItems.forEach((item, i) => {
-    const iy = 16 + legPad + headerH + i * legLH;
+    const iy = 16 + legPad + 48 + i * legLH;
     ctx.save();
     ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
     if (item.dash) ctx.setLineDash([4, 2]);
@@ -940,48 +831,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
     ctx.fillText(item.label, 52, iy + 11);
   });
-
-  // ── Per-floor detail section ──
-  const floorY0 = 16 + legPad + headerH + legendH + 8;
-  ctx.fillStyle = "#e4e0d8"; ctx.fillRect(28, floorY0, legW - 24, 1);
-  ctx.font = "bold 10px Arial"; ctx.fillStyle = "#888"; ctx.textAlign = "left";
-  ctx.fillText("DÉTAIL PAR NIVEAU", 28, floorY0 + 14);
-  floorBreakdown.forEach((f, i) => {
-    const fy = floorY0 + 22 + i * 18;
-    ctx.fillStyle = f.color; ctx.beginPath(); ctx.roundRect(28, fy - 1, 10, 10, 1); ctx.fill();
-    ctx.strokeStyle = f.colorStroke; ctx.lineWidth = 1; ctx.stroke();
-    ctx.font = "10px Arial"; ctx.fillStyle = "#555"; ctx.textAlign = "left";
-    ctx.fillText(`${f.floorLabel}  ${f.usage}  —  ${f.m2} m²`, 44, fy + 8);
-  });
-
-  // ── Hottest facade indicator ──
-  // Douala ~4°N: sun travels E→W passing near zenith. Hottest facade = WEST (afternoon sun).
-  // We compute which building face is closest to facing West based on bearing.
-  const westAngle = 270; // true west
-  const facadeLabels = ["Nord", "Est", "Sud", "Ouest"];
-  const facadeAngles = [0, 90, 180, 270];
-  let hottestFacade = "Ouest";
-  let minDiff = 999;
-  facadeAngles.forEach((fa, idx) => {
-    const adjusted = ((fa + bearing) % 360 + 360) % 360;
-    const diff = Math.abs(adjusted - westAngle);
-    const diffNorm = diff > 180 ? 360 - diff : diff;
-    if (diffNorm < minDiff) { minDiff = diffNorm; hottestFacade = facadeLabels[idx]; }
-  });
-
-  // Draw hottest facade badge (bottom-left, above attribution)
-  const badgeY = H - 42;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 6;
-  ctx.fillStyle = "rgba(255,240,220,0.95)";
-  ctx.beginPath(); ctx.roundRect(16, badgeY, 260, 28, 6); ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e8a030"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.restore();
-  ctx.font = "bold 11px Arial"; ctx.fillStyle = "#c07020"; ctx.textAlign = "left";
-  ctx.fillText(`☀ Façade la plus chaude : ${hottestFacade}`, 28, badgeY + 18);
-
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 2);
+  ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
   drawSolarArc(ctx, W, H, { bearing });
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
@@ -1089,7 +940,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v53 ═══", JSON.stringify(req.body).slice(0, 300));
+  console.log("═══ /generate-massing v52.5 ═══", JSON.stringify(req.body).slice(0, 300));
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
@@ -1098,10 +949,8 @@ app.post("/generate-massing", async (req, res) => {
     style_ref_url = null,
     // ── Mode classique (valeurs pré-calculées par la sheet) ──
     fp_m2: fp_m2_raw, massing_levels: levels_raw, height_m: height_raw,
-    commerce_levels: commerce_raw = 0, bureau_levels: bureau_raw = 0,
-    floor_height: fh_raw = 3.2,
+    commerce_levels: commerce_raw = 0, floor_height: fh_raw = 3.2,
     scenario_role: role_raw = "", accent_color: accent_raw = "#2a5298",
-    zoom_override = null,
     // ── Mode smart (calcul serveur) ──
     compute_scenario = false,
     zoning_type = "URBAIN",
@@ -1124,7 +973,7 @@ app.post("/generate-massing", async (req, res) => {
   const label = String(massing_label).toUpperCase();
 
   // ── Déterminer les paramètres du scénario ──
-  let fp, levels, totalH, commerceLevels, bureauLevels, scenarioRole, accentColor;
+  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor;
 
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
@@ -1167,26 +1016,23 @@ app.post("/generate-massing", async (req, res) => {
     levels = sc.levels;
     totalH = sc.height_m;
     commerceLevels = sc.commerce_levels;
-    bureauLevels = sc.bureau_levels || 0;
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} bureau=${bureauLevels} (${sc.cos_compliance})`);
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
     levels = Number(levels_raw);
     totalH = Number(height_raw) || levels * floorH;
     commerceLevels = Number(commerce_raw);
-    bureauLevels = Number(bureau_raw) || 0;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
-    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} bureau=${bureauLevels}`);
+    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
   }
 
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
-  const bureauH = bureauLevels * floorH;
-  const habitationLevels = levels - commerceLevels - bureauLevels;
+  const habitationLevels = levels - commerceLevels;
   const { w: mw, d: md, offset_x: ox, offset_y: oy } = computeMassingDimensions(fp, envW, envD);
   console.log(`fp_m2=${fp} → ${mw}m×${md}m offset[${ox.toFixed(1)},${oy.toFixed(1)}]`);
   const coords = polygon_points.split("|").map(pt => {
@@ -1210,8 +1056,8 @@ app.post("/generate-massing", async (req, res) => {
   coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`└── end ENVELOPE DIAGNOSTIC ──`);
   const bearing = computeBearing(coords, cLat, cLon);
-  const zoom = zoom_override ? Number(zoom_override) : computeZoom(coords, cLat, cLon);
-  console.log(`Map view: bearing=${bearing}° zoom=${zoom}${zoom_override ? " (OVERRIDE)" : ""}`);
+  const zoom = computeZoom(coords, cLat, cLon);
+  console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
   const massingCoords = computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy);
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -1225,39 +1071,18 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalH, commerce_levels: commerceLevels, bureau_levels: bureauLevels, habitation_levels: habitationLevels, floor_height: floorH, accent_color: accentColor, fp_m2: Math.round(fp) }, MAPBOX_TOKEN);
+      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
-    // ── Get building screen position via map.project() ──
-    const buildingScreenPos = await page.evaluate((lat, lon) => {
-      const map = window._map || (typeof mapboxgl !== 'undefined' ? null : null);
-      // Try to access map instance from the closure
-      try {
-        const mapEl = document.getElementById('map');
-        const mapInstance = mapEl && mapEl.__mapboxgl_map;
-        if (mapInstance) {
-          const pt = mapInstance.project([lon, lat]);
-          return { x: pt.x, y: pt.y, ok: true };
-        }
-      } catch(e) {}
-      return { x: 640, y: 640, ok: false };
-    }, cLat, cLon).catch(() => ({ x: 640, y: 640, ok: false }));
-    console.log(`Building screen pos: x=${buildingScreenPos.x.toFixed(0)} y=${buildingScreenPos.y.toFixed(0)} (${buildingScreenPos.ok ? 'projected' : 'fallback center'})`);
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     await page.close();
     const W = 1280, H = 1280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0, W, H);
-    // ── Draw per-floor m² labels on the building ──
-    drawFloorLabels(ctx, W, H, {
-      bx: buildingScreenPos.x, by: buildingScreenPos.y,
-      levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels,
-      floor_height: floorH, total_height: totalH, fp_m2: Math.round(fp), zoom,
-    });
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
-      levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels, habitation_levels: habitationLevels,
+      levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
     });
     const png = canvas.toBuffer("image/png");
@@ -1286,16 +1111,13 @@ app.post("/generate-massing", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt",
-          "Restyle this axonometric urban planning massing view as a FROZEN / ICY premium architectural illustration.\n\n" +
-          "VISUAL STYLE — FROZEN:\n- Cool-toned palette: icy whites, pale blues, frosted surfaces\n- Crystalline, clean, hyper-precise rendering — like a frozen architectural model\n- Subtle frost/ice texture on building surfaces\n- Cool ambient light, soft blue-white shadows\n- Premium, magazine-quality illustration\n\n" +
+          "Restyle this axonometric urban planning map into a premium architectural massing illustration.\n\n" +
           "GEOMETRY — ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\n" +
-          "PARCEL ZONE — NON-NEGOTIABLE:\n- The RED/PINK semi-transparent zone on the ground must NOT MOVE\n- GPS-fixed, must not drift even 1 pixel\n\n" +
-          "PROPOSED MASSING — CRITICAL:\n- There is a NEW BUILDING VOLUME on the parcel — the architectural proposal\n- Keep its exact position, footprint and height — do NOT alter it\n- The building has DISTINCT FLOOR LEVELS separated by visible horizontal lines/gaps on every face\n- Each floor plate is clearly delineated with a thin dark line between levels\n" +
-          `- FLOOR COLOR CODING (bottom to top): ${commerceLevels > 0 ? `${commerceLevels} floors ORANGE #e8a030 = COMMERCE (ground level)` : ""}${bureauLevels > 0 ? ` → ${bureauLevels} floors BLUE #4a90d9 = BUREAU` : ""} → ${habitationLevels} floors WHITE #ffffff = HABITATION\n` +
-          "- Strong black edges #1a1a1a on all proposed building corners and between each floor\n- The proposed building must clearly stand out from surrounding buildings\n- Each floor separation must be visible as a thin dark horizontal band\n\n" +
-          "EXISTING BUILDINGS:\n- Rooftops: frosted pale blue-white with strong dark edges\n- Shadow faces: cool gray #8a9098\n\n" +
-          "GROUND: frosted green #8ac04a inside blocks, pale sandy #d8cca0 roads\n" +
-          "TREES: round canopy frosted dark green #4a8a2a, at least 30 visible\nNo text, no labels, no annotations."
+          "PARCEL ZONE — NON-NEGOTIABLE:\n- The RED/PINK semi-transparent zone on the ground must NOT MOVE\n- DO NOT MOVE IT, DO NOT RESIZE IT, DO NOT RECOLOR IT\n- GPS-fixed, must not drift even 1 pixel\n- The dashed red outline must also stay at exact same position\n\n" +
+          "PROPOSED MASSING — CRITICAL:\n- There is a NEW BUILDING VOLUME on the parcel — the architectural proposal\n- Keep its exact position, footprint and height — do NOT alter it\n- Orange/warm levels = COMMERCE floors (ground floor)\n- White levels = HABITATION floors\n- Add visible horizontal lines on building faces to show each floor\n- Strong black edges #1a1a1a on all proposed building corners\n- The proposed building must clearly stand out from surrounding buildings\n\n" +
+          "EXISTING BUILDINGS:\n- Rooftops: BRIGHT PURE WHITE #ffffff with strong black edges\n- Sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Shadow faces: warm gray #9a9690\n- EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\n" +
+          "GROUND AND VEGETATION:\n- Ground inside blocks: fresh vivid green #7ab83a, natural sunlit grass\n- Trees: round canopy dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks — at least 30 trees\n\n" +
+          "ROADS:\n- Road surface: warm sandy beige #d4c49a\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n\nNo text, no labels, no annotations."
         );
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -1304,16 +1126,10 @@ app.post("/generate-massing", async (req, res) => {
         if (oaiJson.data?.[0]?.b64_json) {
           const enhBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           const fCanvas = createCanvas(W, H);
-          const fCtx = fCanvas.getContext("2d");
-          fCtx.drawImage(await loadImage(enhBuf), 0, 0, W, H);
-          drawFloorLabels(fCtx, W, H, {
-            bx: buildingScreenPos.x, by: buildingScreenPos.y,
-            levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels,
-            floor_height: floorH, total_height: totalH, fp_m2: Math.round(fp), zoom,
-          });
-          drawMassingOverlays(fCtx, W, H, {
+          fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
+          drawMassingOverlays(fCanvas.getContext("2d"), W, H, {
             site_area: Number(site_area), bearing, label,
-            levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels, habitation_levels: habitationLevels,
+            levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
             total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
           });
           const finalPng = fCanvas.toBuffer("image/png");
@@ -1329,7 +1145,7 @@ app.post("/generate-massing", async (req, res) => {
     return res.json({
       ok: true, cached: false, public_url: pd.publicUrl, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp, mw, md, offset_x: ox, offset_y: oy,
-      levels, total_height: totalH, commerce_levels: commerceLevels, bureau_levels: bureauLevels,
+      levels, total_height: totalH, commerce_levels: commerceLevels,
       scenario_role: scenarioRole, accent_color: accentColor,
       centroid: { lat: cLat, lon: cLon },
       view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0,
@@ -1343,7 +1159,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v53-massing-floors on port ${PORT}`);
+  console.log(`BARLO v52.5-stable on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
