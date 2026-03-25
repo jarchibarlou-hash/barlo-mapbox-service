@@ -15,7 +15,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "43.0-zones-mapbox-overlay" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "45.0-FINAL" }));
 
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -274,7 +274,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
 
-    // ── Enveloppe constructible — tirets rouges, SOUS les bâtiments ──
+    // ── Enveloppe — tirets rouges, SOUS les bâtiments ─────────────────
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#d02818', 'line-width': 2.5,
@@ -412,7 +412,7 @@ function drawOverlays(ctx, W, H, BH, p) {
 }
 
 
-// ─── LÉGENDE + BOUSSOLE (v16 exact, sans bande stats) ────────────────────────
+// ─── LÉGENDE + BOUSSOLE ───────────────────────────────────────────────────────
 function drawLegendCompass(ctx, W, H, p) {
   const { site_area, bearing } = p;
   ctx.save();
@@ -430,9 +430,8 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
   ctx.fillText("N", 0, -22);
   ctx.restore();
-
   const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
+    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: "Parcelle — " + site_area + " m²" },
     { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
     { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiment existant" },
   ];
@@ -444,7 +443,7 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
-  legItems.forEach((item, i) => {
+  legItems.forEach(function(item, i) {
     const iy = 16 + legPad + i * legLH;
     ctx.save();
     if (item.type === "rect") {
@@ -457,15 +456,14 @@ function drawLegendCompass(ctx, W, H, p) {
       ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.restore();
-    ctx.font = "12px Arial, Helvetica, sans-serif";
-    ctx.fillStyle = "#444"; ctx.textAlign = "left";
+    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
     ctx.fillText(item.label, 52, iy + 11);
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
 }
 
-// ─── ARC SOLAIRE BAS DROITE ───────────────────────────────────────────────────
+// ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
 function drawSolarArc(ctx, W, H, p) {
   const { bearing } = p;
   const SX = W - 110, SY = H - 110, SR = 68;
@@ -474,20 +472,18 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.beginPath(); ctx.arc(SX, SY, SR + 12, 0, 2 * Math.PI); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e8e4dc"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.strokeStyle = "#f0ede8"; ctx.lineWidth = 0.5;
-  ctx.beginPath(); ctx.arc(SX, SY, SR - 8, 0, 2 * Math.PI); ctx.stroke();
   const northRad = -(bearing) * Math.PI / 180 - Math.PI / 2;
   const sunriseAngle = northRad + Math.PI / 2;
   const sunsetAngle  = northRad + 3 * Math.PI / 2;
   ctx.beginPath(); ctx.arc(SX, SY, SR - 6, sunriseAngle, sunsetAngle);
-  ctx.strokeStyle = "rgba(255,170,0,0.12)"; ctx.lineWidth = 14; ctx.stroke();
+  ctx.strokeStyle = "rgba(255,170,0,0.15)"; ctx.lineWidth = 14; ctx.stroke();
   ctx.beginPath(); ctx.arc(SX, SY, SR - 6, sunriseAngle, sunsetAngle);
   const grad = ctx.createLinearGradient(
     SX + Math.cos(sunriseAngle) * SR, SY + Math.sin(sunriseAngle) * SR,
     SX + Math.cos(sunsetAngle)  * SR, SY + Math.sin(sunsetAngle)  * SR);
-  grad.addColorStop(0,   "rgba(220,120,0,0.5)");
+  grad.addColorStop(0, "rgba(220,120,0,0.5)");
   grad.addColorStop(0.5, "rgba(230,170,0,0.8)");
-  grad.addColorStop(1,   "rgba(200,80,0,0.5)");
+  grad.addColorStop(1, "rgba(200,80,0,0.5)");
   ctx.strokeStyle = grad; ctx.lineWidth = 5; ctx.stroke();
   const sunAngle = northRad + Math.PI;
   const sunX = SX + Math.cos(sunAngle) * (SR - 6);
@@ -506,7 +502,7 @@ function drawSolarArc(ctx, W, H, p) {
     { label: "S", angle: northRad + Math.PI,  color: "#aaa",    font: "9px Arial" },
     { label: "E", angle: sunriseAngle,         color: "#b08020", font: "bold 10px Arial" },
     { label: "O", angle: sunsetAngle,          color: "#b08020", font: "bold 10px Arial" },
-  ].forEach(l => {
+  ].forEach(function(l) {
     const lx = SX + Math.cos(l.angle) * (SR + 4);
     const ly = SY + Math.sin(l.angle) * (SR + 4);
     ctx.font = l.font; ctx.fillStyle = l.color; ctx.textAlign = "center";
@@ -517,130 +513,10 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 
-
-// ─── GPS → PIXEL (kept for reference) ──────────────────────────────────────────
-function gpsToPixel(lat, lon, cLat, cLon, zoom, bearing, W, H) {
-  const scale = 256 * Math.pow(2, zoom);
-  const toMX = (lng) => (lng + 180) / 360 * scale;
-  const toMY = (lat) => {
-    const s = Math.sin(lat * Math.PI / 180);
-    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * scale;
-  };
-  const cx = toMX(cLon), cy = toMY(cLat);
-  const dx = toMX(lon) - cx;
-  const dy = toMY(lat) - cy;
-  // Rotation bearing
-  const rad = bearing * Math.PI / 180;
-  const rx = dx * Math.cos(rad) - dy * Math.sin(rad);
-  const ry = dx * Math.sin(rad) + dy * Math.cos(rad);
-  return { x: W / 2 + rx, y: H / 2 + ry };
-}
-
-// ─── DESSIN PARCELLE + ENVELOPPE — POSITION GPS EXACTE ───────────────────────
-function drawZones(ctx, W, H, coords, envelopeCoords, cLat, cLon, zoom, bearing) {
-  const toP = (c) => gpsToPixel(c.lat, c.lon, cLat, cLon, zoom, bearing, W, H);
-
-  // ── Fill parcelle rouge semi-transparent ─────────────────────────────────
-  const parcelPts = coords.map(toP);
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(parcelPts[0].x, parcelPts[0].y);
-  parcelPts.forEach(p => ctx.lineTo(p.x, p.y));
-  ctx.closePath();
-  ctx.fillStyle = "rgba(208,40,24,0.22)";
-  ctx.fill();
-  // Contour rouge solide
-  ctx.strokeStyle = "#d02818";
-  ctx.lineWidth = 3;
-  ctx.lineJoin = "round";
-  ctx.stroke();
-  ctx.restore();
-
-  // ── Enveloppe constructible — tirets rouges ───────────────────────────────
-  const envPts = envelopeCoords.map(toP);
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(envPts[0].x, envPts[0].y);
-  envPts.forEach(p => ctx.lineTo(p.x, p.y));
-  ctx.closePath();
-  ctx.strokeStyle = "#d02818";
-  ctx.lineWidth = 2;
-  ctx.lineJoin = "round";
-  ctx.setLineDash([10, 6]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.restore();
-}
-
-// ─── HTML MAPBOX ZONES ONLY — fond transparent, même perspective ──────────────
-function generateZonesHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
-  const parcelGeoJSON = {
-    type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
-  };
-  const envelopeGeoJSON = {
-    type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
-  };
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { width: 1280px; height: 1280px; overflow: hidden; background: transparent; }
-  #map { width: 1280px; height: 1280px; }
-  .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-group { display: none !important; }
-</style>
-<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
-<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
-</head>
-<body>
-<div id="map"></div>
-<script>
-(function() {
-  mapboxgl.accessToken = '${mapboxToken}';
-  const transparentStyle = {
-    "version": 8, "name": "Transparent",
-    "sources": {},
-    "layers": [{ "id": "background", "type": "background", "paint": { "background-color": "rgba(0,0,0,0)" } }]
-  };
-  const map = new mapboxgl.Map({
-    container: 'map', style: transparentStyle,
-    center: [${center.lon}, ${center.lat}],
-    zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
-    antialias: true, preserveDrawingBuffer: true,
-    fadeDuration: 0, interactive: false,
-  });
-  map.addControl = function() {};
-  map.on('style.load', () => {
-    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.22 } });
-    map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } });
-    map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
-    map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5,
-               'line-dasharray': [5, 3], 'line-opacity': 0.85 } });
-  });
-  let rendered = false;
-  map.on('idle', () => {
-    if (rendered) return;
-    rendered = true;
-    setTimeout(() => { window.__MAP_READY = true; }, 1500);
-  });
-  setTimeout(() => { window.__MAP_READY = true; }, 15000);
-})();
-</script>
-</body>
-</html>`;
-}
-
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v43 (zones Mapbox screenshot overlay) ═══");
+  console.log("═══ /generate v45 FINAL ═══");
 
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -692,7 +568,7 @@ app.post("/generate", async (req, res) => {
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
 
-    // Canvas 1280×1280 — pas de bande stats
+    // Canvas 1280x1280 sans bande stats
     const W = 1280, H = 1280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
@@ -732,7 +608,7 @@ app.post("/generate", async (req, res) => {
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high"); // préserver la géométrie source
-        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS - DO NOT CHANGE ANYTHING:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Keep EXACTLY the red parcel and dashed red envelope at their exact positions\n- Do NOT move, add or remove any building or road\n- Do NOT shift or resize the parcel\n\nBUILDINGS - MANDATORY - DO NOT CHANGE:\n- Building rooftops: BRIGHT PURE WHITE #ffffff - stark and clean\n- Building sunlit vertical faces: PURE WHITE #ffffff to very light #faf9f6\n- Building shadow vertical faces: warm gray #9a9690\n- Building EDGES AND OUTLINES: MANDATORY strong black lines #1a1a1a on ALL edges and corners - bold, crisp, architectural ink style - this is non-negotiable\n- Cast shadows: solid warm gray #c4c0b8, sharp and directional\n\nGROUND AND VEGETATION - MANDATORY - DO NOT CHANGE:\n- Ground between buildings inside blocks: fresh vivid green #7ab83a with slight warm softness - NOT neon, NOT artificial, natural sunlit grass\n- Grass texture: visible fine grain #6aa030 with subtle warm tone\n- Trees: round canopy top-view, rich dark green #3d7a1a with highlight #5aaa28, vary sizes and opacity 0.7-1.0\n- Tree shadows: dark green #2d5a12\n- Place trees densely: along every sidewalk, in every open space, in all courtyards - at least 30 trees\n- Ground is predominantly GREEN inside blocks - vivid and natural\n\nROADS - MANDATORY - DO NOT CHANGE:\n- Roads MUST respect their exact width from the original image - do not make them thinner\n- Road surface: warm sandy beige #d4c49a with visible asphalt grain texture\n- Road borders/curbs: darker #b8a478, sharp line separating road from sidewalk\n- Sidewalks: narrow cream strip #ede4cc between road and grass\n- Main roads: wider with subtle center dashed line\n- All roads are CLEARLY sandy/beige colored - strong contrast with green blocks\n- Road grid is prominent and immediately readable as urban infrastructure\n\nBLOCK STRUCTURE - MANDATORY - DO NOT CHANGE:\n- Each city block is an island of green + buildings COMPLETELY SURROUNDED by roads\n- Roads on ALL 4 sides of every block\n- Green stays STRICTLY INSIDE each block - NEVER crosses roads\n- Road edges are hard sharp lines - no blending\n- Urban grid is crystal clear: blocks are separated islands\n\nSITE AREA:\n- There is an open plot visible in the scene - leave it as empty sandy ground #e8d4b8\n- Do NOT add vegetation inside the empty plot\n- Do NOT draw any red outlines - they will be added separately\n\nNo text, no labels, no annotations.\nOutput: premium urban planning illustration - white buildings with black edges, vivid green blocks, sandy beige roads, highlighted red parcel.");
+        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\nPARCEL ZONE - NON-NEGOTIABLE:\n- There is a RED/PINK semi-transparent zone visible on the ground\n- DO NOT MOVE IT under any circumstances\n- DO NOT RESIZE IT\n- DO NOT RECOLOR IT beyond keeping it red/pink semi-transparent\n- It must stay at EXACTLY the same position, same shape, same size\n- The dashed red outline around it must also stay at exact same position\n- This zone is GPS-fixed and must not drift even 1 pixel\n\nBUILDINGS - MANDATORY:\n- Building rooftops: BRIGHT PURE WHITE #ffffff\n- Building sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Building shadow faces: warm gray #9a9690\n- Building EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\nGROUND AND VEGETATION - MANDATORY:\n- Ground inside blocks: fresh vivid green #7ab83a, slightly warm, natural sunlit grass\n- Grass texture: visible fine grain #6aa030\n- Trees: round canopy top-view, dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks and in open spaces - at least 30 trees\n- Ground is predominantly GREEN inside blocks\n\nROADS - MANDATORY:\n- Road surface: warm sandy beige #d4c49a with asphalt grain texture\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n- Roads are clearly sandy/beige, strong contrast with green blocks\n- Road grid is prominent and legible\n\nBLOCK STRUCTURE - MANDATORY:\n- Each block is surrounded by roads on all 4 sides\n- Green stays strictly inside blocks, never crosses roads\n- Block boundaries are sharp hard lines\n\nNo text, no labels, no annotations.");
 
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST",
@@ -751,31 +627,10 @@ app.post("/generate", async (req, res) => {
           const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           console.log(`OpenAI enhanced map: ${enhancedMapBuf.length} bytes`);
 
-          // Recomposer : enhanced 1024→1280 + légende + boussole + arc solaire
+          // Recomposer : enhanced + légende + boussole + arc solaire
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
-          const enhancedMapImg = await loadImage(enhancedMapBuf);
-          finalCtx.drawImage(enhancedMapImg, 0, 0, W, H);
-          // ── Screenshot zones Mapbox — même perspective exacte ──────────
-          // Reconnecter browser si nécessaire
-          if (!browser.isConnected()) {
-            browser = await puppeteer.connect({
-              browserWSEndpoint: "wss://chrome.browserless.io?token=" + BROWSERLESS_TOKEN,
-            });
-          }
-          const zonesPage = await browser.newPage();
-          await zonesPage.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-          const zonesHtml = generateZonesHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
-          await zonesPage.setContent(zonesHtml, { waitUntil: "networkidle0", timeout: 20000 });
-          await zonesPage.waitForFunction("window.__MAP_READY === true", { timeout: 15000 });
-          const zonesBuf = await zonesPage.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
-          await zonesPage.close();
-          console.log("Zones screenshot: " + zonesBuf.length + " bytes");
-
-          // Composer zones par-dessus enhanced
-          const zonesImg = await loadImage(zonesBuf);
-          finalCtx.drawImage(zonesImg, 0, 0, W, H);
-
+          finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
 
@@ -821,7 +676,7 @@ app.post("/generate", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v43 on port ${PORT}`);
+  console.log(`BARLO v45 FINAL on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox: ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI: ${OPENAI_API_KEY ? "OK" : "MISSING (enhancement disabled)"}`);
