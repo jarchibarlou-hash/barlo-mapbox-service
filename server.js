@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "49.0-massing-fix" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.0-massing-centered" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -88,34 +88,50 @@ function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
   const offset_y = (envelope_d - dCapped) / 2;
   return { w: Math.round(wCapped * 10) / 10, d: Math.round(dCapped * 10) / 10, offset_x, offset_y };
 }
-// ─── POLYGONE GPS DU BÂTIMENT MASSING (v49 — CORRIGÉ) ────────────────────────
-// v48 bug: partait du topIdx avec rotation (bearing-90) → massing hors parcelle
-// v49 fix: centré sur le centroïde de l'enveloppe, orienté selon bearing parcelle
+// ─── POLYGONE GPS DU BÂTIMENT MASSING (v50 — CORRIGÉ) ────────────────────────
+// v49 bug: utilisait le bearing d'affichage (longest+30°) au lieu de l'orientation réelle
+// v50 fix: travaille en mètres, centré sur centroïde enveloppe, aligné avec son plus long côté
 function computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy) {
-  // Centroïde de l'enveloppe (plus robuste que topIdx)
-  const envCLat = envelopeCoords.reduce((s, c) => s + c.lat, 0) / envelopeCoords.length;
-  const envCLon = envelopeCoords.reduce((s, c) => s + c.lon, 0) / envelopeCoords.length;
+  // Convertir l'enveloppe en mètres (même repère que toM)
+  const envPts = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
 
-  // Bearing en radians (direction "avant" de la parcelle)
-  const bRad = bearing * Math.PI / 180;
+  // Centroïde de l'enveloppe en mètres
+  const cx = envPts.reduce((s, p) => s + p.x, 0) / envPts.length;
+  const cy = envPts.reduce((s, p) => s + p.y, 0) / envPts.length;
 
-  // Axes locaux alignés avec le bearing de la parcelle
-  // axe X = perpendiculaire au bearing (droite), axe Y = direction du bearing (avant)
-  const axX = { dlat: -Math.cos(bRad) / R_EARTH * 180 / Math.PI,
-                dlon:  Math.sin(bRad) / (R_EARTH * Math.cos(envCLat * Math.PI / 180)) * 180 / Math.PI };
-  const axY = { dlat:  Math.sin(bRad) / R_EARTH * 180 / Math.PI,
-                dlon:  Math.cos(bRad) / (R_EARTH * Math.cos(envCLat * Math.PI / 180)) * 180 / Math.PI };
+  // Trouver le plus long côté de l'enveloppe pour déterminer son orientation réelle
+  let longest = 0, edgeAngle = 0;
+  for (let i = 0; i < envPts.length; i++) {
+    const j = (i + 1) % envPts.length;
+    const dx = envPts[j].x - envPts[i].x;
+    const dy = envPts[j].y - envPts[i].y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > longest) {
+      longest = len;
+      edgeAngle = Math.atan2(dy, dx); // angle standard (math, pas compass)
+    }
+  }
 
-  // Demi-dimensions du massing
+  // Vecteurs unitaires : u le long du plus long côté, v perpendiculaire
+  const ux = Math.cos(edgeAngle), uy = Math.sin(edgeAngle);
+  const vx = -uy, vy = ux;
+
+  // mw le long de u (largeur = plus long côté), md le long de v (profondeur)
   const hw = mw / 2, hd = md / 2;
 
-  // 4 coins du massing centré sur le centroïde de l'enveloppe
-  return [
-    { lat: envCLat + (-hw) * axX.dlat + ( hd) * axY.dlat, lon: envCLon + (-hw) * axX.dlon + ( hd) * axY.dlon },
-    { lat: envCLat + ( hw) * axX.dlat + ( hd) * axY.dlat, lon: envCLon + ( hw) * axX.dlon + ( hd) * axY.dlon },
-    { lat: envCLat + ( hw) * axX.dlat + (-hd) * axY.dlat, lon: envCLon + ( hw) * axX.dlon + (-hd) * axY.dlon },
-    { lat: envCLat + (-hw) * axX.dlat + (-hd) * axY.dlat, lon: envCLon + (-hw) * axX.dlon + (-hd) * axY.dlon },
+  // 4 coins en mètres, centrés sur le centroïde de l'enveloppe
+  const cornersM = [
+    { x: cx - hw * ux - hd * vx, y: cy - hw * uy - hd * vy },
+    { x: cx + hw * ux - hd * vx, y: cy + hw * uy - hd * vy },
+    { x: cx + hw * ux + hd * vx, y: cy + hw * uy + hd * vy },
+    { x: cx - hw * ux + hd * vx, y: cy - hw * uy + hd * vy },
   ];
+
+  // Reconvertir en GPS
+  return cornersM.map(m => ({
+    lat: cLat + m.y / R_EARTH * 180 / Math.PI,
+    lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
+  }));
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
@@ -730,7 +746,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v49-massing-fix on port ${PORT}`);
+  console.log(`BARLO v50-massing-centered on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
