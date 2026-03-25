@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "53.0-massing-floors" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "53.1-floor-labels" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -613,6 +613,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     {id:"road-fill-str",type:"line",source:"composite","source-layer":"road",filter:["match",["get","class"],["street","street_limited","service"],true,false],layout:{"line-cap":"round","line-join":"round"},paint:{"line-color":"#eae4d4","line-width":["interpolate",["linear"],["zoom"],14,1,18,4]}}
   ]};
   const map=new mapboxgl.Map({container:"map",style:hektarStyle,center:[${center.lon},${center.lat}],zoom:${zoom},bearing:${bearing},pitch:58,antialias:true,preserveDrawingBuffer:true,fadeDuration:0,interactive:false});
+  document.getElementById("map").__mapboxgl_map=map;
   map.addControl=function(){};
   map.on("style.load",()=>{
     map.setLight({anchor:"map",color:"#fff8f0",intensity:0.55,position:[1.15,195,40]});
@@ -801,6 +802,69 @@ function drawSolarArc(ctx, W, H, p) {
   });
   ctx.font = "7px Arial"; ctx.fillStyle = "#ccc"; ctx.textAlign = "center";
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
+  ctx.restore();
+}
+// ─── FLOOR LABELS — m² par étage directement sur le bâtiment ─────────────────
+function drawFloorLabels(ctx, W, H, { bx, by, levels, commerce_levels, bureau_levels = 0, floor_height, total_height, fp_m2, zoom }) {
+  // Estimate pixels-per-meter based on zoom level at pitch 58°
+  // At zoom 17, roughly 1.2px per meter; scale doubles per zoom level
+  const pxPerM = 1.2 * Math.pow(2, zoom - 17);
+  const buildingPixelH = total_height * pxPerM * 0.6; // foreshortened by pitch ~58°
+  const floorPixelH = floor_height * pxPerM * 0.6;
+
+  // Building top is above the centroid in the image (3D perspective)
+  const topY = by - buildingPixelH;
+  const labelX = bx + 60; // offset to the right of the building
+
+  // Draw a thin connecting line from building to labels
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,0,0,0.15)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(bx + 20, topY);
+  ctx.lineTo(labelX - 4, topY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const floorColors = { commerce: "#e8a030", bureau: "#4a90d9", habitation: "#ffffff" };
+  const floorTextColors = { commerce: "#8a5010", bureau: "#1a4a80", habitation: "#555" };
+  const floorBgColors = { commerce: "rgba(232,160,48,0.15)", bureau: "rgba(74,144,217,0.15)", habitation: "rgba(255,255,255,0.85)" };
+
+  for (let i = levels - 1; i >= 0; i--) {
+    let usage;
+    if (i < commerce_levels) usage = "commerce";
+    else if (i < commerce_levels + bureau_levels) usage = "bureau";
+    else usage = "habitation";
+
+    const floorLabel = i === 0 ? "RDC" : `R+${i}`;
+    const floorY = topY + (levels - 1 - i) * floorPixelH;
+
+    // Label background pill
+    const text = `${floorLabel} · ${fp_m2}m²`;
+    ctx.font = "bold 10px Arial";
+    const tw = ctx.measureText(text).width;
+
+    ctx.fillStyle = floorBgColors[usage];
+    ctx.beginPath();
+    ctx.roundRect(labelX, floorY - 7, tw + 18, 16, 4);
+    ctx.fill();
+    ctx.strokeStyle = floorColors[usage];
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // Color dot
+    ctx.fillStyle = floorColors[usage];
+    ctx.beginPath();
+    ctx.arc(labelX + 6, floorY, 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Text
+    ctx.font = "bold 10px Arial";
+    ctx.fillStyle = floorTextColors[usage];
+    ctx.textAlign = "left";
+    ctx.fillText(text, labelX + 13, floorY + 3.5);
+  }
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
@@ -1164,12 +1228,33 @@ app.post("/generate-massing", async (req, res) => {
       { total_height: totalH, commerce_levels: commerceLevels, bureau_levels: bureauLevels, habitation_levels: habitationLevels, floor_height: floorH, accent_color: accentColor, fp_m2: Math.round(fp) }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
+    // ── Get building screen position via map.project() ──
+    const buildingScreenPos = await page.evaluate((lat, lon) => {
+      const map = window._map || (typeof mapboxgl !== 'undefined' ? null : null);
+      // Try to access map instance from the closure
+      try {
+        const mapEl = document.getElementById('map');
+        const mapInstance = mapEl && mapEl.__mapboxgl_map;
+        if (mapInstance) {
+          const pt = mapInstance.project([lon, lat]);
+          return { x: pt.x, y: pt.y, ok: true };
+        }
+      } catch(e) {}
+      return { x: 640, y: 640, ok: false };
+    }, cLat, cLon).catch(() => ({ x: 640, y: 640, ok: false }));
+    console.log(`Building screen pos: x=${buildingScreenPos.x.toFixed(0)} y=${buildingScreenPos.y.toFixed(0)} (${buildingScreenPos.ok ? 'projected' : 'fallback center'})`);
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     await page.close();
     const W = 1280, H = 1280;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0, W, H);
+    // ── Draw per-floor m² labels on the building ──
+    drawFloorLabels(ctx, W, H, {
+      bx: buildingScreenPos.x, by: buildingScreenPos.y,
+      levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels,
+      floor_height: floorH, total_height: totalH, fp_m2: Math.round(fp), zoom,
+    });
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels, habitation_levels: habitationLevels,
@@ -1219,10 +1304,16 @@ app.post("/generate-massing", async (req, res) => {
         if (oaiJson.data?.[0]?.b64_json) {
           const enhBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           const fCanvas = createCanvas(W, H);
-          fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
-          drawMassingOverlays(fCanvas.getContext("2d"), W, H, {
+          const fCtx = fCanvas.getContext("2d");
+          fCtx.drawImage(await loadImage(enhBuf), 0, 0, W, H);
+          drawFloorLabels(fCtx, W, H, {
+            bx: buildingScreenPos.x, by: buildingScreenPos.y,
+            levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels,
+            floor_height: floorH, total_height: totalH, fp_m2: Math.round(fp), zoom,
+          });
+          drawMassingOverlays(fCtx, W, H, {
             site_area: Number(site_area), bearing, label,
-            levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
+            levels, commerce_levels: commerceLevels, bureau_levels: bureauLevels, habitation_levels: habitationLevels,
             total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
           });
           const finalPng = fCanvas.toBuffer("image/png");
