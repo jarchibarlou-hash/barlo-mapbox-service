@@ -5,9 +5,8 @@ const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
 const app = express();
-// Parse JSON, text, and urlencoded bodies — capture EVERYTHING Make might send
 app.use(express.json({ limit: "2mb" }));
-app.use(express.text({ limit: "2mb", type: "*/*" }));
+app.use(express.text({ limit: "2mb", type: "text/*" }));
 app.use(express.urlencoded({ limit: "2mb", extended: true }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
