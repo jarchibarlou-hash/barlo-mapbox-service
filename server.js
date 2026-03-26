@@ -120,10 +120,15 @@ const FP_RATIOS = {
   PHASAGE_FONCIER:    { A: 0.80, B: 0.70, C: 0.60 },
 };
 
-// COS par zoning_type (depuis RULES_ZONING)
-const ZONING_COS = {
-  URBAIN: 0.60, PERIURBAIN: 0.40, PAVILLON: 0.30,
+// CES par zoning_type — Coefficient d'Emprise au Sol → contrôle le FOOTPRINT (% du terrain couvert)
+const ZONING_CES = {
+  URBAIN: 0.60, PERIURBAIN: 0.45, PAVILLON: 0.30,
   RURAL: 0.20, MIXTE: 0.50, Z_DEFAULT: 0.40,
+};
+// COS par zoning_type — Coefficient d'Occupation du Sol → contrôle la SDP TOTALE (plancher tous niveaux)
+const ZONING_COS = {
+  URBAIN: 2.50, PERIURBAIN: 1.50, PAVILLON: 0.80,
+  RURAL: 0.40, MIXTE: 2.00, Z_DEFAULT: 1.50,
 };
 
 // Massing modes par scénario (depuis SCENARIOS_FR)
@@ -159,9 +164,12 @@ function computeSmartScenarios({
   strategic_position = "",
 }) {
   const envelope_area = env_area_override || (envelope_w * envelope_d);
-  const cos = ZONING_COS[zoning_type] || 0.40;
+  // CES → emprise au sol max (footprint)
+  const ces = ZONING_CES[zoning_type] || 0.50;
+  const max_fp = Math.min(ces * site_area, envelope_area);
+  // COS → surface de plancher totale max (SDP = fp × niveaux)
+  const cos = ZONING_COS[zoning_type] || 1.50;
   const max_sdp = cos * site_area;
-  const max_fp = Math.min(cos * site_area, envelope_area);
   const ratios = FP_RATIOS[primary_driver] || FP_RATIOS.MAX_CAPACITE;
 
   // ── BUDGET MODULATION ──
@@ -197,9 +205,9 @@ function computeSmartScenarios({
   const isMixte = /mixte|mixed/i.test(program_main);
   const commerceLevels = isMixte ? 1 : 0;
 
-  console.log(`┌── SCENARIO ENGINE v52.1 (data-driven + budget) ──`);
+  console.log(`┌── SCENARIO ENGINE v54.1 (CES/COS fix) ──`);
   console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d}=${envelope_area}m²`);
-  console.log(`│ zoning=${zoning_type} COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
+  console.log(`│ zoning=${zoning_type} CES=${ces} max_fp=${Math.round(max_fp)}m² | COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
   console.log(`│ driver=${primary_driver} intensity=${driver_intensity} ratios=[${ratios.A}/${ratios.B}/${ratios.C}]`);
   console.log(`│ max_floors=${max_floors} max_height=${max_height_m}m → absMaxLevels=${absMaxLevels}`);
   console.log(`│ program=${program_main} commerce=${commerceLevels} saturation=${site_saturation_level}`);
