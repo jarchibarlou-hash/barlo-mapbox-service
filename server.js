@@ -572,63 +572,114 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 }
 // ─── HTML MAPBOX GL — MASSING ─────────────────────────────────────────────────
 function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
-  const toGeoJSON = (coords) => ({
+  const parcelGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...coords.map(c => [c.lon, c.lat]), [coords[0].lon, coords[0].lat]]] },
-  });
-  const massingFeature = {
+    geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
+  };
+  const envelopeGeoJSON = {
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
+  };
+  const massingGeoJSON = {
     type: "Feature",
     properties: { height: massingParams.total_height, base_height: 0 },
-    geometry: toGeoJSON(massingCoords).geometry,
+    geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
   const commerceH = massingParams.commerce_levels * massingParams.floor_height;
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<style>* { margin: 0; padding: 0; box-sizing: border-box; } body { width: 1280px; height: 1280px; overflow: hidden; background: #f2f0ec; } #map { width: 1280px; height: 1280px; } .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-group { display: none !important; }</style>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1280px; height: 1280px; overflow: hidden; background: #f2f0ec; }
+  #map { width: 1280px; height: 1280px; }
+  .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-group { display: none !important; }
+</style>
 <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
 <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
 </head>
-<body><div id="map"></div>
+<body>
+<div id="map"></div>
 <script>
-(function(){
-  mapboxgl.accessToken='${mapboxToken}';
-  const hektarStyle={version:8,name:"Hektar",sources:{composite:{type:"vector",url:"mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2"}},glyphs:"mapbox://fonts/mapbox/{fontstack}/{range}.pbf",sprite:"mapbox://sprites/mapbox/light-v11",layers:[
-    {id:"background",type:"background",paint:{"background-color":"#f2f0ec"}},
-    {id:"water",type:"fill",source:"composite","source-layer":"water",paint:{"fill-color":"#c8dce8"}},
-    {id:"landuse-park",type:"fill",source:"composite","source-layer":"landuse",filter:["match",["get","class"],["park","grass","cemetery","wood","scrub","pitch"],true,false],paint:{"fill-color":"#e0ddd4"}},
-    {id:"landuse-urban",type:"fill",source:"composite","source-layer":"landuse",filter:["match",["get","class"],["residential","commercial","industrial"],true,false],paint:{"fill-color":"#ebe8e2"}},
-    {id:"road-case-sec",type:"line",source:"composite","source-layer":"road",filter:["match",["get","class"],["secondary","tertiary","primary","trunk","motorway"],true,false],layout:{"line-cap":"round","line-join":"round"},paint:{"line-color":"#ccc4ae","line-width":["interpolate",["linear"],["zoom"],14,3,18,10]}},
-    {id:"road-case-str",type:"line",source:"composite","source-layer":"road",filter:["match",["get","class"],["street","street_limited","service"],true,false],layout:{"line-cap":"round","line-join":"round"},paint:{"line-color":"#ccc4ae","line-width":["interpolate",["linear"],["zoom"],14,1.5,18,6]}},
-    {id:"road-fill-sec",type:"line",source:"composite","source-layer":"road",filter:["match",["get","class"],["secondary","tertiary","primary","trunk","motorway"],true,false],layout:{"line-cap":"round","line-join":"round"},paint:{"line-color":"#eae4d4","line-width":["interpolate",["linear"],["zoom"],14,2,18,8]}},
-    {id:"road-fill-str",type:"line",source:"composite","source-layer":"road",filter:["match",["get","class"],["street","street_limited","service"],true,false],layout:{"line-cap":"round","line-join":"round"},paint:{"line-color":"#eae4d4","line-width":["interpolate",["linear"],["zoom"],14,1,18,4]}}
-  ]};
-  const map=new mapboxgl.Map({container:"map",style:hektarStyle,center:[${center.lon},${center.lat}],zoom:${zoom},bearing:${bearing},pitch:58,antialias:true,preserveDrawingBuffer:true,fadeDuration:0,interactive:false});
-  map.addControl=function(){};
-  map.on("style.load",()=>{
-    map.setLight({anchor:"map",color:"#fff8f0",intensity:0.55,position:[1.15,195,40]});
-    map.addLayer({id:"3d-buildings",source:"composite","source-layer":"building",filter:["==","extrude","true"],type:"fill-extrusion",minzoom:13,paint:{
-      "fill-extrusion-color":["interpolate",["linear"],["coalesce",["get","height"],6],0,"#ffffff",4,"#f5f3ef",10,"#e8e4dc",20,"#c8c4bc",40,"#9a9690"],
-      "fill-extrusion-height":["case",["has","height"],["*",["get","height"],1.6],8],
-      "fill-extrusion-base":["case",["has","min_height"],["*",["get","min_height"],1.6],0],
-      "fill-extrusion-opacity":1.0,"fill-extrusion-vertical-gradient":true
-    }});
-    map.addSource("parcel",{type:"geojson",data:${JSON.stringify(toGeoJSON(parcelCoords))}});
-    map.addLayer({id:"parcel-fill",type:"fill",source:"parcel",paint:{"fill-color":"#d02818","fill-opacity":0.22}},"3d-buildings");
-    map.addLayer({id:"parcel-outline",type:"line",source:"parcel",paint:{"line-color":"#d02818","line-width":3,"line-opacity":1}},"3d-buildings");
-    map.addSource("envelope",{type:"geojson",data:${JSON.stringify(toGeoJSON(envelopeCoords))}});
-    map.addLayer({id:"envelope-outline",type:"line",source:"envelope",paint:{"line-color":"#d02818","line-width":2,"line-dasharray":[5,3],"line-opacity":0.8}},"3d-buildings");
-    map.addSource("massing",{type:"geojson",data:${JSON.stringify(massingFeature)}});
-    ${commerceH > 0 ? `map.addLayer({id:"massing-commerce",type:"fill-extrusion",source:"massing",paint:{"fill-extrusion-color":"#e8a030","fill-extrusion-height":${commerceH},"fill-extrusion-base":0,"fill-extrusion-opacity":0.95,"fill-extrusion-vertical-gradient":true}});` : ""}
-    map.addLayer({id:"massing-habitation",type:"fill-extrusion",source:"massing",paint:{"fill-extrusion-color":"#ffffff","fill-extrusion-height":${massingParams.total_height},"fill-extrusion-base":${commerceH},"fill-extrusion-opacity":0.95,"fill-extrusion-vertical-gradient":true}});
-    map.addLayer({id:"massing-footprint",type:"line",source:"massing",paint:{"line-color":"${massingParams.accent_color}","line-width":3,"line-opacity":1}});
+(function() {
+  mapboxgl.accessToken = '${mapboxToken}';
+  const hektarStyle = {
+    "version": 8, "name": "Hektar",
+    "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
+    "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+    "sprite": "mapbox://sprites/mapbox/light-v11",
+    "layers": [
+      { "id": "background", "type": "background", "paint": { "background-color": "#f2f0ec" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c8dce8" } },
+      { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
+        "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
+        "paint": { "fill-color": "#e0ddd4" } },
+      { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
+        "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
+        "paint": { "fill-color": "#ebe8e2" } },
+      { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+      { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+      { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+      { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+    ]
+  };
+  const map = new mapboxgl.Map({
+    container: 'map', style: hektarStyle,
+    center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
+    antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
-  let ready=false;
-  map.on("idle",()=>{if(ready)return;ready=true;setTimeout(()=>{window.__MAP_READY=true;},2500);});
-  setTimeout(()=>{window.__MAP_READY=true;},28000);
+  map.addControl = function() {};
+  map.on('style.load', () => {
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    map.addLayer({
+      id: '3d-buildings', source: 'composite', 'source-layer': 'building',
+      filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
+      paint: {
+        'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
+          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
+        'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
+        'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
+        'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
+      },
+    });
+    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.22 } }, '3d-buildings');
+    map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
+      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
+    map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
+    map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
+      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.85 } }, '3d-buildings');
+    map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
+    ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
+      paint: { 'fill-extrusion-color': '#e8a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true } });` : ""}
+    map.addLayer({ id: 'massing-habitation', type: 'fill-extrusion', source: 'massing',
+      paint: { 'fill-extrusion-color': '#ffffff', 'fill-extrusion-height': ${massingParams.total_height},
+        'fill-extrusion-base': ${commerceH}, 'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true } });
+    map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
+      paint: { 'line-color': '${massingParams.accent_color}', 'line-width': 3, 'line-opacity': 1 } });
+  });
+  let rendered = false;
+  map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
+  setTimeout(() => { window.__MAP_READY = true; }, 28000);
 })();
-</script></body></html>`;
+</script>
+</body>
+</html>`;
 }
 // ─── OVERLAYS CANVAS — SLIDE 4 AXO ───────────────────────────────────────────
 function drawOverlays(ctx, W, H, BH, p) {
