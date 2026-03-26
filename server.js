@@ -1066,8 +1066,8 @@ app.post("/generate-massing", async (req, res) => {
   coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`└── end ENVELOPE DIAGNOSTIC ──`);
   const bearing = computeBearing(coords, cLat, cLon);
-  const zoom = computeZoomMassing(coords, cLat, cLon);
-  console.log(`Map view (massing zoom): bearing=${bearing}° zoom=${zoom}`);
+  const zoom = computeZoom(coords, cLat, cLon);
+  console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
   const massingCoords = computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy);
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
