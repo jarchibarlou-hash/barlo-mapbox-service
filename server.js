@@ -610,7 +610,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.setLight({anchor:"map",color:"#fff8f0",intensity:0.55,position:[1.15,195,40]});
     map.addLayer({id:"3d-buildings",source:"composite","source-layer":"building",filter:["==","extrude","true"],type:"fill-extrusion",minzoom:13,paint:{
       "fill-extrusion-color":["interpolate",["linear"],["coalesce",["get","height"],6],0,"#ffffff",4,"#f5f3ef",10,"#e8e4dc",20,"#c8c4bc",40,"#9a9690"],
-      "fill-extrusion-height":["case",["has","height"],["*",["get","height"],1.6],["+",3.2,["*",3.2,["%",["to-number",["id"]],4]]]],
+      "fill-extrusion-height":["case",["has","height"],["*",["get","height"],1.6],8],
       "fill-extrusion-base":["case",["has","min_height"],["*",["get","min_height"],1.6],0],
       "fill-extrusion-opacity":1.0,"fill-extrusion-vertical-gradient":true
     }});
