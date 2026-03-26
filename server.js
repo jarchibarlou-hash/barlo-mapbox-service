@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "53-massing" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "54-envelope" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -217,7 +217,11 @@ function computeSmartScenarios({
     // COMPACT : insensible au budget (déjà petit)
     // BALANCED : modération
     let budgetMod = 1.0;
-    if (mode === "SPREAD") {
+    if (mode === "BALANCED") {
+      // Budget tendu → réduire emprise référence (économiser fondations/VRD)
+      // Budget large → légère expansion confort
+      budgetMod = 1.0 + (0.5 - budgetPressure) * 0.12 * intensitySpread;
+    } else if (mode === "SPREAD") {
       // Budget tendu → réduire emprise spread (économiser), budget large → boost
       budgetMod = 1.0 + (0.5 - budgetPressure) * 0.20 * intensitySpread;
     } else if (mode === "COMPACT") {
@@ -398,77 +402,299 @@ app.post("/compute-scenarios", (req, res) => {
   });
   return res.json({ ok: true, scenarios });
 });
-// ─── POLYGONE GPS DU BÂTIMENT MASSING (v51 — GPS CENTROID DIRECT) ────────────
-// v50 bug: centroïde en mètres + rotation causait un décalage mystérieux
-// v51 fix: approche la plus simple possible — centroïde GPS direct, aligné axe le plus long
-function computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy) {
-  // ── DIAGNOSTIC : log chaque sommet de l'enveloppe ──
-  console.log(`┌── computeMassingPolygon v51 ──`);
-  console.log(`│ Parcel centroid: ${cLat.toFixed(7)}, ${cLon.toFixed(7)}`);
-  console.log(`│ Massing dims: ${mw}m × ${md}m`);
-  envelopeCoords.forEach((c, i) => console.log(`│ Envelope[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+// ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
+// Sélection automatique de la forme bâtie selon le contexte :
+//   BLOC     → rectangle compact (~1:1.3), économique, petit terrain
+//   BARRE    → lamelle allongée (~1:3+), éclairage naturel, logement
+//   EN_U     → 3 ailes + cour intérieure, programme mixte, standing élevé
+//   EN_L     → 2 ailes, terrain d'angle, extension/rénovation
+//   EXTENSION→ barre accolée à un côté (parcelle déjà occupée)
 
-  // ── Centroïde GPS direct de l'enveloppe (pas de conversion en mètres) ──
+function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_driver,
+  levels, standing_level, program_main, site_saturation, project_type, existing_fp_m2 }) {
+
+  const fillRatio = fp_m2 / Math.max(1, envelopeArea);
+  const isMixte = /mixte|mixed/i.test(program_main || "");
+  const isReno = /RENOVATION|EXTENSION|SURELEVATION/i.test(project_type || "");
+  const isOccupied = (site_saturation === "HIGH") || (existing_fp_m2 > 0) || isReno;
+  const isPremium = /PREMIUM|HAUT/i.test(standing_level || "");
+
+  console.log(`┌── selectTypology v54 ──`);
+  console.log(`│ fillRatio=${fillRatio.toFixed(3)} envAspect=${envAspect.toFixed(2)}`);
+  console.log(`│ mode=${massing_mode} driver=${primary_driver} levels=${levels}`);
+  console.log(`│ standing=${standing_level} program=${program_main}`);
+  console.log(`│ saturation=${site_saturation} project=${project_type} existing_fp=${existing_fp_m2}`);
+  console.log(`│ isMixte=${isMixte} isReno=${isReno} isOccupied=${isOccupied} isPremium=${isPremium}`);
+
+  let typology;
+  let reason;
+
+  // ── Parcelle occupée / extension / rénovation → EXTENSION ou EN_L ──
+  if (isOccupied && isReno) {
+    typology = "EXTENSION";
+    reason = "parcelle occupée + projet rénovation/extension → barre accolée";
+  } else if (isOccupied && fillRatio < 0.5) {
+    typology = "EN_L";
+    reason = "parcelle occupée + emprise modérée → L pour éviter l'existant";
+  } else if (isOccupied) {
+    typology = "BLOC";
+    reason = "parcelle occupée + emprise importante → bloc compact pour minimiser empiètement";
+  }
+  // ── Parcelle libre : logique architecturale ──
+  else if (fillRatio > 0.75) {
+    typology = "BLOC";
+    reason = "emprise >75% enveloppe → bloc compact (quasi pleine parcelle)";
+  } else if (massing_mode === "COMPACT" || /RENTABILITE|SECURISATION/i.test(primary_driver || "")) {
+    typology = "BLOC";
+    reason = `mode ${massing_mode} / driver ${primary_driver} → bloc compact (coût optimisé)`;
+  } else if (isPremium && isMixte && fillRatio > 0.35 && envelopeArea > 600) {
+    typology = "EN_U";
+    reason = "standing premium + mixte + grande enveloppe → U avec cour";
+  } else if (isMixte && fillRatio > 0.4 && envelopeArea > 500) {
+    typology = "EN_U";
+    reason = "programme mixte + emprise significative → U avec cour intérieure";
+  } else if (envAspect > 2.0 && massing_mode === "SPREAD") {
+    typology = "BARRE";
+    reason = `terrain allongé (aspect=${envAspect.toFixed(1)}) + mode étalé → lamelle`;
+  } else if (envAspect > 1.8 && fillRatio < 0.45) {
+    typology = "BARRE";
+    reason = `terrain allongé + emprise faible → lamelle le long du côté long`;
+  } else if (fillRatio > 0.4 && fillRatio < 0.7 && envelopeArea > 400) {
+    typology = "EN_L";
+    reason = "emprise intermédiaire + enveloppe moyenne → L (bon compromis)";
+  } else if (levels >= 5 && fillRatio < 0.3) {
+    typology = "BLOC";
+    reason = `petite emprise + ${levels} niveaux → tour/bloc compact`;
+  } else {
+    typology = "BLOC";
+    reason = "défaut → bloc compact";
+  }
+
+  console.log(`│ → TYPOLOGY = ${typology} (${reason})`);
+  console.log(`└── end selectTypology ──`);
+  return { typology, reason };
+}
+
+// ─── GÉNÉRATEURS DE POLYGONES PAR TYPOLOGIE ─────────────────────────────────
+// Tous travaillent en coordonnées locales (mètres) relatives au centroïde de l'enveloppe,
+// alignées sur le plus long côté (axe X = longueur, axe Y = profondeur).
+// Retournent un tableau de {x, y} en mètres.
+
+function generateBlocPoly(fp_m2, bboxW, bboxD) {
+  // Rectangle compact, ratio ~1:1.3, centré dans la bbox
+  const targetRatio = 1.3;
+  let w = Math.sqrt(fp_m2 * targetRatio);
+  let d = fp_m2 / w;
+  // Clamp dans la bbox avec marge 5%
+  w = Math.min(w, bboxW * 0.95);
+  d = Math.min(d, bboxD * 0.95);
+  // Reajuster si clamped
+  if (w * d < fp_m2 * 0.8) {
+    w = Math.min(Math.sqrt(fp_m2 * targetRatio), bboxW * 0.95);
+    d = Math.min(fp_m2 / w, bboxD * 0.95);
+  }
+  const hw = w / 2, hd = d / 2;
+  return {
+    points: [
+      { x: -hw, y: -hd }, { x: hw, y: -hd },
+      { x: hw, y: hd }, { x: -hw, y: hd },
+    ],
+    actualArea: w * d,
+  };
+}
+
+function generateBarrePoly(fp_m2, bboxW, bboxD) {
+  // Lamelle : profondeur fixe 12-16m, longueur = fp/profondeur
+  let depth = Math.min(15, bboxD * 0.6);
+  depth = Math.max(10, depth);
+  let length = fp_m2 / depth;
+  length = Math.min(length, bboxW * 0.95);
+  // Reajuster la profondeur si la longueur est saturée
+  if (length * depth < fp_m2 * 0.8) {
+    depth = Math.min(fp_m2 / length, bboxD * 0.90);
+  }
+  const hw = length / 2, hd = depth / 2;
+  return {
+    points: [
+      { x: -hw, y: -hd }, { x: hw, y: -hd },
+      { x: hw, y: hd }, { x: -hw, y: hd },
+    ],
+    actualArea: length * depth,
+  };
+}
+
+function generateEnUPoly(fp_m2, bboxW, bboxD) {
+  // U ouvert vers le haut (y positif = nord/fond de parcelle)
+  // ┌──┐     ┌──┐
+  // │  │     │  │   ← ailes (wings)
+  // │  └─────┘  │
+  // └───────────┘   ← barre de base
+  const wingDepth = Math.min(13, bboxW * 0.22);  // épaisseur des ailes
+  const barDepth = Math.min(13, bboxD * 0.22);    // épaisseur de la barre
+  // Dimensions extérieures (ajustées à la bbox)
+  let W = Math.min(bboxW * 0.90, Math.sqrt(fp_m2 * 1.8));
+  let H = Math.min(bboxD * 0.90, fp_m2 / (2 * wingDepth + (W - 2 * wingDepth) > 0 ? barDepth : W));
+
+  // Aire du U = W*barDepth + 2*wingDepth*(H - barDepth)
+  // On résout H pour obtenir l'aire cible
+  const barArea = W * barDepth;
+  const wingArea = fp_m2 - barArea;
+  if (wingArea > 0 && wingDepth > 0) {
+    H = barDepth + wingArea / (2 * wingDepth);
+  }
+  H = Math.min(H, bboxD * 0.90);
+  W = Math.min(W, bboxW * 0.90);
+
+  const hw = W / 2, hh = H / 2;
+  const wd = wingDepth;
+  const bd = barDepth;
+
+  // Polygone anti-horaire depuis bas-gauche
+  const points = [
+    { x: -hw,      y: -hh },          // 0: bas gauche
+    { x: hw,       y: -hh },          // 1: bas droite
+    { x: hw,       y: -hh + H },      // 2: haut droite extérieur
+    { x: hw - wd,  y: -hh + H },      // 3: haut droite intérieur
+    { x: hw - wd,  y: -hh + bd },     // 4: intérieur droite
+    { x: -hw + wd, y: -hh + bd },     // 5: intérieur gauche
+    { x: -hw + wd, y: -hh + H },      // 6: haut gauche intérieur
+    { x: -hw,      y: -hh + H },      // 7: haut gauche extérieur
+  ];
+  const actualArea = W * bd + 2 * wd * (H - bd);
+  return { points, actualArea };
+}
+
+function generateEnLPoly(fp_m2, bboxW, bboxD) {
+  // L : aile horizontale (bas) + aile verticale (gauche)
+  // ┌──┐
+  // │  │
+  // │  └──────┐
+  // └─────────┘
+  const wingThick = Math.min(13, Math.min(bboxW, bboxD) * 0.30);
+
+  // Aile horizontale : pleine largeur, épaisseur wingThick
+  let totalW = Math.min(bboxW * 0.88, Math.sqrt(fp_m2 * 2.0));
+  // Aile verticale : pleine hauteur, épaisseur wingThick
+  // Aire = totalW * wingThick + wingThick * (totalH - wingThick)
+  // fp = wingThick * (totalW + totalH - wingThick)
+  // totalH = fp/wingThick - totalW + wingThick
+  let totalH = fp_m2 / wingThick - totalW + wingThick;
+  totalH = Math.max(wingThick * 1.5, Math.min(totalH, bboxD * 0.88));
+  totalW = Math.min(totalW, bboxW * 0.88);
+
+  const hw = totalW / 2, hh = totalH / 2;
+  const wt = wingThick;
+
+  // Polygone — L avec coin bas-gauche
+  const points = [
+    { x: -hw,      y: -hh },           // 0: bas gauche
+    { x: hw,       y: -hh },           // 1: bas droite
+    { x: hw,       y: -hh + wt },      // 2: fin aile horizontale droite
+    { x: -hw + wt, y: -hh + wt },      // 3: coin intérieur du L
+    { x: -hw + wt, y: hh },            // 4: haut aile verticale intérieur
+    { x: -hw,      y: hh },            // 5: haut aile verticale extérieur
+  ];
+  const actualArea = totalW * wt + wt * (totalH - wt);
+  return { points, actualArea };
+}
+
+function generateExtensionPoly(fp_m2, bboxW, bboxD) {
+  // Extension/réno : barre accolée au côté long (bas de l'enveloppe = côté rue)
+  // Positionnée en bas de la bbox pour laisser l'existant au centre/haut
+  let depth = Math.min(14, bboxD * 0.40);
+  depth = Math.max(8, depth);
+  let length = fp_m2 / depth;
+  length = Math.min(length, bboxW * 0.90);
+  if (length * depth < fp_m2 * 0.8) {
+    depth = Math.min(fp_m2 / length, bboxD * 0.45);
+  }
+  const hw = length / 2;
+  // Décalé vers le bas de la bbox (y négatif = côté rue/front)
+  const yBottom = -bboxD / 2 * 0.85;
+  const yTop = yBottom + depth;
+  return {
+    points: [
+      { x: -hw, y: yBottom }, { x: hw, y: yBottom },
+      { x: hw, y: yTop }, { x: -hw, y: yTop },
+    ],
+    actualArea: length * depth,
+  };
+}
+
+// ─── POLYGONE GPS DU BÂTIMENT MASSING (v54 — TYPOLOGIE ARCHITECTURALE) ──────
+function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
+  const { massing_mode, primary_driver, levels, standing_level, program_main,
+    site_saturation, project_type, existing_fp_m2 } = context;
+
+  console.log(`┌── computeMassingPolygon v54 (typology) ──`);
+  console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²`);
+
+  // ── Centroïde GPS de l'enveloppe ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
   const eLon = envelopeCoords.reduce((s, p) => s + p.lon, 0) / envelopeCoords.length;
-  console.log(`│ Envelope GPS centroid: ${eLat.toFixed(7)}, ${eLon.toFixed(7)}`);
 
-  // ── Vérifier distance centroïde enveloppe ↔ centroïde parcelle ──
-  const distM = Math.sqrt(
-    Math.pow((eLon - cLon) * Math.PI / 180 * R_EARTH * Math.cos(cLat * Math.PI / 180), 2) +
-    Math.pow((eLat - cLat) * Math.PI / 180 * R_EARTH, 2)
-  );
-  console.log(`│ Distance envelope↔parcel centroid: ${distM.toFixed(1)}m`);
+  // ── Convertir enveloppe en mètres (ref = centroïde) ──
+  const envM = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon));
 
-  // ── Trouver l'orientation du plus long côté de l'enveloppe (en mètres) ──
-  const envPts = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon)); // ref = envelope centroid
+  // ── Trouver le plus long côté pour aligner l'axe local ──
   let longest = 0, edgeAngle = 0;
-  for (let i = 0; i < envPts.length; i++) {
-    const j = (i + 1) % envPts.length;
-    const dx = envPts[j].x - envPts[i].x;
-    const dy = envPts[j].y - envPts[i].y;
+  for (let i = 0; i < envM.length; i++) {
+    const j = (i + 1) % envM.length;
+    const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
     const len = Math.sqrt(dx * dx + dy * dy);
-    console.log(`│ Edge[${i}→${j}]: len=${len.toFixed(1)}m angle=${(Math.atan2(dy, dx) * 180 / Math.PI).toFixed(1)}°`);
-    if (len > longest) {
-      longest = len;
-      edgeAngle = Math.atan2(dy, dx);
-    }
+    if (len > longest) { longest = len; edgeAngle = Math.atan2(dy, dx); }
   }
-  console.log(`│ Longest edge: ${longest.toFixed(1)}m at ${(edgeAngle * 180 / Math.PI).toFixed(1)}°`);
 
-  // ── Vecteurs unitaires : u le long du plus long côté, v perpendiculaire ──
-  const ux = Math.cos(edgeAngle), uy = Math.sin(edgeAngle);
-  const vx = -uy, vy = ux;
+  // ── Rotation pour aligner le plus long côté sur l'axe X ──
+  const cosA = Math.cos(-edgeAngle), sinA = Math.sin(-edgeAngle);
+  const aligned = envM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+  const minX = Math.min(...aligned.map(p => p.x)), maxX = Math.max(...aligned.map(p => p.x));
+  const minY = Math.min(...aligned.map(p => p.y)), maxY = Math.max(...aligned.map(p => p.y));
+  const bboxW = maxX - minX, bboxD = maxY - minY;
+  const envAspect = bboxW / Math.max(1, bboxD);
 
-  // ── mw le long de u, md le long de v — centrés sur centroïde enveloppe ──
-  const hw = mw / 2, hd = md / 2;
+  console.log(`│ Envelope bbox: ${bboxW.toFixed(1)}m × ${bboxD.toFixed(1)}m (aspect=${envAspect.toFixed(2)})`);
+  console.log(`│ Longest edge angle: ${(edgeAngle * 180 / Math.PI).toFixed(1)}°`);
 
-  // ── 4 coins en mètres (ref = envelope centroid, donc centre = 0,0) ──
-  const cornersM = [
-    { x: -hw * ux - hd * vx, y: -hw * uy - hd * vy },
-    { x: +hw * ux - hd * vx, y: +hw * uy - hd * vy },
-    { x: +hw * ux + hd * vx, y: +hw * uy + hd * vy },
-    { x: -hw * ux + hd * vx, y: -hw * uy + hd * vy },
-  ];
+  // ── Sélection de la typology ──
+  const { typology, reason } = selectTypology({
+    fp_m2, envelopeArea, envAspect, massing_mode,
+    primary_driver, levels, standing_level, program_main,
+    site_saturation, project_type, existing_fp_m2: Number(existing_fp_m2) || 0,
+  });
 
-  // ── Reconvertir en GPS (ref = envelope centroid GPS) ──
-  const result = cornersM.map(m => ({
+  // ── Génération du polygone en coordonnées locales (mètres, alignées) ──
+  let localResult;
+  switch (typology) {
+    case "BARRE":     localResult = generateBarrePoly(fp_m2, bboxW, bboxD); break;
+    case "EN_U":      localResult = generateEnUPoly(fp_m2, bboxW, bboxD); break;
+    case "EN_L":      localResult = generateEnLPoly(fp_m2, bboxW, bboxD); break;
+    case "EXTENSION": localResult = generateExtensionPoly(fp_m2, bboxW, bboxD); break;
+    default:          localResult = generateBlocPoly(fp_m2, bboxW, bboxD); break;
+  }
+
+  console.log(`│ ${typology}: ${localResult.points.length} vertices, area=${localResult.actualArea.toFixed(0)}m² (target=${fp_m2})`);
+
+  // ── Rotation inverse (remettre dans l'orientation originale) ──
+  const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
+  const worldPts = localResult.points.map(p => ({
+    x: p.x * cosB - p.y * sinB,
+    y: p.x * sinB + p.y * cosB,
+  }));
+
+  // ── Conversion en GPS ──
+  const result = worldPts.map(m => ({
     lat: eLat + m.y / R_EARTH * 180 / Math.PI,
     lon: eLon + m.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
   }));
 
-  // ── Diagnostic : vérifier que le centroïde du massing = centroïde de l'enveloppe ──
-  const mLat = result.reduce((s, p) => s + p.lat, 0) / result.length;
-  const mLon = result.reduce((s, p) => s + p.lon, 0) / result.length;
-  const checkDist = Math.sqrt(
-    Math.pow((mLon - eLon) * Math.PI / 180 * R_EARTH * Math.cos(eLat * Math.PI / 180), 2) +
-    Math.pow((mLat - eLat) * Math.PI / 180 * R_EARTH, 2)
-  );
   result.forEach((c, i) => console.log(`│ Massing[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
-  console.log(`│ Massing centroid: ${mLat.toFixed(7)}, ${mLon.toFixed(7)}`);
-  console.log(`│ Massing↔Envelope centroid offset: ${checkDist.toFixed(3)}m (should be ~0)`);
-  console.log(`└── end computeMassingPolygon v51 ──`);
+  console.log(`│ Typology: ${typology} — ${reason}`);
+  console.log(`└── end computeMassingPolygon v54 ──`);
 
+  // Ajouter la typologie au résultat pour l'overlay
+  result._typology = typology;
+  result._reason = reason;
   return result;
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
@@ -848,7 +1074,7 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology }) {
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -882,6 +1108,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.font = "12px Arial"; ctx.fillStyle = "#555";
   ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28, 16 + legPad + 18);
   if (scenario_role) { ctx.font = "italic 11px Arial"; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28, 16 + legPad + 34); }
+  const typoLabels = { BLOC: "Bloc compact", BARRE: "Barre / Lamelle", EN_U: "Forme en U", EN_L: "Forme en L", EXTENSION: "Extension" };
+  if (typology) { ctx.font = "bold 11px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.fillText(`Typologie : ${typoLabels[typology] || typology}`, 170, 16 + legPad + 2); }
   legItems.forEach((item, i) => {
     const iy = 16 + legPad + 48 + i * legLH;
     ctx.save();
@@ -1001,7 +1229,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v53 ═══", JSON.stringify(req.body).slice(0, 300));
+  console.log("═══ /generate-massing v54 ═══", JSON.stringify(req.body).slice(0, 300));
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
@@ -1025,6 +1253,9 @@ app.post("/generate-massing", async (req, res) => {
     standing_level, rent_score, capacity_score,
     mix_score, phase_score, risk_score,
     density_pressure_factor, driver_intensity, strategic_position,
+    // ── Contexte parcelle occupée / rénovation ──
+    project_type,          // NEUF | RENOVATION | EXTENSION | SURELEVATION | DEMOLITION_RECONSTRUCTION
+    existing_footprint_m2, // emprise existante si parcelle déjà construite
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -1116,10 +1347,28 @@ app.post("/generate-massing", async (req, res) => {
   console.log(`│ Setbacks: front=${setback_front} side=${setback_side} back=${setback_back}`);
   coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`└── end ENVELOPE DIAGNOSTIC ──`);
+  // ── Calcul aire réelle de l'enveloppe (Shoelace formula en mètres) ──
+  let envelopeAreaReal = 0;
+  for (let i = 0; i < envPtsDbg.length; i++) {
+    const j = (i + 1) % envPtsDbg.length;
+    envelopeAreaReal += envPtsDbg[i].x * envPtsDbg[j].y;
+    envelopeAreaReal -= envPtsDbg[j].x * envPtsDbg[i].y;
+  }
+  envelopeAreaReal = Math.abs(envelopeAreaReal) / 2;
+  console.log(`Envelope real area (shoelace): ${envelopeAreaReal.toFixed(1)}m²`);
   const bearing = computeBearing(coords, cLat, cLon);
   const zoom = computeZoom(coords, cLat, cLon);
   console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
-  const massingCoords = computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy);
+  const massingCoords = computeMassingPolygon(envelopeCoords, fp, envelopeAreaReal, {
+    massing_mode: compute_scenario ? (label === "A" ? "BALANCED" : label === "B" ? "SPREAD" : "COMPACT") : "BALANCED",
+    primary_driver: primary_driver || "MAX_CAPACITE",
+    levels,
+    standing_level: standing_level || "STANDARD",
+    program_main: program_main || "",
+    site_saturation: site_saturation_level || "MEDIUM",
+    project_type: project_type || "NEUF",
+    existing_fp_m2: Number(existing_footprint_m2) || 0,
+  });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const folder = `hektar/${String(lead_id).trim()}_${slug}`;
@@ -1145,6 +1394,7 @@ app.post("/generate-massing", async (req, res) => {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
+      typology: massingCoords._typology,
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -1192,6 +1442,7 @@ app.post("/generate-massing", async (req, res) => {
             site_area: Number(site_area), bearing, label,
             levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
             total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
+            typology: massingCoords._typology,
           });
           const finalPng = fCanvas.toBuffer("image/png");
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
@@ -1220,7 +1471,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v53-massing on port ${PORT}`);
+  console.log(`BARLO v54-envelope on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
