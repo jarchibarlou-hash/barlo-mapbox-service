@@ -483,90 +483,62 @@ function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_
   return { typology, reason };
 }
 
-// ─── POLYGONE GPS DU BÂTIMENT MASSING (v54.2 — ENVELOPPE-SAFE) ──────────────
-// Approche hybride : homothétie de l'enveloppe (GARANTI à l'intérieur) + forme typologique
-// Le polygone massing ne peut JAMAIS déborder de l'enveloppe constructible.
+// ─── POLYGONE GPS DU BÂTIMENT MASSING (v54.3 — HOMOTHÉTIE STRICTE) ──────────
+// RÈGLE ABSOLUE : le massing = l'enveloppe × scaleFactor, depuis son centroïde.
+// Aucun offset, aucune déformation, aucun calcul de bbox.
+// Mathématiquement IMPOSSIBLE de sortir de l'enveloppe.
 
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2 } = context;
 
-  console.log(`┌── computeMassingPolygon v54.2 (envelope-safe) ──`);
+  console.log(`┌── computeMassingPolygon v54.3 (STRICT HOMOTHETY) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²`);
+  envelopeCoords.forEach((c, i) => console.log(`│ Envelope[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
 
   // ── Centroïde GPS de l'enveloppe ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
   const eLon = envelopeCoords.reduce((s, p) => s + p.lon, 0) / envelopeCoords.length;
+  console.log(`│ Envelope centroid: ${eLat.toFixed(7)}, ${eLon.toFixed(7)}`);
 
-  // ── Convertir enveloppe en mètres (ref = centroïde) ──
+  // ── Calcul aspect ratio pour la sélection typologique ──
   const envM = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon));
-
-  // ── Trouver le plus long côté et la bbox ──
-  let longest = 0, edgeAngle = 0;
+  let longest = 0;
   for (let i = 0; i < envM.length; i++) {
     const j = (i + 1) % envM.length;
-    const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len > longest) { longest = len; edgeAngle = Math.atan2(dy, dx); }
+    const len = Math.sqrt(Math.pow(envM[j].x - envM[i].x, 2) + Math.pow(envM[j].y - envM[i].y, 2));
+    if (len > longest) longest = len;
   }
-  const cosA = Math.cos(-edgeAngle), sinA = Math.sin(-edgeAngle);
-  const aligned = envM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
-  const minX = Math.min(...aligned.map(p => p.x)), maxX = Math.max(...aligned.map(p => p.x));
-  const minY = Math.min(...aligned.map(p => p.y)), maxY = Math.max(...aligned.map(p => p.y));
-  const bboxW = maxX - minX, bboxD = maxY - minY;
+  const cosA = Math.cos(0), sinA = Math.sin(0); // pas de rotation
+  const xs = envM.map(p => p.x), ys = envM.map(p => p.y);
+  const bboxW = Math.max(...xs) - Math.min(...xs);
+  const bboxD = Math.max(...ys) - Math.min(...ys);
   const envAspect = bboxW / Math.max(1, bboxD);
 
-  console.log(`│ Envelope bbox: ${bboxW.toFixed(1)}m × ${bboxD.toFixed(1)}m (aspect=${envAspect.toFixed(2)})`);
-
-  // ── Sélection de la typology ──
+  // ── Sélection de la typology (pour la légende uniquement) ──
   const { typology, reason } = selectTypology({
     fp_m2, envelopeArea, envAspect, massing_mode,
     primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2: Number(existing_fp_m2) || 0,
   });
 
-  // ── ÉTAPE 1 : Homothétie de base (garanti à l'intérieur de l'enveloppe) ──
-  // Cap à 0.88 pour garantir une marge visible sur tous les côtés (recul rue inclus)
-  const scaleFactor = Math.min(0.88, Math.sqrt(Math.max(50, fp_m2) / Math.max(1, envelopeArea)));
-  console.log(`│ Base scaleFactor = ${scaleFactor.toFixed(4)} (√${fp_m2}/${Math.round(envelopeArea)})`);
+  // ── HOMOTHÉTIE STRICTE DEPUIS LE CENTROÏDE GPS ──
+  // scaleFactor = √(fp / envelopeArea), cappé à 0.85 pour marge visuelle
+  const scaleFactor = Math.min(0.85, Math.sqrt(Math.max(50, fp_m2) / Math.max(1, envelopeArea)));
+  console.log(`│ scaleFactor = ${scaleFactor.toFixed(4)}`);
 
-  // ── Décalage vers l'arrière de la parcelle (recul rue principale) ──
-  // On pousse le centre de l'homothétie vers l'arrière pour éloigner le bâtiment du front de rue
-  // Le "front" est estimé comme le côté le plus proche de la rue (bord min Y en coords alignées)
-  const homoAlignedCheck = envM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
-  const envCenterY = (Math.min(...homoAlignedCheck.map(p => p.y)) + Math.max(...homoAlignedCheck.map(p => p.y))) / 2;
-  const envRangeY = Math.max(...homoAlignedCheck.map(p => p.y)) - Math.min(...homoAlignedCheck.map(p => p.y));
-  // Décalage de 12% de la profondeur vers l'arrière (Y positif = fond de parcelle)
-  const backOffset = envRangeY * 0.12;
-  // Appliquer le décalage au centroïde en coords originales (rotation inverse)
-  const cosB0 = Math.cos(edgeAngle), sinB0 = Math.sin(edgeAngle);
-  const offsetX = 0 * cosB0 - backOffset * sinB0;  // offset en X monde
-  const offsetY = 0 * sinB0 + backOffset * cosB0;  // offset en Y monde
-  console.log(`│ Back offset: ${backOffset.toFixed(1)}m (12% of depth=${envRangeY.toFixed(1)}m)`);
-
-  // Points homothétiques en mètres, décalés vers l'arrière
-  const homoM = envM.map(p => ({
-    x: (p.x - offsetX) * scaleFactor + offsetX,
-    y: (p.y - offsetY) * scaleFactor + offsetY,
+  // Chaque sommet se rapproche du centroïde par scaleFactor
+  // C'est la SEULE opération. Pas d'offset, pas de rotation, pas de bbox.
+  const result = envelopeCoords.map(c => ({
+    lat: eLat + (c.lat - eLat) * scaleFactor,
+    lon: eLon + (c.lon - eLon) * scaleFactor,
   }));
 
-  // ── ÉTAPE 2 : Homothétie pure pour TOUTES les typologies ──
-  // Garanti 100% à l'intérieur de l'enveloppe, suit la morphologie de la parcelle
-  // La typologie recommandée (BLOC, BARRE, EN_U, EN_L) est affichée dans la légende
-  const finalM = homoM;
   const effectiveArea = envelopeArea * scaleFactor * scaleFactor;
-  console.log(`│ ${typology}: homothétie de l'enveloppe, area≈${effectiveArea.toFixed(0)}m² (target=${fp_m2})`);
-  console.log(`│ Recommandation typologique : ${typology} — ${reason}`);
-
-  // ── Conversion en GPS ──
-  const result = finalM.map(m => ({
-    lat: eLat + m.y / R_EARTH * 180 / Math.PI,
-    lon: eLon + m.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
-  }));
-
   result.forEach((c, i) => console.log(`│ Massing[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+  console.log(`│ area≈${effectiveArea.toFixed(0)}m² (target=${fp_m2}m²)`);
   console.log(`│ Typology: ${typology} — ${reason}`);
-  console.log(`└── end computeMassingPolygon v54.2 ──`);
+  console.log(`└── end computeMassingPolygon v54.3 ──`);
 
   result._typology = typology;
   result._reason = reason;
