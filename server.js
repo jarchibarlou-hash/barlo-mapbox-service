@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "54.2-safe" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "54.3-homo" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -550,78 +550,13 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     y: (p.y - offsetY) * scaleFactor + offsetY,
   }));
 
-  // ── ÉTAPE 2 : Déformation typologique (DANS les limites de l'homothétie) ──
-  let finalM;
-  if (typology === "BARRE") {
-    // Étirer sur l'axe long, comprimer sur l'axe court
-    // On travaille en coordonnées alignées pour étirer
-    const homoAligned = homoM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
-    const hMinY = Math.min(...homoAligned.map(p => p.y)), hMaxY = Math.max(...homoAligned.map(p => p.y));
-    const hMinX = Math.min(...homoAligned.map(p => p.x)), hMaxX = Math.max(...homoAligned.map(p => p.x));
-    const currentW = hMaxX - hMinX, currentD = hMaxY - hMinY;
-    const targetDepth = Math.min(15, currentD * 0.55);
-    const scaleY = targetDepth / Math.max(1, currentD);
-    const scaleX = 1 / scaleY; // Compenser pour garder l'aire
-    // Clamp scaleX pour ne pas déborder de l'enveloppe
-    const maxScaleX = (bboxW * 0.95) / Math.max(1, currentW);
-    const finalScaleX = Math.min(scaleX, maxScaleX);
-    const finalScaleY = (scaleFactor * scaleFactor) / (finalScaleX * scaleFactor * scaleFactor / scaleFactor);
-    const barreAligned = homoAligned.map(p => ({ x: p.x * Math.min(scaleX, maxScaleX), y: p.y * scaleY }));
-    // Rotation inverse
-    const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
-    finalM = barreAligned.map(p => ({ x: p.x * cosB - p.y * sinB, y: p.x * sinB + p.y * cosB }));
-    console.log(`│ BARRE deformation: scaleX=${Math.min(scaleX, maxScaleX).toFixed(2)} scaleY=${scaleY.toFixed(2)}`);
-  } else if (typology === "EN_U") {
-    // U = homothétie pleine MOINS une encoche rectangulaire (cour intérieure)
-    // On prend l'homothétie comme contour extérieur, et on découpe la cour
-    const homoAligned = homoM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
-    const hMinX = Math.min(...homoAligned.map(p => p.x)), hMaxX = Math.max(...homoAligned.map(p => p.x));
-    const hMinY = Math.min(...homoAligned.map(p => p.y)), hMaxY = Math.max(...homoAligned.map(p => p.y));
-    const W = hMaxX - hMinX, H = hMaxY - hMinY;
-    const wingW = Math.min(13, W * 0.25); // épaisseur des ailes
-    const barH = Math.min(13, H * 0.30);  // épaisseur barre de base
-    // Cour : rectangle intérieur ouvert vers le haut
-    const cx = (hMinX + hMaxX) / 2, cy = (hMinY + hMaxY) / 2;
-    // 8 points du U (en coords alignées, centrées)
-    const uPts = [
-      { x: hMinX, y: hMinY },                    // 0 bas gauche
-      { x: hMaxX, y: hMinY },                    // 1 bas droite
-      { x: hMaxX, y: hMaxY },                    // 2 haut droite ext
-      { x: hMaxX - wingW, y: hMaxY },            // 3 haut droite int
-      { x: hMaxX - wingW, y: hMinY + barH },     // 4 cour droite
-      { x: hMinX + wingW, y: hMinY + barH },     // 5 cour gauche
-      { x: hMinX + wingW, y: hMaxY },            // 6 haut gauche int
-      { x: hMinX, y: hMaxY },                    // 7 haut gauche ext
-    ];
-    const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
-    finalM = uPts.map(p => ({ x: p.x * cosB - p.y * sinB, y: p.x * sinB + p.y * cosB }));
-    const uArea = W * barH + 2 * wingW * (H - barH);
-    console.log(`│ EN_U: W=${W.toFixed(1)} H=${H.toFixed(1)} wingW=${wingW.toFixed(1)} barH=${barH.toFixed(1)} area≈${uArea.toFixed(0)}m²`);
-  } else if (typology === "EN_L") {
-    // L = homothétie découpée : on garde 2 ailes
-    const homoAligned = homoM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
-    const hMinX = Math.min(...homoAligned.map(p => p.x)), hMaxX = Math.max(...homoAligned.map(p => p.x));
-    const hMinY = Math.min(...homoAligned.map(p => p.y)), hMaxY = Math.max(...homoAligned.map(p => p.y));
-    const W = hMaxX - hMinX, H = hMaxY - hMinY;
-    const wingW = Math.min(13, W * 0.35);
-    const wingH = Math.min(13, H * 0.35);
-    const lPts = [
-      { x: hMinX, y: hMinY },                    // 0 bas gauche
-      { x: hMaxX, y: hMinY },                    // 1 bas droite
-      { x: hMaxX, y: hMinY + wingH },            // 2 fin aile horiz
-      { x: hMinX + wingW, y: hMinY + wingH },    // 3 coin intérieur L
-      { x: hMinX + wingW, y: hMaxY },            // 4 haut aile vert int
-      { x: hMinX, y: hMaxY },                    // 5 haut aile vert ext
-    ];
-    const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
-    finalM = lPts.map(p => ({ x: p.x * cosB - p.y * sinB, y: p.x * sinB + p.y * cosB }));
-    const lArea = W * wingH + wingW * (H - wingH);
-    console.log(`│ EN_L: W=${W.toFixed(1)} H=${H.toFixed(1)} wingW=${wingW.toFixed(1)} wingH=${wingH.toFixed(1)} area≈${lArea.toFixed(0)}m²`);
-  } else {
-    // BLOC / EXTENSION : homothétie pure (suit la forme de la parcelle)
-    finalM = homoM;
-    console.log(`│ ${typology}: homothétie pure, area≈${(envelopeArea * scaleFactor * scaleFactor).toFixed(0)}m²`);
-  }
+  // ── ÉTAPE 2 : Homothétie pure pour TOUTES les typologies ──
+  // Garanti 100% à l'intérieur de l'enveloppe, suit la morphologie de la parcelle
+  // La typologie recommandée (BLOC, BARRE, EN_U, EN_L) est affichée dans la légende
+  const finalM = homoM;
+  const effectiveArea = envelopeArea * scaleFactor * scaleFactor;
+  console.log(`│ ${typology}: homothétie de l'enveloppe, area≈${effectiveArea.toFixed(0)}m² (target=${fp_m2})`);
+  console.log(`│ Recommandation typologique : ${typology} — ${reason}`);
 
   // ── Conversion en GPS ──
   const result = finalM.map(m => ({
@@ -1411,7 +1346,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v54.2-safe on port ${PORT}`);
+  console.log(`BARLO v54.3-homo on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
