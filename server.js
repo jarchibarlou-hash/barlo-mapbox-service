@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "54-envelope" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "54.2-safe" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -483,158 +483,15 @@ function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_
   return { typology, reason };
 }
 
-// ─── GÉNÉRATEURS DE POLYGONES PAR TYPOLOGIE ─────────────────────────────────
-// Tous travaillent en coordonnées locales (mètres) relatives au centroïde de l'enveloppe,
-// alignées sur le plus long côté (axe X = longueur, axe Y = profondeur).
-// Retournent un tableau de {x, y} en mètres.
+// ─── POLYGONE GPS DU BÂTIMENT MASSING (v54.2 — ENVELOPPE-SAFE) ──────────────
+// Approche hybride : homothétie de l'enveloppe (GARANTI à l'intérieur) + forme typologique
+// Le polygone massing ne peut JAMAIS déborder de l'enveloppe constructible.
 
-function generateBlocPoly(fp_m2, bboxW, bboxD) {
-  // Rectangle compact, ratio ~1:1.3, centré dans la bbox
-  const targetRatio = 1.3;
-  let w = Math.sqrt(fp_m2 * targetRatio);
-  let d = fp_m2 / w;
-  // Clamp dans la bbox avec marge 5%
-  w = Math.min(w, bboxW * 0.95);
-  d = Math.min(d, bboxD * 0.95);
-  // Reajuster si clamped
-  if (w * d < fp_m2 * 0.8) {
-    w = Math.min(Math.sqrt(fp_m2 * targetRatio), bboxW * 0.95);
-    d = Math.min(fp_m2 / w, bboxD * 0.95);
-  }
-  const hw = w / 2, hd = d / 2;
-  return {
-    points: [
-      { x: -hw, y: -hd }, { x: hw, y: -hd },
-      { x: hw, y: hd }, { x: -hw, y: hd },
-    ],
-    actualArea: w * d,
-  };
-}
-
-function generateBarrePoly(fp_m2, bboxW, bboxD) {
-  // Lamelle : profondeur fixe 12-16m, longueur = fp/profondeur
-  let depth = Math.min(15, bboxD * 0.6);
-  depth = Math.max(10, depth);
-  let length = fp_m2 / depth;
-  length = Math.min(length, bboxW * 0.95);
-  // Reajuster la profondeur si la longueur est saturée
-  if (length * depth < fp_m2 * 0.8) {
-    depth = Math.min(fp_m2 / length, bboxD * 0.90);
-  }
-  const hw = length / 2, hd = depth / 2;
-  return {
-    points: [
-      { x: -hw, y: -hd }, { x: hw, y: -hd },
-      { x: hw, y: hd }, { x: -hw, y: hd },
-    ],
-    actualArea: length * depth,
-  };
-}
-
-function generateEnUPoly(fp_m2, bboxW, bboxD) {
-  // U ouvert vers le haut (y positif = nord/fond de parcelle)
-  // ┌──┐     ┌──┐
-  // │  │     │  │   ← ailes (wings)
-  // │  └─────┘  │
-  // └───────────┘   ← barre de base
-  const wingDepth = Math.min(13, bboxW * 0.22);  // épaisseur des ailes
-  const barDepth = Math.min(13, bboxD * 0.22);    // épaisseur de la barre
-  // Dimensions extérieures (ajustées à la bbox)
-  let W = Math.min(bboxW * 0.90, Math.sqrt(fp_m2 * 1.8));
-  let H = Math.min(bboxD * 0.90, fp_m2 / (2 * wingDepth + (W - 2 * wingDepth) > 0 ? barDepth : W));
-
-  // Aire du U = W*barDepth + 2*wingDepth*(H - barDepth)
-  // On résout H pour obtenir l'aire cible
-  const barArea = W * barDepth;
-  const wingArea = fp_m2 - barArea;
-  if (wingArea > 0 && wingDepth > 0) {
-    H = barDepth + wingArea / (2 * wingDepth);
-  }
-  H = Math.min(H, bboxD * 0.90);
-  W = Math.min(W, bboxW * 0.90);
-
-  const hw = W / 2, hh = H / 2;
-  const wd = wingDepth;
-  const bd = barDepth;
-
-  // Polygone anti-horaire depuis bas-gauche
-  const points = [
-    { x: -hw,      y: -hh },          // 0: bas gauche
-    { x: hw,       y: -hh },          // 1: bas droite
-    { x: hw,       y: -hh + H },      // 2: haut droite extérieur
-    { x: hw - wd,  y: -hh + H },      // 3: haut droite intérieur
-    { x: hw - wd,  y: -hh + bd },     // 4: intérieur droite
-    { x: -hw + wd, y: -hh + bd },     // 5: intérieur gauche
-    { x: -hw + wd, y: -hh + H },      // 6: haut gauche intérieur
-    { x: -hw,      y: -hh + H },      // 7: haut gauche extérieur
-  ];
-  const actualArea = W * bd + 2 * wd * (H - bd);
-  return { points, actualArea };
-}
-
-function generateEnLPoly(fp_m2, bboxW, bboxD) {
-  // L : aile horizontale (bas) + aile verticale (gauche)
-  // ┌──┐
-  // │  │
-  // │  └──────┐
-  // └─────────┘
-  const wingThick = Math.min(13, Math.min(bboxW, bboxD) * 0.30);
-
-  // Aile horizontale : pleine largeur, épaisseur wingThick
-  let totalW = Math.min(bboxW * 0.88, Math.sqrt(fp_m2 * 2.0));
-  // Aile verticale : pleine hauteur, épaisseur wingThick
-  // Aire = totalW * wingThick + wingThick * (totalH - wingThick)
-  // fp = wingThick * (totalW + totalH - wingThick)
-  // totalH = fp/wingThick - totalW + wingThick
-  let totalH = fp_m2 / wingThick - totalW + wingThick;
-  totalH = Math.max(wingThick * 1.5, Math.min(totalH, bboxD * 0.88));
-  totalW = Math.min(totalW, bboxW * 0.88);
-
-  const hw = totalW / 2, hh = totalH / 2;
-  const wt = wingThick;
-
-  // Polygone — L avec coin bas-gauche
-  const points = [
-    { x: -hw,      y: -hh },           // 0: bas gauche
-    { x: hw,       y: -hh },           // 1: bas droite
-    { x: hw,       y: -hh + wt },      // 2: fin aile horizontale droite
-    { x: -hw + wt, y: -hh + wt },      // 3: coin intérieur du L
-    { x: -hw + wt, y: hh },            // 4: haut aile verticale intérieur
-    { x: -hw,      y: hh },            // 5: haut aile verticale extérieur
-  ];
-  const actualArea = totalW * wt + wt * (totalH - wt);
-  return { points, actualArea };
-}
-
-function generateExtensionPoly(fp_m2, bboxW, bboxD) {
-  // Extension/réno : barre accolée au côté long (bas de l'enveloppe = côté rue)
-  // Positionnée en bas de la bbox pour laisser l'existant au centre/haut
-  let depth = Math.min(14, bboxD * 0.40);
-  depth = Math.max(8, depth);
-  let length = fp_m2 / depth;
-  length = Math.min(length, bboxW * 0.90);
-  if (length * depth < fp_m2 * 0.8) {
-    depth = Math.min(fp_m2 / length, bboxD * 0.45);
-  }
-  const hw = length / 2;
-  // Décalé vers le bas de la bbox (y négatif = côté rue/front)
-  const yBottom = -bboxD / 2 * 0.85;
-  const yTop = yBottom + depth;
-  return {
-    points: [
-      { x: -hw, y: yBottom }, { x: hw, y: yBottom },
-      { x: hw, y: yTop }, { x: -hw, y: yTop },
-    ],
-    actualArea: length * depth,
-  };
-}
-
-// ─── POLYGONE GPS DU BÂTIMENT MASSING (v54 — TYPOLOGIE ARCHITECTURALE) ──────
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2 } = context;
 
-  console.log(`┌── computeMassingPolygon v54 (typology) ──`);
+  console.log(`┌── computeMassingPolygon v54.2 (envelope-safe) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²`);
 
   // ── Centroïde GPS de l'enveloppe ──
@@ -644,7 +501,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // ── Convertir enveloppe en mètres (ref = centroïde) ──
   const envM = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon));
 
-  // ── Trouver le plus long côté pour aligner l'axe local ──
+  // ── Trouver le plus long côté et la bbox ──
   let longest = 0, edgeAngle = 0;
   for (let i = 0; i < envM.length; i++) {
     const j = (i + 1) % envM.length;
@@ -652,8 +509,6 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len > longest) { longest = len; edgeAngle = Math.atan2(dy, dx); }
   }
-
-  // ── Rotation pour aligner le plus long côté sur l'axe X ──
   const cosA = Math.cos(-edgeAngle), sinA = Math.sin(-edgeAngle);
   const aligned = envM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
   const minX = Math.min(...aligned.map(p => p.x)), maxX = Math.max(...aligned.map(p => p.x));
@@ -662,7 +517,6 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const envAspect = bboxW / Math.max(1, bboxD);
 
   console.log(`│ Envelope bbox: ${bboxW.toFixed(1)}m × ${bboxD.toFixed(1)}m (aspect=${envAspect.toFixed(2)})`);
-  console.log(`│ Longest edge angle: ${(edgeAngle * 180 / Math.PI).toFixed(1)}°`);
 
   // ── Sélection de la typology ──
   const { typology, reason } = selectTypology({
@@ -671,36 +525,114 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     site_saturation, project_type, existing_fp_m2: Number(existing_fp_m2) || 0,
   });
 
-  // ── Génération du polygone en coordonnées locales (mètres, alignées) ──
-  let localResult;
-  switch (typology) {
-    case "BARRE":     localResult = generateBarrePoly(fp_m2, bboxW, bboxD); break;
-    case "EN_U":      localResult = generateEnUPoly(fp_m2, bboxW, bboxD); break;
-    case "EN_L":      localResult = generateEnLPoly(fp_m2, bboxW, bboxD); break;
-    case "EXTENSION": localResult = generateExtensionPoly(fp_m2, bboxW, bboxD); break;
-    default:          localResult = generateBlocPoly(fp_m2, bboxW, bboxD); break;
-  }
+  // ── ÉTAPE 1 : Homothétie de base (garanti à l'intérieur de l'enveloppe) ──
+  // Cap à 0.88 pour garantir une marge visible sur tous les côtés (recul rue inclus)
+  const scaleFactor = Math.min(0.88, Math.sqrt(Math.max(50, fp_m2) / Math.max(1, envelopeArea)));
+  console.log(`│ Base scaleFactor = ${scaleFactor.toFixed(4)} (√${fp_m2}/${Math.round(envelopeArea)})`);
 
-  console.log(`│ ${typology}: ${localResult.points.length} vertices, area=${localResult.actualArea.toFixed(0)}m² (target=${fp_m2})`);
+  // ── Décalage vers l'arrière de la parcelle (recul rue principale) ──
+  // On pousse le centre de l'homothétie vers l'arrière pour éloigner le bâtiment du front de rue
+  // Le "front" est estimé comme le côté le plus proche de la rue (bord min Y en coords alignées)
+  const homoAlignedCheck = envM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+  const envCenterY = (Math.min(...homoAlignedCheck.map(p => p.y)) + Math.max(...homoAlignedCheck.map(p => p.y))) / 2;
+  const envRangeY = Math.max(...homoAlignedCheck.map(p => p.y)) - Math.min(...homoAlignedCheck.map(p => p.y));
+  // Décalage de 12% de la profondeur vers l'arrière (Y positif = fond de parcelle)
+  const backOffset = envRangeY * 0.12;
+  // Appliquer le décalage au centroïde en coords originales (rotation inverse)
+  const cosB0 = Math.cos(edgeAngle), sinB0 = Math.sin(edgeAngle);
+  const offsetX = 0 * cosB0 - backOffset * sinB0;  // offset en X monde
+  const offsetY = 0 * sinB0 + backOffset * cosB0;  // offset en Y monde
+  console.log(`│ Back offset: ${backOffset.toFixed(1)}m (12% of depth=${envRangeY.toFixed(1)}m)`);
 
-  // ── Rotation inverse (remettre dans l'orientation originale) ──
-  const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
-  const worldPts = localResult.points.map(p => ({
-    x: p.x * cosB - p.y * sinB,
-    y: p.x * sinB + p.y * cosB,
+  // Points homothétiques en mètres, décalés vers l'arrière
+  const homoM = envM.map(p => ({
+    x: (p.x - offsetX) * scaleFactor + offsetX,
+    y: (p.y - offsetY) * scaleFactor + offsetY,
   }));
 
+  // ── ÉTAPE 2 : Déformation typologique (DANS les limites de l'homothétie) ──
+  let finalM;
+  if (typology === "BARRE") {
+    // Étirer sur l'axe long, comprimer sur l'axe court
+    // On travaille en coordonnées alignées pour étirer
+    const homoAligned = homoM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+    const hMinY = Math.min(...homoAligned.map(p => p.y)), hMaxY = Math.max(...homoAligned.map(p => p.y));
+    const hMinX = Math.min(...homoAligned.map(p => p.x)), hMaxX = Math.max(...homoAligned.map(p => p.x));
+    const currentW = hMaxX - hMinX, currentD = hMaxY - hMinY;
+    const targetDepth = Math.min(15, currentD * 0.55);
+    const scaleY = targetDepth / Math.max(1, currentD);
+    const scaleX = 1 / scaleY; // Compenser pour garder l'aire
+    // Clamp scaleX pour ne pas déborder de l'enveloppe
+    const maxScaleX = (bboxW * 0.95) / Math.max(1, currentW);
+    const finalScaleX = Math.min(scaleX, maxScaleX);
+    const finalScaleY = (scaleFactor * scaleFactor) / (finalScaleX * scaleFactor * scaleFactor / scaleFactor);
+    const barreAligned = homoAligned.map(p => ({ x: p.x * Math.min(scaleX, maxScaleX), y: p.y * scaleY }));
+    // Rotation inverse
+    const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
+    finalM = barreAligned.map(p => ({ x: p.x * cosB - p.y * sinB, y: p.x * sinB + p.y * cosB }));
+    console.log(`│ BARRE deformation: scaleX=${Math.min(scaleX, maxScaleX).toFixed(2)} scaleY=${scaleY.toFixed(2)}`);
+  } else if (typology === "EN_U") {
+    // U = homothétie pleine MOINS une encoche rectangulaire (cour intérieure)
+    // On prend l'homothétie comme contour extérieur, et on découpe la cour
+    const homoAligned = homoM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+    const hMinX = Math.min(...homoAligned.map(p => p.x)), hMaxX = Math.max(...homoAligned.map(p => p.x));
+    const hMinY = Math.min(...homoAligned.map(p => p.y)), hMaxY = Math.max(...homoAligned.map(p => p.y));
+    const W = hMaxX - hMinX, H = hMaxY - hMinY;
+    const wingW = Math.min(13, W * 0.25); // épaisseur des ailes
+    const barH = Math.min(13, H * 0.30);  // épaisseur barre de base
+    // Cour : rectangle intérieur ouvert vers le haut
+    const cx = (hMinX + hMaxX) / 2, cy = (hMinY + hMaxY) / 2;
+    // 8 points du U (en coords alignées, centrées)
+    const uPts = [
+      { x: hMinX, y: hMinY },                    // 0 bas gauche
+      { x: hMaxX, y: hMinY },                    // 1 bas droite
+      { x: hMaxX, y: hMaxY },                    // 2 haut droite ext
+      { x: hMaxX - wingW, y: hMaxY },            // 3 haut droite int
+      { x: hMaxX - wingW, y: hMinY + barH },     // 4 cour droite
+      { x: hMinX + wingW, y: hMinY + barH },     // 5 cour gauche
+      { x: hMinX + wingW, y: hMaxY },            // 6 haut gauche int
+      { x: hMinX, y: hMaxY },                    // 7 haut gauche ext
+    ];
+    const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
+    finalM = uPts.map(p => ({ x: p.x * cosB - p.y * sinB, y: p.x * sinB + p.y * cosB }));
+    const uArea = W * barH + 2 * wingW * (H - barH);
+    console.log(`│ EN_U: W=${W.toFixed(1)} H=${H.toFixed(1)} wingW=${wingW.toFixed(1)} barH=${barH.toFixed(1)} area≈${uArea.toFixed(0)}m²`);
+  } else if (typology === "EN_L") {
+    // L = homothétie découpée : on garde 2 ailes
+    const homoAligned = homoM.map(p => ({ x: p.x * cosA - p.y * sinA, y: p.x * sinA + p.y * cosA }));
+    const hMinX = Math.min(...homoAligned.map(p => p.x)), hMaxX = Math.max(...homoAligned.map(p => p.x));
+    const hMinY = Math.min(...homoAligned.map(p => p.y)), hMaxY = Math.max(...homoAligned.map(p => p.y));
+    const W = hMaxX - hMinX, H = hMaxY - hMinY;
+    const wingW = Math.min(13, W * 0.35);
+    const wingH = Math.min(13, H * 0.35);
+    const lPts = [
+      { x: hMinX, y: hMinY },                    // 0 bas gauche
+      { x: hMaxX, y: hMinY },                    // 1 bas droite
+      { x: hMaxX, y: hMinY + wingH },            // 2 fin aile horiz
+      { x: hMinX + wingW, y: hMinY + wingH },    // 3 coin intérieur L
+      { x: hMinX + wingW, y: hMaxY },            // 4 haut aile vert int
+      { x: hMinX, y: hMaxY },                    // 5 haut aile vert ext
+    ];
+    const cosB = Math.cos(edgeAngle), sinB = Math.sin(edgeAngle);
+    finalM = lPts.map(p => ({ x: p.x * cosB - p.y * sinB, y: p.x * sinB + p.y * cosB }));
+    const lArea = W * wingH + wingW * (H - wingH);
+    console.log(`│ EN_L: W=${W.toFixed(1)} H=${H.toFixed(1)} wingW=${wingW.toFixed(1)} wingH=${wingH.toFixed(1)} area≈${lArea.toFixed(0)}m²`);
+  } else {
+    // BLOC / EXTENSION : homothétie pure (suit la forme de la parcelle)
+    finalM = homoM;
+    console.log(`│ ${typology}: homothétie pure, area≈${(envelopeArea * scaleFactor * scaleFactor).toFixed(0)}m²`);
+  }
+
   // ── Conversion en GPS ──
-  const result = worldPts.map(m => ({
+  const result = finalM.map(m => ({
     lat: eLat + m.y / R_EARTH * 180 / Math.PI,
     lon: eLon + m.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
   }));
 
   result.forEach((c, i) => console.log(`│ Massing[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`│ Typology: ${typology} — ${reason}`);
-  console.log(`└── end computeMassingPolygon v54 ──`);
+  console.log(`└── end computeMassingPolygon v54.2 ──`);
 
-  // Ajouter la typologie au résultat pour l'overlay
   result._typology = typology;
   result._reason = reason;
   return result;
@@ -1479,7 +1411,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v54-envelope on port ${PORT}`);
+  console.log(`BARLO v54.2-safe on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
