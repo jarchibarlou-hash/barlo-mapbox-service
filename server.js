@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "52.5-stable" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "53-massing" }));
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -65,6 +65,16 @@ function computeZoom(coords, cLat, cLon) {
   const mpp = (ext * 3.0) / 1280;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(17.5, Math.max(16, Math.round(z * 4) / 4));
+}
+function computeZoomMassing(coords, cLat, cLon) {
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  const ext = Math.max(
+    Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
+    Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
+  );
+  const mpp = (ext * 1.8) / 1280;
+  const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
+  return Math.min(18, Math.max(16.5, Math.round(z * 4) / 4));
 }
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -598,9 +608,10 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   map.addControl=function(){};
   map.on("style.load",()=>{
     map.setLight({anchor:"map",color:"#fff8f0",intensity:0.55,position:[1.15,195,40]});
-    map.addLayer({id:"3d-buildings",source:"composite","source-layer":"building",filter:["==","extrude","true"],type:"fill-extrusion",minzoom:13,paint:{
+    const parcelPoly=${JSON.stringify(toGeoJSON(parcelCoords))};
+    map.addLayer({id:"3d-buildings",source:"composite","source-layer":"building",filter:["all",["==","extrude","true"],["!",["within",parcelPoly]]],type:"fill-extrusion",minzoom:13,paint:{
       "fill-extrusion-color":["interpolate",["linear"],["coalesce",["get","height"],6],0,"#ffffff",4,"#f5f3ef",10,"#e8e4dc",20,"#c8c4bc",40,"#9a9690"],
-      "fill-extrusion-height":["case",["has","height"],["*",["get","height"],1.6],8],
+      "fill-extrusion-height":["case",["has","height"],["*",["get","height"],1.6],["+",3.2,["*",3.2,["%",["to-number",["id"]],4]]]],
       "fill-extrusion-base":["case",["has","min_height"],["*",["get","min_height"],1.6],0],
       "fill-extrusion-opacity":1.0,"fill-extrusion-vertical-gradient":true
     }});
@@ -940,7 +951,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v52.5 ═══", JSON.stringify(req.body).slice(0, 300));
+  console.log("═══ /generate-massing v53 ═══", JSON.stringify(req.body).slice(0, 300));
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
@@ -1056,8 +1067,8 @@ app.post("/generate-massing", async (req, res) => {
   coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`└── end ENVELOPE DIAGNOSTIC ──`);
   const bearing = computeBearing(coords, cLat, cLon);
-  const zoom = computeZoom(coords, cLat, cLon);
-  console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
+  const zoom = computeZoomMassing(coords, cLat, cLon);
+  console.log(`Map view (massing zoom): bearing=${bearing}° zoom=${zoom}`);
   const massingCoords = computeMassingPolygon(envelopeCoords, cLat, cLon, bearing, mw, md, ox, oy);
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -1159,7 +1170,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v52.5-stable on port ${PORT}`);
+  console.log(`BARLO v53-massing on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
