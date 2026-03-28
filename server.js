@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.4" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.5" }));
 // ─── DIAGNOSTIC : tester compute-scenarios avec des valeurs par défaut ──────
 app.get("/diag-scenarios", (req, res) => {
   const sa = Number(req.query.site_area) || 1950;
@@ -1680,7 +1680,8 @@ app.post("/generate", async (req, res) => {
     const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     if (ue) return res.status(500).json({ error: ue.message });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
-    let enhancedUrl = pd.publicUrl;
+    const cacheBust2 = `?v=${Date.now()}`;
+    let enhancedUrl = pd.publicUrl + cacheBust2;
     if (OPENAI_API_KEY) {
       try {
         const resizedCanvas = createCanvas(1024, 1024);
@@ -1724,7 +1725,7 @@ app.post("/generate", async (req, res) => {
         }
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
-    return res.json({ ok: true, public_url: pd.publicUrl, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
+    return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
     console.error("Error:", e.message || e);
     return res.status(500).json({ error: String(e.message || e) });
@@ -1863,7 +1864,7 @@ app.post("/generate-massing", async (req, res) => {
   envelopeAreaReal = Math.abs(envelopeAreaReal) / 2;
   console.log(`Envelope real area (shoelace): ${envelopeAreaReal.toFixed(1)}m²`);
   const bearing = computeBearing(coords, cLat, cLon);
-  const zoom = computeZoom(coords, cLat, cLon);
+  const zoom = computeZoomMassing(coords, cLat, cLon); // v56.5: zoom plus serré pour le massing
   console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
   const massingCoords = computeMassingPolygon(envelopeCoords, fp, envelopeAreaReal, {
     massing_mode: compute_scenario ? (label === "A" ? "BALANCED" : label === "B" ? "SPREAD" : "COMPACT") : "BALANCED",
@@ -1905,7 +1906,8 @@ app.post("/generate-massing", async (req, res) => {
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
-    let enhancedUrl = pd.publicUrl;
+    const cacheBust = `?v=${Date.now()}`;
+    let enhancedUrl = pd.publicUrl + cacheBust;
     if (OPENAI_API_KEY) {
       try {
         const resizedCanvas = createCanvas(1024, 1024);
@@ -1961,8 +1963,13 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, public_url: pd.publicUrl, enhanced_url: enhancedUrl,
-      massing_label: label, fp_m2: fp, mw, md, offset_x: ox, offset_y: oy,
+      ok: true, cached: false, server_version: "56.5",
+      public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
+      massing_label: label, fp_m2: fp,
+      actual_typology: massingCoords._typology || "BLOC",
+      actual_envelope_w: actualEnvW.toFixed(1), actual_envelope_d: actualEnvD.toFixed(1),
+      actual_envelope_area: envelopeAreaReal.toFixed(0),
+      sheet_envelope_w: envW, sheet_envelope_d: envD,
       levels, total_height: totalH, commerce_levels: commerceLevels,
       scenario_role: scenarioRole, accent_color: accentColor,
       centroid: { lat: cLat, lon: cLon },
@@ -1977,7 +1984,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v56.4 on port ${PORT}`);
+  console.log(`BARLO v56.5 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
