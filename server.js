@@ -672,7 +672,7 @@ function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_
 
   console.log(`┌── selectTypology v56.2 ──`);
   console.log(`│ fillRatio=${fillRatio.toFixed(3)} envAspect=${envAspect.toFixed(2)} mode=${massing_mode}`);
-  console.log(`│ streetBearing=${streetBearing.toFixed(0)}° isEW=${isStreetEW} isNS=${isStreetNS} barreSolar=${barreSolarScore}`);
+  console.log(`│ streetBearing=${streetBearing.toFixed(0)}° axisDeviation=${axisDeviation.toFixed(0)}° barreSolar=${barreSolarScore.toFixed(2)} facesWest=${streetFacesWest}`);
   console.log(`│ driver=${primary_driver} levels=${levels} standing=${standing_level}`);
   console.log(`│ program=${program_main} saturation=${site_saturation} project=${project_type}`);
 
