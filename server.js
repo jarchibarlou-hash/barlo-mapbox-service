@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.3" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.4" }));
 // ─── DIAGNOSTIC : tester compute-scenarios avec des valeurs par défaut ──────
 app.get("/diag-scenarios", (req, res) => {
   const sa = Number(req.query.site_area) || 1950;
@@ -35,7 +35,7 @@ app.get("/diag-scenarios", (req, res) => {
     density_pressure_factor: 1, driver_intensity: "MEDIUM",
   });
   res.json({
-    version: "56.3", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
+    version: "56.4", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
     CES: ZONING_CES[zt], COS: ZONING_COS[zt],
     fp_A: scenarios.A.fp_m2, fp_B: scenarios.B.fp_m2, fp_C: scenarios.C.fp_m2,
     levels_A: scenarios.A.levels, levels_B: scenarios.B.levels, levels_C: scenarios.C.levels,
@@ -860,23 +860,20 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const envM = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon));
   envelopeCoords.forEach((c, i) => console.log(`│ Env[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
 
-  // ── 2. Détecter la façade rue ──
-  // Méthode améliorée : le bord le PLUS LONG est probablement le front de rue
-  // (les côtés de parcelle sont généralement plus courts que le front)
-  // On combine avec la latitude max pour départager
+  // ── 2. Détecter la façade rue (v56.3 — longueur seule) ──
+  // Le bord le PLUS LONG de l'enveloppe est le front de rue.
+  // En urbanisme ouest-africain, les parcelles ont leur côté le plus large
+  // face à la rue. La latitude n'est PAS un bon indicateur (toutes les parcelles
+  // sont presque à la même latitude en zone tropicale).
   let frontIdx = 0;
-  let bestScore = -Infinity;
+  let maxEdgeLen = 0;
   for (let i = 0; i < envelopeCoords.length; i++) {
     const j = (i + 1) % envelopeCoords.length;
     const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
     const edgeLen = Math.sqrt(dx * dx + dy * dy);
-    const midLat = (envelopeCoords[i].lat + envelopeCoords[j].lat) / 2;
-    // Score = longueur × 0.4 + latitude × 0.6 (normalised)
-    // Les bords longs et au nord (latitude haute) sont probablement le front de rue
-    const latNorm = (midLat - eLat) / 0.001; // normaliser autour du centroïde
-    const score = edgeLen * 0.4 + latNorm * 100 * 0.6;
-    if (score > bestScore) { bestScore = score; frontIdx = i; }
+    if (edgeLen > maxEdgeLen) { maxEdgeLen = edgeLen; frontIdx = i; }
   }
+  console.log(`│ Front edge: longest edge [${frontIdx}→${(frontIdx+1)%envM.length}] len=${maxEdgeLen.toFixed(1)}m`);
   const fi = frontIdx, fj = (fi + 1) % envM.length;
   const sDx = envM[fj].x - envM[fi].x, sDy = envM[fj].y - envM[fi].y;
   const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
@@ -971,9 +968,9 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // pour s'adapter aux formes irrégulières
   const targetCU = envCentroidU;
 
-  // ── 6. v56 : MESURER l'espace RÉEL à la position cible ──
+  // ── 6. v56.3 : MESURER l'espace RÉEL à la position cible ──
   // Scanner l'enveloppe à la profondeur cible pour trouver la vraie largeur
-  const margin = 2.0; // marge de sécurité depuis les bords
+  const margin = 4.0; // v56.3: marge augmentée (4m) pour garantir le respect des retraits
   const crossW = envelopeWidthAtV(targetCV, envLocal);
   const crossD = envelopeDepthAtU(targetCU, envLocal);
 
@@ -1023,8 +1020,9 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   } else if (typology === "EN_U") {
     const wingPct = 0.22;
     const backPct = 0.28;
-    bW = Math.min(maxW, Math.max(18, maxW * 0.85));
-    bD = Math.min(maxD, Math.max(14, maxD * 0.80));
+    // v56.3: réduire pour containment
+    bW = Math.min(maxW * 0.90, Math.max(18, maxW * 0.75));
+    bD = Math.min(maxD * 0.90, Math.max(14, maxD * 0.70));
     let wing = bW * wingPct;
     let back = bD * backPct;
     let aU = bW * back + 2 * wing * (bD - back);
@@ -1053,8 +1051,9 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   } else if (typology === "EN_L") {
     const armPctW = 0.35;
     const armPctD = 0.35;
-    bW = Math.min(maxW, Math.max(14, maxW * 0.80));
-    bD = Math.min(maxD, Math.max(14, maxD * 0.75));
+    // v56.3: réduire les dimensions initiales pour garantir le containment
+    bW = Math.min(maxW * 0.90, Math.max(14, maxW * 0.70));
+    bD = Math.min(maxD * 0.90, Math.max(14, maxD * 0.65));
     let aW = bW * armPctW;
     let aD = bD * armPctD;
     let aL = bW * aD + aW * (bD - aD);
@@ -1108,8 +1107,16 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   function tryPosition(center, scale) {
     const pts = bPts.map(p => ({ u: p.u * scale + center.u, v: p.v * scale + center.v }));
     const mPts = pts.map(localToMeter);
-    const ok = mPts.every(p => ptInPoly(p.x, p.y, envM));
-    return { ok, pts, mPts };
+    // v56.3: vérifier TOUS les sommets ET les milieux des arêtes (pour les formes concaves comme le L)
+    const allInside = mPts.every(p => ptInPoly(p.x, p.y, envM));
+    if (!allInside) return { ok: false, pts, mPts };
+    // Vérifier aussi les milieux d'arêtes (un L peut avoir une arête qui traverse l'enveloppe)
+    for (let i = 0; i < mPts.length; i++) {
+      const j = (i + 1) % mPts.length;
+      const mx = (mPts[i].x + mPts[j].x) / 2, my = (mPts[i].y + mPts[j].y) / 2;
+      if (!ptInPoly(mx, my, envM)) return { ok: false, pts, mPts };
+    }
+    return { ok: true, pts, mPts };
   }
 
   // Stratégie 1 : position cible, taille pleine
@@ -1970,7 +1977,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v56.3 on port ${PORT}`);
+  console.log(`BARLO v56.4 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
