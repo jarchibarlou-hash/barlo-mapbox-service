@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.2" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.3" }));
 // ─── DIAGNOSTIC : tester compute-scenarios avec des valeurs par défaut ──────
 app.get("/diag-scenarios", (req, res) => {
   const sa = Number(req.query.site_area) || 1950;
@@ -35,7 +35,7 @@ app.get("/diag-scenarios", (req, res) => {
     density_pressure_factor: 1, driver_intensity: "MEDIUM",
   });
   res.json({
-    version: "56.2", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
+    version: "56.3", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
     CES: ZONING_CES[zt], COS: ZONING_COS[zt],
     fp_A: scenarios.A.fp_m2, fp_B: scenarios.B.fp_m2, fp_C: scenarios.C.fp_m2,
     levels_A: scenarios.A.levels, levels_B: scenarios.B.levels, levels_C: scenarios.C.levels,
@@ -60,6 +60,18 @@ function brng(p1, p2) {
 function computeEnvelope(coords, cLat, cLon, front, side, back) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const n = pts.length;
+
+  // ── v56.3 FIX: Détecter le sens de rotation (CW vs CCW) ──
+  // Shoelace sign: positif = CCW, négatif = CW
+  let windingSum = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    windingSum += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+  }
+  // Si CW (windingSum < 0), on inverse le signe de l'offset pour aller vers l'intérieur
+  const windingSign = windingSum >= 0 ? 1 : -1;
+  console.log(`│ Envelope winding: ${windingSum >= 0 ? "CCW" : "CW"} (sign=${windingSign}) sum=${windingSum.toFixed(1)}`);
+
   let maxLat = -Infinity, rb = 0;
   for (let i = 0; i < n - 1; i++) {
     const ml = (coords[i].lat + coords[(i + 1) % n].lat) / 2;
@@ -68,7 +80,9 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
   function setSB(b) { let d = ((b - rb) + 360) % 360; if (d > 180) d = 360 - d; return d < 45 ? front : d < 135 ? side : back; }
   function offSeg(p1, p2, dist) {
     const dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.sqrt(dx * dx + dy * dy) + 0.001;
-    return { p1: { x: p1.x - dy / len * dist, y: p1.y + dx / len * dist }, p2: { x: p2.x - dy / len * dist, y: p2.y + dx / len * dist } };
+    // windingSign garantit que l'offset va TOUJOURS vers l'intérieur
+    const d = dist * windingSign;
+    return { p1: { x: p1.x - dy / len * d, y: p1.y + dx / len * d }, p2: { x: p2.x - dy / len * d, y: p2.y + dx / len * d } };
   }
   function intersect(s1, s2) {
     const d1x = s1.p2.x - s1.p1.x, d1y = s1.p2.y - s1.p1.y, d2x = s2.p2.x - s2.p1.x, d2y = s2.p2.y - s2.p1.y;
@@ -80,6 +94,17 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
   const segs = [];
   for (let i = 0; i < n; i++) segs.push(offSeg(pts[i], pts[(i + 1) % n], setSB(brng(coords[i], coords[(i + 1) % n]))));
   const envM = segs.map((_, i) => intersect(segs[(i + n - 1) % n], segs[i]));
+
+  // ── v56.3 VALIDATION: vérifier que l'enveloppe est PLUS PETITE que la parcelle ──
+  let envArea = 0, parcelArea = 0;
+  for (let i = 0; i < envM.length; i++) {
+    const j = (i + 1) % envM.length;
+    envArea += envM[i].x * envM[j].y - envM[j].x * envM[i].y;
+  }
+  envArea = Math.abs(envArea) / 2;
+  parcelArea = Math.abs(windingSum) / 2;
+  console.log(`│ Envelope area=${envArea.toFixed(0)}m² vs Parcel area=${parcelArea.toFixed(0)}m² → ${envArea < parcelArea ? "OK (inside)" : "⚠ PROBLÈME (outside!)"}`);
+
   return envM.map(m => ({
     lat: cLat + m.y / R_EARTH * 180 / Math.PI,
     lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
@@ -192,15 +217,19 @@ function computeSmartScenarios({
   driver_intensity = "MEDIUM",
   strategic_position = "",
 }) {
-  // v56 FIX: TOUJOURS utiliser le bounding box (w×d) pour le calcul max_fp.
-  // L'aire polygonale (env_area_override) ne doit PAS plafonner l'emprise car
-  // un polygone irrégulier a une aire < w×d mais le bâtiment (rectangle) s'inscrit
-  // dans le bounding box, pas dans l'aire polygonale.
+  // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
+  // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
+  // ≈24×24 au lieu du vrai bbox ≈49×47), ce qui causait fp_A=342 au lieu de ~1100.
+  // La contrainte physique (bâtiment dans l'enveloppe) est gérée par
+  // computeMassingPolygon au moment du rendu, avec cross-section + containment check.
   const envelope_bbox = envelope_w * envelope_d;
   const envelope_area = env_area_override || envelope_bbox;
-  // CES → emprise au sol max (footprint) — basé sur le SITE, cappé par le BBOX
   const ces = ZONING_CES[zoning_type] || 0.50;
-  const max_fp = Math.min(ces * site_area, envelope_bbox);
+  const max_fp = ces * site_area;  // v56.3: CES seul, pas de cap par envelope_bbox erroné
+  // ⚠ Diagnostic : si envelope_bbox << ces*site_area, les dimensions Sheet sont suspectes
+  if (envelope_bbox > 0 && envelope_bbox < max_fp * 0.6) {
+    console.warn(`⚠ ENVELOPE SUSPECT: bbox=${envelope_bbox}m² (${envelope_w}×${envelope_d}) << max_fp=${max_fp}m² (CES×site). Les dimensions Sheet sont probablement fausses.`);
+  }
   // COS → surface de plancher totale max (SDP = fp × niveaux)
   const cos = ZONING_COS[zoning_type] || 1.50;
   const max_sdp = cos * site_area;
@@ -545,7 +574,7 @@ app.post("/compute-scenarios", (req, res) => {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
   // v56: LOG COMPLET des paramètres reçus par 8D pour diagnostic
-  console.log(`\n╔══ /compute-scenarios RECEIVED (v56.2) ══╗`);
+  console.log(`\n╔══ /compute-scenarios RECEIVED (v56.3) ══╗`);
   console.log(`║ site_area=${p.site_area} envelope_w=${p.envelope_w} envelope_d=${p.envelope_d}`);
   console.log(`║ envelope_area=${p.envelope_area} (${p.envelope_area ? "OVERRIDE REÇU" : "non fourni → w×d"})`);
   console.log(`║ zoning=${p.zoning_type} driver=${p.primary_driver} standing=${p.standing_level}`);
@@ -822,7 +851,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2 } = context;
 
-  console.log(`┌── computeMassingPolygon v56.2 (SOLAR + POSITION + TYPOLOGY) ──`);
+  console.log(`┌── computeMassingPolygon v56.3 (SOLAR + POSITION + TYPOLOGY + INWARD FIX) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}`);
 
   // ── 1. Centroïde et conversion mètres ──
@@ -902,33 +931,37 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   });
   console.log(`│ Typology: ${typology} — ${reason}`);
 
-  // ── 5b. POSITION CIBLE — stratégie d'implantation ──
-  // Règles d'implantation professionnelles :
-  //   - JAMAIS en front de façade directe sur la rue principale
-  //   - En retrait pour dégagement, intimité, espaces verts devant
+  // ── 5b. POSITION CIBLE — stratégie d'implantation v56.3 ──
+  // Règles d'implantation professionnelles (Afrique de l'Ouest) :
+  //   - TOUJOURS en retrait significatif de la rue principale
+  //   - Minimum ~30% de profondeur = jamais collé au front
+  //   - Espaces verts / cour / parking entre la rue et le bâtiment
   //   - Plus profond si SPREAD (jardins, terrasses), plus centré si COMPACT
-  //   - Si le soleil vient du sud et la rue est au nord → reculer au sud = bon
-  //   - Si le soleil vient du sud et la rue est au sud → reculer au nord = se protéger
-  //   - Vis-à-vis : s'éloigner des bords latéraux
+  //   - Ajustement solaire selon l'orientation de la rue
 
   let depthPct;
   if (massing_mode === "COMPACT") {
-    // COMPACT : centré, efficace, accès facile
-    depthPct = 0.48;
-  } else if (massing_mode === "SPREAD") {
-    // SPREAD : reculé, jardins devant, intimité maximale
-    depthPct = 0.62;
-  } else {
-    // BALANCED : retrait modéré
+    // COMPACT : en retrait mais pas trop profond, accès efficace
     depthPct = 0.55;
+  } else if (massing_mode === "SPREAD") {
+    // SPREAD : bien reculé, jardins devant, intimité maximale
+    depthPct = 0.68;
+  } else {
+    // BALANCED : retrait standard, espace dégagé devant
+    depthPct = 0.60;
   }
 
   // Ajustement solaire : si la rue est côté soleil (sud), reculer davantage
   // pour que les espaces devant soient éclairés et le bâtiment protégé
   if (solarFavorDepth) {
-    depthPct = Math.min(0.70, depthPct + 0.06);
-    console.log(`│ Solar adjust: rue face au soleil → recul +6% (depthPct=${depthPct.toFixed(2)})`);
+    depthPct = Math.min(0.75, depthPct + 0.08);
+    console.log(`│ Solar adjust: rue face au soleil → recul +8% (depthPct=${depthPct.toFixed(2)})`);
   }
+
+  // GARANTIE : jamais plus de 80% ni moins de 35% de profondeur
+  depthPct = Math.max(0.35, Math.min(0.80, depthPct));
+  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (mode=${massing_mode})`);
+
 
   // Vis-à-vis : décaler latéralement si le terrain est asymétrique
   // (le centroïde de l'enveloppe n'est pas forcément au milieu du bbox)
@@ -1252,7 +1285,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.85 } }, '3d-buildings');
+      paint: { 'line-color': '#2563eb', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.80 } }, '3d-buildings');
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -1354,7 +1387,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.85 } }, '3d-buildings');
+      paint: { 'line-color': '#2563eb', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.80 } }, '3d-buildings');
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
       paint: { 'fill-extrusion-color': '#e8a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
@@ -1937,7 +1970,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v55.1-typo on port ${PORT}`);
+  console.log(`BARLO v56.3 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
