@@ -12,7 +12,36 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "55.0-typo" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56" }));
+// ─── DIAGNOSTIC : tester compute-scenarios avec des valeurs par défaut ──────
+app.get("/diag-scenarios", (req, res) => {
+  const sa = Number(req.query.site_area) || 1950;
+  const ew = Number(req.query.ew) || 55;
+  const ed = Number(req.query.ed) || 55;
+  const zt = req.query.zoning || "URBAIN";
+  const pd = req.query.driver || "MAX_CAPACITE";
+  const scenarios = computeSmartScenarios({
+    site_area: sa, envelope_w: ew, envelope_d: ed,
+    zoning_type: zt, floor_height: 3.2, primary_driver: pd,
+    max_floors: 5, max_height_m: 16, program_main: "",
+    target_surface_m2: 0, target_units: 0,
+    site_saturation_level: "MEDIUM", financial_rigidity_score: 0.5,
+    density_band: "MEDIUM", risk_adjusted: 0.5,
+    feasibility_posture: "STANDARD",
+    scenario_A_role: "INTENSIFICATION", scenario_B_role: "OPTIMISATION", scenario_C_role: "PRUDENT",
+    budget_range: 0, budget_band: "MEDIUM", budget_tension: 0.5,
+    standing_level: "STANDARD", rent_score: 0.5, capacity_score: 0.7,
+    mix_score: 0.5, phase_score: 0.5, risk_score: 0.5,
+    density_pressure_factor: 1, driver_intensity: "MEDIUM",
+  });
+  res.json({
+    version: "56", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
+    CES: ZONING_CES[zt], COS: ZONING_COS[zt],
+    fp_A: scenarios.A.fp_m2, fp_B: scenarios.B.fp_m2, fp_C: scenarios.C.fp_m2,
+    levels_A: scenarios.A.levels, levels_B: scenarios.B.levels, levels_C: scenarios.C.levels,
+    height_A: scenarios.A.height_m, height_B: scenarios.B.height_m, height_C: scenarios.C.height_m,
+  });
+});
 // ─── GÉOMÉTRIE GPS ────────────────────────────────────────────────────────────
 const R_EARTH = 6371000;
 function toM(lat, lon, cLat, cLon) {
@@ -163,10 +192,15 @@ function computeSmartScenarios({
   driver_intensity = "MEDIUM",
   strategic_position = "",
 }) {
-  const envelope_area = env_area_override || (envelope_w * envelope_d);
-  // CES → emprise au sol max (footprint)
+  // v56 FIX: TOUJOURS utiliser le bounding box (w×d) pour le calcul max_fp.
+  // L'aire polygonale (env_area_override) ne doit PAS plafonner l'emprise car
+  // un polygone irrégulier a une aire < w×d mais le bâtiment (rectangle) s'inscrit
+  // dans le bounding box, pas dans l'aire polygonale.
+  const envelope_bbox = envelope_w * envelope_d;
+  const envelope_area = env_area_override || envelope_bbox;
+  // CES → emprise au sol max (footprint) — basé sur le SITE, cappé par le BBOX
   const ces = ZONING_CES[zoning_type] || 0.50;
-  const max_fp = Math.min(ces * site_area, envelope_area);
+  const max_fp = Math.min(ces * site_area, envelope_bbox);
   // COS → surface de plancher totale max (SDP = fp × niveaux)
   const cos = ZONING_COS[zoning_type] || 1.50;
   const max_sdp = cos * site_area;
@@ -205,9 +239,9 @@ function computeSmartScenarios({
   const isMixte = /mixte|mixed/i.test(program_main);
   const commerceLevels = isMixte ? 1 : 0;
 
-  console.log(`┌── SCENARIO ENGINE v54.1 (CES/COS fix) ──`);
-  console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d}=${envelope_area}m²`);
-  console.log(`│ zoning=${zoning_type} CES=${ces} max_fp=${Math.round(max_fp)}m² | COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
+  console.log(`┌── SCENARIO ENGINE v56 (BBOX fix) ──`);
+  console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d} bbox=${envelope_bbox}m² polyArea=${envelope_area}m²`);
+  console.log(`│ zoning=${zoning_type} CES=${ces} max_fp=${Math.round(max_fp)}m² (basé sur BBOX) | COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
   console.log(`│ driver=${primary_driver} intensity=${driver_intensity} ratios=[${ratios.A}/${ratios.B}/${ratios.C}]`);
   console.log(`│ max_floors=${max_floors} max_height=${max_height_m}m → absMaxLevels=${absMaxLevels}`);
   console.log(`│ program=${program_main} commerce=${commerceLevels} saturation=${site_saturation_level}`);
@@ -242,7 +276,8 @@ function computeSmartScenarios({
     ratio = ratio * (1 + (dpf - 1) * 0.15);
     ratio = Math.max(0.30, Math.min(0.98, ratio));
 
-    let fp = Math.round(Math.min(max_fp * ratio, envelope_area * ratio));
+    // v56 FIX: cap par le BBOX, pas l'aire polygonale
+    let fp = Math.round(max_fp * ratio);
     fp = Math.max(50, fp);
 
     // ── Niveaux : massing_mode + modulation budget ──
@@ -374,6 +409,15 @@ app.post("/compute-scenarios", (req, res) => {
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
+  // v56: LOG COMPLET des paramètres reçus par 8D pour diagnostic
+  console.log(`\n╔══ /compute-scenarios RECEIVED (v56) ══╗`);
+  console.log(`║ site_area=${p.site_area} envelope_w=${p.envelope_w} envelope_d=${p.envelope_d}`);
+  console.log(`║ envelope_area=${p.envelope_area} (${p.envelope_area ? "OVERRIDE REÇU" : "non fourni → w×d"})`);
+  console.log(`║ zoning=${p.zoning_type} driver=${p.primary_driver} standing=${p.standing_level}`);
+  console.log(`║ max_floors=${p.max_floors} max_height=${p.max_height_m} floor_h=${p.floor_height}`);
+  console.log(`║ budget_tension=${p.budget_tension} budget_band=${p.budget_band}`);
+  console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
+  console.log(`╚════════════════════════════════════════╝\n`);
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
@@ -495,18 +539,64 @@ function ptInPoly(px, py, poly) {
   return inside;
 }
 
-// ─── POLYGONE GPS DU BÂTIMENT MASSING v55 — FORMES ARCHITECTURALES ──────────
-// Génère un VRAI bâtiment (rectangle, U, L) positionné stratégiquement :
-//   1. Forme typologique réelle (pas la forme de la parcelle)
-//   2. Orienté selon l'ensoleillement et l'axe rue
-//   3. Positionné en retrait de la rue principale
-//   4. Garanti à l'intérieur de l'enveloppe constructible
+// ─── COUPE TRANSVERSALE de l'enveloppe (v56) ─────────────────────────────────
+// Pour un polygone en repère local (u,v), trouve la largeur disponible
+// à une profondeur v donnée, en scannant les arêtes qui croisent ce v.
+function envelopeWidthAtV(vTarget, envLocal) {
+  let minU = Infinity, maxU = -Infinity;
+  const n = envLocal.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const vi = envLocal[i].v, vj = envLocal[j].v;
+    if ((vi <= vTarget && vj >= vTarget) || (vj <= vTarget && vi >= vTarget)) {
+      if (Math.abs(vj - vi) < 0.001) {
+        minU = Math.min(minU, envLocal[i].u, envLocal[j].u);
+        maxU = Math.max(maxU, envLocal[i].u, envLocal[j].u);
+      } else {
+        const t = (vTarget - vi) / (vj - vi);
+        const u = envLocal[i].u + t * (envLocal[j].u - envLocal[i].u);
+        minU = Math.min(minU, u);
+        maxU = Math.max(maxU, u);
+      }
+    }
+  }
+  if (minU === Infinity) return { minU: 0, maxU: 0, width: 0 };
+  return { minU, maxU, width: maxU - minU };
+}
+
+// Idem mais coupe horizontale : profondeur dispo à un u donné
+function envelopeDepthAtU(uTarget, envLocal) {
+  let minV = Infinity, maxV = -Infinity;
+  const n = envLocal.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const ui = envLocal[i].u, uj = envLocal[j].u;
+    if ((ui <= uTarget && uj >= uTarget) || (uj <= uTarget && ui >= uTarget)) {
+      if (Math.abs(uj - ui) < 0.001) {
+        minV = Math.min(minV, envLocal[i].v, envLocal[j].v);
+        maxV = Math.max(maxV, envLocal[i].v, envLocal[j].v);
+      } else {
+        const t = (uTarget - ui) / (uj - ui);
+        const v = envLocal[i].v + t * (envLocal[j].v - envLocal[i].v);
+        minV = Math.min(minV, v);
+        maxV = Math.max(maxV, v);
+      }
+    }
+  }
+  if (minV === Infinity) return { minV: 0, maxV: 0, depth: 0 };
+  return { minV, maxV, depth: maxV - minV };
+}
+
+// ─── POLYGONE GPS DU BÂTIMENT MASSING v56 — FORMES ARCHITECTURALES ──────────
+// v56 : dimensionne le bâtiment selon l'espace RÉEL disponible à la position
+// cible (coupe transversale de l'enveloppe), pas le bounding box global.
+// Résultat : le bâtiment rentre du premier coup, pas besoin de réduire.
 
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2 } = context;
 
-  console.log(`┌── computeMassingPolygon v55 (ARCHITECTURAL TYPOLOGY) ──`);
+  console.log(`┌── computeMassingPolygon v56 (CROSS-SECTION FIT) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²`);
 
   // ── 1. Centroïde et conversion mètres ──
@@ -526,10 +616,8 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const sDx = envM[fj].x - envM[fi].x, sDy = envM[fj].y - envM[fi].y;
   const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
 
-  // Vecteurs unitaires : sU = le long de la rue, nU = vers l'intérieur du site
   const sUx = sDx / sLen, sUy = sDy / sLen;
   let nUx = -sUy, nUy = sUx;
-  // S'assurer que nU pointe vers l'intérieur (vers le centroïde)
   const midFX = (envM[fi].x + envM[fj].x) / 2, midFY = (envM[fi].y + envM[fj].y) / 2;
   if (nUx * (0 - midFX) + nUy * (0 - midFY) < 0) { nUx = -nUx; nUy = -nUy; }
 
@@ -543,8 +631,8 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   }));
   const minU = Math.min(...envLocal.map(p => p.u)), maxU = Math.max(...envLocal.map(p => p.u));
   const minV = Math.min(...envLocal.map(p => p.v)), maxV = Math.max(...envLocal.map(p => p.v));
-  const availW = maxU - minU; // largeur le long de la rue
-  const availD = maxV - minV; // profondeur vers l'intérieur
+  const availW = maxU - minU;
+  const availD = maxV - minV;
   const envAspect = availW / Math.max(1, availD);
 
   console.log(`│ Local frame: W=${availW.toFixed(1)}m(rue) × D=${availD.toFixed(1)}m(prof) aspect=${envAspect.toFixed(2)}`);
@@ -557,16 +645,53 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   });
   console.log(`│ Typology: ${typology} — ${reason}`);
 
-  // ── 5. Générer la forme bâtie en repère local ──
-  const margin = 1.5; // marge min depuis les bords de l'enveloppe
-  const maxW = Math.max(6, availW - 2 * margin);
-  const maxD = Math.max(6, availD - 2 * margin);
-  let bPts = []; // points {u, v} centrés sur (0,0)
+  // ── 5. POSITION CIBLE : déterminer le centre du bâtiment ──
+  // En retrait de la rue (v élevé = profond dans le site)
+  const depthPct = massing_mode === "COMPACT" ? 0.50 : massing_mode === "SPREAD" ? 0.62 : 0.56;
+  const targetCV = minV + availD * depthPct;
+  const targetCU = (minU + maxU) / 2;
+
+  // ── 6. v56 : MESURER l'espace RÉEL à la position cible ──
+  // Scanner l'enveloppe à la profondeur cible pour trouver la vraie largeur
+  const margin = 2.0; // marge de sécurité depuis les bords
+  const crossW = envelopeWidthAtV(targetCV, envLocal);
+  const crossD = envelopeDepthAtU(targetCU, envLocal);
+
+  // L'espace réellement disponible à cette position
+  const realW = Math.max(6, crossW.width - 2 * margin);
+  const realD = Math.max(6, crossD.depth - 2 * margin);
+  // Centre réel de la zone disponible (pas forcément le centre du bounding box)
+  const realCU = (crossW.minU + crossW.maxU) / 2;
+  const realCV = targetCV; // on garde la profondeur cible
+
+  // On utilise aussi le bbox global comme référence max
+  const bboxW = Math.max(6, availW - 2 * margin);
+  const bboxD = Math.max(6, availD - 2 * margin);
+
+  // Le maxW/maxD pour le bâtiment = le MINIMUM entre le réel et le bbox
+  const maxW = Math.min(realW, bboxW);
+  const maxD = Math.min(realD, bboxD);
+
+  console.log(`│ Target position: CV=${targetCV.toFixed(1)} (${(depthPct*100).toFixed(0)}% depth)`);
+  console.log(`│ Cross-section at target: W=${crossW.width.toFixed(1)}m [${crossW.minU.toFixed(1)}→${crossW.maxU.toFixed(1)}]`);
+  console.log(`│ Cross-section at center: D=${crossD.depth.toFixed(1)}m [${crossD.minV.toFixed(1)}→${crossD.maxV.toFixed(1)}]`);
+  console.log(`│ Available for building: maxW=${maxW.toFixed(1)}m maxD=${maxD.toFixed(1)}m (margin=${margin}m)`);
+
+  // ── 7. Générer la forme bâtie ──
+  let bPts = [];
   let bW, bD;
 
+  function polyArea(pts) {
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      a += pts[i].u * pts[j].v - pts[j].u * pts[i].v;
+    }
+    return Math.abs(a) / 2;
+  }
+
   if (typology === "BARRE") {
-    // Lamelle : profondeur 12-14m (double orientation), longueur adaptée
-    const idealD = Math.min(13, maxD * 0.5);
+    const idealD = Math.min(14, maxD * 0.45);
     bW = Math.min(fp_m2 / idealD, maxW);
     bD = Math.min(fp_m2 / bW, maxD);
     if (bW > maxW) { bW = maxW; bD = Math.min(fp_m2 / bW, maxD); }
@@ -576,60 +701,65 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     ];
 
   } else if (typology === "EN_U") {
-    // Forme en U : 3 ailes autour d'une cour, ouvert vers la rue
-    const wing = Math.min(8, maxW * 0.22); // épaisseur des ailes latérales
-    const back = Math.min(10, maxD * 0.25); // profondeur de l'aile arrière
-    bW = Math.min(maxW, Math.max(wing * 4, Math.sqrt(fp_m2 * 1.6)));
-    bD = Math.min(maxD, Math.max(back * 2, Math.sqrt(fp_m2 * 0.9)));
-    // Ajuster pour atteindre fp_m2
-    // Aire U = bW×back + 2×wing×(bD-back)
-    const areaU = bW * back + 2 * wing * (bD - back);
-    if (areaU > 0) {
-      const sc = Math.sqrt(fp_m2 / areaU);
-      bW = Math.min(bW * sc, maxW);
-      bD = Math.min(bD * sc, maxD);
+    const wingPct = 0.22;
+    const backPct = 0.28;
+    bW = Math.min(maxW, Math.max(18, maxW * 0.85));
+    bD = Math.min(maxD, Math.max(14, maxD * 0.80));
+    let wing = bW * wingPct;
+    let back = bD * backPct;
+    let aU = bW * back + 2 * wing * (bD - back);
+    if (aU > 0 && aU !== fp_m2) {
+      const sc = Math.sqrt(fp_m2 / aU);
+      bW = Math.min(bW * sc, maxW); bD = Math.min(bD * sc, maxD);
+      wing = bW * wingPct; back = bD * backPct;
+      aU = bW * back + 2 * wing * (bD - back);
+      if (aU > 0 && Math.abs(aU - fp_m2) / fp_m2 > 0.05) {
+        const sc2 = Math.sqrt(fp_m2 / aU);
+        bW = Math.min(bW * sc2, maxW); bD = Math.min(bD * sc2, maxD);
+        wing = bW * wingPct; back = bD * backPct;
+      }
     }
-    const innerW = Math.max(2, bW - 2 * wing);
-    const innerD = Math.max(2, bD - back);
-    // U ouvert vers le bas (v négatif = côté rue)
     bPts = [
-      { u: -bW / 2, v: -bD / 2 },             // bas-gauche ext
-      { u: -bW / 2 + wing, v: -bD / 2 },       // bas-gauche int
-      { u: -bW / 2 + wing, v: bD / 2 - back },  // haut aile gauche int
-      { u: bW / 2 - wing, v: bD / 2 - back },   // haut aile droite int
-      { u: bW / 2 - wing, v: -bD / 2 },         // bas-droite int
-      { u: bW / 2, v: -bD / 2 },               // bas-droite ext
-      { u: bW / 2, v: bD / 2 },                // haut-droite ext
-      { u: -bW / 2, v: bD / 2 },               // haut-gauche ext
+      { u: -bW / 2, v: -bD / 2 },
+      { u: -bW / 2 + wing, v: -bD / 2 },
+      { u: -bW / 2 + wing, v: bD / 2 - back },
+      { u: bW / 2 - wing, v: bD / 2 - back },
+      { u: bW / 2 - wing, v: -bD / 2 },
+      { u: bW / 2, v: -bD / 2 },
+      { u: bW / 2, v: bD / 2 },
+      { u: -bW / 2, v: bD / 2 },
     ];
 
   } else if (typology === "EN_L") {
-    // Forme en L : 2 ailes perpendiculaires
-    const armW = Math.min(12, maxW * 0.45); // largeur du bras vertical
-    const armD = Math.min(12, maxD * 0.45); // profondeur du bras horizontal
-    bW = Math.min(maxW, Math.max(armW * 2, Math.sqrt(fp_m2 * 1.4)));
-    bD = Math.min(maxD, Math.max(armD * 2, Math.sqrt(fp_m2 / 1.4)));
-    // Aire L = bW×armD + armW×(bD-armD)
-    const areaL = bW * armD + armW * (bD - armD);
-    if (areaL > 0) {
-      const sc = Math.sqrt(fp_m2 / areaL);
-      bW = Math.min(bW * sc, maxW);
-      bD = Math.min(bD * sc, maxD);
+    const armPctW = 0.35;
+    const armPctD = 0.35;
+    bW = Math.min(maxW, Math.max(14, maxW * 0.80));
+    bD = Math.min(maxD, Math.max(14, maxD * 0.75));
+    let aW = bW * armPctW;
+    let aD = bD * armPctD;
+    let aL = bW * aD + aW * (bD - aD);
+    if (aL > 0 && aL !== fp_m2) {
+      const sc = Math.sqrt(fp_m2 / aL);
+      bW = Math.min(bW * sc, maxW); bD = Math.min(bD * sc, maxD);
+      aW = bW * armPctW; aD = bD * armPctD;
+      aL = bW * aD + aW * (bD - aD);
+      if (aL > 0 && Math.abs(aL - fp_m2) / fp_m2 > 0.05) {
+        const sc2 = Math.sqrt(fp_m2 / aL);
+        bW = Math.min(bW * sc2, maxW); bD = Math.min(bD * sc2, maxD);
+        aW = bW * armPctW; aD = bD * armPctD;
+      }
     }
-    const adjArmW = Math.min(armW, bW * 0.5);
-    const adjArmD = Math.min(armD, bD * 0.5);
-    // L : bras horizontal en bas, bras vertical à gauche montant
     bPts = [
-      { u: -bW / 2, v: -bD / 2 },                       // bas-gauche
-      { u: bW / 2, v: -bD / 2 },                         // bas-droite
-      { u: bW / 2, v: -bD / 2 + adjArmD },                // angle droit ext
-      { u: -bW / 2 + adjArmW, v: -bD / 2 + adjArmD },     // angle int
-      { u: -bW / 2 + adjArmW, v: bD / 2 },                // haut bras
-      { u: -bW / 2, v: bD / 2 },                          // haut-gauche
+      { u: -bW / 2, v: -bD / 2 },
+      { u: bW / 2, v: -bD / 2 },
+      { u: bW / 2, v: -bD / 2 + aD },
+      { u: -bW / 2 + aW, v: -bD / 2 + aD },
+      { u: -bW / 2 + aW, v: bD / 2 },
+      { u: -bW / 2, v: bD / 2 },
     ];
 
   } else {
-    // BLOC (défaut) : rectangle compact ~1.25:1
+    // BLOC : rectangle compact ~1.25:1
     const ratio = 1.25;
     bD = Math.min(Math.sqrt(fp_m2 / ratio), maxD);
     bW = Math.min(fp_m2 / bD, maxW);
@@ -640,83 +770,107 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     ];
   }
 
-  console.log(`│ Shape: ${bW.toFixed(1)}m × ${bD.toFixed(1)}m (${bPts.length} pts)`);
+  const shapeArea = polyArea(bPts);
+  console.log(`│ Shape: ${typology} ${bW.toFixed(1)}m × ${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m² (${(shapeArea/fp_m2*100).toFixed(0)}%)`);
 
-  // ── 6. POSITIONNEMENT STRATÉGIQUE ──
-  // • Centré latéralement (le long de la rue)
-  // • Reculé vers l'arrière (loin de la rue) : 55-65% de la profondeur
-  // • Mode COMPACT → plus centré, SPREAD → plus en retrait
-  const depthPct = massing_mode === "COMPACT" ? 0.50 : massing_mode === "SPREAD" ? 0.62 : 0.56;
-  const cU = (minU + maxU) / 2;
-  const cV = minV + availD * depthPct;
-  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)}) depthPct=${depthPct}`);
+  // ── 8. POSITIONNEMENT avec centre réel de la zone dispo ──
+  const cU = realCU;
+  const cV = realCV;
+  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)})`);
 
-  // Translater les points du bâtiment
   let positioned = bPts.map(p => ({ u: p.u + cU, v: p.v + cV }));
 
-  // ── 7. VÉRIFICATION CONTAINMENT ──
-  // Convertir en mètres cartésiens pour test point-in-polygon
+  // ── 9. VÉRIFICATION CONTAINMENT (multi-stratégie) ──
   function localToMeter(p) {
     return { x: p.u * sUx + p.v * nUx, y: p.u * sUy + p.v * nUy };
   }
-  let buildM = positioned.map(localToMeter);
-  let allIn = buildM.every(p => ptInPoly(p.x, p.y, envM));
 
-  if (!allIn) {
-    console.log(`│ ⚠ Hors enveloppe — ajustement...`);
-    // Essayer d'abord de recentrer (le centroïde de l'enveloppe)
-    const envCU = envLocal.reduce((s, p) => s + p.u, 0) / envLocal.length;
-    const envCV = envLocal.reduce((s, p) => s + p.v, 0) / envLocal.length;
-    // Décaler vers le centroïde de l'enveloppe, mais garder le retrait
-    const altCU = (cU + envCU) / 2;
-    const altCV = (cV + envCV) / 2;
-    let altPos = bPts.map(p => ({ u: p.u + altCU, v: p.v + altCV }));
-    let altM = altPos.map(localToMeter);
-    if (altM.every(p => ptInPoly(p.x, p.y, envM))) {
-      positioned = altPos; buildM = altM; allIn = true;
-      console.log(`│ ✓ Recentré vers centroïde enveloppe`);
-    } else {
-      // Réduire progressivement depuis le centre du bâtiment
-      for (let s = 0.92; s >= 0.45; s -= 0.04) {
-        const scaled = bPts.map(p => ({ u: p.u * s + altCU, v: p.v * s + altCV }));
-        const scaledM = scaled.map(localToMeter);
-        if (scaledM.every(p => ptInPoly(p.x, p.y, envM))) {
-          positioned = scaled; buildM = scaledM; allIn = true;
-          console.log(`│ ✓ Réduit à ${(s * 100).toFixed(0)}% — rentre dans l'enveloppe`);
-          break;
-        }
-      }
-    }
-    if (!allIn) {
-      // FALLBACK ultime : homothétie pure (garanti dans l'enveloppe)
-      console.log(`│ ⚠ FALLBACK homothétie`);
-      const sf = Math.min(0.80, Math.sqrt(Math.max(50, fp_m2) / Math.max(1, envelopeArea)));
-      const result = envelopeCoords.map(c => ({
-        lat: eLat + (c.lat - eLat) * sf, lon: eLon + (c.lon - eLon) * sf,
-      }));
-      result._typology = typology;
-      result._reason = reason + " (fallback homothétie)";
-      console.log(`└── end v55 (fallback) ──`);
-      return result;
-    }
-  } else {
-    console.log(`│ ✓ Tous les sommets dans l'enveloppe`);
+  function tryPosition(center, scale) {
+    const pts = bPts.map(p => ({ u: p.u * scale + center.u, v: p.v * scale + center.v }));
+    const mPts = pts.map(localToMeter);
+    const ok = mPts.every(p => ptInPoly(p.x, p.y, envM));
+    return { ok, pts, mPts };
   }
 
-  // ── 8. Conversion GPS ──
-  const result = buildM.map(p => ({
+  // Stratégie 1 : position cible, taille pleine
+  let result1 = tryPosition({ u: cU, v: cV }, 1.0);
+  let finalPts, finalM;
+
+  if (result1.ok) {
+    finalPts = result1.pts; finalM = result1.mPts;
+    console.log(`│ ✓ Position OK du premier coup (100%)`);
+  } else {
+    console.log(`│ ⚠ Hors enveloppe à la position cible — recherche meilleure position...`);
+
+    // Stratégie 2 : centroïde de l'enveloppe
+    const envCU = envLocal.reduce((s, p) => s + p.u, 0) / envLocal.length;
+    const envCV = envLocal.reduce((s, p) => s + p.v, 0) / envLocal.length;
+
+    // Tester 5 positions candidates
+    const candidates = [
+      { u: envCU, v: envCV, name: "centroïde" },
+      { u: (cU + envCU) / 2, v: (cV + envCV) / 2, name: "mi-chemin" },
+      { u: envCU, v: cV, name: "centroïde-U + cible-V" },
+      { u: cU, v: envCV, name: "cible-U + centroïde-V" },
+      { u: cU, v: minV + availD * 0.45, name: "moins profond (45%)" },
+    ];
+
+    let found = false;
+    for (const cand of candidates) {
+      const r = tryPosition(cand, 1.0);
+      if (r.ok) {
+        finalPts = r.pts; finalM = r.mPts; found = true;
+        console.log(`│ ✓ Position "${cand.name}" OK à 100%`);
+        break;
+      }
+    }
+
+    if (!found) {
+      // Stratégie 3 : réduire légèrement depuis le centroïde
+      for (let s = 0.95; s >= 0.70; s -= 0.025) {
+        for (const cand of [
+          { u: envCU, v: envCV },
+          { u: (cU + envCU) / 2, v: (cV + envCV) / 2 },
+        ]) {
+          const r = tryPosition(cand, s);
+          if (r.ok) {
+            finalPts = r.pts; finalM = r.mPts; found = true;
+            console.log(`│ ✓ Réduit à ${(s * 100).toFixed(0)}% au ${cand === candidates[0] ? "centroïde" : "mi-chemin"}`);
+            break;
+          }
+        }
+        if (found) break;
+      }
+    }
+
+    if (!found) {
+      // FALLBACK ultime : homothétie de l'enveloppe (garanti)
+      console.log(`│ ⚠ FALLBACK homothétie (ne devrait quasi jamais arriver avec v56)`);
+      const sf = Math.min(0.80, Math.sqrt(Math.max(50, fp_m2) / Math.max(1, envelopeArea)));
+      const fallback = envelopeCoords.map(c => ({
+        lat: eLat + (c.lat - eLat) * sf, lon: eLon + (c.lon - eLon) * sf,
+      }));
+      fallback._typology = typology;
+      fallback._reason = reason + " (fallback homothétie)";
+      console.log(`└── end v56 (fallback) ──`);
+      return fallback;
+    }
+  }
+
+  // ── 10. Conversion GPS ──
+  const result = finalM.map(p => ({
     lat: eLat + p.y / R_EARTH * 180 / Math.PI,
     lon: eLon + p.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
   }));
 
   result.forEach((c, i) => console.log(`│ Massing[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
-  const actualFp = Math.abs(buildM.reduce((s, p, i) => {
-    const j = (i + 1) % buildM.length;
-    return s + p.x * buildM[j].y - buildM[j].x * p.y;
+  const actualFp = Math.abs(finalM.reduce((s, p, i) => {
+    const j = (i + 1) % finalM.length;
+    return s + p.x * finalM[j].y - finalM[j].x * p.y;
   }, 0) / 2);
   console.log(`│ Emprise réelle ≈ ${actualFp.toFixed(0)}m² (cible=${fp_m2}m²)`);
   console.log(`│ Typology: ${typology} — ${reason}`);
-  console.log(`└── end computeMassingPolygon v55 ──`);
+  console.log(`└── end computeMassingPolygon v56 ──`);
 
   result._typology = typology;
   result._reason = reason;
@@ -1496,7 +1650,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v55.0-typo on port ${PORT}`);
+  console.log(`BARLO v55.1-typo on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
