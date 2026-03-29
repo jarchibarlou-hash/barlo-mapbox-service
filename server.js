@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.6" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.7" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -69,7 +69,7 @@ app.post("/diag-massing", (req, res) => {
     masAreaShoelace = Math.abs(masAreaShoelace) / 2;
 
     res.json({
-      server_version: "56.6",
+      server_version: "56.7",
       input: { fp_m2: fp, site_area: Number(site_area), setbacks: { front: Number(setback_front), side: Number(setback_side), back: Number(setback_back) } },
       parcel: {
         centroid: { lat: cLat, lon: cLon },
@@ -275,17 +275,38 @@ const ZONING_COS = {
   RURAL: 0.40, MIXTE: 2.00, Z_DEFAULT: 1.50,
 };
 
-// Massing modes par scénario (depuis SCENARIOS_FR)
-// S1/A = Référence (BALANCED), S2/B = Étalée (SPREAD), S3/C = Compacte (COMPACT)
+// ══════════════════════════════════════════════════════════════════════════════
+// v56.7 — RÔLES SCÉNARIOS (logique métier claire)
+// ══════════════════════════════════════════════════════════════════════════════
+// A = INTENSIFICATION : colle au max à la priorité client, pousse les limites réglementaires
+// B = EQUILIBRE : alternative équilibrée, bon compromis densité/risque
+// C = PRUDENT : version conservatrice, reste bien dans les clous, phasable
+//
+// Le massing_mode (forme du bâti: BALANCED/SPREAD/COMPACT) est INDÉPENDANT du rôle.
+// On peut avoir un scénario prudent en forme compacte (petit bâtiment dense mais peu de niveaux).
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Rôle stratégique de chaque scénario
+const SCENARIO_ROLE = { A: "INTENSIFICATION", B: "EQUILIBRE", C: "PRUDENT" };
+
+// Massing mode = FORME du bâtiment (indépendant du rôle)
 const SCENARIO_MASSING_MODE = { A: "BALANCED", B: "SPREAD", C: "COMPACT" };
 
-// Multiplicateur de niveaux par massing_mode
-// COMPACT = hauteur max, BALANCED = modéré, SPREAD = bas
-function levelMultiplier(mode) {
-  if (mode === "COMPACT") return 1.0;
-  if (mode === "BALANCED") return 0.65;
-  return 0.35; // SPREAD
+// Multiplicateur de niveaux par rôle (PAS par massing_mode)
+// INTENSIFICATION = pousse les niveaux au max du driver
+// EQUILIBRE = niveaux modérés
+// PRUDENT = niveaux conservateurs, toujours conforme COS
+function levelMultiplier(role) {
+  if (role === "INTENSIFICATION") return 0.85;
+  if (role === "EQUILIBRE") return 0.55;
+  return 0.35; // PRUDENT
 }
+
+// Contrainte COS par rôle
+// INTENSIFICATION peut atteindre 100% du COS (voire dérogation légère)
+// EQUILIBRE vise 70-90% du COS
+// PRUDENT ne dépasse jamais 80% du COS
+const COS_CAP_BY_ROLE = { INTENSIFICATION: 1.05, EQUILIBRE: 0.90, PRUDENT: 0.80 };
 
 function computeSmartScenarios({
   site_area, envelope_w, envelope_d, envelope_area: env_area_override,
@@ -328,12 +349,36 @@ function computeSmartScenarios({
   // ══════════════════════════════════════════════════════════════════════════════
   // v56.1 — TOUS LES PARAMÈTRES INTÉGRÉS (plus de code mort)
   // ══════════════════════════════════════════════════════════════════════════════
+  // v56.7 — NORMALISATION SCORES + ENUMS FR/EN
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ── Helper: normalise un score (accepte 0-1 OU 0-100) ──
+  function norm01(v) {
+    const n = Number(v) || 0;
+    if (n > 1 && n <= 100) return n / 100;  // score 0-100 → 0-1
+    return Math.max(0, Math.min(1, n));
+  }
+
+  // ── Helper: parse budget_tension qui peut être string ou number ──
+  function parseBudgetTension(v) {
+    const n = Number(v);
+    if (!isNaN(n)) return Math.max(0, Math.min(1, n > 1 ? n / 100 : n));
+    const s = String(v).toUpperCase();
+    if (s.includes("LOW") || s.includes("FAIBLE") || s.includes("BAS")) return 0.25;
+    if (s.includes("HIGH") || s.includes("FORT") || s.includes("HAUT") || s.includes("ELEV")) return 0.75;
+    if (s.includes("MED") || s.includes("MOY")) return 0.50;
+    return 0;
+  }
 
   // ── 1. BUDGET : tension + rigidité + band ──
-  const bt = Math.max(0, Math.min(1, Number(budget_tension) || 0));
-  const fri = Math.max(0, Math.min(1, Number(financial_rigidity_score) || 0));
-  // budget_band amplifie/atténue la tension
-  const bandMod = { HIGH: 0.15, MEDIUM: 0, LOW: -0.10 }[String(budget_band).toUpperCase()] || 0;
+  const bt = parseBudgetTension(budget_tension);
+  const fri = norm01(financial_rigidity_score);
+  // budget_band amplifie/atténue la tension (FR + EN + variantes)
+  const bandMod = {
+    HIGH: 0.15, HIGH_BUDGET: 0.15, HAUT: 0.15, ELEVE: 0.15,
+    MEDIUM: 0, MEDIUM_BUDGET: 0, MOYEN: 0,
+    LOW: -0.10, LOW_BUDGET: -0.10, BAS: -0.10, FAIBLE: -0.10,
+  }[String(budget_band).toUpperCase()] || 0;
   const budgetPressure = Math.max(0, Math.min(1, (bt + fri) / 2 + bandMod));
 
   // ── 2. STANDING ──
@@ -343,31 +388,37 @@ function computeSmartScenarios({
 
   // ── 3. DENSITY : pressure + band ──
   const dpf = Math.max(0.5, Math.min(2.0, Number(density_pressure_factor) || 1));
-  // density_band affecte le plafond d'emprise
-  const densityBandMult = { HIGH: 1.10, MEDIUM: 1.0, LOW: 0.88 }[String(density_band).toUpperCase()] || 1.0;
+  // density_band affecte le plafond d'emprise (FR + EN + variantes)
+  const densityBandMult = {
+    HIGH: 1.10, HIGH_DENSITY: 1.10, "HIGH DENSITY": 1.10, HAUT: 1.10, DENSE: 1.10, FORTE: 1.10,
+    MEDIUM: 1.0, MEDIUM_DENSITY: 1.0, MOYEN: 1.0, MOYENNE: 1.0,
+    LOW: 0.88, LOW_DENSITY: 0.88, BAS: 0.88, FAIBLE: 0.88,
+  }[String(density_band).toUpperCase().trim()] || 1.0;
 
-  // ── 4. DRIVER INTENSITY ──
-  const intensitySpread = { HIGH: 1.3, MEDIUM: 1.0, LOW: 0.7 }[String(driver_intensity).toUpperCase()] || 1.0;
+  // ── 4. DRIVER INTENSITY (FR + EN) ──
+  const intensitySpread = {
+    HIGH: 1.3, FORT: 1.3, FORTE: 1.3, ELEVE: 1.3, ELEVEE: 1.3,
+    MEDIUM: 1.0, MOYEN: 1.0, MOYENNE: 1.0,
+    LOW: 0.7, FAIBLE: 0.7, BAS: 0.7,
+  }[String(driver_intensity).toUpperCase()] || 1.0;
 
-  // ── 5. FEASIBILITY POSTURE ──
-  // AMBITIEUX → pousse tous les ratios vers le haut (+8%)
-  // PRUDENT → réduit tous les ratios (-10%), plus conservateur
-  const postureMod = { AMBITIEUX: 1.08, AGGRESSIVE: 1.08, BALANCED: 1.0, STANDARD: 1.0, PRUDENT: 0.90, CONSERVATIVE: 0.90 }[String(feasibility_posture).toUpperCase()] || 1.0;
+  // ── 5. FEASIBILITY POSTURE (FR + EN + variantes) ──
+  const postureMod = {
+    AMBITIEUX: 1.08, AGGRESSIVE: 1.08, OFFENSIVE: 1.08, OFFENSIF: 1.08,
+    BALANCED: 1.0, STANDARD: 1.0, EQUILIBRE: 1.0, NEUTRE: 1.0,
+    PRUDENT: 0.90, CONSERVATIVE: 0.90, DEFENSIVE: 0.90, DEFENSIF: 0.90, PRUDENTE: 0.90,
+  }[String(feasibility_posture).toUpperCase()] || 1.0;
 
-  // ── 6. RISK ──
-  // risk_adjusted : 0-1 (0=pas de risque, 1=très risqué)
-  // risk_score : score global de risque
-  // Plus le risque est élevé → scénarios plus conservateurs (emprise réduite, moins de niveaux)
-  const riskAdj = Math.max(0, Math.min(1, Number(risk_adjusted) || 0));
-  const riskSc = Math.max(0, Math.min(1, Number(risk_score) || 0));
+  // ── 6. RISK ── (scores normalisés 0-1)
+  const riskAdj = norm01(risk_adjusted);
+  const riskSc = norm01(risk_score);
   const riskPenalty = 1.0 - ((riskAdj + riskSc) / 2) * 0.15; // max -15% si risque max
 
-  // ── 7. SCORES MÉTIER (rent, capacity, mix, phase) ──
-  // Chaque score 0-1 influence un aspect spécifique :
-  const rentSc = Math.max(0, Math.min(1, Number(rent_score) || 0));
-  const capSc = Math.max(0, Math.min(1, Number(capacity_score) || 0));
-  const mixSc = Math.max(0, Math.min(1, Number(mix_score) || 0));
-  const phaseSc = Math.max(0, Math.min(1, Number(phase_score) || 0));
+  // ── 7. SCORES MÉTIER (normalisés 0-1, accepte 0-100) ──
+  const rentSc = norm01(rent_score);
+  const capSc = norm01(capacity_score);
+  const mixSc = norm01(mix_score);
+  const phaseSc = norm01(phase_score);
 
   // capacity_score → boost emprise (high cap = max footprint)
   const capacityBoost = 1.0 + (capSc - 0.5) * 0.12; // ±6%
@@ -392,7 +443,7 @@ function computeSmartScenarios({
   const isMixte = /mixte|mixed/i.test(program_main) || forceCommerce;
   const commerceLevels = isMixte ? 1 : 0;
 
-  console.log(`┌── SCENARIO ENGINE v56.1 (ALL PARAMS ACTIVE) ──`);
+  console.log(`┌── SCENARIO ENGINE v56.7 (RÔLES + NORMALISATION + COS CAP) ──`);
   console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d} bbox=${envelope_bbox}m² polyArea=${envelope_area}m²`);
   console.log(`│ zoning=${zoning_type} CES=${ces} max_fp=${Math.round(max_fp)}m² | COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
   console.log(`│ driver=${primary_driver} intensity=${driver_intensity} ratios=[${ratios.A}/${ratios.B}/${ratios.C}]`);
@@ -435,15 +486,17 @@ function computeSmartScenarios({
     let fp = Math.round(max_fp * ratio);
     fp = Math.max(50, fp);
 
-    // ── Niveaux : massing_mode + budget + rent_score + risk + posture ──
-    let baseLevelMult = levelMultiplier(mode);
-    // Budget tendu + COMPACT → pousser encore plus de niveaux (vertical = économique)
-    if (budgetPressure > 0.5 && mode === "COMPACT") {
+    // ── Niveaux : basé sur le RÔLE du scénario (pas le massing_mode) ──
+    const role = SCENARIO_ROLE[label];
+    let baseLevelMult = levelMultiplier(role);
+
+    // Budget tendu + INTENSIFICATION → pousser les niveaux (vertical = économique)
+    if (budgetPressure > 0.5 && role === "INTENSIFICATION") {
       baseLevelMult = Math.min(1.0, baseLevelMult + (budgetPressure - 0.5) * 0.3);
     }
-    // Budget large + SPREAD → réduire niveaux (confort, horizontal)
-    if (budgetPressure < 0.3 && mode === "SPREAD") {
-      baseLevelMult = Math.max(0.20, baseLevelMult - (0.3 - budgetPressure) * 0.2);
+    // Budget large + PRUDENT → réduire niveaux (confort)
+    if (budgetPressure < 0.3 && role === "PRUDENT") {
+      baseLevelMult = Math.max(0.15, baseLevelMult - (0.3 - budgetPressure) * 0.15);
     }
     // rent_score : fort rendement locatif → pousser les niveaux (plus de m² louables)
     baseLevelMult = baseLevelMult * rentLevelBoost;
@@ -470,6 +523,17 @@ function computeSmartScenarios({
       const idealLevels = Math.ceil(neededSdp / fp);
       const modeLevels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
       levels = Math.max(1, Math.min(Math.round((idealLevels + modeLevels) / 2), absMaxLevels));
+    }
+
+    // ── v56.7 GARDE-FOU COS : cap SDP selon le rôle du scénario ──
+    const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
+    const maxSdpForRole = Math.floor(max_sdp * cosCap);
+    if (fp > 0) {
+      const maxLevelsByCos = Math.floor(maxSdpForRole / fp);
+      if (levels > maxLevelsByCos) {
+        console.log(`  ⚠ Scénario ${label} (${role}): ${levels} niv → ${maxLevelsByCos} niv (cap COS ${(cosCap*100).toFixed(0)}% = ${maxSdpForRole}m² SDP max)`);
+        levels = Math.max(1, maxLevelsByCos);
+      }
     }
 
     const height = Math.round(levels * floor_height * 10) / 10;
@@ -729,7 +793,7 @@ app.post("/compute-scenarios", (req, res) => {
 
 function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_driver,
   levels, standing_level, program_main, site_saturation, project_type, existing_fp_m2,
-  streetBearing = 0, latitude = 14 }) {
+  streetBearing = 0, latitude = 14, scenario_role = "EQUILIBRE" }) {
 
   const fillRatio = fp_m2 / Math.max(1, envelopeArea);
   const isMixte = /mixte|mixed/i.test(program_main || "");
@@ -814,7 +878,21 @@ function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_
     typology = "BLOC";
     reason = `emprise ${(fillRatio*100).toFixed(0)}% > 80% → bloc compact seul possible`;
   }
-  // ── Sélection par massing_mode (différenciation entre scénarios) ──
+  // ── v56.7: RÔLE influence la préférence typologique ──
+  // PRUDENT → préfère les formes simples (BLOC) sauf si le terrain impose autre chose
+  // INTENSIFICATION → peut proposer des formes complexes (EN_U, BARRE longue)
+  // EQUILIBRE → compromis
+  else if (scenario_role === "PRUDENT" && fillRatio > 0.35) {
+    typology = "BLOC";
+    reason = `PRUDENT + emprise ${(fillRatio*100).toFixed(0)}% → bloc simple (risque minimal, coût maîtrisé)`;
+  } else if (scenario_role === "INTENSIFICATION" && isMixte && envelopeArea > 500 && fillRatio > 0.35) {
+    typology = "EN_U";
+    reason = "INTENSIFICATION + mixte + grande parcelle → U (max SDP, cour intérieure, commerce RDC)";
+  } else if (scenario_role === "INTENSIFICATION" && envAspect > 1.8 && barreSolarScore > 0.5) {
+    typology = "BARRE";
+    reason = `INTENSIFICATION + terrain allongé + bonne orientation solaire → barre longue`;
+  }
+  // ── Sélection par massing_mode (différenciation de forme) ──
   else if (massing_mode === "COMPACT") {
     // COMPACT = rentabilité max, coût optimisé → BLOC ou EN_U
     if (isPremium && isMixte && envelopeArea > 500) {
@@ -939,10 +1017,11 @@ function envelopeDepthAtU(uTarget, envLocal) {
 
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
-    site_saturation, project_type, existing_fp_m2 } = context;
+    site_saturation, project_type, existing_fp_m2,
+    road_bearing: roadBearingInput, scenario_role } = context;
 
-  console.log(`┌── computeMassingPolygon v56.3 (SOLAR + POSITION + TYPOLOGY + INWARD FIX) ──`);
-  console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}`);
+  console.log(`┌── computeMassingPolygon v56.7 (ROAD_BEARING + RÔLE + SOLAR) ──`);
+  console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
 
   // ── 1. Centroïde et conversion mètres ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -950,20 +1029,42 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const envM = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon));
   envelopeCoords.forEach((c, i) => console.log(`│ Env[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
 
-  // ── 2. Détecter la façade rue (v56.3 — longueur seule) ──
-  // Le bord le PLUS LONG de l'enveloppe est le front de rue.
-  // En urbanisme ouest-africain, les parcelles ont leur côté le plus large
-  // face à la rue. La latitude n'est PAS un bon indicateur (toutes les parcelles
-  // sont presque à la même latitude en zone tropicale).
+  // ── 2. Détecter la façade rue ──
+  // v56.7: Si road_bearing est fourni par la Sheet, on cherche le bord de l'enveloppe
+  // dont l'azimut est le PLUS PROCHE du road_bearing (= parallèle à la route).
+  // Sinon, fallback: le bord le PLUS LONG (heuristique ouest-africaine).
   let frontIdx = 0;
   let maxEdgeLen = 0;
-  for (let i = 0; i < envelopeCoords.length; i++) {
-    const j = (i + 1) % envelopeCoords.length;
-    const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
-    const edgeLen = Math.sqrt(dx * dx + dy * dy);
-    if (edgeLen > maxEdgeLen) { maxEdgeLen = edgeLen; frontIdx = i; }
+
+  if (roadBearingInput != null && !isNaN(roadBearingInput)) {
+    // ── ROAD BEARING CONNU : trouver le bord parallèle à la route ──
+    const rb = ((roadBearingInput % 360) + 360) % 360;
+    let bestAngleDiff = 999;
+    for (let i = 0; i < envelopeCoords.length; i++) {
+      const j = (i + 1) % envelopeCoords.length;
+      const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
+      const edgeLen = Math.sqrt(dx * dx + dy * dy);
+      if (edgeLen < 3) continue; // ignorer les micro-bords
+      const edgeBearing = ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360;
+      // Différence angulaire (0°-180°, car un bord à 10° et 190° est le même axe)
+      let diff = Math.abs(edgeBearing - rb) % 360;
+      if (diff > 180) diff = 360 - diff;
+      if (diff > 90) diff = 180 - diff; // même axe, direction opposée
+      // Pondérer légèrement par la longueur (préférer un bord long à angle égal)
+      const score = diff - edgeLen * 0.02;
+      if (score < bestAngleDiff) { bestAngleDiff = score; frontIdx = i; maxEdgeLen = edgeLen; }
+    }
+    console.log(`│ Front edge: road_bearing=${rb.toFixed(0)}° → best match [${frontIdx}→${(frontIdx+1)%envM.length}] angleDiff=${bestAngleDiff.toFixed(1)}° len=${maxEdgeLen.toFixed(1)}m`);
+  } else {
+    // ── FALLBACK : bord le plus long = front de rue ──
+    for (let i = 0; i < envelopeCoords.length; i++) {
+      const j = (i + 1) % envelopeCoords.length;
+      const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
+      const edgeLen = Math.sqrt(dx * dx + dy * dy);
+      if (edgeLen > maxEdgeLen) { maxEdgeLen = edgeLen; frontIdx = i; }
+    }
+    console.log(`│ Front edge: no road_bearing → longest edge [${frontIdx}→${(frontIdx+1)%envM.length}] len=${maxEdgeLen.toFixed(1)}m`);
   }
-  console.log(`│ Front edge: longest edge [${frontIdx}→${(frontIdx+1)%envM.length}] len=${maxEdgeLen.toFixed(1)}m`);
   const fi = frontIdx, fj = (fi + 1) % envM.length;
   const sDx = envM[fj].x - envM[fi].x, sDy = envM[fj].y - envM[fi].y;
   const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
@@ -1009,12 +1110,12 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
 
   console.log(`│ Local frame: W=${availW.toFixed(1)}m(rue) × D=${availD.toFixed(1)}m(prof) aspect=${envAspect.toFixed(2)}`);
 
-  // ── 5. Sélection typologique (avec orientation solaire et bearing) ──
+  // ── 5. Sélection typologique (avec orientation solaire, bearing et rôle) ──
   const { typology, reason } = selectTypology({
     fp_m2, envelopeArea, envAspect, massing_mode,
     primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2: Number(existing_fp_m2) || 0,
-    streetBearing, latitude: eLat,
+    streetBearing, latitude: eLat, scenario_role,
   });
   console.log(`│ Typology: ${typology} — ${reason}`);
 
@@ -1030,12 +1131,20 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
 
   console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
 
-  // Position en profondeur (retrait de la rue)
-  let depthPct = massing_mode === "COMPACT" ? 0.50 : massing_mode === "SPREAD" ? 0.60 : 0.55;
-  if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
-  depthPct = Math.max(0.40, Math.min(0.70, depthPct));
+  // Position en profondeur (retrait de la rue) — v56.7 : basé sur le RÔLE
+  // INTENSIFICATION → plus près de la rue (visibilité, commerce RDC, intensité urbaine)
+  // EQUILIBRE → retrait modéré
+  // PRUDENT → retrait plus marqué (calme, résidentiel, phasage)
+  let depthPct;
+  if (scenario_role === "INTENSIFICATION") depthPct = 0.45;
+  else if (scenario_role === "PRUDENT") depthPct = 0.62;
+  else depthPct = 0.53; // EQUILIBRE
 
-  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (mode=${massing_mode})`);
+  // Ajustement solaire : si la rue est N-S, reculer un peu pour libérer la cour sud
+  if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
+  depthPct = Math.max(0.38, Math.min(0.72, depthPct));
+
+  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (role=${scenario_role}, mode=${massing_mode})`);
 
   // ── 6. Générer la forme bâtie ──
   let bPts = [];
@@ -1710,6 +1819,8 @@ app.post("/generate-massing", async (req, res) => {
     // ── Contexte parcelle occupée / rénovation ──
     project_type,          // NEUF | RENOVATION | EXTENSION | SURELEVATION | DEMOLITION_RECONSTRUCTION
     existing_footprint_m2, // emprise existante si parcelle déjà construite
+    // ── v56.7 : orientation rue ──
+    road_bearing,          // azimut de la route principale (degrés, depuis la Sheet)
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -1822,6 +1933,8 @@ app.post("/generate-massing", async (req, res) => {
     site_saturation: site_saturation_level || "MEDIUM",
     project_type: project_type || "NEUF",
     existing_fp_m2: Number(existing_footprint_m2) || 0,
+    road_bearing: Number(road_bearing) || null,        // v56.7: azimut rue depuis la Sheet
+    scenario_role: label === "A" ? "INTENSIFICATION" : label === "B" ? "EQUILIBRE" : "PRUDENT",
   });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -1910,7 +2023,7 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, server_version: "56.6",
+      ok: true, cached: false, server_version: "56.7",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
