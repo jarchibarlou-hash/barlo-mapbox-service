@@ -12,7 +12,97 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.5" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.6" }));
+
+// ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
+app.post("/diag-massing", (req, res) => {
+  try {
+    const { polygon_points, site_area, setback_front = 3, setback_side = 3, setback_back = 3,
+      fp_m2 = 1147, envelope_w = 24, envelope_d = 24 } = req.body;
+    if (!polygon_points) return res.status(400).json({ error: "polygon_points requis" });
+
+    const coords = polygon_points.split("|").map(pt => {
+      const [lat, lon] = pt.trim().split(",").map(Number);
+      return { lat, lon };
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+    if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
+
+    const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
+    const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
+
+    // Parcelle en mètres
+    const parcelM = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
+    const parcelMinX = Math.min(...parcelM.map(p => p.x)), parcelMaxX = Math.max(...parcelM.map(p => p.x));
+    const parcelMinY = Math.min(...parcelM.map(p => p.y)), parcelMaxY = Math.max(...parcelM.map(p => p.y));
+
+    // Enveloppe
+    const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
+    const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+    const envMinX = Math.min(...envM.map(p => p.x)), envMaxX = Math.max(...envM.map(p => p.x));
+    const envMinY = Math.min(...envM.map(p => p.y)), envMaxY = Math.max(...envM.map(p => p.y));
+
+    // Aire réelle enveloppe
+    let envAreaShoelace = 0;
+    for (let i = 0; i < envM.length; i++) {
+      const j = (i + 1) % envM.length;
+      envAreaShoelace += envM[i].x * envM[j].y - envM[j].x * envM[i].y;
+    }
+    envAreaShoelace = Math.abs(envAreaShoelace) / 2;
+
+    // Massing polygon
+    const fp = Number(fp_m2);
+    const massingCoords = computeMassingPolygon(envelopeCoords, fp, envAreaShoelace, {
+      massing_mode: "BALANCED", primary_driver: "MAX_CAPACITE", levels: 4,
+      standing_level: "STANDARD", program_main: "", site_saturation: "MEDIUM",
+      project_type: "NEUF", existing_fp_m2: 0,
+    });
+
+    // Massing en mètres pour vérifier les dimensions
+    const massingM = massingCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+    const masMinX = Math.min(...massingM.map(p => p.x)), masMaxX = Math.max(...massingM.map(p => p.x));
+    const masMinY = Math.min(...massingM.map(p => p.y)), masMaxY = Math.max(...massingM.map(p => p.y));
+    let masAreaShoelace = 0;
+    for (let i = 0; i < massingM.length; i++) {
+      const j = (i + 1) % massingM.length;
+      masAreaShoelace += massingM[i].x * massingM[j].y - massingM[j].x * massingM[i].y;
+    }
+    masAreaShoelace = Math.abs(masAreaShoelace) / 2;
+
+    res.json({
+      server_version: "56.6",
+      input: { fp_m2: fp, site_area: Number(site_area), setbacks: { front: Number(setback_front), side: Number(setback_side), back: Number(setback_back) } },
+      parcel: {
+        centroid: { lat: cLat, lon: cLon },
+        bbox_m: { w: (parcelMaxX - parcelMinX).toFixed(1), d: (parcelMaxY - parcelMinY).toFixed(1) },
+        vertices_m: parcelM.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+      },
+      envelope: {
+        vertices_count: envelopeCoords.length,
+        bbox_m: { w: (envMaxX - envMinX).toFixed(1), d: (envMaxY - envMinY).toFixed(1) },
+        area_m2: +envAreaShoelace.toFixed(0),
+        vertices_m: envM.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+        vertices_gps: envelopeCoords.map(c => ({ lat: +c.lat.toFixed(7), lon: +c.lon.toFixed(7) })),
+      },
+      massing: {
+        typology: massingCoords._typology,
+        reason: massingCoords._reason,
+        bbox_m: { w: (masMaxX - masMinX).toFixed(1), d: (masMaxY - masMinY).toFixed(1) },
+        area_m2: +masAreaShoelace.toFixed(0),
+        fill_ratio: +(masAreaShoelace / envAreaShoelace).toFixed(3),
+        target_ratio: +(fp / envAreaShoelace).toFixed(3),
+        vertices_m: massingM.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+        vertices_gps: massingCoords.filter(c => c.lat).map(c => ({ lat: +c.lat.toFixed(7), lon: +c.lon.toFixed(7) })),
+      },
+      sheet_vs_real: {
+        sheet_envelope: { w: Number(envelope_w), d: Number(envelope_d), area: Number(envelope_w) * Number(envelope_d) },
+        real_envelope: { w: +(envMaxX - envMinX).toFixed(1), d: +(envMaxY - envMinY).toFixed(1), area: +envAreaShoelace.toFixed(0) },
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack?.split("\n").slice(0, 5) });
+  }
+});
+
 // ─── DIAGNOSTIC : tester compute-scenarios avec des valeurs par défaut ──────
 app.get("/diag-scenarios", (req, res) => {
   const sa = Number(req.query.site_area) || 1950;
@@ -928,73 +1018,26 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   });
   console.log(`│ Typology: ${typology} — ${reason}`);
 
-  // ── 5b. POSITION CIBLE — stratégie d'implantation v56.3 ──
-  // Règles d'implantation professionnelles (Afrique de l'Ouest) :
-  //   - TOUJOURS en retrait significatif de la rue principale
-  //   - Minimum ~30% de profondeur = jamais collé au front
-  //   - Espaces verts / cour / parking entre la rue et le bâtiment
-  //   - Plus profond si SPREAD (jardins, terrasses), plus centré si COMPACT
-  //   - Ajustement solaire selon l'orientation de la rue
+  // ── 5b. v56.5 SIMPLIFIED POSITIONING ──
+  // Approche directe : utiliser le bbox de l'enveloppe en repère local.
+  // Le bâtiment est inscrit dans le bbox avec une marge de 2m.
+  // Pas de cross-section, pas de containment check, pas de shrink loop.
+  // Garanti de fonctionner pour toute enveloppe convexe.
 
-  let depthPct;
-  if (massing_mode === "COMPACT") {
-    // COMPACT : en retrait mais pas trop profond, accès efficace
-    depthPct = 0.55;
-  } else if (massing_mode === "SPREAD") {
-    // SPREAD : bien reculé, jardins devant, intimité maximale
-    depthPct = 0.68;
-  } else {
-    // BALANCED : retrait standard, espace dégagé devant
-    depthPct = 0.60;
-  }
+  const margin = 2.0; // marge constructive (l'enveloppe est déjà en retrait de la parcelle)
+  const maxW = Math.max(8, availW - 2 * margin);
+  const maxD = Math.max(8, availD - 2 * margin);
 
-  // Ajustement solaire : si la rue est côté soleil (sud), reculer davantage
-  // pour que les espaces devant soient éclairés et le bâtiment protégé
-  if (solarFavorDepth) {
-    depthPct = Math.min(0.75, depthPct + 0.08);
-    console.log(`│ Solar adjust: rue face au soleil → recul +8% (depthPct=${depthPct.toFixed(2)})`);
-  }
+  console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
 
-  // GARANTIE : jamais plus de 80% ni moins de 35% de profondeur
-  depthPct = Math.max(0.35, Math.min(0.80, depthPct));
+  // Position en profondeur (retrait de la rue)
+  let depthPct = massing_mode === "COMPACT" ? 0.50 : massing_mode === "SPREAD" ? 0.60 : 0.55;
+  if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
+  depthPct = Math.max(0.40, Math.min(0.70, depthPct));
+
   console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (mode=${massing_mode})`);
 
-
-  // Vis-à-vis : décaler latéralement si le terrain est asymétrique
-  // (le centroïde de l'enveloppe n'est pas forcément au milieu du bbox)
-  const envCentroidU = envLocal.reduce((s, p) => s + p.u, 0) / envLocal.length;
-  const targetCV = minV + availD * depthPct;
-  // Centrer latéralement sur le centroïde de l'enveloppe (pas le milieu du bbox)
-  // pour s'adapter aux formes irrégulières
-  const targetCU = envCentroidU;
-
-  // ── 6. v56.3 : MESURER l'espace RÉEL à la position cible ──
-  // Scanner l'enveloppe à la profondeur cible pour trouver la vraie largeur
-  const margin = 4.0; // v56.3: marge augmentée (4m) pour garantir le respect des retraits
-  const crossW = envelopeWidthAtV(targetCV, envLocal);
-  const crossD = envelopeDepthAtU(targetCU, envLocal);
-
-  // L'espace réellement disponible à cette position
-  const realW = Math.max(6, crossW.width - 2 * margin);
-  const realD = Math.max(6, crossD.depth - 2 * margin);
-  // Centre réel de la zone disponible (pas forcément le centre du bounding box)
-  const realCU = (crossW.minU + crossW.maxU) / 2;
-  const realCV = targetCV; // on garde la profondeur cible
-
-  // On utilise aussi le bbox global comme référence max
-  const bboxW = Math.max(6, availW - 2 * margin);
-  const bboxD = Math.max(6, availD - 2 * margin);
-
-  // Le maxW/maxD pour le bâtiment = le MINIMUM entre le réel et le bbox
-  const maxW = Math.min(realW, bboxW);
-  const maxD = Math.min(realD, bboxD);
-
-  console.log(`│ Target position: CV=${targetCV.toFixed(1)} (${(depthPct*100).toFixed(0)}% depth)`);
-  console.log(`│ Cross-section at target: W=${crossW.width.toFixed(1)}m [${crossW.minU.toFixed(1)}→${crossW.maxU.toFixed(1)}]`);
-  console.log(`│ Cross-section at center: D=${crossD.depth.toFixed(1)}m [${crossD.minV.toFixed(1)}→${crossD.maxV.toFixed(1)}]`);
-  console.log(`│ Available for building: maxW=${maxW.toFixed(1)}m maxD=${maxD.toFixed(1)}m (margin=${margin}m)`);
-
-  // ── 7. Générer la forme bâtie ──
+  // ── 6. Générer la forme bâtie ──
   let bPts = [];
   let bW, bD;
 
@@ -1008,34 +1051,24 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   }
 
   if (typology === "BARRE") {
-    const idealD = Math.min(14, maxD * 0.45);
+    const idealD = Math.min(14, maxD * 0.40);
     bW = Math.min(fp_m2 / idealD, maxW);
     bD = Math.min(fp_m2 / bW, maxD);
-    if (bW > maxW) { bW = maxW; bD = Math.min(fp_m2 / bW, maxD); }
     bPts = [
       { u: -bW / 2, v: -bD / 2 }, { u: bW / 2, v: -bD / 2 },
       { u: bW / 2, v: bD / 2 }, { u: -bW / 2, v: bD / 2 },
     ];
 
   } else if (typology === "EN_U") {
-    const wingPct = 0.22;
-    const backPct = 0.28;
-    // v56.3: réduire pour containment
-    bW = Math.min(maxW * 0.90, Math.max(18, maxW * 0.75));
-    bD = Math.min(maxD * 0.90, Math.max(14, maxD * 0.70));
-    let wing = bW * wingPct;
-    let back = bD * backPct;
+    const wingPct = 0.22, backPct = 0.28;
+    bW = Math.min(maxW * 0.92, Math.max(16, maxW * 0.80));
+    bD = Math.min(maxD * 0.92, Math.max(14, maxD * 0.80));
+    let wing = bW * wingPct, back = bD * backPct;
     let aU = bW * back + 2 * wing * (bD - back);
     if (aU > 0 && aU !== fp_m2) {
       const sc = Math.sqrt(fp_m2 / aU);
       bW = Math.min(bW * sc, maxW); bD = Math.min(bD * sc, maxD);
       wing = bW * wingPct; back = bD * backPct;
-      aU = bW * back + 2 * wing * (bD - back);
-      if (aU > 0 && Math.abs(aU - fp_m2) / fp_m2 > 0.05) {
-        const sc2 = Math.sqrt(fp_m2 / aU);
-        bW = Math.min(bW * sc2, maxW); bD = Math.min(bD * sc2, maxD);
-        wing = bW * wingPct; back = bD * backPct;
-      }
     }
     bPts = [
       { u: -bW / 2, v: -bD / 2 },
@@ -1049,24 +1082,15 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     ];
 
   } else if (typology === "EN_L") {
-    const armPctW = 0.35;
-    const armPctD = 0.35;
-    // v56.3: réduire les dimensions initiales pour garantir le containment
-    bW = Math.min(maxW * 0.90, Math.max(14, maxW * 0.70));
-    bD = Math.min(maxD * 0.90, Math.max(14, maxD * 0.65));
-    let aW = bW * armPctW;
-    let aD = bD * armPctD;
+    const armPctW = 0.35, armPctD = 0.35;
+    bW = Math.min(maxW * 0.92, Math.max(14, maxW * 0.80));
+    bD = Math.min(maxD * 0.92, Math.max(14, maxD * 0.80));
+    let aW = bW * armPctW, aD = bD * armPctD;
     let aL = bW * aD + aW * (bD - aD);
     if (aL > 0 && aL !== fp_m2) {
       const sc = Math.sqrt(fp_m2 / aL);
       bW = Math.min(bW * sc, maxW); bD = Math.min(bD * sc, maxD);
       aW = bW * armPctW; aD = bD * armPctD;
-      aL = bW * aD + aW * (bD - aD);
-      if (aL > 0 && Math.abs(aL - fp_m2) / fp_m2 > 0.05) {
-        const sc2 = Math.sqrt(fp_m2 / aL);
-        bW = Math.min(bW * sc2, maxW); bD = Math.min(bD * sc2, maxD);
-        aW = bW * armPctW; aD = bD * armPctD;
-      }
     }
     bPts = [
       { u: -bW / 2, v: -bD / 2 },
@@ -1090,101 +1114,24 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   }
 
   const shapeArea = polyArea(bPts);
-  console.log(`│ Shape: ${typology} ${bW.toFixed(1)}m × ${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m² (${(shapeArea/fp_m2*100).toFixed(0)}%)`);
+  console.log(`│ Shape: ${typology} bW=${bW.toFixed(1)}m × bD=${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m²`);
 
-  // ── 8. POSITIONNEMENT avec centre réel de la zone dispo ──
-  const cU = realCU;
-  const cV = realCV;
-  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)})`);
+  // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
+  // Centre U = milieu du bbox, Centre V = retrait en profondeur
+  const cU = (minU + maxU) / 2;
+  const cV = minV + availD * depthPct;
 
-  let positioned = bPts.map(p => ({ u: p.u + cU, v: p.v + cV }));
+  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)}) [bbox mid-U, ${(depthPct*100).toFixed(0)}% depth-V]`);
 
-  // ── 9. VÉRIFICATION CONTAINMENT (multi-stratégie) ──
+  // Positionner les points : local (u,v) → mètre (x,y) → GPS
   function localToMeter(p) {
     return { x: p.u * sUx + p.v * nUx, y: p.u * sUy + p.v * nUy };
   }
 
-  function tryPosition(center, scale) {
-    const pts = bPts.map(p => ({ u: p.u * scale + center.u, v: p.v * scale + center.v }));
-    const mPts = pts.map(localToMeter);
-    // v56.3: vérifier TOUS les sommets ET les milieux des arêtes (pour les formes concaves comme le L)
-    const allInside = mPts.every(p => ptInPoly(p.x, p.y, envM));
-    if (!allInside) return { ok: false, pts, mPts };
-    // Vérifier aussi les milieux d'arêtes (un L peut avoir une arête qui traverse l'enveloppe)
-    for (let i = 0; i < mPts.length; i++) {
-      const j = (i + 1) % mPts.length;
-      const mx = (mPts[i].x + mPts[j].x) / 2, my = (mPts[i].y + mPts[j].y) / 2;
-      if (!ptInPoly(mx, my, envM)) return { ok: false, pts, mPts };
-    }
-    return { ok: true, pts, mPts };
-  }
+  const finalPts = bPts.map(p => ({ u: p.u + cU, v: p.v + cV }));
+  const finalM = finalPts.map(localToMeter);
 
-  // Stratégie 1 : position cible, taille pleine
-  let result1 = tryPosition({ u: cU, v: cV }, 1.0);
-  let finalPts, finalM;
-
-  if (result1.ok) {
-    finalPts = result1.pts; finalM = result1.mPts;
-    console.log(`│ ✓ Position OK du premier coup (100%)`);
-  } else {
-    console.log(`│ ⚠ Hors enveloppe à la position cible — recherche meilleure position...`);
-
-    // Stratégie 2 : centroïde de l'enveloppe
-    const envCU = envLocal.reduce((s, p) => s + p.u, 0) / envLocal.length;
-    const envCV = envLocal.reduce((s, p) => s + p.v, 0) / envLocal.length;
-
-    // Tester 5 positions candidates
-    const candidates = [
-      { u: envCU, v: envCV, name: "centroïde" },
-      { u: (cU + envCU) / 2, v: (cV + envCV) / 2, name: "mi-chemin" },
-      { u: envCU, v: cV, name: "centroïde-U + cible-V" },
-      { u: cU, v: envCV, name: "cible-U + centroïde-V" },
-      { u: cU, v: minV + availD * 0.45, name: "moins profond (45%)" },
-    ];
-
-    let found = false;
-    for (const cand of candidates) {
-      const r = tryPosition(cand, 1.0);
-      if (r.ok) {
-        finalPts = r.pts; finalM = r.mPts; found = true;
-        console.log(`│ ✓ Position "${cand.name}" OK à 100%`);
-        break;
-      }
-    }
-
-    if (!found) {
-      // Stratégie 3 : réduire légèrement depuis le centroïde
-      for (let s = 0.95; s >= 0.70; s -= 0.025) {
-        for (const cand of [
-          { u: envCU, v: envCV },
-          { u: (cU + envCU) / 2, v: (cV + envCV) / 2 },
-        ]) {
-          const r = tryPosition(cand, s);
-          if (r.ok) {
-            finalPts = r.pts; finalM = r.mPts; found = true;
-            console.log(`│ ✓ Réduit à ${(s * 100).toFixed(0)}% au ${cand === candidates[0] ? "centroïde" : "mi-chemin"}`);
-            break;
-          }
-        }
-        if (found) break;
-      }
-    }
-
-    if (!found) {
-      // FALLBACK ultime : homothétie de l'enveloppe (garanti)
-      console.log(`│ ⚠ FALLBACK homothétie (ne devrait quasi jamais arriver avec v56)`);
-      const sf = Math.min(0.80, Math.sqrt(Math.max(50, fp_m2) / Math.max(1, envelopeArea)));
-      const fallback = envelopeCoords.map(c => ({
-        lat: eLat + (c.lat - eLat) * sf, lon: eLon + (c.lon - eLon) * sf,
-      }));
-      fallback._typology = typology;
-      fallback._reason = reason + " (fallback homothétie)";
-      console.log(`└── end v56 (fallback) ──`);
-      return fallback;
-    }
-  }
-
-  // ── 10. Conversion GPS ──
+  // ── 8. Conversion GPS ──
   const result = finalM.map(p => ({
     lat: eLat + p.y / R_EARTH * 180 / Math.PI,
     lon: eLon + p.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
@@ -1963,7 +1910,7 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, server_version: "56.5",
+      ok: true, cached: false, server_version: "56.6",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -1984,7 +1931,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v56.5 on port ${PORT}`);
+  console.log(`BARLO v56.6 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
