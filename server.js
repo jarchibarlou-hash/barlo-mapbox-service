@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "57.10" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "57.11" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -69,7 +69,7 @@ app.post("/diag-massing", (req, res) => {
     masAreaShoelace = Math.abs(masAreaShoelace) / 2;
 
     res.json({
-      server_version: "57.10",
+      server_version: "57.11",
       input: { fp_m2: fp, site_area: Number(site_area), setbacks: { front: Number(setback_front), side: Number(setback_side), back: Number(setback_back) } },
       parcel: {
         centroid: { lat: cLat, lon: cLon },
@@ -125,7 +125,7 @@ app.get("/diag-scenarios", (req, res) => {
     density_pressure_factor: 1, driver_intensity: "MEDIUM",
   });
   res.json({
-    version: "57.10", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
+    version: "57.11", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
     CES: ZONING_CES[zt], COS: ZONING_COS[zt],
     fp_A: scenarios.A.fp_m2, fp_B: scenarios.B.fp_m2, fp_C: scenarios.C.fp_m2,
     levels_A: scenarios.A.levels, levels_B: scenarios.B.levels, levels_C: scenarios.C.levels,
@@ -884,18 +884,23 @@ function computeSmartScenarios({
   const climaticZone = detectClimaticZone(zoning_type, country);
   const solarImpact = computeSolarImpact(envelope_w, envelope_d, climaticZone, parcel_orientation);
 
-  // La profondeur recommandée impacte l'emprise constructible si elle est inférieure à D
-  const dSolaire = Math.min(dConstructible, solarImpact.profondeur_recommandee_m || dConstructible);
-  // Si contrainte solaire active, recalculer emprise constructible
-  const empriseConstructibleSolaire = wConstructible * dSolaire;
-  const solarReductionPct = empriseConstructible > 0 ? Math.round((1 - empriseConstructibleSolaire / empriseConstructible) * 100) : 0;
-  if (solarReductionPct > 0) {
-    console.log(`│ v57.9 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}→${dSolaire.toFixed(1)}m (ventilation traversante) → emprise ${Math.round(empriseConstructibleSolaire)}m² (-${solarReductionPct}% vs retraits seuls)`);
+  // v57.11: Le solaire est une RECOMMANDATION (façades, orientation, ventilation)
+  // mais ne plafonne plus la géométrie — le CES réglementaire reste la contrainte structurante.
+  // Si la profondeur dépasse le seuil solaire, on applique un malus coût (climatisation)
+  // mais on ne réduit PAS l'emprise constructible.
+  const profondeurSolaire = solarImpact.profondeur_recommandee_m || 99;
+  const depassementSolaire = Math.max(0, dConstructible - profondeurSolaire);
+  const solaireSouple = depassementSolaire > 0; // true si bâtiment plus profond que recommandé
+  if (solaireSouple) {
+    // Malus proportionnel au dépassement (max +15% si double de la profondeur recommandée)
+    const depassementRatio = Math.min(1, depassementSolaire / profondeurSolaire);
+    solarImpact.malus_orientation_pct = Math.round(solarImpact.malus_orientation_pct + depassementRatio * 10);
+    console.log(`│ v57.11 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}m > recommandé ${profondeurSolaire}m (+${depassementSolaire.toFixed(1)}m) → malus clim +${solarImpact.malus_orientation_pct}% (RECOMMANDATION, CES préservé)`);
   } else {
-    console.log(`│ v57.9 solaire: zone=${climaticZone} orientation=${solarImpact.orientationScore} — pas de reduction supplementaire`);
+    console.log(`│ v57.11 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}m ≤ ${profondeurSolaire}m — conforme ventilation traversante`);
   }
-  // L'emprise effective est le MIN entre retraits et contrainte solaire
-  const empriseEffective = Math.min(empriseConstructible, empriseConstructibleSolaire);
+  // v57.11: emprise effective = emprise constructible (retraits seuls, PAS plafonnée par le solaire)
+  const empriseEffective = empriseConstructible;
 
   // ══════════════════════════════════════════════════════════════════════════════
   // v56.1 — TOUS LES PARAMÈTRES INTÉGRÉS (plus de code mort)
@@ -1308,7 +1313,7 @@ function computeSmartScenarios({
       const rdcHeightM = hasRdcCommerce ? (rules.rdc_height_m || 4.0) : floor_height;
 
       const sdpDual = computeSdpDual(levels);
-      console.log(`│ ✅ ${label} (${role}) CES-DRIVEN v57.10${isBungalow ? " [BUNGALOWS]" : ""}:`);
+      console.log(`│ ✅ ${label} (${role}) CES-DRIVEN v57.11${isBungalow ? " [BUNGALOWS]" : ""}:`);
       console.log(`│   📊 CES EFFECTIF: réglementaire=${(ces*100).toFixed(0)}% → client=${(effectiveCES*100).toFixed(1)}% (clientMod=${clientCesMod.toFixed(3)}: budPres=${budgetPressure.toFixed(2)} post=${postureMod} risk=${riskPenalty.toFixed(3)} cap=${capacityBoost.toFixed(3)} dens=${densityBandMult})`);
       console.log(`│   📊 maxFp: réglementaire=${Math.round(max_fp)}m² → client=${effectiveMaxFp}m² | cesFill=${(cesFill*100).toFixed(0)}% (role=${role})`);
       console.log(`│   RDC=${fpRdc}m² (${(fpRdc/site_area*100).toFixed(0)}% terrain) | ét.=${fpEtages}m² (${(fpEtages/site_area*100).toFixed(0)}%) [${etageExt === "ENVELOPE" ? "→enveloppe" : "×" + etageExt}]`);
@@ -1434,22 +1439,34 @@ function computeSmartScenarios({
     const freeGround = envelope_area - (fpRdc || fp); // espace libre au sol = enveloppe - empreinte RDC
     const parkingEst = hasPilotis ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
 
-    // ── v57.10 PARKING DÉTAILLÉ + ESPACE DÉGAGÉ ──
+    // ── v57.11 PARKING DÉTAILLÉ + ESPACE DÉGAGÉ (corrigé) ──
+    // Parking basé sur les places REQUISES (réglementation), pas sur tout l'espace théorique
     const parkingPerUnit = rules.parking_per_unit || 1;
     const parkingRequired = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnitsResult || 1) * parkingPerUnit));
-    const parkingM2Used = parkingEst * PILOTIS_CONFIG.PARKING_SPOT_M2;
-    const parkingSuffisant = parkingEst >= parkingRequired;
-    const parkingDeficit = parkingSuffisant ? 0 : parkingRequired - parkingEst;
     const parkingSource = hasPilotis ? "PILOTIS" : "SURFACE";
 
-    // Espace dégagé : sol libre TOTAL = site_area - fpRdc (inclut retraits, cour, jardin)
-    const solLibreTotal = site_area - (fpRdc || fp); // tout le terrain non bâti
-    const espaceCirculation = hasPilotis ? 0 : parkingM2Used; // parking occupe du sol libre
-    const espaceVert = Math.max(0, Math.round(solLibreTotal - espaceCirculation));
+    // Sol libre TOTAL = site_area - emprise RDC (inclut retraits, cour, jardin, parking)
+    const solLibreTotal = site_area - (fpRdc || fp);
+
+    // v57.11: Ratio réaliste — parking requis occupe ~1/3 du sol libre, espace dégagé ~2/3
+    // On dimensionne le parking sur les places requises uniquement
+    const parkingM2Requis = parkingRequired * PILOTIS_CONFIG.PARKING_SPOT_M2;
+    const parkingM2Effectif = hasPilotis ? 0 : Math.min(parkingM2Requis, Math.round(solLibreTotal * 0.33));
+    const parkingPlacesEffectif = hasPilotis
+      ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) // pilotis : sous le bâtiment
+      : Math.floor(parkingM2Effectif / PILOTIS_CONFIG.PARKING_SPOT_M2);
+    const parkingSuffisant = parkingPlacesEffectif >= parkingRequired;
+    const parkingDeficit = parkingSuffisant ? 0 : parkingRequired - parkingPlacesEffectif;
+
+    // Espace dégagé = sol libre - parking effectif en surface
+    const espaceVert = Math.max(0, Math.round(solLibreTotal - parkingM2Effectif));
     const freeGroundPctTotal = site_area > 0 ? solLibreTotal / site_area : 0;
     const espaceVertPct = site_area > 0 ? espaceVert / site_area : 0;
+    const ratioParkingEspace = solLibreTotal > 0
+      ? `${Math.round(parkingM2Effectif / solLibreTotal * 100)}/${Math.round(espaceVert / solLibreTotal * 100)}`
+      : "0/0";
 
-    // Qualification de l'espace dégagé
+    // Qualification de l'espace dégagé (basée sur espace vert réel, pas le sol brut)
     let espaceQualite = "CONFORTABLE";
     let espaceDescription = "";
     if (espaceVertPct >= 0.40) {
@@ -1489,22 +1506,24 @@ function computeSmartScenarios({
       total_levels_incl_pilotis: totalLevelsWithPilotis,
       ground_reserve_pct: Math.round((groundReserve || 0) * 100),
       free_ground_m2: Math.round(freeGround),
-      parking_spots_estimate: parkingEst,
-      // v57.10 parking détaillé + espace dégagé
+      parking_spots_estimate: parkingPlacesEffectif,
+      // v57.11 parking détaillé + espace dégagé (basé sur requis, ratio 1/3-2/3)
       parking_detail: {
-        places_disponibles: parkingEst,
+        places_disponibles: parkingPlacesEffectif,
         places_requises: parkingRequired,
         ratio_par_unite: parkingPerUnit,
         suffisant: parkingSuffisant,
         deficit: parkingDeficit,
         source: parkingSource,
-        m2_parking: Math.round(parkingM2Used),
+        m2_parking: Math.round(parkingM2Effectif),
+        m2_parking_requis: Math.round(parkingM2Requis),
       },
       espace_degage: {
         sol_libre_total_m2: Math.round(solLibreTotal),
         sol_libre_pct: Math.round(freeGroundPctTotal * 100),
         espace_vert_m2: espaceVert,
         espace_vert_pct: Math.round(espaceVertPct * 100),
+        ratio_parking_espace: ratioParkingEspace,
         qualite: espaceQualite,
         description: espaceDescription,
       },
@@ -1980,10 +1999,13 @@ function computeSmartScenarios({
     if (mitoDet.justification) {
       contexte.push(mitoDet.justification);
     }
-    // v57.9: orientation solaire dans la lecture du site
+    // v57.11: orientation solaire = recommandation (pas contrainte dure)
     contexte.push(solarImpact.recommandation_orientation);
+    if (solaireSouple) {
+      contexte.push(`profondeur de batiment (${Math.round(dConstructible)}m) superieure au seuil de ventilation traversante (${profondeurSolaire}m) — prevoir des dispositifs de ventilation intermediaires (patios, gaines, double orientation)`);
+    }
     if (solarImpact.malus_orientation_pct > 0) {
-      contexte.push(`surcoût climatisation estime a +${solarImpact.malus_orientation_pct}% en raison de l'orientation`);
+      contexte.push(`surcoût climatisation estime a +${solarImpact.malus_orientation_pct}% en raison de l'orientation et de la profondeur`);
     }
     contexte.push(`${contrainteExplication}`);
     parts.push(`◆ LECTURE DU SITE — ${contexte.join(". ")}.`);
@@ -2019,11 +2041,11 @@ function computeSmartScenarios({
     parkingLine.push(`emprise parking : ${pkDet.m2_parking || 0}m² (${PILOTIS_CONFIG.PARKING_SPOT_M2}m² par place, circulation comprise)`);
     extParts.push(`Stationnement : ${parkingLine.join(". ")}`);
 
-    // Espace dégagé
+    // Espace dégagé (v57.11: ratio parking/espace basé sur requis)
     const espaceLine = [];
     espaceLine.push(`${espDet.sol_libre_total_m2 || sc.free_ground_m2}m² libres au sol (${espDet.sol_libre_pct || Math.round(solLibrePct * 100)}% du terrain)`);
     if (pkDet.source !== "PILOTIS") {
-      espaceLine.push(`dont ${espDet.espace_vert_m2 || 0}m² d'espace degage hors parking (${espDet.espace_vert_pct || 0}% du terrain)`);
+      espaceLine.push(`repartition : ${espDet.ratio_parking_espace || "33/67"} (parking/espaces verts) — ${pkDet.m2_parking || 0}m² de parking, ${espDet.espace_vert_m2 || 0}m² d'espace degage (${espDet.espace_vert_pct || 0}% du terrain)`);
     } else {
       espaceLine.push(`integralement disponible pour amenagement exterieur (parking sous pilotis)`);
     }
@@ -2412,7 +2434,7 @@ function computeSmartScenarios({
   const recommendation_reason = reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
 
   const meta = {
-    engine_version: "57.10",
+    engine_version: "57.11",
     mode: isProgramDriven ? "PROGRAM_DRIVEN" : "REGULATION_DRIVEN",
     program_key: programKey || "NONE",
     zoning_type, primary_driver, cos, ces, floor_height,
@@ -2535,7 +2557,7 @@ function computeSmartScenarios({
       malus_orientation_pct: solarImpact.malus_orientation_pct,
       recommandation: solarImpact.recommandation_orientation,
     },
-    engine_version: "57.10",
+    engine_version: "57.11",
   };
 
   console.log(`│`);
@@ -2543,7 +2565,7 @@ function computeSmartScenarios({
   console.log(`│ B(${r.B.role}): fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}%COS) ${r.B.cos_compliance} | ${r.B.unit_mix_detail}`);
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
-  console.log(`└── end SCENARIO ENGINE v57.10 ──`);
+  console.log(`└── end SCENARIO ENGINE v57.11 ──`);
 
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic };
 }
@@ -3849,7 +3871,7 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, server_version: "57.10",
+      ok: true, cached: false, server_version: "57.11",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
