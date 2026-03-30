@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.9" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "57.9" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -69,7 +69,7 @@ app.post("/diag-massing", (req, res) => {
     masAreaShoelace = Math.abs(masAreaShoelace) / 2;
 
     res.json({
-      server_version: "56.9",
+      server_version: "57.9",
       input: { fp_m2: fp, site_area: Number(site_area), setbacks: { front: Number(setback_front), side: Number(setback_side), back: Number(setback_back) } },
       parcel: {
         centroid: { lat: cLat, lon: cLon },
@@ -125,7 +125,7 @@ app.get("/diag-scenarios", (req, res) => {
     density_pressure_factor: 1, driver_intensity: "MEDIUM",
   });
   res.json({
-    version: "56.4", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
+    version: "57.9", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
     CES: ZONING_CES[zt], COS: ZONING_COS[zt],
     fp_A: scenarios.A.fp_m2, fp_B: scenarios.B.fp_m2, fp_C: scenarios.C.fp_m2,
     levels_A: scenarios.A.levels, levels_B: scenarios.B.levels, levels_C: scenarios.C.levels,
@@ -278,6 +278,50 @@ const ZONING_COS = {
 // ══════════════════════════════════════════════════════════════════════════════
 // v56.8 — RÉSERVE SOL + PILOTIS
 // ══════════════════════════════════════════════════════════════════════════════
+// v56.9.1 — QUALITÉ DE CIRCULATION PAR RÔLE
+// ══════════════════════════════════════════════════════════════════════════════
+// Le scénario A (INTENSIFICATION) = la meilleure version du programme client :
+//   → circulation plus généreuse (halls, paliers, rangements communs)
+//   → balcons/terrasses intégrés dans le fp
+//   → résultat : un bâtiment plus qualitatif, donc un peu plus grand en fp
+// Le scénario B = standard marché
+// Le scénario C = compact, optimisé coût
+// ══════════════════════════════════════════════════════════════════════════════
+const CIRCULATION_BONUS_BY_ROLE = {
+  INTENSIFICATION: 0.05,  // +5% de circulation en plus (lobby, paliers larges, rangements)
+  EQUILIBRE: 0,            // standard
+  PRUDENT: -0.02,          // -2% (couloirs plus étroits, optimisé)
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CES_FILL_BY_ROLE : quel % du CES autorisé on occupe réellement au sol
+// C'est le PREMIER levier de différenciation entre scénarios.
+// Combiné avec UNIT_SIZES (2e levier), ça donne des scénarios réalistes :
+//   A → grosse empreinte + grands apparts = ambitieux
+//   B → empreinte standard + tailles marché = équilibré
+//   C → empreinte réduite + compact = prudent/phasable
+// ══════════════════════════════════════════════════════════════════════════════
+const CES_FILL_BY_ROLE = {
+  INTENSIFICATION: 0.95,  // occupe 95% du CES autorisé (quasi max, 5% marge technique)
+  EQUILIBRE: 0.80,         // 80% — retrait confortable
+  PRUDENT: 0.65,           // 65% — empreinte réduite, plus d'espace libre
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EXTENSION ÉTAGES : à partir du R+1, le bâtiment peut s'élargir vers les
+// limites séparatives de la parcelle. Le RDC reste en retrait (parking, accès,
+// jardin), mais les étages débordent — architecture courante en Afrique de l'Ouest.
+//   A = étages jusqu'à l'enveloppe (limites séparatives)
+//   B = +15% vs le RDC (extension modérée)
+//   C = pas d'extension (même empreinte que le RDC)
+// ══════════════════════════════════════════════════════════════════════════════
+const ETAGE_EXTENSION_BY_ROLE = {
+  INTENSIFICATION: "ENVELOPE",  // fp_etages = enveloppe constructible
+  EQUILIBRE: 1.15,               // fp_etages = fp_rdc × 1.15
+  PRUDENT: 1.00,                  // fp_etages = fp_rdc (pas d'extension)
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Le CES réglementaire = max autorisé, PAS ce qu'on doit construire.
 // En pratique, on réserve toujours de l'espace au sol pour :
 //   - Parking (obligatoire en ville)
@@ -351,6 +395,228 @@ const UNIT_SIZES = {
     B: { T1: 45, T2: 75, T3: 100, T4: 130, T5: 160, STUDIO: 32, COMMERCE: 65, BUREAU: 28 },
     C: { T1: 38, T2: 65, T3: 88, T4: 112, T5: 138, STUDIO: 26, COMMERCE: 55, BUREAU: 22 },
   },
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.6 — LOYERS MARCHÉ DOUALA (FCFA/mois par typologie × standing)
+// Source : estimations marché Cameroun 2024-2025, ajustables
+// ══════════════════════════════════════════════════════════════════════════════
+const LOYERS_MENSUELS_FCFA = {
+  PREMIUM: { T1: 100000, T2: 150000, T3: 250000, T4: 350000, T5: 450000, STUDIO: 80000, COMMERCE: 400000, BUREAU: 300000 },
+  STANDARD: { T1: 60000, T2: 100000, T3: 150000, T4: 200000, T5: 280000, STUDIO: 45000, COMMERCE: 250000, BUREAU: 180000 },
+  ECO: { T1: 35000, T2: 60000, T3: 90000, T4: 130000, T5: 180000, STUDIO: 25000, COMMERCE: 150000, BUREAU: 100000 },
+};
+
+const VACANCY_RATE_BY_ZONING = {
+  URBAIN: 0.10, PERIURBAIN: 0.15, PAVILLON: 0.20, RURAL: 0.25, MIXTE: 0.12,
+};
+
+// Fourchette de coûts construction : le costPerM2 du standing est le MEDIAN
+// BAS = -15%, HAUT = +20% (aléas chantier, fondations, accès)
+const COST_RANGE_MULT = { bas: 0.85, median: 1.0, haut: 1.20 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.7 — RETRAITS RÉGLEMENTAIRES (SETBACKS) par zonage
+// ══════════════════════════════════════════════════════════════════════════════
+// En zone URBAIN Cameroun : retrait AVANT 3-5m, LATÉRAL 0-3m, ARRIÈRE 3m
+// Mitoyenneté : en urbain dense, les murs pignons touchent la limite → retrait=0
+// La combinaison retrait + mitoyenneté réduit l'emprise RÉELLE constructible
+// ══════════════════════════════════════════════════════════════════════════════
+const RETRAITS_M = {
+  URBAIN:     { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
+  PERIURBAIN: { avant: 6, lateral: 4, arriere: 4, mitoyen_possible: true },
+  PAVILLON:   { avant: 8, lateral: 5, arriere: 5, mitoyen_possible: false },
+  RURAL:      { avant: 10, lateral: 6, arriere: 6, mitoyen_possible: false },
+  MIXTE:      { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
+};
+
+// Mitoyenneté : en zone urbaine dense, un ou deux côtés sont mitoyens
+// → retrait latéral = 0 sur les côtés mitoyens
+// On modélise le nombre de côtés mitoyens par zonage
+const MITOYENNETE_SIDES = {
+  URBAIN: 2,      // 2 côtés mitoyens (typique Douala centre)
+  PERIURBAIN: 1,  // 1 côté mitoyen
+  PAVILLON: 0,    // isolé
+  RURAL: 0,
+  MIXTE: 1,
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.7 — VENTILATION COÛTS PAR POSTE (% du coût construction hors VRD)
+// ══════════════════════════════════════════════════════════════════════════════
+const COST_VENTILATION_PCT = {
+  gros_oeuvre: 0.55,      // fondations, structure, maçonnerie, charpente
+  second_oeuvre: 0.25,    // cloisons, menuiseries, revêtements, peinture
+  lots_techniques: 0.15,  // plomberie, électricité, climatisation
+  amenagements_ext: 0.05, // VRD, clôture, aménagements paysagers
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.8 — HONORAIRES ARCHITECTE : barème international dégressif
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.9 — HONORAIRES ARCHITECTE : barème FCFA réel (fourchette bas/haut)
+// ══════════════════════════════════════════════════════════════════════════════
+// Source : barème professionnel ONAC / UIA ajusté Cameroun
+// Le taux effectif est la MÉDIANE de la fourchette (négociation standard)
+// Inclut : esquisse, APS, APD, permis, DCE, suivi chantier, réception
+// ══════════════════════════════════════════════════════════════════════════════
+const HONORAIRES_TRANCHES_FCFA = [
+  { seuil_max: 100_000_000,     taux_bas: 0.10, taux_haut: 0.15 },   // <100M → 10-15%
+  { seuil_max: 500_000_000,     taux_bas: 0.08, taux_haut: 0.12 },   // 100-500M → 8-12%
+  { seuil_max: 1_000_000_000,   taux_bas: 0.06, taux_haut: 0.10 },   // 500M-1Md → 6-10%
+  { seuil_max: 5_000_000_000,   taux_bas: 0.05, taux_haut: 0.08 },   // 1-5Md → 5-8%
+  { seuil_max: 10_000_000_000,  taux_bas: 0.04, taux_haut: 0.06 },   // 5-10Md → 4-6%
+  { seuil_max: Infinity,        taux_bas: 0.03, taux_haut: 0.05 },   // >10Md → 3-5%
+];
+
+// Frais annexes : permis de construire, assurances, études techniques
+const FRAIS_ANNEXES_PCT = {
+  permis_construire: 0.015,        // ~1.5% du coût construction
+  assurance_dommage_ouvrage: 0.02, // ~2% (obligatoire)
+  etudes_techniques: 0.025,        // BET structure, fluides, géotechnique (~2.5%)
+  divers_imprevus: 0.03,           // aléas administratifs, raccordements (~3%)
+};
+
+// Calcul honoraires dégressifs (retourne { bas, median, haut })
+function calcHonorairesDegressifs(coutConstruction) {
+  let honoBas = 0, honoHaut = 0;
+  let reste = coutConstruction;
+  let tranchePrecedente = 0;
+  for (const tranche of HONORAIRES_TRANCHES_FCFA) {
+    const montantTranche = Math.min(reste, tranche.seuil_max - tranchePrecedente);
+    if (montantTranche <= 0) break;
+    honoBas += montantTranche * tranche.taux_bas;
+    honoHaut += montantTranche * tranche.taux_haut;
+    reste -= montantTranche;
+    tranchePrecedente = tranche.seuil_max;
+  }
+  const median = Math.round((honoBas + honoHaut) / 2);
+  return { bas: Math.round(honoBas), median, haut: Math.round(honoHaut) };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.9 — ORIENTATION SOLAIRE & GÉOGRAPHIE DU SITE
+// ══════════════════════════════════════════════════════════════════════════════
+// L'orientation solaire impacte la géométrie du bâtiment :
+// - En zone tropicale (Cameroun, lat ~4°N) : soleil quasi-zénithal
+//   → Façades principales NORD-SUD (minimiser l'exposition est/ouest)
+//   → Protéger la façade OUEST (soleil rasant l'après-midi = surchauffe)
+//   → Profondeur de corps limitée (ventilation traversante)
+//   → Toiture débordante (protection solaire)
+// - En zone tempérée : optimiser l'apport solaire sud en hiver
+// ══════════════════════════════════════════════════════════════════════════════
+const SOLAR_CONFIG = {
+  TROPICAL: {
+    // Cameroun, Afrique de l'Ouest, zone équatoriale (lat < 15°)
+    orientation_optimale: "NORD-SUD",       // façades principales
+    facade_a_proteger: "OUEST",             // soleil rasant PM
+    profondeur_max_m: 14,                   // ventilation traversante
+    debord_toiture_m: 1.2,                  // protection solaire
+    ratio_longueur_profondeur: 1.8,         // bâtiment allongé E-O → façades N-S
+    malus_mauvaise_orientation_pct: 15,     // surcoût clim si mal orienté
+    ventilation_traversante: true,
+    brise_soleil_ouest: true,
+  },
+  TEMPERE: {
+    orientation_optimale: "SUD",
+    facade_a_proteger: "NORD",
+    profondeur_max_m: 18,
+    debord_toiture_m: 0.6,
+    ratio_longueur_profondeur: 1.4,
+    malus_mauvaise_orientation_pct: 8,
+    ventilation_traversante: false,
+    brise_soleil_ouest: false,
+  },
+  MEDITERRANEEN: {
+    orientation_optimale: "SUD",
+    facade_a_proteger: "OUEST",
+    profondeur_max_m: 16,
+    debord_toiture_m: 1.0,
+    ratio_longueur_profondeur: 1.5,
+    malus_mauvaise_orientation_pct: 10,
+    ventilation_traversante: true,
+    brise_soleil_ouest: true,
+  },
+};
+
+// Détecter la zone climatique depuis le zoning ou le pays
+function detectClimaticZone(zoning_type, country) {
+  const c = String(country || "").toUpperCase();
+  if (/CAMEROUN|CAMEROON|SENEGAL|COTE.D.IVOIRE|IVORY|BENIN|TOGO|GABON|CONGO|NIGERIA|GHANA|GUINEA|MALI|BURKINA/i.test(c)) return "TROPICAL";
+  if (/MAROC|MOROCCO|TUNISIE|TUNISIA|ALGERIE|ALGERIA|EGYPTE|EGYPT/i.test(c)) return "MEDITERRANEEN";
+  if (/FRANCE|BELGIQUE|SUISSE|CANADA|ALLEMAGNE/i.test(c)) return "TEMPERE";
+  // Fallback par zonage : urbain africain = tropical par défaut
+  return "TROPICAL";
+}
+
+// Calculer l'impact de l'orientation sur la géométrie
+// Retourne un facteur correctif pour W et D du bâtiment
+function computeSolarImpact(envelope_w, envelope_d, climaticZone, parcelOrientation) {
+  const config = SOLAR_CONFIG[climaticZone] || SOLAR_CONFIG.TROPICAL;
+  const ratio = config.ratio_longueur_profondeur;
+
+  // Si la parcelle est plus large que profonde (W > D), la longueur du bâti
+  // s'aligne naturellement sur W → façades longues en N-S = OPTIMAL en tropical
+  // Si W < D, le bâtiment est profond → SOUS-OPTIMAL (façades courtes en N-S)
+  const parcelRatio = envelope_w / Math.max(1, envelope_d);
+  let orientationScore = 1.0; // 1.0 = parfait
+
+  if (climaticZone === "TROPICAL") {
+    // En tropical : on VEUT un bâtiment allongé E-O (façades longues N-S)
+    // Si la parcelle le permet (W > D), c'est optimal
+    if (parcelRatio >= 1.3) {
+      orientationScore = 1.0; // parcelle large → bâti allongé N-S = optimal
+    } else if (parcelRatio >= 0.8) {
+      orientationScore = 0.92; // parcelle carrée → compromis acceptable
+    } else {
+      orientationScore = 0.85; // parcelle profonde → sous-optimal (façades longues E-O)
+    }
+
+    // Limiter la profondeur de corps pour ventilation traversante
+    const profondeurEffective = Math.min(envelope_d, config.profondeur_max_m);
+    return {
+      orientationScore,
+      profondeur_recommandee_m: profondeurEffective,
+      ratio_recommande: ratio,
+      facade_optimale: config.orientation_optimale,
+      facade_a_proteger: config.facade_a_proteger,
+      ventilation_traversante: config.ventilation_traversante,
+      brise_soleil: config.brise_soleil_ouest,
+      debord_toiture_m: config.debord_toiture_m,
+      malus_orientation_pct: orientationScore < 0.95 ? config.malus_mauvaise_orientation_pct : 0,
+      recommandation_orientation: orientationScore >= 0.95
+        ? "Parcelle favorable : longueur orientee pour maximiser les facades Nord-Sud. Ventilation traversante naturelle possible."
+        : orientationScore >= 0.90
+        ? "Parcelle acceptable : orienter la longueur du batiment Nord-Sud autant que possible. Prevoir des brise-soleil en facade Ouest."
+        : "Parcelle contrainte pour l'orientation solaire : la profondeur impose des facades longues Est-Ouest. Prevoir imperativement des protections solaires (brise-soleil, double peau, vegetation) en facade Ouest et un surcoût climatisation de ~" + config.malus_mauvaise_orientation_pct + "%.",
+    };
+  }
+
+  // Tempéré / Méditerranéen : logique similaire mais inversée
+  if (parcelRatio >= 1.2) orientationScore = 0.95;
+  else if (parcelRatio >= 0.8) orientationScore = 1.0;
+  else orientationScore = 0.90;
+
+  return {
+    orientationScore,
+    profondeur_recommandee_m: Math.min(envelope_d, config.profondeur_max_m),
+    ratio_recommande: ratio,
+    facade_optimale: config.orientation_optimale,
+    facade_a_proteger: config.facade_a_proteger,
+    ventilation_traversante: config.ventilation_traversante,
+    brise_soleil: config.brise_soleil_ouest,
+    debord_toiture_m: config.debord_toiture_m,
+    malus_orientation_pct: orientationScore < 0.95 ? config.malus_mauvaise_orientation_pct : 0,
+    recommandation_orientation: "Orientation standard pour climat tempere.",
+  };
+}
+
+// Durée estimée de chantier (mois) par niveau
+const DUREE_CHANTIER_MOIS_PAR_NIVEAU = {
+  fondations_terrassement: 2,  // invariant : terrassement + fondations
+  par_niveau: 1.5,             // ~1.5 mois par niveau (gros œuvre + étanchéité)
+  finitions: 2,                // second œuvre + lots techniques
+  vrd_ext: 1,                  // VRD + aménagements extérieurs
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -496,6 +762,25 @@ function resolveField(field, key) {
   return field;
 }
 
+// ── Helper : taille moyenne pondérée d'un logement résidentiel ──
+// Utilise la default_mix_fn du programme pour calculer les proportions réelles
+// au lieu de poids en dur. Fonctionne pour tous les 6 types de programme.
+function computeAvgResidentialSize(sizes, rules, targetUnits) {
+  const n = Math.max(1, targetUnits || 4);
+  const mix = rules.default_mix_fn ? rules.default_mix_fn(n) : { T3: n };
+  let totalSize = 0, totalCount = 0;
+  for (const [typ, count] of Object.entries(mix)) {
+    if (count <= 0) continue;
+    // Pour le calcul de avgSize résidentiel, ignorer les COMMERCE/BUREAU/PLATEAU
+    // (ils ont leur propre logique : RDC commerce, fp_from_envelope, etc.)
+    if (/COMMERCE|BUREAU|PLATEAU/i.test(typ)) continue;
+    const unitSize = sizes[typ] || sizes.T3 || 80;
+    totalSize += count * unitSize;
+    totalCount += count;
+  }
+  return totalCount > 0 ? totalSize / totalCount : (sizes.T3 || 80);
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // v56.7 — RÔLES SCÉNARIOS (logique métier claire)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -548,6 +833,12 @@ function computeSmartScenarios({
   density_pressure_factor = 1,
   driver_intensity = "MEDIUM",
   strategic_position = "",
+  // v57.7 : retraits optionnels (overrides)
+  retrait_avant_m = 0, retrait_lateral_m = 0, retrait_arriere_m = 0,
+  nb_cotes_mitoyens = -1, // -1 = auto (déduit du zonage)
+  // v57.9 : orientation solaire & géographie
+  country = "CAMEROUN", // pays du site (pour détecter zone climatique)
+  parcel_orientation = "", // orientation principale de la parcelle (optionnel)
 }) {
   // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
   // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
@@ -568,16 +859,58 @@ function computeSmartScenarios({
   const ratios = FP_RATIOS[primary_driver] || FP_RATIOS.MAX_CAPACITE;
 
   // ══════════════════════════════════════════════════════════════════════════════
+  // v57.7 — RETRAITS RÉGLEMENTAIRES & MITOYENNETÉ → emprise constructible réduite
+  // ══════════════════════════════════════════════════════════════════════════════
+  const retraitsZone = RETRAITS_M[zoning_type] || RETRAITS_M.URBAIN;
+  const rAvant = retrait_avant_m > 0 ? retrait_avant_m : retraitsZone.avant;
+  const rLateral = retrait_lateral_m > 0 ? retrait_lateral_m : retraitsZone.lateral;
+  const rArriere = retrait_arriere_m > 0 ? retrait_arriere_m : retraitsZone.arriere;
+  const nbMitoyens = nb_cotes_mitoyens >= 0 ? nb_cotes_mitoyens : (MITOYENNETE_SIDES[zoning_type] || 0);
+
+  // Emprise constructible = envelope réduite par les retraits
+  // Modèle simplifié : on retire les retraits de W et D
+  // Mitoyenneté : chaque côté mitoyen annule un retrait latéral
+  const retraitLatEffectif = Math.max(0, rLateral * (2 - nbMitoyens)); // 0 si 2 mitoyens
+  const wConstructible = Math.max(envelope_w - retraitLatEffectif, envelope_w * 0.5);
+  const dConstructible = Math.max(envelope_d - rAvant - rArriere, envelope_d * 0.5);
+  const empriseConstructible = wConstructible * dConstructible;
+  // L'emprise constructible est un plafond physique supplémentaire (en plus du CES)
+  const setbackReductionPct = envelope_bbox > 0 ? Math.round((1 - empriseConstructible / envelope_bbox) * 100) : 0;
+  console.log(`│ v57.7 retraits: avant=${rAvant}m lat=${rLateral}m(×${2-nbMitoyens} côtés) arr=${rArriere}m → W=${wConstructible.toFixed(1)}×D=${dConstructible.toFixed(1)}=${Math.round(empriseConstructible)}m² (-${setbackReductionPct}%)`);
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // v57.9 — ORIENTATION SOLAIRE → impact profondeur de corps + géométrie
+  // ══════════════════════════════════════════════════════════════════════════════
+  const climaticZone = detectClimaticZone(zoning_type, country);
+  const solarImpact = computeSolarImpact(envelope_w, envelope_d, climaticZone, parcel_orientation);
+
+  // La profondeur recommandée impacte l'emprise constructible si elle est inférieure à D
+  const dSolaire = Math.min(dConstructible, solarImpact.profondeur_recommandee_m || dConstructible);
+  // Si contrainte solaire active, recalculer emprise constructible
+  const empriseConstructibleSolaire = wConstructible * dSolaire;
+  const solarReductionPct = empriseConstructible > 0 ? Math.round((1 - empriseConstructibleSolaire / empriseConstructible) * 100) : 0;
+  if (solarReductionPct > 0) {
+    console.log(`│ v57.9 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}→${dSolaire.toFixed(1)}m (ventilation traversante) → emprise ${Math.round(empriseConstructibleSolaire)}m² (-${solarReductionPct}% vs retraits seuls)`);
+  } else {
+    console.log(`│ v57.9 solaire: zone=${climaticZone} orientation=${solarImpact.orientationScore} — pas de reduction supplementaire`);
+  }
+  // L'emprise effective est le MIN entre retraits et contrainte solaire
+  const empriseEffective = Math.min(empriseConstructible, empriseConstructibleSolaire);
+
+  // ══════════════════════════════════════════════════════════════════════════════
   // v56.1 — TOUS LES PARAMÈTRES INTÉGRÉS (plus de code mort)
   // ══════════════════════════════════════════════════════════════════════════════
   // v56.7 — NORMALISATION SCORES + ENUMS FR/EN
   // ══════════════════════════════════════════════════════════════════════════════
 
-  // ── Helper: normalise un score (accepte 0-1 OU 0-100) ──
+  // ── Helper: normalise un score (accepte 0-1, 0-10, ou 0-100) ──
+  // v57.6 FIX CRITIQUE: les scores Sheet sont en 0-10, pas 0-100.
+  // Avant ce fix, score=8 → 0.08 au lieu de 0.8 → modulations 10× trop faibles!
   function norm01(v) {
     const n = Number(v) || 0;
-    if (n > 1 && n <= 100) return n / 100;  // score 0-100 → 0-1
-    return Math.max(0, Math.min(1, n));
+    if (n > 10 && n <= 100) return n / 100;  // score 0-100 → 0-1
+    if (n > 1 && n <= 10) return n / 10;     // score 0-10 → 0-1
+    return Math.max(0, Math.min(1, n));       // déjà 0-1 → 0-1
   }
 
   // ── Helper: parse budget_tension qui peut être string ou number ──
@@ -696,55 +1029,132 @@ function computeSmartScenarios({
     A: "Scenario intensification", B: "Scenario equilibre", C: "Scenario prudent",
   };
 
+  // Initialize for effective CES (used in program-driven mode)
+  let effectiveCESOutput = ces;
+
+  // Extract budgetMax before the loop for use in diagnostic
+  let budgetMax = 0;
+  if (typeof budget_range === 'string' && budget_range.includes('-')) {
+    budgetMax = Number(budget_range.split('-')[1]) || 0;
+  } else {
+    budgetMax = Number(budget_range) || 0;
+  }
+
   for (const label of ["A", "B", "C"]) {
     const role = SCENARIO_ROLE[label];
     const mode = SCENARIO_MASSING_MODE[label];
 
-    let fp, levels, unitMixDetail, totalUseful, circRatio, bodyDepth, maxPerFloor, groundReserve;
+    let fp, fpRdc, fpEtages, levels, unitMixDetail, totalUseful, circRatio, bodyDepth, maxPerFloor, groundReserve;
+    let unitMix = {};
+    let totalUnitsResult = 0;
     let hasPilotis = false;
     let pilotisLevels = 0;
 
     if (isProgramDriven) {
       // ════════════════════════════════════════════════════════════════════════
-      // MODE PROGRAMME-DRIVEN : fp dérivé du programme client
+      // MODE CES-DRIVEN v57.0
+      // RDC = CES_FILL × CES (retrait parking, accès, jardin)
+      // ÉTAGES = extension vers limites séparatives (A→enveloppe, B→+15%, C→=RDC)
+      // SDP = fpRdc + fpEtages × (niveaux - 1)
+      // Le nombre de logements est un RÉSULTAT, pas une entrée.
       // ════════════════════════════════════════════════════════════════════════
       const sizes = (UNIT_SIZES[sizeKey] || UNIT_SIZES.STANDARD)[label];
 
-      // Résoudre les champs rules qui dépendent du standing ou du rôle
+      // Résoudre les champs rules
       circRatio = resolveField(rules.circulation_ratio, stdKey);
+      circRatio = Math.max(0.08, Math.min(0.30, circRatio + (CIRCULATION_BONUS_BY_ROLE[role] || 0)));
       bodyDepth = resolveField(rules.body_depth_m, stdKey);
       maxPerFloor = resolveField(rules.max_units_per_floor, stdKey);
       groundReserve = resolveField(rules.ground_reserve, label) || 0.25;
       let maxFloorsProg = rules.max_floors || 99;
 
-      // ── BUNGALOWS : si maison individuelle + plusieurs unités → plain-pied ──
+      // ── CAS SPÉCIAUX ──
       const isBungalow = programKey === "MAISON_INDIVIDUELLE" && target_units > 1;
-      if (isBungalow) {
-        maxFloorsProg = rules.bungalow_max_floors || 1; // force 1 niveau
+      if (isBungalow) maxFloorsProg = rules.bungalow_max_floors || 1;
+      const isFpFromEnvelope = rules.fp_from_envelope === true;
+      const effectiveMaxFloors = Math.min(maxFloorsProg, absMaxLevels);
+
+      // ══════════════════════════════════════════════════════════════════════
+      // ÉTAPE 1 : CES EFFECTIF CLIENT → EMPREINTES RDC + ÉTAGES
+      // ══════════════════════════════════════════════════════════════════════
+      // v57.6 : Le CES RÉGLEMENTAIRE lui-même est ajusté par le profil client.
+      // Un client AMBITIEUX (rigidité=2, risque=2) utilise le CES complet (60%).
+      // Un client SERRÉ (rigidité=8, risque=8) se voit appliquer un CES réduit (~38%).
+      // Ensuite CES_FILL_BY_ROLE s'applique NORMALEMENT (0.95/0.80/0.65).
+      // Les étages sont une CONSÉQUENCE NATURELLE, pas un forçage.
+      // ══════════════════════════════════════════════════════════════════════
+
+      // ── CES EFFECTIF = CES réglementaire × profil client ──
+      // Composantes du profil client qui réduisent/augmentent le CES atteignable :
+      const clientCesMod =
+        (1 - budgetPressure * 0.30)     // budget serré → CES réduit (-30% max)
+        * postureMod                      // AMBITIEUX=+8%, PRUDENT=-10%
+        * riskPenalty                     // risque élevé → -15% max
+        * capacityBoost                   // capacité élevée → +6% max
+        * densityBandMult;                // zone dense → CES poussé (+10% max)
+
+      // Bornes : jamais en dessous de 40% du CES réglementaire, jamais au-dessus de 105%
+      const effectiveCES = Math.max(ces * 0.40, Math.min(ces * 1.05,
+        ces * clientCesMod
+      ));
+      effectiveCESOutput = effectiveCES;
+      const effectiveMaxFp = Math.round(effectiveCES * site_area);
+
+      // ── CES_FILL : constantes architecturales PURES (ne dépendent PAS du client) ──
+      const cesFill = CES_FILL_BY_ROLE[role] || 0.80;
+      const maxFpByEnvelope = envelope_area * (1 - groundReserve);
+
+      // v57.9: RDC plafonné par emprise effective (retraits + contrainte solaire)
+      fpRdc = Math.round(Math.min(cesFill * effectiveMaxFp, maxFpByEnvelope, empriseEffective));
+
+      // ÉTAGES : extension selon le rôle
+      // v57.7: en étage, les retraits peuvent être réduits (porte-à-faux, encorbellement)
+      // v57.9: contrainte solaire s'applique aussi aux étages (profondeur de corps)
+      const etageExt = ETAGE_EXTENSION_BY_ROLE[role];
+      const empriseEtageMax = empriseEffective * (nbMitoyens > 0 ? 1.10 : 1.0);
+      if (etageExt === "ENVELOPE") {
+        fpEtages = Math.round(Math.min(envelope_area, effectiveMaxFp, empriseEtageMax * 1.05));
+      } else {
+        fpEtages = Math.round(Math.min(fpRdc * (etageExt || 1.0), envelope_area, effectiveMaxFp, empriseEtageMax));
       }
 
-      // ── BUREAUX (fp_from_envelope) : le plateau est dérivé de l'enveloppe ──
-      // target_units = nombre de niveaux, pas nombre de postes
-      const isFpFromEnvelope = rules.fp_from_envelope === true;
+      // fp principal (pour le rendu 3D) = fpEtages (volume dominant)
+      fp = fpEtages;
 
-      // Mix de logements : unit_mix fourni par le client, sinon default
-      const mix = rules.default_mix_fn
-        ? rules.default_mix_fn(target_units)
-        : rules.default_mix
-          ? { ...rules.default_mix }
-          : { T3: target_units };
-
-      // Calculer surfaces utiles par typo
+      let floorsNeeded, totalUnits;
       totalUseful = 0;
-      let totalUnits = 0;
       const details = [];
 
+      // Helper COS check : SDP = fpRdc + fpEtages × (niv - 1)
+      const computeSdpDual = (niv) => fpRdc + fpEtages * Math.max(0, niv - 1);
+      const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
+      const maxSdpForRole = Math.floor(max_sdp * cosCap);
+
       if (isFpFromEnvelope) {
-        // Pour les bureaux : fp = enveloppe × (1-réserve), niveaux = target_units
-        totalUnits = target_units;
-        totalUseful = 0; // pas pertinent pour les bureaux
-        details.push(`${target_units} plateaux libres`);
-      } else {
+        // ── BUREAUX : plateaux proportionnels au CES effectif et rôle scénario ──
+        // v57.6: Apply roleTargetFactor to ensure A >= B >= C in floor count
+        const cesRatio = effectiveCES / ces;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.0, EQUILIBRE: 0.80, PRUDENT: 0.60 })[role] || 0.80;
+        const effectiveTargetBur = Math.max(1, Math.round(target_units * cesRatio * roleTargetFactor));
+        floorsNeeded = Math.min(effectiveTargetBur, effectiveMaxFloors);
+        floorsNeeded = Math.max(1, floorsNeeded);
+        // COS check avec SDP duale
+        while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
+        if (computeSdpDual(floorsNeeded) > maxSdpForRole && floorsNeeded === 1) {
+          fpRdc = Math.round(maxSdpForRole);
+          fpEtages = fpRdc;
+        }
+        totalUnits = floorsNeeded;
+        const sdpBur = computeSdpDual(floorsNeeded);
+        totalUseful = Math.round(sdpBur * (1 - circRatio));
+        unitMixDetail = `${floorsNeeded} plateaux (RDC=${fpRdc}m² + ${Math.max(0,floorsNeeded-1)}ét.×${fpEtages}m², utile ${Math.round(fpEtages*(1-circRatio))}m²/ét.)`;
+        fp = fpEtages; // rendu 3D
+        unitMix = { BUREAU: floorsNeeded };
+
+      } else if (isBungalow) {
+        // ── BUNGALOWS : plain-pied, pas d'extension étage ──
+        const mix = rules.default_mix_fn ? rules.default_mix_fn(target_units) : { T3: target_units };
+        totalUnits = 0;
         for (const [typ, count] of Object.entries(mix)) {
           if (count <= 0) continue;
           const unitSize = sizes[typ] || sizes.T3 || 80;
@@ -752,99 +1162,136 @@ function computeSmartScenarios({
           totalUnits += count;
           details.push(`${count}×${typ}(${unitSize}m²)`);
         }
-      }
-      unitMixDetail = details.join(" + ");
-
-      // SDP totale nécessaire = utile / (1 - circulation)
-      const sdpNeeded = isFpFromEnvelope ? 0 : totalUseful / (1 - circRatio);
-
-      // ── DRIVER MAX_CAPACITE / RENTABILITE : autoriser plus d'unités par palier ──
-      // Le client veut maximiser → on peut mettre plus de logements par étage
-      // en poussant l'emprise vers le CES max au lieu de rester au strict programme
-      let effectiveMaxPerFloor = maxPerFloor;
-      const isMaxDriver = /MAX_CAPACITE|RENTABILITE/i.test(primary_driver);
-      if (isMaxDriver && role === "INTENSIFICATION") {
-        // A (INTENSIFICATION) + driver max → on peut aller jusqu'à maxPerFloor+2
-        // ça augmente le fp par palier en gardant les mêmes surfaces d'appart
-        effectiveMaxPerFloor = maxPerFloor + 2;
-        console.log(`│   💪 Driver ${primary_driver} + INTENSIFICATION → max ${effectiveMaxPerFloor} unités/palier (au lieu de ${maxPerFloor})`);
-      } else if (isMaxDriver && role === "EQUILIBRE") {
-        effectiveMaxPerFloor = maxPerFloor + 1;
-      }
-
-      // Nombre d'unités par palier (limité par rules ajustées)
-      const unitsPerFloor = Math.min(effectiveMaxPerFloor, totalUnits);
-
-      // ── CALCUL fp ET floorsNeeded selon le mode ──
-      let floorsNeeded;
-      if (isFpFromEnvelope) {
-        // BUREAUX : plateau = enveloppe × (1-réserve), niveaux = target_units
-        const maxFpByEnv = envelope_area * (1 - groundReserve);
-        fp = Math.round(Math.min(max_fp, maxFpByEnv));
-        floorsNeeded = Math.min(target_units, Math.min(maxFloorsProg, absMaxLevels));
-        floorsNeeded = Math.max(1, floorsNeeded);
-        totalUseful = Math.round(fp * (1 - circRatio) * floorsNeeded);
-        unitMixDetail = `${floorsNeeded} plateaux de ${fp}m² (utile ${Math.round(fp*(1-circRatio))}m²/plateau)`;
-      } else if (isBungalow) {
-        // BUNGALOWS : pas d'empilement, chaque unité est au sol
         floorsNeeded = 1;
-        fp = Math.round(sdpNeeded); // toute la SDP est au sol
-        unitMixDetail = `${totalUnits} bungalows: ` + unitMixDetail;
+        fpRdc = Math.round(totalUseful / (1 - circRatio));
+        if (fpRdc > max_fp) fpRdc = Math.round(max_fp);
+        if (fpRdc > maxFpByEnvelope) fpRdc = Math.round(maxFpByEnvelope);
+        fpEtages = fpRdc;
+        fp = fpRdc;
+        unitMixDetail = `${totalUnits} bungalows: ` + details.join(" + ");
+        unitMix = mix;
+
+      } else if (programKey === "MAISON_INDIVIDUELLE" && target_units <= 1) {
+        // ── VILLA : RDC + étage étendu ──
+        floorsNeeded = Math.min(2, effectiveMaxFloors);
+        while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
+        totalUnits = 1;
+        const sdpVilla = computeSdpDual(floorsNeeded);
+        totalUseful = Math.round(sdpVilla * (1 - circRatio));
+        let villaTypo = "T4";
+        if (totalUseful >= (sizes.T5 || 999) * 0.9) villaTypo = "T5";
+        else if (totalUseful >= (sizes.T4 || 120)) villaTypo = "T4";
+        else if (totalUseful >= (sizes.T3 || 80)) villaTypo = "T3";
+        unitMixDetail = `1 villa ${villaTypo} (${totalUseful}m² utile, RDC=${fpRdc}m² ét.=${fpEtages}m²)`;
+        unitMix = { [villaTypo]: 1 };
+
+      } else if (programKey === "USAGE_MIXTE") {
+        // ── USAGE MIXTE : Commerce RDC (fpRdc) + Logements étages (fpEtages) ──
+        const usefulEtage = fpEtages * (1 - circRatio);
+
+        // Commerce count from mix function
+        const estMix = rules.default_mix_fn ? rules.default_mix_fn(target_units) : { COMMERCE: 1, T3: target_units - 1 };
+        const commerceUnits = estMix.COMMERCE || 1;
+
+        // Résidentiel par étage
+        const resiAvgSize = computeAvgResidentialSize(sizes, rules, target_units);
+        let resiPerFloor = Math.floor(usefulEtage / resiAvgSize);
+        let effectiveMaxPerFloor = maxPerFloor;
+        // Adaptation maxPerFloor seulement pour A si le plateau le permet
+        if (role === "INTENSIFICATION" && usefulEtage >= resiAvgSize * (maxPerFloor + 1) * 1.20) {
+          effectiveMaxPerFloor = maxPerFloor + 1;
+        }
+        resiPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, resiPerFloor));
+
+        // v57.6 : target résidentiel proportionnel au CES effectif × rôle
+        const cesRatio = effectiveCES / ces;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.0, EQUILIBRE: 0.80, PRUDENT: 0.60 })[role] || 0.80;
+        const effectiveTargetResi = Math.max(1, Math.round((target_units - commerceUnits) * cesRatio * roleTargetFactor));
+        floorsNeeded = 1 + Math.ceil(effectiveTargetResi / resiPerFloor);
+        floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
+        while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
+
+        const actualResiFloors = floorsNeeded - 1;
+        totalUnits = commerceUnits + resiPerFloor * actualResiFloors;
+
+        // Mix réel
+        const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalUnits) : { COMMERCE: commerceUnits, T3: totalUnits - commerceUnits };
+        totalUseful = 0;
+        let mixUnits = 0;
+        for (const [typ, count] of Object.entries(resiMix)) {
+          if (count <= 0) continue;
+          const unitSize = sizes[typ] || sizes.T3 || 80;
+          totalUseful += count * unitSize;
+          mixUnits += count;
+          details.push(`${count}×${typ}(${unitSize}m²)`);
+        }
+        totalUnits = mixUnits;
+        unitMixDetail = details.join(" + ");
+        unitMix = resiMix;
+
       } else {
-        // IMMEUBLES : empiler les unités
-        floorsNeeded = Math.ceil(totalUnits / unitsPerFloor);
-        const effectiveMaxFloors = Math.min(maxFloorsProg, absMaxLevels);
-        floorsNeeded = Math.min(floorsNeeded, effectiveMaxFloors);
-        floorsNeeded = Math.max(1, floorsNeeded);
-        const usefulPerFloor = totalUseful / floorsNeeded;
-        fp = Math.round(usefulPerFloor / (1 - circRatio));
-      }
+        // ══════════════════════════════════════════════════════════════════
+        // ── IMMEUBLES GÉNÉRIQUES (PETIT_COLLECTIF, IMMEUBLE_RAPPORT,
+        //    PROGRAMME_FLOU) — logique CES-DRIVEN + extension étages ──
+        // ══════════════════════════════════════════════════════════════════
+        // ── Unités/palier : adaptatif au plateau, capé par programme ──
+        const usefulEtage = fpEtages * (1 - circRatio);
+        const avgSize = computeAvgResidentialSize(sizes, rules, target_units);
 
-      const effectiveMaxFloors = Math.min(maxFloorsProg, absMaxLevels);
+        let effectiveMaxPerFloor = maxPerFloor;
 
-      // ── GARDE-FOU CES : fp ne peut pas dépasser le CES ──
-      const canAdjustFloors = !isBungalow && !isFpFromEnvelope; // bureaux et bungalows : floors fixes
-      if (fp > max_fp) {
-        console.log(`│   ⚠ ${label}: fp programme=${fp}m² > CES max=${Math.round(max_fp)}m² → ajustement`);
-        fp = Math.round(max_fp);
-        if (canAdjustFloors && sdpNeeded > 0) {
-          floorsNeeded = Math.min(effectiveMaxFloors, Math.ceil(sdpNeeded / fp));
-          floorsNeeded = Math.max(1, floorsNeeded);
+        // v57.6 : maxPerFloor adaptatif SEULEMENT pour A (INTENSIFICATION)
+        // Si le plateau est assez grand pour accueillir +1 confortablement
+        // (marge de 20% pour circulation large, rangements, etc.)
+        // On ne touche PAS B/C — ils restent au standard programme.
+        const isMaxDriver = /MAX_CAPACITE|RENTABILITE/i.test(primary_driver);
+        if (role === "INTENSIFICATION") {
+          const canFitMore = usefulEtage >= avgSize * (maxPerFloor + 1) * 1.20;
+          if (canFitMore || isMaxDriver) {
+            effectiveMaxPerFloor = maxPerFloor + 1;
+            console.log(`│   💪 ${role}: plateau ${Math.round(usefulEtage)}m² utile → ${effectiveMaxPerFloor} logts/palier (base ${maxPerFloor})`);
+          }
         }
-      }
 
-      // ── GARDE-FOU ENVELOPPE × réserve sol ──
-      const maxFpByEnvelope = isFpFromEnvelope ? max_fp : envelope_area * (1 - groundReserve);
-      if (!isFpFromEnvelope && fp > maxFpByEnvelope) {
-        console.log(`│   ⚠ ${label}: fp=${fp}m² > enveloppe×(1-reserve)=${Math.round(maxFpByEnvelope)}m² → ajustement`);
-        fp = Math.round(maxFpByEnvelope);
-        if (canAdjustFloors && sdpNeeded > 0) {
-          floorsNeeded = Math.min(effectiveMaxFloors, Math.ceil(sdpNeeded / fp));
-          floorsNeeded = Math.max(1, floorsNeeded);
-        }
-      }
+        let unitsPerFloor = Math.floor(usefulEtage / avgSize);
+        unitsPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, unitsPerFloor));
 
-      // ── GARDE-FOU COS : SDP totale ≤ COS × site_area × cap_by_role ──
-      const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
-      const maxSdpForRole = Math.floor(max_sdp * cosCap);
-      if (fp * floorsNeeded > maxSdpForRole && !isBungalow) {
-        if (isFpFromEnvelope) {
-          // BUREAUX : plutôt réduire le plateau pour garder les niveaux demandés
-          const idealFp = Math.floor(maxSdpForRole / floorsNeeded);
-          console.log(`│   ⚠ ${label}: SDP=${fp * floorsNeeded}m² > COS cap=${maxSdpForRole}m² → fp réduit de ${fp} à ${idealFp}m² (${floorsNeeded} niveaux conservés)`);
-          fp = idealFp;
-        } else {
-          const maxLevelsByCos = Math.max(1, Math.floor(maxSdpForRole / fp));
-          console.log(`│   ⚠ ${label}: SDP=${fp * floorsNeeded}m² > COS cap=${maxSdpForRole}m² → ${maxLevelsByCos} niv`);
-          floorsNeeded = maxLevelsByCos;
+        // v57.6 : effectiveTarget PROPORTIONNEL au CES effectif × rôle scénario
+        // - CES effectif = profil client (budget, risque, posture)
+        // - roleTargetFactor = ambition du scénario (A=max, B=standard, C=réduit)
+        // Le nombre de logements est un RÉSULTAT, pas une cible fixe.
+        const cesRatio = effectiveCES / ces;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.0, EQUILIBRE: 0.80, PRUDENT: 0.60 })[role] || 0.80;
+        const effectiveTarget = Math.max(2, Math.round(target_units * cesRatio * roleTargetFactor));
+
+        floorsNeeded = Math.ceil(effectiveTarget / unitsPerFloor);
+        floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
+        // COS check duale
+        while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
+
+        totalUnits = unitsPerFloor * floorsNeeded;
+
+        // Mix réel
+        const mix = rules.default_mix_fn ? rules.default_mix_fn(totalUnits) : { T3: totalUnits };
+        totalUseful = 0;
+        let mixUnits = 0;
+        for (const [typ, count] of Object.entries(mix)) {
+          if (count <= 0) continue;
+          const unitSize = sizes[typ] || sizes.T3 || 80;
+          totalUseful += count * unitSize;
+          mixUnits += count;
+          details.push(`${count}×${typ}(${unitSize}m²)`);
         }
+        totalUnits = mixUnits;
+        unitMixDetail = details.join(" + ");
+        unitMix = mix;
       }
 
       levels = floorsNeeded;
 
-      // ── PILOTIS : check si l'espace libre est suffisant pour le parking ──
-      const freeGround = envelope_area - fp;
-      const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil(totalUnits * (rules.parking_per_unit || 1)));
+      // ── PILOTIS ──
+      const freeGround = envelope_area - fpRdc;
+      const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnits || 1) * (rules.parking_per_unit || 1)));
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
       const pilotisRule = rules.requires_pilotis;
@@ -856,17 +1303,22 @@ function computeSmartScenarios({
         pilotisLevels = 1;
       }
 
-      // Commerce au RDC : si rules.rdc_commerce, le RDC est commercial (hauteur différente)
+      // Commerce au RDC
       const hasRdcCommerce = rules.rdc_commerce || false;
       const rdcHeightM = hasRdcCommerce ? (rules.rdc_height_m || 4.0) : floor_height;
 
-      console.log(`│ ✅ ${label} (${role}) PROGRAMME-DRIVEN${isBungalow ? " [BUNGALOWS]" : ""}:`);
-      console.log(`│   mix: ${unitMixDetail}`);
-      console.log(`│   utile=${Math.round(totalUseful)}m² circ=${(circRatio*100).toFixed(0)}% → plateau=${fp}m² (${Math.round(fp/bodyDepth)}m×${bodyDepth}m)`);
-      console.log(`│   niveaux=${levels} (max prog=${maxFloorsProg} max regl=${absMaxLevels})`);
-      console.log(`│   reserve sol=${(groundReserve*100).toFixed(0)}% libre=${Math.round(freeGround)}m² parking=${parkingSpotsNeeded} places`);
+      const sdpDual = computeSdpDual(levels);
+      console.log(`│ ✅ ${label} (${role}) CES-DRIVEN v57.9${isBungalow ? " [BUNGALOWS]" : ""}:`);
+      console.log(`│   📊 CES EFFECTIF: réglementaire=${(ces*100).toFixed(0)}% → client=${(effectiveCES*100).toFixed(1)}% (clientMod=${clientCesMod.toFixed(3)}: budPres=${budgetPressure.toFixed(2)} post=${postureMod} risk=${riskPenalty.toFixed(3)} cap=${capacityBoost.toFixed(3)} dens=${densityBandMult})`);
+      console.log(`│   📊 maxFp: réglementaire=${Math.round(max_fp)}m² → client=${effectiveMaxFp}m² | cesFill=${(cesFill*100).toFixed(0)}% (role=${role})`);
+      console.log(`│   RDC=${fpRdc}m² (${(fpRdc/site_area*100).toFixed(0)}% terrain) | ét.=${fpEtages}m² (${(fpEtages/site_area*100).toFixed(0)}%) [${etageExt === "ENVELOPE" ? "→enveloppe" : "×" + etageExt}]`);
+      console.log(`│   mix: ${unitMixDetail} | ${totalUnits || 0} logts (souhait: ${target_units})`);
+      console.log(`│   ${levels}niv → SDP=${sdpDual}m² (COS ${(sdpDual/max_sdp*100).toFixed(0)}%)`);
+      console.log(`│   sol libre=${Math.round(freeGround)}m² parking=${parkingSpotsNeeded} places`);
       if (hasPilotis) console.log(`│   ⚡ PILOTIS activé`);
       if (hasRdcCommerce) console.log(`│   🏪 RDC Commerce (h=${rdcHeightM}m)`);
+
+      totalUnitsResult = totalUnits || 0;
 
     } else {
       // ════════════════════════════════════════════════════════════════════════
@@ -937,6 +1389,8 @@ function computeSmartScenarios({
       totalUseful = 0;
       circRatio = 0;
       bodyDepth = 0;
+      fpRdc = fp;
+      fpEtages = fp;
 
       console.log(`│ 📐 ${label} (${role}) REGULATION-DRIVEN: ratio=${ratio.toFixed(3)} fp=${fp}m² levels=${levels}`);
     }
@@ -947,7 +1401,10 @@ function computeSmartScenarios({
     const totalLevelsWithPilotis = levels + pilotisLevels;
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
-    const sdp = fp * levels;
+    // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
+    const sdp = (fpRdc && fpEtages && levels > 1)
+      ? fpRdc + fpEtages * (levels - 1)
+      : fp * levels;
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
 
     let compliance;
@@ -955,18 +1412,31 @@ function computeSmartScenarios({
     else if (cosRatio <= 1.30) compliance = "DEROGATION_POSSIBLE";
     else compliance = "AMBITIEUX_HORS_COS";
 
-    // Coût estimé
-    const costPerM2Base = { PREMIUM: 450, HAUT: 380, STANDARD: 300, ECONOMIQUE: 230, ECO: 230 }[String(standing_level).toUpperCase()] || 300;
-    const zoningCostMult = { URBAIN: 1.15, PERIURBAIN: 1.0, PAVILLON: 0.95, RURAL: 0.85, MIXTE: 1.05 }[zoning_type] || 1.0;
-    const pilotisCostMult = hasPilotis ? 1.12 : 1.0;
-    const estimatedCost = Math.round(sdp * costPerM2Base * zoningCostMult * pilotisCostMult);
-    const budgetFit = budget_range > 0 ? (estimatedCost <= budget_range * 1.1 ? "DANS_BUDGET" : estimatedCost <= budget_range * 1.3 ? "BUDGET_TENDU" : "HORS_BUDGET") : "N/A";
+    // v57.6: Coût estimé FCFA (Cameroun) = Construction + VRD
+    // Construction = SDP × coût/m²
+    // VRD = 10% de SDP × 50% du coût/m²
+    // Total = construction + VRD = SDP × costPerM2 × 1.05
+    const COST_PER_M2_FCFA = {
+      PREMIUM: 400000, HAUT: 350000,
+      STANDARD: 250000,
+      ECONOMIQUE: 180000, ECO: 180000
+    };
+    const costPerM2 = COST_PER_M2_FCFA[String(standing_level).toUpperCase()] || 250000;
+    const constructionCost = sdp * costPerM2;
+    const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
+    const estimatedCost = Math.round(constructionCost + vrdCost);
 
-    const freeGround = envelope_area - fp;
-    const parkingEst = hasPilotis ? Math.floor(fp / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
+    // budgetMax is already computed before the loop
+    const budgetFit = budgetMax > 0
+      ? (estimatedCost <= budgetMax ? "DANS_BUDGET" : estimatedCost <= budgetMax * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
+      : "N/A";
+
+    const freeGround = envelope_area - (fpRdc || fp); // espace libre au sol = enveloppe - empreinte RDC
+    const parkingEst = hasPilotis ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
 
     results[label] = {
-      fp_m2: fp, levels, height_m: height,
+      fp_m2: fp, fp_rdc_m2: fpRdc || fp, fp_etages_m2: fpEtages || fp,
+      levels, height_m: height,
       commerce_levels: commerceLevels,
       massing_mode: mode,
       sdp_m2: sdp,
@@ -983,35 +1453,637 @@ function computeSmartScenarios({
       accent_color: accents[label],
       estimated_cost: estimatedCost,
       budget_fit: budgetFit,
-      // v56.9 programme-driven extras
+      // v57.0 CES-driven extras
       program_driven: isProgramDriven,
       program_key: programKey || "NONE",
       unit_mix_detail: unitMixDetail || "N/A",
+      total_units: totalUnitsResult,
+      target_units_client: target_units || 0,
       total_useful_m2: Math.round(totalUseful || 0),
       circulation_ratio_pct: Math.round((circRatio || 0) * 100),
+      ces_fill_pct: Math.round(((fpRdc || fp) / Math.max(1, site_area)) * 100),  // % réel du terrain occupé au sol
       body_depth_m: bodyDepth || 0,
+      // ── v57.6 EFFICIENCY METRICS ──
+      surface_habitable_m2: Math.round(totalUseful || 0),
+      ratio_efficacite_pct: sdp > 0 ? Math.round((totalUseful || 0) / sdp * 100) : 0,
+      m2_habitable_par_logement: totalUnitsResult > 0 ? Math.round((totalUseful || 0) / totalUnitsResult) : 0,
+      // ── v57.6 COST BREAKDOWN ──
+      cost_construction_fcfa: Math.round(constructionCost),
+      cost_vrd_fcfa: Math.round(vrdCost),
+      cost_total_fcfa: estimatedCost,
+      cost_per_m2_sdp: Math.round(costPerM2 * 1.05),
+      cost_per_unit: totalUnitsResult > 0 ? Math.round(estimatedCost / totalUnitsResult) : 0,
+      cost_per_m2_habitable: (totalUseful > 0) ? Math.round(estimatedCost / totalUseful) : 0,
+      // ── 2. REGULATORY COMPLIANCE (new in v57.6) ──
+      regulatory: {
+        ces_reglementaire_pct: Math.round(ces * 100),
+        ces_effectif_pct: Math.round((effectiveCESOutput || ces) * 100),
+        ces_utilise_pct: Math.round(((fpRdc || fp) / Math.max(1, site_area)) * 100),
+        ces_marge_pct: Math.round((ces - (fpRdc || fp) / Math.max(1, site_area)) * 100),
+        cos_reglementaire: cos,
+        cos_utilise_pct: Math.round(cosRatio * 100),
+        cos_marge_pct: Math.round((1 - cosRatio) * 100),
+        hauteur_max_m: Number(max_height_m) || 99,
+        hauteur_projet_m: height,
+        hauteur_marge_m: Math.round(((Number(max_height_m) || 99) - height) * 10) / 10,
+        conformite_globale: compliance === "CONFORME" ? "CONFORME" : compliance,
+        // v57.7 retraits
+        retrait_avant_m: rAvant,
+        retrait_lateral_m: rLateral,
+        retrait_arriere_m: rArriere,
+        mitoyennete_cotes: nbMitoyens,
+        emprise_constructible_m2: Math.round(empriseConstructible),
+        emprise_effective_m2: Math.round(empriseEffective),
+        reduction_retraits_pct: setbackReductionPct,
+        // v57.9 solaire
+        zone_climatique: climaticZone,
+        orientation_score: solarImpact.orientationScore,
+        profondeur_recommandee_m: solarImpact.profondeur_recommandee_m,
+        facade_optimale: solarImpact.facade_optimale,
+        facade_a_proteger: solarImpact.facade_a_proteger,
+        ventilation_traversante: solarImpact.ventilation_traversante,
+        brise_soleil: solarImpact.brise_soleil,
+        malus_orientation_pct: solarImpact.malus_orientation_pct,
+      },
+      // ── 3. SCENARIO IDENTITY (new in v57.6) ──
+      scenario_identity: {
+        code: label,
+        nom: labels_fr[label],
+        role: SCENARIO_ROLE[label],
+        description: generateScenarioDescription(label, SCENARIO_ROLE[label], {
+          ces_fill_pct: Math.round(((fpRdc || fp) / Math.max(1, site_area)) * 100),
+          sdp: sdp,
+          levels: levels,
+          free_ground_m2: Math.round(freeGround),
+        }),
+      },
+      // ── v57.6 FINANCIAL LAYER ──
+      revenu_mensuel_brut: 0,
+      revenu_annuel_brut: 0,
+      revenu_annuel_net: 0,
+      revenu_detail: {},
+      vacancy_rate_pct: 0,
+      rendement_brut_pct: 0,
+      roi_annees: 0,
+      ratio_invest_revenu: 0,
+      cout_fourchette: { bas: 0, median: estimatedCost, haut: 0 },
+      complexite: { score: 0, label: "Moyen" },
+      risque: "MOYEN",
     };
+
+    // ── v57.6 REVENUE & FINANCIAL INDICATORS ──
+    const loyerKey = /PREMIUM|HAUT/i.test(String(standing_level)) ? "PREMIUM" : /ECO/i.test(String(standing_level)) ? "ECO" : "STANDARD";
+    const loyers = LOYERS_MENSUELS_FCFA[loyerKey] || LOYERS_MENSUELS_FCFA.STANDARD;
+    const vacancyRate = VACANCY_RATE_BY_ZONING[zoning_type] || 0.15;
+
+    let revenuMensuelBrut = 0;
+    const revenuDetail = {};
+    for (const [typo, count] of Object.entries(unitMix)) {
+      if (count <= 0) continue;
+      const loyerUnit = loyers[typo] || loyers.T3 || 100000;
+      revenuMensuelBrut += count * loyerUnit;
+      revenuDetail[typo] = { count, loyer_unitaire: loyerUnit, loyer_total: count * loyerUnit };
+    }
+    const revenuAnnuelBrut = revenuMensuelBrut * 12;
+    const revenuAnnuelNet = Math.round(revenuAnnuelBrut * (1 - vacancyRate));
+    const rendementBrutPct = estimatedCost > 0 ? Math.round(revenuAnnuelNet / estimatedCost * 10000) / 100 : 0;
+    const roiAnnees = revenuAnnuelNet > 0 ? Math.round(estimatedCost / revenuAnnuelNet * 10) / 10 : 0;
+
+    // Cost range (fourchette)
+    const costBas = Math.round(estimatedCost * COST_RANGE_MULT.bas);
+    const costHaut = Math.round(estimatedCost * COST_RANGE_MULT.haut);
+
+    // Complexity (1-5)
+    const complexityScore = Math.min(5, 1 + Math.floor(levels / 2) + (hasPilotis ? 1 : 0) + (totalUnitsResult > 12 ? 1 : 0) + (commerceLevels > 0 ? 1 : 0));
+    const complexityLabel = ["", "Faible", "Modere", "Moyen", "Eleve", "Tres eleve"][complexityScore] || "Moyen";
+
+    // Risk level
+    let riskLevel = "MOYEN";
+    if (budgetFit === "HORS_BUDGET" && cosRatio > 0.90) riskLevel = "ELEVE";
+    else if (budgetFit === "DANS_BUDGET" && cosRatio < 0.80) riskLevel = "FAIBLE";
+    else if (budgetFit === "HORS_BUDGET") riskLevel = "ELEVE";
+    else if (cosRatio > 0.95) riskLevel = "ELEVE";
+
+    // v57.9: ventilation des coûts par poste + honoraires fourchette + frais + solaire
+    const coutConstruction = Math.round(sdp * costPerM2); // hors VRD
+    const honorairesResult = calcHonorairesDegressifs(estimatedCost);
+    const honorairesArchi = honorairesResult.median;
+    const tauxHonorairesBas = estimatedCost > 0 ? Math.round(honorairesResult.bas / estimatedCost * 10000) / 100 : 0;
+    const tauxHonorairesHaut = estimatedCost > 0 ? Math.round(honorairesResult.haut / estimatedCost * 10000) / 100 : 0;
+    const tauxHonoraires = estimatedCost > 0 ? Math.round(honorairesArchi / estimatedCost * 10000) / 100 : 0;
+    const fraisPermis = Math.round(estimatedCost * FRAIS_ANNEXES_PCT.permis_construire);
+    const fraisAssurance = Math.round(estimatedCost * FRAIS_ANNEXES_PCT.assurance_dommage_ouvrage);
+    const fraisEtudes = Math.round(estimatedCost * FRAIS_ANNEXES_PCT.etudes_techniques);
+    const fraisDivers = Math.round(estimatedCost * FRAIS_ANNEXES_PCT.divers_imprevus);
+    const totalFraisAnnexes = fraisPermis + fraisAssurance + fraisEtudes + fraisDivers;
+    // Malus orientation solaire (surcoût climatisation si mal orienté)
+    const malusSolaire = solarImpact.malus_orientation_pct > 0 ? Math.round(estimatedCost * solarImpact.malus_orientation_pct / 100) : 0;
+    const coutGlobalProjet = estimatedCost + honorairesArchi + totalFraisAnnexes + malusSolaire;
+
+    results[label].cout_ventilation = {
+      gros_oeuvre_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.gros_oeuvre),
+      second_oeuvre_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.second_oeuvre),
+      lots_techniques_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.lots_techniques),
+      amenagements_ext_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.amenagements_ext),
+      vrd_fcfa: Math.round(vrdCost),
+      sous_total_construction_fcfa: estimatedCost,
+      honoraires_architecte: {
+        bas_fcfa: honorairesResult.bas,
+        median_fcfa: honorairesArchi,
+        haut_fcfa: honorairesResult.haut,
+        taux_bas_pct: tauxHonorairesBas,
+        taux_median_pct: tauxHonoraires,
+        taux_haut_pct: tauxHonorairesHaut,
+      },
+      frais_annexes: {
+        permis_construire_fcfa: fraisPermis,
+        assurance_dommage_ouvrage_fcfa: fraisAssurance,
+        etudes_techniques_fcfa: fraisEtudes,
+        divers_imprevus_fcfa: fraisDivers,
+        total_frais_annexes_fcfa: totalFraisAnnexes,
+      },
+      malus_orientation_solaire_fcfa: malusSolaire,
+      cout_global_projet_fcfa: coutGlobalProjet,
+    };
+    results[label].cout_global_projet_fcfa = coutGlobalProjet;
+    results[label].honoraires_architecte_fcfa = honorairesArchi;
+    results[label].malus_orientation_solaire_fcfa = malusSolaire;
+
+    // v57.7: durée estimée du chantier
+    const dureeBase = DUREE_CHANTIER_MOIS_PAR_NIVEAU;
+    const dureeTotale = dureeBase.fondations_terrassement
+      + levels * dureeBase.par_niveau
+      + dureeBase.finitions
+      + dureeBase.vrd_ext;
+    results[label].duree_chantier_mois = Math.round(dureeTotale);
+
+    // Update the results object with financial metrics
+    results[label].revenu_mensuel_brut = revenuMensuelBrut;
+    results[label].revenu_annuel_brut = revenuAnnuelBrut;
+    results[label].revenu_annuel_net = revenuAnnuelNet;
+    results[label].revenu_detail = revenuDetail;
+    results[label].vacancy_rate_pct = Math.round(vacancyRate * 100);
+    results[label].rendement_brut_pct = rendementBrutPct;
+    results[label].roi_annees = roiAnnees;
+    results[label].ratio_invest_revenu = revenuAnnuelNet > 0 ? Math.round(estimatedCost / revenuAnnuelNet * 10) / 10 : 0;
+    results[label].cout_fourchette = { bas: costBas, median: estimatedCost, haut: costHaut };
+    results[label].complexite = { score: complexityScore, label: complexityLabel };
+    results[label].risque = riskLevel;
   }
 
   const r = results;
 
-  // ── POST-TRAITEMENT : garantir la hiérarchie A ≥ B ≥ C en SDP ──
-  // En mode programme-driven, la différenciation vient des tailles d'apparts.
-  // Mais il faut quand même garantir que A.sdp ≥ B.sdp ≥ C.sdp (cohérence visuelle).
+  // Helper : recalcule SDP duale pour un scénario
+  const recalcSdp = (s) => {
+    s.sdp_m2 = (s.fp_rdc_m2 && s.fp_etages_m2 && s.levels > 1)
+      ? s.fp_rdc_m2 + s.fp_etages_m2 * (s.levels - 1)
+      : s.fp_m2 * s.levels;
+    s.height_m = Math.round(s.levels * floor_height * 10) / 10;
+  };
+
+  // ── v57.6 HELPERS FOR DIAGNOSTICS ──
+
+  // Generate scenario description (1-2 sentences in French)
+  function generateScenarioDescription(label, role, sc_data) {
+    const sdp = Math.round(sc_data.sdp);
+    const ces = sc_data.ces_fill_pct;
+    const niv = sc_data.levels;
+    const libre = Math.round(sc_data.free_ground_m2);
+    if (label === "A") {
+      return `Intensification : exploitation maximale du potentiel constructible du terrain. Emprise au sol de ${ces}%, developpant ${sdp}m² de SDP sur ${niv} niveaux. Cette option maximise la surface construite et le nombre d'unites, au prix d'un sol libre reduit (${libre}m²).`;
+    } else if (label === "B") {
+      return `Equilibre : compromis entre densite et qualite de vie. Emprise moderee a ${ces}% du terrain, produisant ${sdp}m² de SDP sur ${niv} niveaux avec ${libre}m² d'espace libre. Ce scenario offre un bon ratio entre rendement et habitabilite.`;
+    } else if (label === "C") {
+      return `Prudent : implantation mesuree, phasable et evolutive. Emprise contenue a ${ces}% du terrain, preservant ${libre}m² d'espaces exterieurs. Les ${sdp}m² de SDP sur ${niv} niveaux permettent une construction progressive et un investissement maitrise.`;
+    }
+    return "Scenario de projet immobilier.";
+  }
+
+  // Extract comparison data for a scenario
+  function extractComparatif(sc) {
+    return {
+      emprise_rdc_m2: sc.fp_rdc_m2 || sc.fp_m2,
+      emprise_etages_m2: sc.fp_etages_m2 || sc.fp_m2,
+      niveaux: sc.levels,
+      hauteur_m: sc.height_m,
+      sdp_m2: sc.sdp_m2,
+      surface_habitable_m2: sc.surface_habitable_m2 || 0,
+      ratio_efficacite_pct: sc.ratio_efficacite_pct || 0,
+      unites: sc.total_units,
+      m2_par_logement: sc.m2_habitable_par_logement || 0,
+      cout_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost,
+      cout_par_unite: sc.cost_per_unit || 0,
+      cout_par_m2_sdp: sc.cost_per_m2_sdp || 0,
+      cout_par_m2_habitable: sc.cost_per_m2_habitable || 0,
+      ces_utilise_pct: sc.ces_fill_pct,
+      cos_utilise_pct: sc.cos_ratio_pct,
+      conformite: sc.cos_compliance,
+      budget_fit: sc.budget_fit,
+      parking: sc.parking_spots_estimate,
+      sol_libre_m2: sc.free_ground_m2,
+      sol_libre_pct: sc.free_ground_m2 > 0 ? Math.round(sc.free_ground_m2 / site_area * 100) : 0,
+      // v57.6 : coût fourchette + complexité + risque (diagnostic scope)
+      cout_fourchette: sc.cout_fourchette || {},
+      complexite: sc.complexite ? sc.complexite.label : "N/A",
+      risque: sc.risque || "N/A",
+      // v57.7 : ventilation coûts + durée + scoring décomposé + retraits
+      cout_ventilation: sc.cout_ventilation || {},
+      duree_chantier_mois: sc.duree_chantier_mois || 0,
+      score_recommandation: sc.recommendation_score || 0,
+      score_detail: sc.score_detail || {},
+      retraits: sc.regulatory ? {
+        avant_m: sc.regulatory.retrait_avant_m,
+        lateral_m: sc.regulatory.retrait_lateral_m,
+        arriere_m: sc.regulatory.retrait_arriere_m,
+        mitoyennete: sc.regulatory.mitoyennete_cotes,
+        emprise_constructible_m2: sc.regulatory.emprise_constructible_m2,
+        reduction_pct: sc.regulatory.reduction_retraits_pct,
+      } : {},
+    };
+  }
+
+  // v57.8: Phasage intelligent — durées, jalons datés (M0..Mn), répartition budgétaire, calendrier structuré
+  function generatePhasingStrategy(recommended, r_results, ctx) {
+    const recSc = r_results[recommended];
+    const totalCost = recSc.cost_total_fcfa || recSc.estimated_cost;
+    const globalCost = recSc.cout_global_projet_fcfa || totalCost;
+    const honoraires = recSc.honoraires_architecte_fcfa || 0;
+    const dureeBase = DUREE_CHANTIER_MOIS_PAR_NIVEAU;
+
+    // Calendrier structuré (données machine pour 8F)
+    const calendrier = [];
+    let moisCourant = 0;
+
+    // Projet compact (1-2 niveaux) : monophasé avec calendrier détaillé
+    if (recSc.levels <= 2) {
+      const dureeFond = dureeBase.fondations_terrassement;
+      const dureeGO = Math.round(recSc.levels * dureeBase.par_niveau);
+      const dureeFin = dureeBase.finitions;
+      const dureeVRD = dureeBase.vrd_ext;
+      const dureeTotal = dureeFond + dureeGO + dureeFin + dureeVRD;
+      const parts = [];
+
+      // Jalons datés
+      calendrier.push({ jalon: "Demarrage chantier", mois: `M0`, cout_cumule_pct: 0 });
+      parts.push(`CONSTRUCTION MONOPHASEE — Duree estimee : ${Math.round(dureeTotal)} mois (M0 a M${Math.round(dureeTotal)}).`);
+
+      moisCourant = dureeFond;
+      calendrier.push({ jalon: "Fin fondations", mois: `M${moisCourant}`, cout_cumule_pct: 15 });
+      parts.push(`M0-M${moisCourant} — Terrassement + fondations : ${dureeFond} mois | ${Math.round(totalCost * 0.15 / 1e6)}M FCFA (15% du budget construction).`);
+
+      const finGO = moisCourant + dureeGO;
+      calendrier.push({ jalon: "Fin gros oeuvre (hors d'eau/hors d'air)", mois: `M${Math.round(finGO)}`, cout_cumule_pct: 55 });
+      parts.push(`M${moisCourant}-M${Math.round(finGO)} — Gros oeuvre + etancheite : ${dureeGO} mois | ${Math.round(totalCost * 0.40 / 1e6)}M FCFA (40%). Batiment hors d'eau hors d'air.`);
+      moisCourant = Math.round(finGO);
+
+      const finFin = moisCourant + dureeFin;
+      calendrier.push({ jalon: "Fin second oeuvre + lots techniques", mois: `M${Math.round(finFin)}`, cout_cumule_pct: 90 });
+      parts.push(`M${moisCourant}-M${Math.round(finFin)} — Second oeuvre + lots techniques : ${dureeFin} mois | ${Math.round(totalCost * 0.35 / 1e6)}M FCFA (35%).`);
+      moisCourant = Math.round(finFin);
+
+      const finVRD = moisCourant + dureeVRD;
+      calendrier.push({ jalon: "Reception + livraison", mois: `M${Math.round(finVRD)}`, cout_cumule_pct: 100 });
+      parts.push(`M${moisCourant}-M${Math.round(finVRD)} — VRD + amenagements exterieurs + reception : ${dureeVRD} mois | ${Math.round(totalCost * 0.10 / 1e6)}M FCFA (10%).`);
+
+      parts.push(`\nBUDGET GLOBAL — Construction : ${Math.round(totalCost / 1e6)}M FCFA + Honoraires architecte : ${Math.round(honoraires / 1e6)}M FCFA = ${Math.round(globalCost / 1e6)}M FCFA TTC. Le projet compact simplifie la gestion du chantier.`);
+
+      return {
+        text: parts.join("\n"),
+        calendrier,
+        phases: [{ nom: "Construction complete", duree_mois: Math.round(dureeTotal), cout_construction_fcfa: totalCost, pct_budget: 100 }],
+        duree_totale_mois: Math.round(dureeTotal),
+        cout_global_projet_fcfa: globalCost,
+      };
+    }
+
+    // Projet multi-niveaux : phasé en 2-3 tranches
+    const phase1Floors = Math.min(2, recSc.levels - 1);
+    const phase1Levels = 1 + phase1Floors;
+    const phase1CostRatio = phase1Levels / recSc.levels;
+    const phase1Cost = Math.round(totalCost * phase1CostRatio);
+    const phase1Sdp = Math.round(recSc.fp_rdc_m2 + recSc.fp_etages_m2 * phase1Floors);
+    const phase1DureeFond = dureeBase.fondations_terrassement;
+    const phase1DureeGO = Math.round(phase1Levels * dureeBase.par_niveau);
+    const phase1DureeFin = dureeBase.finitions;
+    const phase1Duree = phase1DureeFond + phase1DureeGO + phase1DureeFin;
+
+    const remainingFloors = recSc.levels - phase1Levels;
+    const parts = [];
+    const phasesData = [];
+    const dureeTotalEstimee = recSc.duree_chantier_mois || Math.round(phase1Duree + remainingFloors * dureeBase.par_niveau + dureeBase.finitions + dureeBase.vrd_ext);
+
+    parts.push(`CONSTRUCTION PHASEE — ${remainingFloors > 2 ? 3 : 2} tranches, duree totale estimee : ${dureeTotalEstimee} mois (M0 a M${dureeTotalEstimee}).`);
+
+    // Phase 1 avec jalons datés
+    calendrier.push({ jalon: "Demarrage Phase 1", mois: "M0", cout_cumule_pct: 0 });
+    parts.push(`\nPHASE 1 — RDC + ${phase1Floors} etage(s) | ${phase1Sdp}m² SDP | ${Math.round(phase1Duree)} mois | ${Math.round(phase1Cost / 1e6)}M FCFA (${Math.round(phase1CostRatio * 100)}% du budget).`);
+
+    moisCourant = phase1DureeFond;
+    calendrier.push({ jalon: "Fin fondations (dim. pour " + recSc.levels + " niv.)", mois: `M${moisCourant}`, cout_cumule_pct: Math.round(phase1CostRatio * 15) });
+    parts.push(`  M0-M${moisCourant} — Fondations dimensionnees pour ${recSc.levels} niveaux (structure renforcee des le depart).`);
+
+    const finGO1 = moisCourant + phase1DureeGO;
+    calendrier.push({ jalon: "Phase 1 hors d'eau", mois: `M${Math.round(finGO1)}`, cout_cumule_pct: Math.round(phase1CostRatio * 55) });
+    parts.push(`  M${moisCourant}-M${Math.round(finGO1)} — Gros oeuvre RDC a R+${phase1Floors}.`);
+    moisCourant = Math.round(finGO1);
+
+    const finFin1 = moisCourant + phase1DureeFin;
+    calendrier.push({ jalon: "Livraison Phase 1", mois: `M${Math.round(finFin1)}`, cout_cumule_pct: Math.round(phase1CostRatio * 100) });
+    parts.push(`  M${moisCourant}-M${Math.round(finFin1)} — Finitions + mise en service. Tranche autonome et fonctionnelle.`);
+    moisCourant = Math.round(finFin1);
+    phasesData.push({ nom: "Phase 1 (RDC+R" + phase1Floors + ")", debut: "M0", fin: `M${moisCourant}`, duree_mois: Math.round(phase1Duree), cout_construction_fcfa: phase1Cost, pct_budget: Math.round(phase1CostRatio * 100), sdp_m2: phase1Sdp });
+
+    // Phase 2
+    if (remainingFloors > 0) {
+      const phase2Floors = remainingFloors > 2 ? Math.ceil(remainingFloors / 2) : remainingFloors;
+      const phase2CostRatio = phase2Floors / recSc.levels;
+      const phase2Cost = Math.round(totalCost * phase2CostRatio);
+      const phase2DureeGO = Math.round(phase2Floors * dureeBase.par_niveau);
+      const phase2DureeFin = remainingFloors <= 2 ? dureeBase.finitions + dureeBase.vrd_ext : Math.round(dureeBase.finitions * 0.5);
+      const phase2Duree = phase2DureeGO + phase2DureeFin;
+      const phase2Start = moisCourant;
+
+      calendrier.push({ jalon: "Demarrage Phase 2 (surelevation)", mois: `M${moisCourant}`, cout_cumule_pct: Math.round(phase1CostRatio * 100) });
+      parts.push(`\nPHASE 2 — Surelevation R+${phase1Floors + 1} a R+${phase1Floors + phase2Floors} | +${Math.round(recSc.fp_etages_m2 * phase2Floors)}m² SDP | M${moisCourant}-M${moisCourant + phase2Duree} (${phase2Duree} mois) | ${Math.round(phase2Cost / 1e6)}M FCFA (${Math.round(phase2CostRatio * 100)}%).`);
+
+      moisCourant += phase2DureeGO;
+      calendrier.push({ jalon: "Phase 2 hors d'eau", mois: `M${moisCourant}`, cout_cumule_pct: Math.round((phase1CostRatio + phase2CostRatio * 0.6) * 100) });
+
+      moisCourant += phase2DureeFin;
+      calendrier.push({ jalon: remainingFloors <= 2 ? "Livraison finale" : "Livraison Phase 2", mois: `M${moisCourant}`, cout_cumule_pct: Math.round((phase1CostRatio + phase2CostRatio) * 100) });
+
+      parts.push(`  Avantage : l'investissement initial est reduit de ${Math.round((1 - phase1CostRatio) * 100)}%, permettant de financer la phase 2 par les revenus de la phase 1 ou un second financement.`);
+      phasesData.push({ nom: `Phase 2 (R+${phase1Floors + 1} a R+${phase1Floors + phase2Floors})`, debut: `M${phase2Start}`, fin: `M${moisCourant}`, duree_mois: phase2Duree, cout_construction_fcfa: phase2Cost, pct_budget: Math.round(phase2CostRatio * 100) });
+
+      // Phase 3
+      const phase3Floors = remainingFloors - phase2Floors;
+      if (phase3Floors > 0) {
+        const phase3CostRatio = phase3Floors / recSc.levels;
+        const phase3Cost = Math.round(totalCost * phase3CostRatio);
+        const phase3Duree = Math.round(phase3Floors * dureeBase.par_niveau + dureeBase.finitions * 0.5 + dureeBase.vrd_ext);
+        const phase3Start = moisCourant;
+
+        calendrier.push({ jalon: "Demarrage Phase 3", mois: `M${moisCourant}`, cout_cumule_pct: Math.round((phase1CostRatio + phase2CostRatio) * 100) });
+        parts.push(`\nPHASE 3 — Surelevation R+${phase1Floors + phase2Floors + 1} a R+${recSc.levels - 1} | +${Math.round(recSc.fp_etages_m2 * phase3Floors)}m² SDP | M${moisCourant}-M${moisCourant + phase3Duree} (${phase3Duree} mois) | ${Math.round(phase3Cost / 1e6)}M FCFA (${Math.round(phase3CostRatio * 100)}%).`);
+
+        moisCourant += phase3Duree;
+        calendrier.push({ jalon: "Livraison finale", mois: `M${moisCourant}`, cout_cumule_pct: 100 });
+        phasesData.push({ nom: `Phase 3 (R+${phase1Floors + phase2Floors + 1} a R+${recSc.levels - 1})`, debut: `M${phase3Start}`, fin: `M${moisCourant}`, duree_mois: phase3Duree, cout_construction_fcfa: phase3Cost, pct_budget: Math.round(phase3CostRatio * 100) });
+      }
+    }
+
+    parts.push(`\nSTRATEGIE STRUCTURELLE — Fondations et poteaux dimensionnes des la phase 1 pour ${recSc.levels} niveaux. Surcoût de renforcement initial : +8-12% sur les fondations, compense par l'economie sur la mobilisation de chantier.`);
+    parts.push(`BUDGET GLOBAL — Construction : ${Math.round(totalCost / 1e6)}M FCFA + Honoraires architecte : ${Math.round(honoraires / 1e6)}M FCFA = ${Math.round(globalCost / 1e6)}M FCFA TTC.`);
+
+    return {
+      text: parts.join("\n"),
+      calendrier,
+      phases: phasesData,
+      duree_totale_mois: moisCourant > 0 ? moisCourant : dureeTotalEstimee,
+      cout_global_projet_fcfa: globalCost,
+    };
+  }
+
+  // v57.7: Narratif stratégique contextualisé
+  // Identifie la CONTRAINTE DOMINANTE du projet et construit l'argumentaire autour
+  function generateRecommendationNarrative(recommended, r_results, ctx) {
+    const sc = r_results[recommended];
+    const noms = { A: "Intensification", B: "Equilibre", C: "Prudent" };
+    const costM = Math.round((sc.cost_total_fcfa || sc.estimated_cost) / 1e6);
+    const costBas = sc.cout_fourchette ? Math.round(sc.cout_fourchette.bas / 1e6) : Math.round(costM * 0.85);
+    const costHaut = sc.cout_fourchette ? Math.round(sc.cout_fourchette.haut / 1e6) : Math.round(costM * 1.2);
+    const habM2 = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
+    const m2Logt = sc.m2_habitable_par_logement || 0;
+    const coutLogt = sc.cost_per_unit ? Math.round(sc.cost_per_unit / 1e6) : 0;
+    const reg = sc.regulatory || {};
+    const scoreDet = sc.score_detail || {};
+    const parts = [];
+
+    // ══════════════════════════════════════════════════════════════════
+    // v57.7: IDENTIFICATION CONTRAINTE DOMINANTE
+    // ══════════════════════════════════════════════════════════════════
+    // On identifie le facteur limitant principal parmi : budget, terrain, réglementation, programme
+    let contrainteDominante = "equilibre"; // default
+    let contrainteExplication = "";
+    const budgetMaxCtx = ctx.budgetMax || 0;
+    const solLibrePct = sc.free_ground_m2 > 0 ? sc.free_ground_m2 / ctx.site_area : 1;
+
+    if (sc.budget_fit === "HORS_BUDGET" && budgetMaxCtx > 0) {
+      contrainteDominante = "budget";
+      contrainteExplication = `le budget disponible (${Math.round(budgetMaxCtx / 1e6)}M FCFA) est le facteur limitant principal de ce projet`;
+    } else if (sc.cos_ratio_pct > 85) {
+      contrainteDominante = "reglementation";
+      contrainteExplication = `la densite reglementaire (COS a ${sc.cos_ratio_pct}%) est le facteur structurant — le terrain est exploite pres de sa capacite maximale`;
+    } else if (solLibrePct < 0.25 || setbackReductionPct > 20) {
+      contrainteDominante = "terrain";
+      contrainteExplication = `la geometrie du terrain et les retraits reglementaires (${setbackReductionPct}% de reduction d'emprise) sont les contraintes majeures de l'implantation`;
+    } else if (ctx.target_units > 0 && sc.total_units < ctx.target_units * 0.80) {
+      contrainteDominante = "programme";
+      contrainteExplication = `le terrain ne permet pas d'atteindre les ${ctx.target_units} unites souhaitees dans les regles — ${sc.total_units} unites sont realisables`;
+    } else {
+      contrainteExplication = `le projet s'inscrit dans un equilibre favorable entre terrain, budget et reglementation`;
+    }
+
+    // ── 1. VERDICT CONTEXTUALISE ──
+    let verdictRaison = "";
+    if (/AMBITIEUX|OFFENSIVE/i.test(ctx.feasibility_posture) && recommended === "A") {
+      verdictRaison = `Il exploite pleinement le potentiel constructible du terrain. Votre posture ambitieuse et votre capacite financiere permettent de viser le scenario le plus dense.`;
+    } else if (/PRUDENT|CONSERVATIVE/i.test(ctx.feasibility_posture) && recommended === "C") {
+      verdictRaison = `Il respecte votre approche prudente : implantation maitrisee, investissement contenu, et possibilite d'evolution future par surelevation.`;
+    } else if (recommended === "B") {
+      verdictRaison = `Il offre le meilleur compromis entre surface construite, cout de realisation et conformite reglementaire.`;
+    } else if (contrainteDominante === "budget") {
+      verdictRaison = `Face a la contrainte budgetaire identifiee, il optimise la surface construite dans les limites de votre enveloppe financiere.`;
+    } else if (contrainteDominante === "terrain") {
+      verdictRaison = `Sur ce terrain ou les retraits reglementaires reduisent l'emprise de ${setbackReductionPct}%, il tire le meilleur parti de la surface constructible reelle.`;
+    } else {
+      verdictRaison = `Il offre la meilleure adequation entre votre programme, votre budget et les contraintes du terrain.`;
+    }
+    parts.push(`◆ VERDICT — Le scenario ${noms[recommended]} est recommande pour votre projet (score ${sc.recommendation_score}/1). ${verdictRaison}`);
+
+    // ── 1b. CONTEXTE DU SITE avec orientation solaire ──
+    const contexte = [];
+    contexte.push(`Sur votre terrain de ${ctx.site_area}m² en zone ${zoning_type} (${climaticZone.toLowerCase()})`);
+    if (setbackReductionPct > 5) {
+      contexte.push(`les retraits reglementaires (avant ${rAvant}m, lateral ${rLateral}m${nbMitoyens > 0 ? `, ${nbMitoyens} cote(s) mitoyen(s)` : ""}, arriere ${rArriere}m) reduisent l'emprise constructible de ${setbackReductionPct}%`);
+    }
+    // v57.9: orientation solaire dans la lecture du site
+    contexte.push(solarImpact.recommandation_orientation);
+    if (solarImpact.malus_orientation_pct > 0) {
+      contexte.push(`surcoût climatisation estime a +${solarImpact.malus_orientation_pct}% en raison de l'orientation`);
+    }
+    contexte.push(`${contrainteExplication}`);
+    parts.push(`◆ LECTURE DU SITE — ${contexte.join(". ")}.`);
+
+    // ── 2. CE QUE VOUS CONSTRUISEZ ──
+    const implantation = [];
+    implantation.push(`un batiment de ${sc.levels} niveaux (${sc.height_m}m)`);
+    implantation.push(`emprise au sol de ${sc.fp_rdc_m2}m² (${sc.ces_fill_pct}% du terrain)`);
+    if (sc.fp_etages_m2 > sc.fp_rdc_m2) {
+      implantation.push(`etages elargis a ${sc.fp_etages_m2}m² (extension${nbMitoyens > 0 ? " en appui sur les mitoyennetes" : " vers les limites separatives"})`);
+    }
+    implantation.push(`${sc.sdp_m2}m² de surface de plancher dont ${habM2}m² habitables (efficacite ${sc.ratio_efficacite_pct || 0}%)`);
+    if (sc.total_units > 1) {
+      implantation.push(`${sc.total_units} logements — ${sc.unit_mix_detail || "mix standard"}`);
+      if (m2Logt > 0) implantation.push(`${m2Logt}m² habitables par logement`);
+    }
+    implantation.push(`${sc.free_ground_m2}m² libres au sol (${Math.round(solLibrePct * 100)}%), ${sc.parking_spots_estimate} places de stationnement`);
+    parts.push(`◆ CE QUE VOUS CONSTRUISEZ — ${implantation.join(" ; ")}.`);
+
+    // ── 3. COUT GLOBAL DU PROJET (construction + honoraires fourchette + frais + solaire) ──
+    const cout = [];
+    const vent = sc.cout_ventilation || {};
+    const globalM = vent.cout_global_projet_fcfa ? Math.round(vent.cout_global_projet_fcfa / 1e6) : costM;
+    const honoObj = vent.honoraires_architecte || {};
+    const honoBasM = Math.round((honoObj.bas_fcfa || 0) / 1e6);
+    const honoHautM = Math.round((honoObj.haut_fcfa || 0) / 1e6);
+    const honoMedianM = Math.round((honoObj.median_fcfa || 0) / 1e6);
+    const fraisAnnM = vent.frais_annexes ? Math.round(vent.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0;
+    const malusSolaireM = vent.malus_orientation_solaire_fcfa ? Math.round(vent.malus_orientation_solaire_fcfa / 1e6) : 0;
+
+    cout.push(`Cout global du projet estime : ${globalM}M FCFA`);
+    let honoText = `honoraires architecte ${honoMedianM}M (fourchette ${honoBasM}M a ${honoHautM}M, soit ${honoObj.taux_bas_pct || 0}% a ${honoObj.taux_haut_pct || 0}% — bareme degressif)`;
+    cout.push(`dont construction ${costM}M (fourchette ${costBas}M a ${costHaut}M), ${honoText}, frais annexes ${fraisAnnM}M (permis, assurance DO, BET, imprevus)`);
+    if (malusSolaireM > 0) {
+      cout.push(`Surcoût orientation solaire : +${malusSolaireM}M FCFA (protection facades Ouest, climatisation renforcee)`);
+    }
+    if (vent.gros_oeuvre_fcfa) {
+      cout.push(`Ventilation construction : gros oeuvre ${Math.round(vent.gros_oeuvre_fcfa / 1e6)}M (55%), second oeuvre ${Math.round(vent.second_oeuvre_fcfa / 1e6)}M (25%), lots techniques ${Math.round(vent.lots_techniques_fcfa / 1e6)}M (15%), VRD ${Math.round(vent.vrd_fcfa / 1e6)}M`);
+    }
+    cout.push(`${Math.round((sc.cost_per_m2_sdp || 0) / 1000)}k FCFA/m² SDP`);
+    if (coutLogt > 0 && sc.total_units > 1) cout.push(`${coutLogt}M FCFA par logement (construction seule)`);
+    if (sc.budget_fit === "DANS_BUDGET") {
+      cout.push(`Ce montant s'inscrit dans votre enveloppe budgetaire`);
+    } else if (sc.budget_fit === "BUDGET_TENDU") {
+      cout.push(`Montant proche de votre limite — optimisable par ajustement des finitions`);
+    } else if (sc.budget_fit === "HORS_BUDGET" && budgetMaxCtx > 0) {
+      const dep = Math.round(((sc.cost_total_fcfa || sc.estimated_cost) - budgetMaxCtx) / 1e6);
+      cout.push(`Depassement de ${dep}M FCFA sur la construction. Cout global tout compris : ${globalM}M FCFA`);
+    }
+    cout.push(`Duree estimee du chantier : ${sc.duree_chantier_mois || "N/A"} mois`);
+    parts.push(`◆ BUDGET GLOBAL DU PROJET — ${cout.join(". ")}.`);
+
+    // ── 4. ALTERNATIVES avec deltas chiffrés ──
+    const others = ["A","B","C"].filter(l => l !== recommended);
+    const comparaison = [];
+    for (const o of others) {
+      const osc = r_results[o];
+      const oCostM = Math.round((osc.cost_total_fcfa || osc.estimated_cost) / 1e6);
+      const deltaSdp = osc.sdp_m2 - sc.sdp_m2;
+      const deltaUnits = osc.total_units - sc.total_units;
+      const deltaCost = oCostM - costM;
+      const deltaSdpPct = sc.sdp_m2 > 0 ? Math.round(Math.abs(deltaSdp) / sc.sdp_m2 * 100) : 0;
+      const deltaCostPct = costM > 0 ? Math.round(Math.abs(deltaCost) / costM * 100) : 0;
+      if (deltaSdp > 0) {
+        comparaison.push(`${noms[o]} (${o}) : +${deltaSdp}m² SDP (+${deltaSdpPct}%), +${Math.max(0, deltaUnits)} logement(s), +${deltaCost}M FCFA (+${deltaCostPct}%)`);
+      } else {
+        comparaison.push(`${noms[o]} (${o}) : ${deltaSdp}m² SDP (-${deltaSdpPct}%), ${deltaUnits} logement(s), -${Math.abs(deltaCost)}M FCFA (-${deltaCostPct}%)`);
+      }
+    }
+    parts.push(`◆ ALTERNATIVES — ${comparaison.join(" | ")}.`);
+
+    // ── 5. DECOMPOSITION DU SCORE avec explications actionnables ──
+    if (scoreDet && scoreDet.budget_fit) {
+      const criteres = [];
+      const labels = {
+        budget_fit: "Budget", risk_alignment: "Risque", cos_conformity: "Conformite COS",
+        capacity_adequacy: "Capacite", cost_efficiency: "Efficacite cout", standing_match: "Standing", phase_flexibility: "Phasabilite"
+      };
+      let bestCrit = "", bestVal = 0, bestExpl = "";
+      let worstCrit = "", worstVal = 1, worstExpl = "";
+      for (const [k, v] of Object.entries(scoreDet)) {
+        if (k === "total" || !v.score) continue;
+        criteres.push(`${labels[k] || k}: ${Math.round(v.score * 10)}/10 (poids ${Math.round(v.poids * 100)}%)`);
+        if (v.contribution > bestVal) { bestVal = v.contribution; bestCrit = labels[k] || k; bestExpl = v.explication || ""; }
+        if (v.score < worstVal) { worstVal = v.score; worstCrit = labels[k] || k; worstExpl = v.explication || ""; }
+      }
+      const scoreParts = [];
+      scoreParts.push(`Score global ${sc.recommendation_score}/1`);
+      scoreParts.push(`Point fort : ${bestCrit} (${Math.round(bestVal * 1000) / 1000}). ${bestExpl}`);
+      scoreParts.push(`Point d'attention : ${worstCrit} (${Math.round(worstVal * 10)}/10). ${worstExpl}`);
+      scoreParts.push(`Detail : ${criteres.join(" | ")}`);
+      parts.push(`◆ POURQUOI CE SCENARIO — ${scoreParts.join(". ")}.`);
+    }
+
+    // ── 6. ANALYSE DE RISQUE ──
+    const risques = [];
+    if (sc.budget_fit === "HORS_BUDGET") risques.push("Risque budgetaire : depassement de l'enveloppe — phasage ou optimisation recommande");
+    if (sc.cos_ratio_pct > 90) risques.push(`Densite elevee : COS a ${sc.cos_ratio_pct}% — marges d'evolution limitees`);
+    if (solLibrePct < 0.25) risques.push(`Emprise importante : seulement ${Math.round(solLibrePct * 100)}% du terrain libre — contrainte pour parking et acces`);
+    if ((sc.complexite || {}).score >= 4) risques.push(`Complexite technique ${(sc.complexite || {}).label} : maitrise d'oeuvre experimentee requise`);
+    if (sc.total_units > ctx.target_units * 1.3) risques.push(`Surdimensionnement (+${Math.round((sc.total_units / ctx.target_units - 1) * 100)}% vs besoin) : investissement supplementaire sans garantie de demande`);
+    if (setbackReductionPct > 25) risques.push(`Terrain contraint : retraits reglementaires reduisent l'emprise de ${setbackReductionPct}%`);
+    if (risques.length === 0) risques.push("Risque maitrise : projet conforme, budget coherent, complexite raisonnable");
+    parts.push(`◆ ANALYSE DE RISQUE — ${risques.join(". ")}.`);
+
+    // ── 7. RÉGLEMENTAIRE + RETRAITS ──
+    const regParts = [];
+    regParts.push(`CES utilise ${reg.ces_utilise_pct || sc.ces_fill_pct}% sur ${reg.ces_reglementaire_pct || ""}% autorises (marge ${reg.ces_marge_pct || ""}%)`);
+    regParts.push(`COS a ${reg.cos_utilise_pct || sc.cos_ratio_pct}% de la capacite reglementaire`);
+    regParts.push(`Hauteur ${sc.height_m}m sur ${reg.hauteur_max_m || ""}m autorises`);
+    if (reg.retrait_avant_m) {
+      regParts.push(`Retraits : avant ${reg.retrait_avant_m}m, lateral ${reg.retrait_lateral_m}m, arriere ${reg.retrait_arriere_m}m${reg.mitoyennete_cotes > 0 ? ` (${reg.mitoyennete_cotes} mitoyennete(s))` : ""}`);
+    }
+    regParts.push(`Statut : ${(reg.conformite_globale || sc.cos_compliance)}`);
+    parts.push(`◆ CONFORMITE REGLEMENTAIRE — ${regParts.join(". ")}.`);
+
+    // ── 9. CONSEIL STRATÉGIQUE PERSONNALISÉ (conclusion) ──
+    const conseil = [];
+    if (contrainteDominante === "budget" && sc.levels > 2) {
+      conseil.push(`Recommandation : demarrez par la phase 1 (RDC + ${Math.min(2, sc.levels - 1)} niveaux) pour valider le projet dans votre budget actuel, puis reevaluez la surelevation dans 12-18 mois`);
+    } else if (contrainteDominante === "budget") {
+      conseil.push(`Recommandation : optimisez les finitions pour rester dans l'enveloppe. Un standing ECONOMIQUE au lieu de ${ctx.standing_level} reduirait le cout de ~25%`);
+    } else if (contrainteDominante === "terrain") {
+      conseil.push(`Recommandation : sur ce terrain contraint, privilegiez la densite verticale plutot que l'etalement. Chaque niveau supplementaire ajoute de la surface sans consommer d'emprise au sol`);
+    } else if (contrainteDominante === "reglementation") {
+      conseil.push(`Recommandation : le COS est presque atteint. Toute evolution future (surelevation, extension) necessitera une derogation ou un changement de zonage`);
+    } else if (recommended === "A" && sc.total_units > ctx.target_units * 1.2) {
+      conseil.push(`Recommandation : vous pouvez construire plus que votre cible initiale. Verifiez que le marche local absorbe ce surplus avant de maximiser`);
+    } else {
+      conseil.push(`Recommandation : le projet est bien dimensionne pour votre profil. Lancez les etudes de sol (geotechnique) et le permis de construire pour securiser le calendrier`);
+    }
+    if (solarImpact.brise_soleil && climaticZone === "TROPICAL") {
+      conseil.push(`Point d'attention climatique : prevoyez des brise-soleil en facade Ouest et une toiture debordante (${solarImpact.debord_toiture_m}m) pour le confort thermique sans surdimensionner la climatisation`);
+    }
+    parts.push(`◆ CONSEIL STRATEGIQUE — ${conseil.join(". ")}.`);
+
+    return parts.join("\n\n");
+  }
+
+  // ── POST-TRAITEMENT v57.6: garantir la hiérarchie A ≥ B ≥ C en SDP, levels, et units ──
+  // Avec CES_FILL 95%>80%>65% + extension étages, la hiérarchie est naturelle.
+  // Mais des cas edge (BUREAUX avec mix function différents) peuvent inverser B>A en units
   if (isProgramDriven) {
-    // En programme-driven, les fp sont déjà différenciés par les UNIT_SIZES.
-    // On vérifie juste la cohérence : A doit être ≥ B ≥ C en SDP
+    // Enforce: A.levels >= B.levels >= C.levels
+    if (r.A.levels < r.B.levels) {
+      r.A.levels = r.B.levels;
+      recalcSdp(r.A);
+    }
+    if (r.B.levels < r.C.levels) {
+      r.C.levels = Math.max(1, r.B.levels - 1);
+      if (r.C.levels === r.B.levels) r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.90);
+      recalcSdp(r.C);
+    }
+
+    // Enforce: A.total_units >= B.total_units >= C.total_units
+    // If B > A, cap B to A's level
+    if (r.B.total_units > r.A.total_units) {
+      r.B.total_units = r.A.total_units;
+    }
+    // If C > B, cap C to B's level
+    if (r.C.total_units > r.B.total_units) {
+      r.C.total_units = r.B.total_units;
+    }
+
+    // SDP check (original logic preserved)
     if (r.A.sdp_m2 < r.B.sdp_m2) {
-      // Si A < B, c'est que A a moins de niveaux → on ajuste
       r.A.levels = Math.max(r.A.levels, r.B.levels);
-      r.A.sdp_m2 = r.A.fp_m2 * r.A.levels;
-      r.A.height_m = Math.round(r.A.levels * floor_height * 10) / 10;
+      recalcSdp(r.A);
     }
     if (r.B.sdp_m2 < r.C.sdp_m2) {
       r.C.levels = Math.max(1, r.B.levels - 1 || 1);
       if (r.C.levels === r.B.levels) r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.90);
-      r.C.sdp_m2 = r.C.fp_m2 * r.C.levels;
-      r.C.height_m = Math.round(r.C.levels * floor_height * 10) / 10;
+      recalcSdp(r.C);
     }
   } else {
     // Regulation-driven : ancienne logique de différenciation
@@ -1021,9 +2093,8 @@ function computeSmartScenarios({
     if (r.B.levels >= r.A.levels && r.A.levels > 1) {
       r.B.levels = Math.max(1, r.A.levels - 1);
     }
+    for (const lbl of ["A", "B", "C"]) recalcSdp(r[lbl]);
     for (const lbl of ["A", "B", "C"]) {
-      r[lbl].height_m = Math.round(r[lbl].levels * floor_height * 10) / 10;
-      r[lbl].sdp_m2 = r[lbl].fp_m2 * r[lbl].levels;
       const cr = max_sdp > 0 ? r[lbl].sdp_m2 / max_sdp : 0;
       r[lbl].cos_ratio_pct = Math.round(cr * 100);
       r[lbl].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
@@ -1033,8 +2104,7 @@ function computeSmartScenarios({
       if (diff < 0.15) {
         r.B.fp_m2 = Math.round(Math.min(r.B.fp_m2 * 1.10, envelope_area * 0.95));
         r.C.fp_m2 = Math.max(50, Math.round(r.C.fp_m2 * 0.85));
-        r.B.sdp_m2 = r.B.fp_m2 * r.B.levels;
-        r.C.sdp_m2 = r.C.fp_m2 * r.C.levels;
+        recalcSdp(r.B); recalcSdp(r.C);
       }
     }
   }
@@ -1047,39 +2117,176 @@ function computeSmartScenarios({
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // MOTEUR DE RECOMMANDATION (v56.9)
+  // MOTEUR DE RECOMMANDATION v57.6 (CLIENT-CENTRIC)
   // ══════════════════════════════════════════════════════════════════════════════
-  const scoreWeights = {
-    budget_fit: 0.20, cos_conform: 0.15, capacity: 0.15, risk: 0.15,
-    rent_potential: 0.10, standing_match: 0.10, phase_compat: 0.08, mix_compat: 0.07,
+  // Recommendation weights: Budget is #1 (30%), then risk alignment (20%), COS (15%),
+  // capacity adequacy (15%), standing (10%), phase (10%)
+  const scoreWeights_v57_5 = {
+    budget_fit: 0.25,          // Budget compatibility
+    risk_alignment: 0.20,      // Posture-scenario alignment
+    cos_conformity: 0.12,      // COS compliance
+    capacity_adequacy: 0.13,   // Target units adequacy
+    cost_efficiency: 0.12,     // Quand budget serré, le moins cher gagne
+    standing_match: 0.08,      // Standing compatibility
+    phase_flexibility: 0.10,   // Phase compatibility
   };
 
   for (const label of ["A", "B", "C"]) {
     const sc = r[label];
     let score = 0;
-    const budgetScore = sc.budget_fit === "DANS_BUDGET" ? 1.0 : sc.budget_fit === "BUDGET_TENDU" ? 0.5 : sc.budget_fit === "N/A" ? 0.7 : 0;
-    score += budgetScore * scoreWeights.budget_fit;
+
+    // 1. BUDGET FIT (0.30): Favor scenarios within budget
+    // MAIS : un client AMBITIEUX tolère plus de dépassement qu'un PRUDENT
+    let budgetScore = 0;
+    if (sc.budget_fit === "DANS_BUDGET") budgetScore = 1.0;
+    else if (sc.budget_fit === "BUDGET_TENDU") budgetScore = 0.6;
+    else if (sc.budget_fit === "HORS_BUDGET") {
+      // AMBITIEUX : le hors-budget est un signal, pas un veto
+      if (/AMBITIEUX|OFFENSIVE?|AGGRESSIVE/i.test(feasibility_posture)) budgetScore = 0.35;
+      else if (/PRUDENT|CONSERVATIVE|DEFENSIVE?/i.test(feasibility_posture)) budgetScore = 0.0;
+      else budgetScore = 0.15;
+    }
+    else budgetScore = 0.5; // N/A
+    score += budgetScore * scoreWeights_v57_5.budget_fit;
+
+    // 2. RISK ALIGNMENT (0.20): Match scenario risk to client posture
+    // PRUDENT clients should NOT get risky (high-capacity) scenarios
+    // AMBITIEUX clients can take more risk
+    let riskAlignScore = 0.5;
+    if (/PRUDENT|CONSERVATIVE|DEFENSIVE?/i.test(feasibility_posture)) {
+      // PRUDENT : préfère C (conservateur) ou B (équilibre), pénalise A (trop risqué)
+      riskAlignScore = label === "C" ? 1.0 : label === "B" ? 0.85 : label === "A" ? 0.2 : 0.5;
+    } else if (/AMBITIEUX|OFFENSIVE?|AGGRESSIVE/i.test(feasibility_posture)) {
+      // AMBITIEUX : préfère A (maximise), tolère B, pénalise C (trop timide)
+      riskAlignScore = label === "A" ? 1.0 : label === "B" ? 0.6 : label === "C" ? 0.15 : 0.5;
+    } else {
+      // EQUILIBRE/STANDARD : préfère B, acceptable A et C
+      riskAlignScore = label === "B" ? 1.0 : label === "A" ? 0.65 : label === "C" ? 0.55 : 0.5;
+    }
+    score += riskAlignScore * scoreWeights_v57_5.risk_alignment;
+
+    // 3. COS CONFORMITY (0.15): Penalize HORS_COS scenarios
     const cosScore = sc.cos_compliance === "CONFORME" ? 1.0 : sc.cos_compliance === "DEROGATION_POSSIBLE" ? 0.5 : 0.1;
-    score += cosScore * scoreWeights.cos_conform;
-    const capScore = max_sdp > 0 ? Math.min(1, sc.sdp_m2 / max_sdp) : 0.5;
-    score += capScore * scoreWeights.capacity * (0.7 + capSc * 0.6);
-    const modeRiskScore = sc.massing_mode === "COMPACT" ? 0.9 : sc.massing_mode === "BALANCED" ? 0.7 : 0.4;
-    const adjustedRisk = modeRiskScore * (0.5 + (riskAdj + riskSc) / 2 * 0.5) + (1 - modeRiskScore) * (1 - (riskAdj + riskSc) / 2) * 0.5;
-    score += adjustedRisk * scoreWeights.risk;
-    const rentScore2 = max_sdp > 0 ? Math.min(1, sc.sdp_m2 / max_sdp) * rentSc : 0.5;
-    score += rentScore2 * scoreWeights.rent_potential;
-    let standMatch = 0.5;
-    if (/PREMIUM|HAUT/i.test(standing_level)) standMatch = sc.massing_mode === "SPREAD" ? 1.0 : sc.massing_mode === "BALANCED" ? 0.7 : 0.3;
-    else if (/ECO/i.test(standing_level)) standMatch = sc.massing_mode === "COMPACT" ? 1.0 : sc.massing_mode === "BALANCED" ? 0.6 : 0.3;
-    else standMatch = sc.massing_mode === "BALANCED" ? 1.0 : 0.6;
-    score += standMatch * scoreWeights.standing_match;
-    const phaseCompat = sc.massing_mode === "COMPACT" ? 0.9 : sc.massing_mode === "BALANCED" ? 0.7 : 0.4;
-    score += (phaseCompat * phaseSc + 0.5 * (1 - phaseSc)) * scoreWeights.phase_compat;
-    const mixCompat = commerceLevels > 0 ? 0.8 + mixSc * 0.2 : 0.5;
-    score += mixCompat * scoreWeights.mix_compat;
+    score += cosScore * scoreWeights_v57_5.cos_conformity;
+
+    // 4. CAPACITY ADEQUACY (0.15): Measure how CLOSE to target, not how BIG
+    // Oversizing (50% over target) is as bad as undersizing (30% under target)
+    const targetUnits = Math.max(1, target_units || 1);
+    const ratio = sc.total_units / targetUnits;
+    let capAdequacyScore = 0;
+    if (ratio >= 0.85 && ratio <= 1.20) {
+      // Ideal: 85-120% of target
+      capAdequacyScore = 1.0 - Math.abs(ratio - 1.0) * 0.5;
+    } else if (ratio >= 0.70 && ratio < 0.85) {
+      // Acceptable undersizing: 70-85%
+      capAdequacyScore = 0.7 - (0.85 - ratio) * 2;
+    } else if (ratio > 1.20 && ratio <= 1.50) {
+      // Acceptable oversizing: 120-150%
+      capAdequacyScore = 0.7 - (ratio - 1.20) * 1.5;
+    } else {
+      // Too far from target
+      capAdequacyScore = Math.max(0, 0.3 - Math.abs(ratio - 1.0) * 0.2);
+    }
+    score += capAdequacyScore * scoreWeights_v57_5.capacity_adequacy;
+
+    // 5. COST EFFICIENCY (0.12): Quand budget contraint, favorise le moins cher
+    // C'est le tiebreaker clé : si tout est HORS_BUDGET, C est le moins douloureux
+    let costEffScore = 0.5;
+    if (budgetPressure > 0.5) {
+      // Budget serré : le moins cher gagne
+      const costs = { A: r.A.cost_total_fcfa || r.A.estimated_cost, B: r.B.cost_total_fcfa || r.B.estimated_cost, C: r.C.cost_total_fcfa || r.C.estimated_cost };
+      const minCost = Math.min(costs.A, costs.B, costs.C);
+      const maxCost = Math.max(costs.A, costs.B, costs.C);
+      const range = maxCost - minCost || 1;
+      costEffScore = 1.0 - (((sc.cost_total_fcfa || sc.estimated_cost) - minCost) / range);
+    } else {
+      // Budget confortable : l'efficacité coût n'est pas un critère fort
+      costEffScore = 0.7; // neutre
+    }
+    score += costEffScore * scoreWeights_v57_5.cost_efficiency;
+
+    // 6. STANDING MATCH (0.08): Standing compatibility
+    // Le standing (PREMIUM/STD/ECO) ne dépend PAS du scénario A/B/C — il s'applique
+    // aux 3. Le score reflète si le volume bâti est cohérent avec le standing visé.
+    // PREMIUM veut de l'espace (A), ECO veut de l'efficacité (C compact).
+    let standScore = 0.7; // base neutre
+    if (/PREMIUM|HAUT/i.test(standing_level)) {
+      standScore = label === "A" ? 1.0 : label === "B" ? 0.75 : 0.5;
+    } else if (/ECO/i.test(standing_level)) {
+      standScore = label === "C" ? 1.0 : label === "B" ? 0.75 : 0.5;
+    } else {
+      // STANDARD : tous les scénarios sont compatibles, léger avantage B
+      standScore = label === "B" ? 0.85 : label === "A" ? 0.75 : label === "C" ? 0.75 : 0.7;
+    }
+    score += standScore * scoreWeights_v57_5.standing_match;
+
+    // 7. PHASE FLEXIBILITY (0.10): Phasability
+    // C est le plus phasable (compact, évolutif), A le moins (gros investissement d'un coup)
+    let phaseScore = 0.6;
+    if (label === "C") phaseScore = 1.0;
+    else if (label === "B") phaseScore = 0.7;
+    else phaseScore = 0.4;
+    // Modulé par le phase_score client (haut = veut du phasage)
+    phaseScore = phaseScore * (0.5 + phaseSc * 0.5) + (1 - phaseScore) * (1 - phaseSc) * 0.3;
+    score += phaseScore * scoreWeights_v57_5.phase_flexibility;
+
     sc.recommendation_score = Math.round(score * 1000) / 1000;
+
+    // v57.8: décomposition granulaire du scoring + texte explicatif par critère
+    // Chaque critère a un score, un poids, sa contribution, ET un texte conseil actionnable
+    function explBudget(s, fit) {
+      if (s >= 0.9) return "Le cout s'inscrit dans votre budget — aucune contrainte financiere.";
+      if (s >= 0.6) return "Budget tendu mais tenable. Levier : passer au standing inferieur ou reduire de 1 niveau pour gagner ~15%.";
+      if (s >= 0.3) return "Depassement budgetaire. Leviers : reduire le programme, baisser le standing, ou phaser la construction pour etaler l'investissement.";
+      return "Hors budget. Ce scenario necessite un financement complementaire ou une reduction significative du programme.";
+    }
+    function explRisk(s, posture) {
+      if (s >= 0.9) return "Parfaite adequation entre le niveau de risque du scenario et votre posture " + posture.toLowerCase() + ".";
+      if (s >= 0.6) return "Risque acceptable pour votre profil. Le scenario est legerement plus " + (s < 0.7 ? "ambitieux" : "prudent") + " que votre posture ideale.";
+      return "Decalage entre votre posture " + posture.toLowerCase() + " et le niveau de risque de ce scenario. Envisagez un scenario plus " + (/PRUDENT/i.test(posture) ? "conservateur" : "ambitieux") + ".";
+    }
+    function explCos(s) {
+      if (s >= 0.9) return "Projet conforme au COS reglementaire — pas de risque de refus de permis.";
+      if (s >= 0.5) return "Derogation possible mais a argumenter aupres de la mairie. Prevoyez un delai supplementaire pour l'instruction.";
+      return "Depassement significatif du COS — risque de refus de permis. Reduisez le nombre de niveaux.";
+    }
+    function explCapacity(s, ratio) {
+      if (s >= 0.9) return "Le nombre d'unites correspond precisement a votre besoin.";
+      if (ratio > 1.2) return "Surdimensionnement de " + Math.round((ratio - 1) * 100) + "% par rapport a votre cible. Vous construisez plus que necessaire — verifiez que la demande locative justifie ce surplus.";
+      if (ratio < 0.8) return "Le terrain ne permet que " + Math.round(ratio * 100) + "% de votre cible. Leviers : augmenter le nombre de niveaux, reduire les surfaces unitaires, ou revoir le programme a la baisse.";
+      return "Proche de votre cible — bon dimensionnement du programme.";
+    }
+    function explCostEff(s) {
+      if (s >= 0.8) return "Ce scenario offre le meilleur rapport surface/cout parmi les 3 options.";
+      if (s >= 0.5) return "Rapport cout/surface intermediaire. Les alternatives offrent un meilleur ratio.";
+      return "Le scenario le plus couteux par m² construit. Si le budget est une contrainte, privilegiez une alternative plus compacte.";
+    }
+    function explStanding(s, standing) {
+      if (s >= 0.9) return "Le volume et la qualite du scenario sont en parfaite coherence avec le standing " + standing + " vise.";
+      if (s >= 0.6) return "Coherence acceptable entre le volume construit et le standing " + standing + ".";
+      return "Decalage : le volume construit n'est pas optimal pour du " + standing + ". Un standing " + (/PREMIUM/i.test(standing) ? "STANDARD" : "superieur") + " serait plus coherent avec ce scenario.";
+    }
+    function explPhase(s) {
+      if (s >= 0.8) return "Scenario facilement phasable — vous pouvez construire par tranches et etaler l'investissement.";
+      if (s >= 0.5) return "Phasage possible mais moins flexible. La structure doit etre concue des le depart pour la totalite.";
+      return "Scenario peu phasable — l'investissement doit etre mobilise en une seule fois. Si le phasage est important, privilegiez un scenario plus compact.";
+    }
+
+    const targetRatio = sc.total_units / Math.max(1, target_units || 1);
+
+    sc.score_detail = {
+      budget_fit:        { score: Math.round(budgetScore * 100) / 100, poids: scoreWeights_v57_5.budget_fit, contribution: Math.round(budgetScore * scoreWeights_v57_5.budget_fit * 1000) / 1000, explication: explBudget(budgetScore, sc.budget_fit) },
+      risk_alignment:    { score: Math.round(riskAlignScore * 100) / 100, poids: scoreWeights_v57_5.risk_alignment, contribution: Math.round(riskAlignScore * scoreWeights_v57_5.risk_alignment * 1000) / 1000, explication: explRisk(riskAlignScore, feasibility_posture) },
+      cos_conformity:    { score: Math.round(cosScore * 100) / 100, poids: scoreWeights_v57_5.cos_conformity, contribution: Math.round(cosScore * scoreWeights_v57_5.cos_conformity * 1000) / 1000, explication: explCos(cosScore) },
+      capacity_adequacy: { score: Math.round(capAdequacyScore * 100) / 100, poids: scoreWeights_v57_5.capacity_adequacy, contribution: Math.round(capAdequacyScore * scoreWeights_v57_5.capacity_adequacy * 1000) / 1000, explication: explCapacity(capAdequacyScore, targetRatio) },
+      cost_efficiency:   { score: Math.round(costEffScore * 100) / 100, poids: scoreWeights_v57_5.cost_efficiency, contribution: Math.round(costEffScore * scoreWeights_v57_5.cost_efficiency * 1000) / 1000, explication: explCostEff(costEffScore) },
+      standing_match:    { score: Math.round(standScore * 100) / 100, poids: scoreWeights_v57_5.standing_match, contribution: Math.round(standScore * scoreWeights_v57_5.standing_match * 1000) / 1000, explication: explStanding(standScore, standing_level) },
+      phase_flexibility: { score: Math.round(phaseScore * 100) / 100, poids: scoreWeights_v57_5.phase_flexibility, contribution: Math.round(phaseScore * scoreWeights_v57_5.phase_flexibility * 1000) / 1000, explication: explPhase(phaseScore) },
+      total: Math.round(score * 1000) / 1000,
+    };
   }
 
+  // Find best scenario
   let recommended = "A";
   if (r.B.recommendation_score > r[recommended].recommendation_score) recommended = "B";
   if (r.C.recommendation_score > r[recommended].recommendation_score) recommended = "C";
@@ -1087,20 +2294,23 @@ function computeSmartScenarios({
   r.B.recommended = recommended === "B";
   r.C.recommended = recommended === "C";
 
+  // Generate client-centric recommendation reason
   const recSc = r[recommended];
   const reasons = [];
-  if (recSc.budget_fit === "DANS_BUDGET") reasons.push("respecte le budget");
+  if (budgetPressure > 0.6) {
+    reasons.push("optimise pour contrainte budgetaire");
+  } else if (recSc.budget_fit === "DANS_BUDGET") {
+    reasons.push("respecte le budget client");
+  }
   if (recSc.cos_compliance === "CONFORME") reasons.push("conforme au COS");
-  if (recommended === "A") reasons.push("meilleur equilibre global");
-  if (recommended === "B" && /PREMIUM|HAUT/i.test(standing_level)) reasons.push("adapte au standing eleve");
-  if (recommended === "C" && budgetPressure > 0.5) reasons.push("optimise sous contrainte budgetaire");
-  if (rentSc > 0.6) reasons.push("bon potentiel locatif");
-  if (capSc > 0.7 && recSc.sdp_m2 >= max_sdp * 0.7) reasons.push("capacite maximisee");
-  if (riskAdj > 0.5 && recSc.cos_compliance === "CONFORME") reasons.push("risque maitrise");
+  if (feasibility_posture === "PRUDENT" && recommended === "B") reasons.push("equilibre entre ambitieux et prudent");
+  if (feasibility_posture === "PRUDENT" && recommended === "C") reasons.push("approche conservative, risque maitrise");
+  if (feasibility_posture === "AMBITIEUX" && recommended === "A") reasons.push("maximise la capacite");
+  if (recSc.total_units >= target_units * 0.85 && recSc.total_units <= target_units * 1.20) reasons.push("proche du besoin exprime");
   const recommendation_reason = reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
 
   const meta = {
-    engine_version: "56.9",
+    engine_version: "57.9",
     mode: isProgramDriven ? "PROGRAM_DRIVEN" : "REGULATION_DRIVEN",
     program_key: programKey || "NONE",
     zoning_type, primary_driver, cos, ces, floor_height,
@@ -1117,14 +2327,123 @@ function computeSmartScenarios({
     recommendation_reason,
   };
 
+  // ── v57.6 DIAGNOSTIC COMPARISON TABLE ──
+  const diagnostic = {
+    // Client profile echo
+    profil_client: {
+      posture: feasibility_posture,
+      budget_band: budget_band || "N/A",
+      budget_max_fcfa: budgetMax,
+      standing: standing_level,
+      programme: program_main,
+      cible_unites: target_units,
+      rigidite_financiere: Number(financial_rigidity_score) || 0,
+      score_risque: Number(risk_score) || 0,
+    },
+    // Site summary
+    site: {
+      surface_m2: Number(site_area),
+      zonage: zoning_type,
+      ces_reglementaire_pct: Math.round(ces * 100),
+      cos_reglementaire: cos,
+      hauteur_max_m: Number(max_height_m) || 99,
+      niveaux_max: absMaxLevels,
+      emprise_max_m2: Math.round(max_fp),
+      sdp_max_m2: Math.round(max_sdp),
+    },
+    // A vs B vs C comparison + deltas
+    comparatif: (() => {
+      const compA = extractComparatif(r.A);
+      const compB = extractComparatif(r.B);
+      const compC = extractComparatif(r.C);
+      // v57.7: Deltas entre scénarios (Δ B vs A, Δ C vs A, Δ C vs B)
+      function computeDeltas(ref, alt, refLabel, altLabel) {
+        const dSdp = alt.sdp_m2 - ref.sdp_m2;
+        const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
+        // v57.9: valeur marginale = coût de chaque m² supplémentaire entre les 2 scénarios
+        const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
+        const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
+        // Si valeur marginale < coût/m² moyen = bon deal, sinon surcoût
+        const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
+        return {
+          label: `${altLabel} vs ${refLabel}`,
+          delta_sdp_m2: dSdp,
+          delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
+          delta_unites: alt.unites - ref.unites,
+          delta_cout_fcfa: dCout,
+          delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
+          delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
+          delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
+          // v57.9: valeur marginale
+          valeur_marginale_fcfa_par_m2: valeurMarginale,
+          marginale_favorable: marginaleFavorable,
+          commentaire: dSdp < 0
+            ? `${altLabel} coute ${Math.abs(Math.round(dCout / ref.cout_total_fcfa * 100))}% de moins que ${refLabel} pour ${Math.abs(Math.round(dSdp / ref.sdp_m2 * 100))}% de surface en moins`
+            : `${altLabel} offre ${Math.round(dSdp / ref.sdp_m2 * 100)}% de surface en plus pour ${Math.round(dCout / ref.cout_total_fcfa * 100)}% de cout supplementaire`,
+          conseil_marginale: dSdp > 0 && marginaleFavorable
+            ? `Chaque m² supplementaire de ${refLabel} a ${altLabel} coute ${Math.round(valeurMarginale / 1000)}k FCFA — inferieur au cout moyen (${Math.round(coutM2Ref / 1000)}k/m²), l'investissement supplementaire est rentable.`
+            : dSdp > 0
+            ? `Chaque m² supplementaire coute ${Math.round(valeurMarginale / 1000)}k FCFA — superieur au cout moyen (${Math.round(coutM2Ref / 1000)}k/m²), rendement decroissant.`
+            : `L'economie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifie.`,
+        };
+      }
+      return {
+        A: compA, B: compB, C: compC,
+        deltas: {
+          B_vs_A: computeDeltas(compA, compB, "A", "B"),
+          C_vs_A: computeDeltas(compA, compC, "A", "C"),
+          C_vs_B: computeDeltas(compB, compC, "B", "C"),
+        },
+      };
+    })(),
+    // Narrative recommendation
+    recommandation: {
+      scenario: recommended,
+      score: r[recommended].recommendation_score,
+      score_detail: r[recommended].score_detail || {},
+      narrative: generateRecommendationNarrative(recommended, r, {
+        feasibility_posture, budgetPressure, budgetMax, target_units,
+        standing_level, site_area, program_main
+      }),
+    },
+    // v57.7 Phasing strategy (object with text + structured data)
+    strategie_phasage: generatePhasingStrategy(recommended, r, {
+      program_main, target_units, site_area
+    }),
+    // v57.7 retraits réglementaires
+    retraits_reglementaires: {
+      avant_m: rAvant,
+      lateral_m: rLateral,
+      arriere_m: rArriere,
+      mitoyennete_cotes: nbMitoyens,
+      emprise_constructible_m2: Math.round(empriseConstructible),
+      emprise_effective_m2: Math.round(empriseEffective),
+      reduction_pct: setbackReductionPct,
+    },
+    // v57.9: orientation solaire
+    orientation_solaire: {
+      zone_climatique: climaticZone,
+      orientation_score: solarImpact.orientationScore,
+      facade_optimale: solarImpact.facade_optimale,
+      facade_a_proteger: solarImpact.facade_a_proteger,
+      profondeur_recommandee_m: solarImpact.profondeur_recommandee_m,
+      ventilation_traversante: solarImpact.ventilation_traversante,
+      brise_soleil_ouest: solarImpact.brise_soleil,
+      debord_toiture_m: solarImpact.debord_toiture_m,
+      malus_orientation_pct: solarImpact.malus_orientation_pct,
+      recommandation: solarImpact.recommandation_orientation,
+    },
+    engine_version: "57.9",
+  };
+
   console.log(`│`);
   console.log(`│ A(${r.A.role}): fp=${r.A.fp_m2}m² × ${r.A.levels}niv = ${r.A.sdp_m2}m² SDP (${r.A.cos_ratio_pct}%COS) ${r.A.cos_compliance} | ${r.A.unit_mix_detail}`);
   console.log(`│ B(${r.B.role}): fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}%COS) ${r.B.cos_compliance} | ${r.B.unit_mix_detail}`);
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
-  console.log(`└── end SCENARIO ENGINE v56.9 ──`);
+  console.log(`└── end SCENARIO ENGINE v57.9 ──`);
 
-  return { A: r.A, B: r.B, C: r.C, meta };
+  return { A: r.A, B: r.B, C: r.C, meta, diagnostic };
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
@@ -2428,7 +3747,7 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, server_version: "56.9",
+      ok: true, cached: false, server_version: "57.9",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
