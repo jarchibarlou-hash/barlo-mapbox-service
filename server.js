@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.7" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "56.9" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -69,7 +69,7 @@ app.post("/diag-massing", (req, res) => {
     masAreaShoelace = Math.abs(masAreaShoelace) / 2;
 
     res.json({
-      server_version: "56.7",
+      server_version: "56.9",
       input: { fp_m2: fp, site_area: Number(site_area), setbacks: { front: Number(setback_front), side: Number(setback_side), back: Number(setback_back) } },
       parcel: {
         centroid: { lat: cLat, lon: cLon },
@@ -264,7 +264,7 @@ const FP_RATIOS = {
   PHASAGE_FONCIER:    { A: 0.80, B: 0.70, C: 0.60 },
 };
 
-// CES par zoning_type — Coefficient d'Emprise au Sol → contrôle le FOOTPRINT (% du terrain couvert)
+// CES par zoning_type — Coefficient d'Emprise au Sol RÉGLEMENTAIRE (max autorisé)
 const ZONING_CES = {
   URBAIN: 0.60, PERIURBAIN: 0.45, PAVILLON: 0.30,
   RURAL: 0.20, MIXTE: 0.50, Z_DEFAULT: 0.40,
@@ -274,6 +274,227 @@ const ZONING_COS = {
   URBAIN: 2.50, PERIURBAIN: 1.50, PAVILLON: 0.80,
   RURAL: 0.40, MIXTE: 2.00, Z_DEFAULT: 1.50,
 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v56.8 — RÉSERVE SOL + PILOTIS
+// ══════════════════════════════════════════════════════════════════════════════
+// Le CES réglementaire = max autorisé, PAS ce qu'on doit construire.
+// En pratique, on réserve toujours de l'espace au sol pour :
+//   - Parking (obligatoire en ville)
+//   - Circulation véhicules/piétons
+//   - Espaces verts, cour, aire de jeux
+//   - Accès pompiers
+//
+// RÉSERVE = % de l'enveloppe réservé aux aménagements extérieurs
+// Varie selon : rôle scénario + standing + programme + zoning
+//
+// PILOTIS : quand la parcelle est trop étroite pour du parking en surface,
+// le RDC est libéré en pilotis (colonnes ouvertes) et le bâtiment commence au R+1.
+// Le RDC pilotis n'est PAS de la SDP, mais le parking est résolu.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Réserve sol de BASE par rôle (% de l'enveloppe)
+const RESERVE_BY_ROLE = {
+  INTENSIFICATION: 0.18,  // max bâti, mais accès + parking minimum
+  EQUILIBRE: 0.27,        // bon compromis bâti/extérieur
+  PRUDENT: 0.35,          // espaces verts généreux, phasable
+};
+
+// Bonus réserve par standing
+const RESERVE_STANDING = {
+  ECONOMIQUE: 0, ECO: 0,
+  STANDARD: 0.05,
+  HAUT: 0.10,
+  PREMIUM: 0.15,          // jardins, piscine, dégagement
+};
+
+// Bonus réserve par programme
+const RESERVE_PROGRAM = {
+  DEFAULT: 0.05,                // minimum parking
+  IMMEUBLE_RAPPORT: 0.05,      // parking résidents
+  COLLECTIF: 0.08,             // parking + espaces communs
+  MIXTE: 0.10,                 // parking client + livraison + parking résidents
+  COMMERCE: 0.12,              // parking clients, accès livraison
+  BUREAUX: 0.10,               // parking employés
+  LOGEMENT_SOCIAL: 0.05,       // minimum
+};
+
+// Seuils pour la décision PILOTIS vs RDC OCCUPÉ
+// Si l'espace libre au sol (après emprise bâtiment) < seuil, on passe en pilotis
+const PILOTIS_CONFIG = {
+  MIN_FREE_GROUND_M2: 150,     // minimum 150m² libres au sol pour ne PAS avoir besoin de pilotis
+  MIN_FREE_GROUND_PCT: 0.25,   // OU minimum 25% de l'enveloppe libre
+  MIN_PARKING_SPOTS: 4,        // nombre min de places de parking à prévoir
+  PARKING_SPOT_M2: 25,         // ~12.5m² place + 12.5m² circulation
+  PILOTIS_HEIGHT_M: 3.5,       // hauteur libre sous pilotis
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v56.9 — SURFACES PAR TYPOLOGIE × STANDING × RÔLE SCÉNARIO
+// ══════════════════════════════════════════════════════════════════════════════
+// Rôle A (INTENSIFICATION) = surfaces GÉNÉREUSES (+15-20% vs standard marché)
+// Rôle B (EQUILIBRE) = surfaces STANDARD (référence marché)
+// Rôle C (PRUDENT) = surfaces COMPACTES (-10-15%, économie de construction)
+const UNIT_SIZES = {
+  ECONOMIQUE: {
+    A: { T1: 32, T2: 55, T3: 72, T4: 90, T5: 110, STUDIO: 22, COMMERCE: 40, BUREAU: 20 },
+    B: { T1: 28, T2: 48, T3: 65, T4: 82, T5: 100, STUDIO: 18, COMMERCE: 35, BUREAU: 16 },
+    C: { T1: 24, T2: 42, T3: 58, T4: 72, T5: 88, STUDIO: 16, COMMERCE: 30, BUREAU: 14 },
+  },
+  STANDARD: {
+    A: { T1: 42, T2: 72, T3: 95, T4: 120, T5: 148, STUDIO: 28, COMMERCE: 60, BUREAU: 25 },
+    B: { T1: 35, T2: 60, T3: 80, T4: 100, T5: 125, STUDIO: 24, COMMERCE: 50, BUREAU: 20 },
+    C: { T1: 30, T2: 52, T3: 70, T4: 88, T5: 108, STUDIO: 20, COMMERCE: 40, BUREAU: 16 },
+  },
+  PREMIUM: {
+    A: { T1: 55, T2: 90, T3: 120, T4: 155, T5: 190, STUDIO: 38, COMMERCE: 80, BUREAU: 35 },
+    B: { T1: 45, T2: 75, T3: 100, T4: 130, T5: 160, STUDIO: 32, COMMERCE: 65, BUREAU: 28 },
+    C: { T1: 38, T2: 65, T3: 88, T4: 112, T5: 138, STUDIO: 26, COMMERCE: 55, BUREAU: 22 },
+  },
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v56.9 — RÈGLES PAR PROGRAMME (chaque option du formulaire client)
+// ══════════════════════════════════════════════════════════════════════════════
+const PROGRAM_RULES = {
+  MAISON_INDIVIDUELLE: {
+    // Villa individuelle OU bungalows (éco-lodges, résidences touristiques)
+    // Si target_units=1 → 1 villa ; si target_units>1 → bungalows sur la parcelle
+    // Le T-type détermine le nombre de chambres :
+    //   T2 = 1 chambre (bungalow simple, studio gardien)
+    //   T3 = master(≥15m²+dressing) + 1 chambre enfant(≥12m²)
+    //   T4 = master + 2 chambres (standard famille camerounaise)
+    //   T5 = master + 3 chambres (grande famille)
+    // SDB : individuelle en PREMIUM/HAUT, partagée enfants en STANDARD/ECO
+    default_mix_fn: (n) => {
+      if (n <= 1) return { T4: 1 }; // villa familiale = 3 chambres par défaut
+      // Bungalows / éco-lodges : unités reproductibles
+      return { T3: n }; // chaque bungalow = 2 chambres (master + 1)
+    },
+    max_units_per_floor: 1,
+    max_floors: 2,          // R+1 pour villa ; bungalows → plain-pied (1 niveau)
+    bungalow_max_floors: 1, // si target_units > 1, on force 1 niveau
+    circulation_ratio: 0.12,
+    body_depth_m: { ECO: 10, STD: 12, PREM: 14 },
+    ground_reserve: { A: 0.40, B: 0.50, C: 0.60 }, // jardin, cour, garage
+    parking_per_unit: 1,
+    requires_pilotis: false, rdc_commerce: false,
+  },
+  PETIT_COLLECTIF: {
+    // Marché Cameroun : majorité T3, quelques T2 ("studios"), 1 T4 si ≥5 logements
+    default_mix_fn: (n) => {
+      if (n <= 2) return { T3: n };
+      if (n <= 4) return { T2: 1, T3: n - 1 };
+      // ≥5 : 1 T4 (proprio), ~20% T2, reste T3
+      const t4 = 1;
+      const t2 = Math.max(1, Math.round((n - t4) * 0.20));
+      return { T2: t2, T3: n - t4 - t2, T4: t4 };
+    },
+    max_units_per_floor: { ECO: 4, STD: 3, PREM: 2 }, max_floors: 4,
+    circulation_ratio: { ECO: 0.15, STD: 0.18, PREM: 0.22 },
+    body_depth_m: { ECO: 12, STD: 13, PREM: 15 },
+    ground_reserve: { A: 0.25, B: 0.30, C: 0.40 }, parking_per_unit: 1,
+    requires_pilotis: "auto", rdc_commerce: false,
+  },
+  IMMEUBLE_RAPPORT: {
+    // Marché Cameroun : majorité T3, ~20% T2 ("studios"), 1 T4 dernier étage (proprio)
+    // Pas de T1 (pas courant), T5 seulement si ≥15 logements
+    default_mix_fn: (n) => {
+      if (n <= 3) return { T3: n };
+      const t4 = 1; // toujours 1 T4 pour le proprio
+      const t5 = n >= 15 ? 1 : 0; // T5 seulement gros programme
+      const rest = n - t4 - t5;
+      const t2 = Math.max(1, Math.round(rest * 0.25)); // ~25% T2 "studios"
+      const t3 = rest - t2; // tout le reste en T3
+      return { T2: t2, T3: Math.max(1, t3), T4: t4, ...(t5 > 0 ? { T5: t5 } : {}) };
+    },
+    max_units_per_floor: { ECO: 6, STD: 4, PREM: 3 }, max_floors: 8,
+    circulation_ratio: { ECO: 0.16, STD: 0.18, PREM: 0.22 },
+    body_depth_m: { ECO: 12, STD: 13, PREM: 15 },
+    ground_reserve: { A: 0.22, B: 0.30, C: 0.38 }, parking_per_unit: 1.2,
+    requires_pilotis: "auto", rdc_commerce: false,
+  },
+  USAGE_MIXTE: {
+    // Cameroun : commerce RDC + logements aux étages (même logique résidentielle)
+    default_mix_fn: (n) => {
+      const commerce = Math.max(1, Math.round(n * 0.15)); // 1-2 commerces au RDC
+      const resi = n - commerce;
+      if (resi <= 2) return { COMMERCE: commerce, T3: Math.max(1, resi) };
+      const t4 = 1;
+      const rest = resi - t4;
+      const t2 = Math.max(1, Math.round(rest * 0.25));
+      return { COMMERCE: commerce, T2: t2, T3: Math.max(1, rest - t2), T4: t4 };
+    },
+    max_units_per_floor: { ECO: 5, STD: 4, PREM: 3 }, max_floors: 8,
+    circulation_ratio: { ECO: 0.18, STD: 0.20, PREM: 0.24 },
+    body_depth_m: { ECO: 14, STD: 15, PREM: 16 },
+    ground_reserve: { A: 0.25, B: 0.32, C: 0.40 }, parking_per_unit: 1.5,
+    requires_pilotis: false, rdc_commerce: true, rdc_height_m: 4.0,
+  },
+  ACTIVITE_PRO: {
+    // Immeuble de bureaux : plateaux libres reproductibles, cloisonnables
+    // target_units = nombre de NIVEAUX de bureaux (chaque niveau = 1 plateau identique)
+    // Le fp est dérivé de l'enveloppe (on remplit raisonnablement), PAS du UNIT_SIZES
+    // Pas de cap arbitraire sur les niveaux — le COS fait le garde-fou
+    fp_from_envelope: true,   // flag spécial : fp = enveloppe × (1-reserve), pas unit-driven
+    default_mix_fn: (n) => ({ PLATEAU: n || 4 }), // n plateaux identiques
+    max_units_per_floor: 1,   // 1 plateau = 1 étage complet
+    max_floors: 99,
+    circulation_ratio: { ECO: 0.20, STD: 0.22, PREM: 0.25 },
+    body_depth_m: { ECO: 14, STD: 16, PREM: 18 },
+    ground_reserve: { A: 0.20, B: 0.28, C: 0.35 }, parking_per_unit: 2.0,
+    requires_pilotis: "auto", rdc_commerce: false,
+  },
+  PROGRAMME_FLOU: {
+    // Pas de programme défini → on suppose le standard camerounais (résidentiel T3-dominant)
+    default_mix_fn: (n) => {
+      if (n <= 3) return { T3: n };
+      const t4 = 1;
+      const rest = n - t4;
+      const t2 = Math.max(1, Math.round(rest * 0.20));
+      return { T2: t2, T3: rest - t2, T4: t4 };
+    },
+    max_units_per_floor: { ECO: 4, STD: 3, PREM: 2 }, max_floors: 6,
+    circulation_ratio: { ECO: 0.16, STD: 0.18, PREM: 0.22 },
+    body_depth_m: { ECO: 12, STD: 13, PREM: 15 },
+    ground_reserve: { A: 0.25, B: 0.30, C: 0.40 }, parking_per_unit: 1,
+    requires_pilotis: "auto", rdc_commerce: false,
+  },
+};
+
+// ── Helper: normalise program_main string → PROGRAM_RULES key ──
+function parseProgramKey(raw) {
+  const s = String(raw || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/MAISON|VILLA|INDIVIDUEL/.test(s)) return "MAISON_INDIVIDUELLE";
+  if (/PETIT.?COLLECTIF/.test(s)) return "PETIT_COLLECTIF";
+  if (/RAPPORT|DENSE|COLLECTIF|LOCATIF/.test(s)) return "IMMEUBLE_RAPPORT";
+  if (/MIXTE|MIXED/.test(s)) return "USAGE_MIXTE";
+  if (/ACTIVITE|PROFESS|BUREAU|OFFICE/.test(s)) return "ACTIVITE_PRO";
+  if (/FLOU|INDEFINI|A.DEFINIR|PAS.ENCORE/.test(s)) return "PROGRAMME_FLOU";
+  return null; // → fallback to regulation-driven
+}
+
+// ── Helper: standing → lookup key for per-standing objects ──
+function standingKey(standing_level) {
+  const s = String(standing_level).toUpperCase();
+  if (/PREMIUM|HAUT/.test(s)) return "PREM";
+  if (/ECO/.test(s)) return "ECO";
+  return "STD";
+}
+
+// ── Helper: standing → UNIT_SIZES key ──
+function standingSizeKey(standing_level) {
+  const s = String(standing_level).toUpperCase();
+  if (/PREMIUM|HAUT/.test(s)) return "PREMIUM";
+  if (/ECO/.test(s)) return "ECONOMIQUE";
+  return "STANDARD";
+}
+
+// ── Helper: resolve a per-standing or per-role value from a rules field ──
+function resolveField(field, key) {
+  if (typeof field === "object" && field !== null) return field[key] ?? Object.values(field)[0];
+  return field;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // v56.7 — RÔLES SCÉNARIOS (logique métier claire)
@@ -443,100 +664,289 @@ function computeSmartScenarios({
   const isMixte = /mixte|mixed/i.test(program_main) || forceCommerce;
   const commerceLevels = isMixte ? 1 : 0;
 
-  console.log(`┌── SCENARIO ENGINE v56.7 (RÔLES + NORMALISATION + COS CAP) ──`);
+  // ══════════════════════════════════════════════════════════════════════════════
+  // v56.9 — PROGRAMME-DRIVEN : le fp vient du PROGRAMME CLIENT, pas du CES
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Si target_units > 0 et qu'on identifie le programme → on dimensionne le
+  // bâtiment à partir du nombre de logements × surfaces par typo × circulation.
+  // CES/COS restent des GARDE-FOUS (contraintes max), pas des cibles.
+  // Si pas de programme → fallback à la logique regulation-driven.
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  const programKey = parseProgramKey(program_main);
+  const rules = programKey ? PROGRAM_RULES[programKey] : null;
+  const stdKey = standingKey(standing_level);
+  const sizeKey = standingSizeKey(standing_level);
+  const isProgramDriven = !!(rules && target_units > 0);
+
+  console.log(`┌── SCENARIO ENGINE v56.9 (PROGRAMME-DRIVEN${isProgramDriven ? "" : " → FALLBACK REGULATION"}) ──`);
   console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d} bbox=${envelope_bbox}m² polyArea=${envelope_area}m²`);
   console.log(`│ zoning=${zoning_type} CES=${ces} max_fp=${Math.round(max_fp)}m² | COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
-  console.log(`│ driver=${primary_driver} intensity=${driver_intensity} ratios=[${ratios.A}/${ratios.B}/${ratios.C}]`);
+  console.log(`│ driver=${primary_driver} intensity=${driver_intensity}`);
   console.log(`│ max_floors=${max_floors} max_height=${max_height_m}m → absMaxLevels=${absMaxLevels}`);
-  console.log(`│ program=${program_main} commerce=${commerceLevels} (isMixte=${isMixte} forceCommerce=${forceCommerce}) saturation=${site_saturation_level}`);
-  console.log(`│ budget: range=${budget_range} band=${budget_band}(${bandMod>0?"+":""}${bandMod}) tension=${bt} rigidity=${fri} → pressure=${budgetPressure.toFixed(2)}`);
-  console.log(`│ standing=${standing_level} (factor=${standingFactor}) density=${dpf} densityBand=${density_band}(×${densityBandMult})`);
-  console.log(`│ posture=${feasibility_posture}(×${postureMod}) riskAdj=${riskAdj} riskScore=${riskSc} → penalty=${riskPenalty.toFixed(3)}`);
-  console.log(`│ scores: rent=${rentSc}(lvl×${rentLevelBoost.toFixed(2)}) cap=${capSc}(fp×${capacityBoost.toFixed(2)}) mix=${mixSc}(force=${forceCommerce}) phase=${phaseSc}(C×${phaseBoostC.toFixed(2)})`);
+  console.log(`│ program=${program_main} → key=${programKey || "NONE"} | target_units=${target_units} | mode=${isProgramDriven ? "PROGRAM" : "REGULATION"}`);
+  console.log(`│ standing=${standing_level} (stdKey=${stdKey} sizeKey=${sizeKey})`);
+  console.log(`│ budget: band=${budget_band} tension=${bt} pressure=${budgetPressure.toFixed(2)} | posture=${feasibility_posture}(×${postureMod})`);
+  console.log(`│ risk: adj=${riskAdj} score=${riskSc} penalty=${riskPenalty.toFixed(3)}`);
+  console.log(`│ scores: rent=${rentSc} cap=${capSc} mix=${mixSc} phase=${phaseSc}`);
 
   const results = {};
+  const accents = { A: "#2a5298", B: "#1e8449", C: "#d35400" };
+  const labels_fr = {
+    A: "Scenario intensification", B: "Scenario equilibre", C: "Scenario prudent",
+  };
+
   for (const label of ["A", "B", "C"]) {
-    const baseRatio = ratios[label];
+    const role = SCENARIO_ROLE[label];
     const mode = SCENARIO_MASSING_MODE[label];
 
-    // ── Modulation emprise par budget + standing + densité + posture + risque + capacité ──
-    let budgetMod = 1.0;
-    if (mode === "BALANCED") {
-      budgetMod = 1.0 + (0.5 - budgetPressure) * 0.12 * intensitySpread;
-    } else if (mode === "SPREAD") {
-      budgetMod = 1.0 + (0.5 - budgetPressure) * 0.20 * intensitySpread;
-    } else if (mode === "COMPACT") {
-      budgetMod = 1.0 + budgetPressure * 0.08;
-    }
+    let fp, levels, unitMixDetail, totalUseful, circRatio, bodyDepth, maxPerFloor, groundReserve;
+    let hasPilotis = false;
+    let pilotisLevels = 0;
 
-    let ratio = baseRatio * standingFactor * budgetMod;
-    // Density pressure + density band
-    ratio = ratio * (1 + (dpf - 1) * 0.15) * densityBandMult;
-    // Feasibility posture : AMBITIEUX pousse, PRUDENT réduit
-    ratio = ratio * postureMod;
-    // Risk penalty : plus de risque → emprise réduite
-    ratio = ratio * riskPenalty;
-    // Capacity score : fort cap → boost emprise
-    ratio = ratio * capacityBoost;
-    // Phase boost pour scénario C uniquement
-    if (label === "C") ratio = ratio * phaseBoostC;
-    ratio = Math.max(0.30, Math.min(0.98, ratio));
+    if (isProgramDriven) {
+      // ════════════════════════════════════════════════════════════════════════
+      // MODE PROGRAMME-DRIVEN : fp dérivé du programme client
+      // ════════════════════════════════════════════════════════════════════════
+      const sizes = (UNIT_SIZES[sizeKey] || UNIT_SIZES.STANDARD)[label];
 
-    // v56 FIX: cap par le BBOX, pas l'aire polygonale
-    let fp = Math.round(max_fp * ratio);
-    fp = Math.max(50, fp);
+      // Résoudre les champs rules qui dépendent du standing ou du rôle
+      circRatio = resolveField(rules.circulation_ratio, stdKey);
+      bodyDepth = resolveField(rules.body_depth_m, stdKey);
+      maxPerFloor = resolveField(rules.max_units_per_floor, stdKey);
+      groundReserve = resolveField(rules.ground_reserve, label) || 0.25;
+      let maxFloorsProg = rules.max_floors || 99;
 
-    // ── Niveaux : basé sur le RÔLE du scénario (pas le massing_mode) ──
-    const role = SCENARIO_ROLE[label];
-    let baseLevelMult = levelMultiplier(role);
-
-    // Budget tendu + INTENSIFICATION → pousser les niveaux (vertical = économique)
-    if (budgetPressure > 0.5 && role === "INTENSIFICATION") {
-      baseLevelMult = Math.min(1.0, baseLevelMult + (budgetPressure - 0.5) * 0.3);
-    }
-    // Budget large + PRUDENT → réduire niveaux (confort)
-    if (budgetPressure < 0.3 && role === "PRUDENT") {
-      baseLevelMult = Math.max(0.15, baseLevelMult - (0.3 - budgetPressure) * 0.15);
-    }
-    // rent_score : fort rendement locatif → pousser les niveaux (plus de m² louables)
-    baseLevelMult = baseLevelMult * rentLevelBoost;
-    // posture AMBITIEUX → +1 niveau possible, PRUDENT → -1
-    baseLevelMult = baseLevelMult * postureMod;
-    // risk → plus de risque → moins de niveaux
-    baseLevelMult = baseLevelMult * riskPenalty;
-    baseLevelMult = Math.max(0.15, Math.min(1.2, baseLevelMult));
-
-    let levels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
-    levels = Math.min(levels, absMaxLevels);
-
-    // Si le client a une cible SDP, on essaie de s'en approcher
-    if (target_surface_m2 > 0 && fp > 0) {
-      const idealLevels = Math.ceil(target_surface_m2 * ratio / fp);
-      const modeLevels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
-      levels = Math.max(1, Math.min(Math.round((idealLevels + modeLevels) / 2), absMaxLevels));
-    }
-
-    // Si cible en nombre de logements → estimer SDP nécessaire
-    if (target_units > 0 && target_surface_m2 <= 0 && fp > 0) {
-      const avgUnitSize = standing_level === "PREMIUM" ? 90 : standing_level === "ECONOMIQUE" ? 55 : 70;
-      const neededSdp = target_units * avgUnitSize;
-      const idealLevels = Math.ceil(neededSdp / fp);
-      const modeLevels = Math.max(1, Math.round(absMaxLevels * baseLevelMult));
-      levels = Math.max(1, Math.min(Math.round((idealLevels + modeLevels) / 2), absMaxLevels));
-    }
-
-    // ── v56.7 GARDE-FOU COS : cap SDP selon le rôle du scénario ──
-    const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
-    const maxSdpForRole = Math.floor(max_sdp * cosCap);
-    if (fp > 0) {
-      const maxLevelsByCos = Math.floor(maxSdpForRole / fp);
-      if (levels > maxLevelsByCos) {
-        console.log(`  ⚠ Scénario ${label} (${role}): ${levels} niv → ${maxLevelsByCos} niv (cap COS ${(cosCap*100).toFixed(0)}% = ${maxSdpForRole}m² SDP max)`);
-        levels = Math.max(1, maxLevelsByCos);
+      // ── BUNGALOWS : si maison individuelle + plusieurs unités → plain-pied ──
+      const isBungalow = programKey === "MAISON_INDIVIDUELLE" && target_units > 1;
+      if (isBungalow) {
+        maxFloorsProg = rules.bungalow_max_floors || 1; // force 1 niveau
       }
+
+      // ── BUREAUX (fp_from_envelope) : le plateau est dérivé de l'enveloppe ──
+      // target_units = nombre de niveaux, pas nombre de postes
+      const isFpFromEnvelope = rules.fp_from_envelope === true;
+
+      // Mix de logements : unit_mix fourni par le client, sinon default
+      const mix = rules.default_mix_fn
+        ? rules.default_mix_fn(target_units)
+        : rules.default_mix
+          ? { ...rules.default_mix }
+          : { T3: target_units };
+
+      // Calculer surfaces utiles par typo
+      totalUseful = 0;
+      let totalUnits = 0;
+      const details = [];
+
+      if (isFpFromEnvelope) {
+        // Pour les bureaux : fp = enveloppe × (1-réserve), niveaux = target_units
+        totalUnits = target_units;
+        totalUseful = 0; // pas pertinent pour les bureaux
+        details.push(`${target_units} plateaux libres`);
+      } else {
+        for (const [typ, count] of Object.entries(mix)) {
+          if (count <= 0) continue;
+          const unitSize = sizes[typ] || sizes.T3 || 80;
+          totalUseful += count * unitSize;
+          totalUnits += count;
+          details.push(`${count}×${typ}(${unitSize}m²)`);
+        }
+      }
+      unitMixDetail = details.join(" + ");
+
+      // SDP totale nécessaire = utile / (1 - circulation)
+      const sdpNeeded = isFpFromEnvelope ? 0 : totalUseful / (1 - circRatio);
+
+      // ── DRIVER MAX_CAPACITE / RENTABILITE : autoriser plus d'unités par palier ──
+      // Le client veut maximiser → on peut mettre plus de logements par étage
+      // en poussant l'emprise vers le CES max au lieu de rester au strict programme
+      let effectiveMaxPerFloor = maxPerFloor;
+      const isMaxDriver = /MAX_CAPACITE|RENTABILITE/i.test(primary_driver);
+      if (isMaxDriver && role === "INTENSIFICATION") {
+        // A (INTENSIFICATION) + driver max → on peut aller jusqu'à maxPerFloor+2
+        // ça augmente le fp par palier en gardant les mêmes surfaces d'appart
+        effectiveMaxPerFloor = maxPerFloor + 2;
+        console.log(`│   💪 Driver ${primary_driver} + INTENSIFICATION → max ${effectiveMaxPerFloor} unités/palier (au lieu de ${maxPerFloor})`);
+      } else if (isMaxDriver && role === "EQUILIBRE") {
+        effectiveMaxPerFloor = maxPerFloor + 1;
+      }
+
+      // Nombre d'unités par palier (limité par rules ajustées)
+      const unitsPerFloor = Math.min(effectiveMaxPerFloor, totalUnits);
+
+      // ── CALCUL fp ET floorsNeeded selon le mode ──
+      let floorsNeeded;
+      if (isFpFromEnvelope) {
+        // BUREAUX : plateau = enveloppe × (1-réserve), niveaux = target_units
+        const maxFpByEnv = envelope_area * (1 - groundReserve);
+        fp = Math.round(Math.min(max_fp, maxFpByEnv));
+        floorsNeeded = Math.min(target_units, Math.min(maxFloorsProg, absMaxLevels));
+        floorsNeeded = Math.max(1, floorsNeeded);
+        totalUseful = Math.round(fp * (1 - circRatio) * floorsNeeded);
+        unitMixDetail = `${floorsNeeded} plateaux de ${fp}m² (utile ${Math.round(fp*(1-circRatio))}m²/plateau)`;
+      } else if (isBungalow) {
+        // BUNGALOWS : pas d'empilement, chaque unité est au sol
+        floorsNeeded = 1;
+        fp = Math.round(sdpNeeded); // toute la SDP est au sol
+        unitMixDetail = `${totalUnits} bungalows: ` + unitMixDetail;
+      } else {
+        // IMMEUBLES : empiler les unités
+        floorsNeeded = Math.ceil(totalUnits / unitsPerFloor);
+        const effectiveMaxFloors = Math.min(maxFloorsProg, absMaxLevels);
+        floorsNeeded = Math.min(floorsNeeded, effectiveMaxFloors);
+        floorsNeeded = Math.max(1, floorsNeeded);
+        const usefulPerFloor = totalUseful / floorsNeeded;
+        fp = Math.round(usefulPerFloor / (1 - circRatio));
+      }
+
+      const effectiveMaxFloors = Math.min(maxFloorsProg, absMaxLevels);
+
+      // ── GARDE-FOU CES : fp ne peut pas dépasser le CES ──
+      const canAdjustFloors = !isBungalow && !isFpFromEnvelope; // bureaux et bungalows : floors fixes
+      if (fp > max_fp) {
+        console.log(`│   ⚠ ${label}: fp programme=${fp}m² > CES max=${Math.round(max_fp)}m² → ajustement`);
+        fp = Math.round(max_fp);
+        if (canAdjustFloors && sdpNeeded > 0) {
+          floorsNeeded = Math.min(effectiveMaxFloors, Math.ceil(sdpNeeded / fp));
+          floorsNeeded = Math.max(1, floorsNeeded);
+        }
+      }
+
+      // ── GARDE-FOU ENVELOPPE × réserve sol ──
+      const maxFpByEnvelope = isFpFromEnvelope ? max_fp : envelope_area * (1 - groundReserve);
+      if (!isFpFromEnvelope && fp > maxFpByEnvelope) {
+        console.log(`│   ⚠ ${label}: fp=${fp}m² > enveloppe×(1-reserve)=${Math.round(maxFpByEnvelope)}m² → ajustement`);
+        fp = Math.round(maxFpByEnvelope);
+        if (canAdjustFloors && sdpNeeded > 0) {
+          floorsNeeded = Math.min(effectiveMaxFloors, Math.ceil(sdpNeeded / fp));
+          floorsNeeded = Math.max(1, floorsNeeded);
+        }
+      }
+
+      // ── GARDE-FOU COS : SDP totale ≤ COS × site_area × cap_by_role ──
+      const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
+      const maxSdpForRole = Math.floor(max_sdp * cosCap);
+      if (fp * floorsNeeded > maxSdpForRole && !isBungalow) {
+        if (isFpFromEnvelope) {
+          // BUREAUX : plutôt réduire le plateau pour garder les niveaux demandés
+          const idealFp = Math.floor(maxSdpForRole / floorsNeeded);
+          console.log(`│   ⚠ ${label}: SDP=${fp * floorsNeeded}m² > COS cap=${maxSdpForRole}m² → fp réduit de ${fp} à ${idealFp}m² (${floorsNeeded} niveaux conservés)`);
+          fp = idealFp;
+        } else {
+          const maxLevelsByCos = Math.max(1, Math.floor(maxSdpForRole / fp));
+          console.log(`│   ⚠ ${label}: SDP=${fp * floorsNeeded}m² > COS cap=${maxSdpForRole}m² → ${maxLevelsByCos} niv`);
+          floorsNeeded = maxLevelsByCos;
+        }
+      }
+
+      levels = floorsNeeded;
+
+      // ── PILOTIS : check si l'espace libre est suffisant pour le parking ──
+      const freeGround = envelope_area - fp;
+      const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil(totalUnits * (rules.parking_per_unit || 1)));
+      const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
+      const freeGroundPct = freeGround / Math.max(1, envelope_area);
+      const pilotisRule = rules.requires_pilotis;
+
+      if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" &&
+        (freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT) &&
+        freeGround < parkingM2Needed))) {
+        hasPilotis = true;
+        pilotisLevels = 1;
+      }
+
+      // Commerce au RDC : si rules.rdc_commerce, le RDC est commercial (hauteur différente)
+      const hasRdcCommerce = rules.rdc_commerce || false;
+      const rdcHeightM = hasRdcCommerce ? (rules.rdc_height_m || 4.0) : floor_height;
+
+      console.log(`│ ✅ ${label} (${role}) PROGRAMME-DRIVEN${isBungalow ? " [BUNGALOWS]" : ""}:`);
+      console.log(`│   mix: ${unitMixDetail}`);
+      console.log(`│   utile=${Math.round(totalUseful)}m² circ=${(circRatio*100).toFixed(0)}% → plateau=${fp}m² (${Math.round(fp/bodyDepth)}m×${bodyDepth}m)`);
+      console.log(`│   niveaux=${levels} (max prog=${maxFloorsProg} max regl=${absMaxLevels})`);
+      console.log(`│   reserve sol=${(groundReserve*100).toFixed(0)}% libre=${Math.round(freeGround)}m² parking=${parkingSpotsNeeded} places`);
+      if (hasPilotis) console.log(`│   ⚡ PILOTIS activé`);
+      if (hasRdcCommerce) console.log(`│   🏪 RDC Commerce (h=${rdcHeightM}m)`);
+
+    } else {
+      // ════════════════════════════════════════════════════════════════════════
+      // MODE REGULATION-DRIVEN (FALLBACK) : fp dérivé du CES × ratio
+      // ════════════════════════════════════════════════════════════════════════
+      const baseRatio = ratios[label];
+      let budgetMod = 1.0;
+      if (mode === "BALANCED") budgetMod = 1.0 + (0.5 - budgetPressure) * 0.12 * intensitySpread;
+      else if (mode === "SPREAD") budgetMod = 1.0 + (0.5 - budgetPressure) * 0.20 * intensitySpread;
+      else if (mode === "COMPACT") budgetMod = 1.0 + budgetPressure * 0.08;
+
+      let ratio = baseRatio * standingFactor * budgetMod;
+      ratio = ratio * (1 + (dpf - 1) * 0.15) * densityBandMult;
+      ratio = ratio * postureMod * riskPenalty * capacityBoost;
+      if (label === "C") ratio = ratio * phaseBoostC;
+      ratio = Math.max(0.30, Math.min(0.98, ratio));
+
+      // Réserve sol
+      const reserveRole = RESERVE_BY_ROLE[role] || 0.25;
+      const reserveStanding = RESERVE_STANDING[String(standing_level).toUpperCase()] || 0.05;
+      const progUp = String(program_main).toUpperCase();
+      let reserveProgram = RESERVE_PROGRAM.DEFAULT;
+      if (/MIXTE|MIXED/.test(progUp)) reserveProgram = RESERVE_PROGRAM.MIXTE;
+      else if (/COMMERCE/.test(progUp)) reserveProgram = RESERVE_PROGRAM.COMMERCE;
+      else if (/BUREAU|OFFICE/.test(progUp)) reserveProgram = RESERVE_PROGRAM.BUREAUX;
+      else if (/COLLECTIF|DENSE/.test(progUp)) reserveProgram = RESERVE_PROGRAM.COLLECTIF;
+      else if (/RAPPORT|LOCATIF/.test(progUp)) reserveProgram = RESERVE_PROGRAM.IMMEUBLE_RAPPORT;
+      groundReserve = Math.min(0.60, reserveRole + reserveStanding + reserveProgram);
+
+      const maxFpByEnvelope = envelope_area * (1 - groundReserve);
+      const effectiveMaxFp = Math.min(max_fp, maxFpByEnvelope);
+      fp = Math.max(50, Math.round(effectiveMaxFp * ratio));
+
+      // Niveaux (regulation-driven)
+      let baseLevelMult = levelMultiplier(role);
+      if (budgetPressure > 0.5 && role === "INTENSIFICATION")
+        baseLevelMult = Math.min(1.0, baseLevelMult + (budgetPressure - 0.5) * 0.3);
+      if (budgetPressure < 0.3 && role === "PRUDENT")
+        baseLevelMult = Math.max(0.15, baseLevelMult - (0.3 - budgetPressure) * 0.15);
+      baseLevelMult = baseLevelMult * rentLevelBoost * postureMod * riskPenalty;
+      baseLevelMult = Math.max(0.15, Math.min(1.2, baseLevelMult));
+      levels = Math.max(1, Math.min(Math.round(absMaxLevels * baseLevelMult), absMaxLevels));
+
+      if (target_surface_m2 > 0 && fp > 0) {
+        const idealLevels = Math.ceil(target_surface_m2 * ratio / fp);
+        levels = Math.max(1, Math.min(Math.round((idealLevels + levels) / 2), absMaxLevels));
+      }
+
+      // COS cap
+      const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
+      const maxSdpForRole = Math.floor(max_sdp * cosCap);
+      if (fp > 0 && levels > Math.floor(maxSdpForRole / fp)) {
+        levels = Math.max(1, Math.floor(maxSdpForRole / fp));
+      }
+
+      // Pilotis check (regulation mode)
+      const freeGround = envelope_area - fp;
+      const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil(fp * levels / 70));
+      const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
+      const freeGroundPct = freeGround / Math.max(1, envelope_area);
+      if ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
+          && freeGround < parkingM2Needed) {
+        hasPilotis = true;
+        pilotisLevels = 1;
+      }
+
+      unitMixDetail = null;
+      totalUseful = 0;
+      circRatio = 0;
+      bodyDepth = 0;
+
+      console.log(`│ 📐 ${label} (${role}) REGULATION-DRIVEN: ratio=${ratio.toFixed(3)} fp=${fp}m² levels=${levels}`);
     }
 
-    const height = Math.round(levels * floor_height * 10) / 10;
+    // ══════════════════════════════════════════════════════════════════════════
+    // CALCULS COMMUNS (program-driven et regulation-driven)
+    // ══════════════════════════════════════════════════════════════════════════
+    const totalLevelsWithPilotis = levels + pilotisLevels;
+    const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
+    const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
     const sdp = fp * levels;
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
 
@@ -545,23 +955,15 @@ function computeSmartScenarios({
     else if (cosRatio <= 1.30) compliance = "DEROGATION_POSSIBLE";
     else compliance = "AMBITIEUX_HORS_COS";
 
-    // Coût estimé au m² (indicatif, basé sur standing + zoning)
+    // Coût estimé
     const costPerM2Base = { PREMIUM: 450, HAUT: 380, STANDARD: 300, ECONOMIQUE: 230, ECO: 230 }[String(standing_level).toUpperCase()] || 300;
     const zoningCostMult = { URBAIN: 1.15, PERIURBAIN: 1.0, PAVILLON: 0.95, RURAL: 0.85, MIXTE: 1.05 }[zoning_type] || 1.0;
-    const estimatedCost = Math.round(sdp * costPerM2Base * zoningCostMult);
+    const pilotisCostMult = hasPilotis ? 1.12 : 1.0;
+    const estimatedCost = Math.round(sdp * costPerM2Base * zoningCostMult * pilotisCostMult);
     const budgetFit = budget_range > 0 ? (estimatedCost <= budget_range * 1.1 ? "DANS_BUDGET" : estimatedCost <= budget_range * 1.3 ? "BUDGET_TENDU" : "HORS_BUDGET") : "N/A";
 
-    const roles = {
-      A: scenario_A_role || "INTENSIFICATION",
-      B: scenario_B_role || "ALTERNATIVE_EQUILIBREE",
-      C: scenario_C_role || "PHASAGE_PROGRESSIF",
-    };
-    const labels_fr = {
-      A: "Scenario de reference",
-      B: "Variante etalee",
-      C: "Variante compacte",
-    };
-    const accents = { A: "#2a5298", B: "#1e8449", C: "#d35400" };
+    const freeGround = envelope_area - fp;
+    const parkingEst = hasPilotis ? Math.floor(fp / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
 
     results[label] = {
       fp_m2: fp, levels, height_m: height,
@@ -570,112 +972,114 @@ function computeSmartScenarios({
       sdp_m2: sdp,
       cos_compliance: compliance,
       cos_ratio_pct: Math.round(cosRatio * 100),
-      role: roles[label],
+      has_pilotis: hasPilotis,
+      pilotis_levels: pilotisLevels,
+      total_levels_incl_pilotis: totalLevelsWithPilotis,
+      ground_reserve_pct: Math.round((groundReserve || 0) * 100),
+      free_ground_m2: Math.round(freeGround),
+      parking_spots_estimate: parkingEst,
+      role: SCENARIO_ROLE[label],
       label_fr: labels_fr[label],
       accent_color: accents[label],
       estimated_cost: estimatedCost,
       budget_fit: budgetFit,
-      ratio_used: Math.round(ratio * 100) / 100,
+      // v56.9 programme-driven extras
+      program_driven: isProgramDriven,
+      program_key: programKey || "NONE",
+      unit_mix_detail: unitMixDetail || "N/A",
+      total_useful_m2: Math.round(totalUseful || 0),
+      circulation_ratio_pct: Math.round((circRatio || 0) * 100),
+      body_depth_m: bodyDepth || 0,
     };
   }
 
-  // ── POST-TRAITEMENT : garantir la différenciation visuelle ──
   const r = results;
 
-  // C(COMPACT) ≥ A(BALANCED) ≥ B(SPREAD) en niveaux
-  if (r.C.levels <= r.A.levels && absMaxLevels > r.A.levels) {
-    r.C.levels = Math.min(r.A.levels + 1, absMaxLevels);
-  }
-  if (r.B.levels >= r.A.levels && r.A.levels > 1) {
-    r.B.levels = Math.max(1, r.A.levels - 1);
-  }
-  for (const label of ["A", "B", "C"]) {
-    r[label].height_m = Math.round(r[label].levels * floor_height * 10) / 10;
-    r[label].sdp_m2 = r[label].fp_m2 * r[label].levels;
-    const cr = max_sdp > 0 ? r[label].sdp_m2 / max_sdp : 0;
-    r[label].cos_ratio_pct = Math.round(cr * 100);
-    r[label].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
-  }
-
-  // Emprise : au moins 15% diff entre B(spread) et C(compact)
-  if (r.B.fp_m2 > 0 && r.C.fp_m2 > 0) {
-    const diff = Math.abs(r.B.fp_m2 - r.C.fp_m2) / Math.max(r.B.fp_m2, r.C.fp_m2);
-    if (diff < 0.15) {
-      r.B.fp_m2 = Math.round(Math.min(r.B.fp_m2 * 1.10, envelope_area * 0.95));
-      r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.85);
-      r.C.fp_m2 = Math.max(r.C.fp_m2, 50);
-      r.B.sdp_m2 = r.B.fp_m2 * r.B.levels;
+  // ── POST-TRAITEMENT : garantir la hiérarchie A ≥ B ≥ C en SDP ──
+  // En mode programme-driven, la différenciation vient des tailles d'apparts.
+  // Mais il faut quand même garantir que A.sdp ≥ B.sdp ≥ C.sdp (cohérence visuelle).
+  if (isProgramDriven) {
+    // En programme-driven, les fp sont déjà différenciés par les UNIT_SIZES.
+    // On vérifie juste la cohérence : A doit être ≥ B ≥ C en SDP
+    if (r.A.sdp_m2 < r.B.sdp_m2) {
+      // Si A < B, c'est que A a moins de niveaux → on ajuste
+      r.A.levels = Math.max(r.A.levels, r.B.levels);
+      r.A.sdp_m2 = r.A.fp_m2 * r.A.levels;
+      r.A.height_m = Math.round(r.A.levels * floor_height * 10) / 10;
+    }
+    if (r.B.sdp_m2 < r.C.sdp_m2) {
+      r.C.levels = Math.max(1, r.B.levels - 1 || 1);
+      if (r.C.levels === r.B.levels) r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.90);
       r.C.sdp_m2 = r.C.fp_m2 * r.C.levels;
+      r.C.height_m = Math.round(r.C.levels * floor_height * 10) / 10;
+    }
+  } else {
+    // Regulation-driven : ancienne logique de différenciation
+    if (r.C.levels <= r.A.levels && absMaxLevels > r.A.levels) {
+      r.C.levels = Math.min(r.A.levels + 1, absMaxLevels);
+    }
+    if (r.B.levels >= r.A.levels && r.A.levels > 1) {
+      r.B.levels = Math.max(1, r.A.levels - 1);
+    }
+    for (const lbl of ["A", "B", "C"]) {
+      r[lbl].height_m = Math.round(r[lbl].levels * floor_height * 10) / 10;
+      r[lbl].sdp_m2 = r[lbl].fp_m2 * r[lbl].levels;
+      const cr = max_sdp > 0 ? r[lbl].sdp_m2 / max_sdp : 0;
+      r[lbl].cos_ratio_pct = Math.round(cr * 100);
+      r[lbl].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
+    }
+    if (r.B.fp_m2 > 0 && r.C.fp_m2 > 0) {
+      const diff = Math.abs(r.B.fp_m2 - r.C.fp_m2) / Math.max(r.B.fp_m2, r.C.fp_m2);
+      if (diff < 0.15) {
+        r.B.fp_m2 = Math.round(Math.min(r.B.fp_m2 * 1.10, envelope_area * 0.95));
+        r.C.fp_m2 = Math.max(50, Math.round(r.C.fp_m2 * 0.85));
+        r.B.sdp_m2 = r.B.fp_m2 * r.B.levels;
+        r.C.sdp_m2 = r.C.fp_m2 * r.C.levels;
+      }
     }
   }
 
+  // Recalc COS ratios after post-processing
+  for (const lbl of ["A", "B", "C"]) {
+    const cr = max_sdp > 0 ? r[lbl].sdp_m2 / max_sdp : 0;
+    r[lbl].cos_ratio_pct = Math.round(cr * 100);
+    r[lbl].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
+  }
+
   // ══════════════════════════════════════════════════════════════════════════════
-  // v56.1 — MOTEUR DE RECOMMANDATION (utilise TOUS les critères)
+  // MOTEUR DE RECOMMANDATION (v56.9)
   // ══════════════════════════════════════════════════════════════════════════════
-  // Scoring multicritère : chaque scénario reçoit un score pondéré.
-  // Le scénario avec le score le plus élevé est recommandé.
   const scoreWeights = {
-    budget_fit:    0.20,  // Le budget est-il respecté ?
-    cos_conform:   0.15,  // Conformité réglementaire (COS)
-    capacity:      0.15,  // Capacité / rendement (m² de plancher)
-    risk:          0.15,  // Prudence (risque faible = mieux)
-    rent_potential: 0.10, // Potentiel locatif
-    standing_match: 0.10, // Adéquation au standing demandé
-    phase_compat:  0.08,  // Compatibilité phasage
-    mix_compat:    0.07,  // Adéquation mixité
+    budget_fit: 0.20, cos_conform: 0.15, capacity: 0.15, risk: 0.15,
+    rent_potential: 0.10, standing_match: 0.10, phase_compat: 0.08, mix_compat: 0.07,
   };
 
   for (const label of ["A", "B", "C"]) {
     const sc = r[label];
     let score = 0;
-
-    // Budget fit : DANS_BUDGET=1, BUDGET_TENDU=0.5, HORS_BUDGET=0, N/A=0.7
     const budgetScore = sc.budget_fit === "DANS_BUDGET" ? 1.0 : sc.budget_fit === "BUDGET_TENDU" ? 0.5 : sc.budget_fit === "N/A" ? 0.7 : 0;
     score += budgetScore * scoreWeights.budget_fit;
-
-    // COS conformité : CONFORME=1, DEROGATION=0.5, HORS=0.1
     const cosScore = sc.cos_compliance === "CONFORME" ? 1.0 : sc.cos_compliance === "DEROGATION_POSSIBLE" ? 0.5 : 0.1;
     score += cosScore * scoreWeights.cos_conform;
-
-    // Capacité : ratio SDP/max_sdp (plafonné à 1)
     const capScore = max_sdp > 0 ? Math.min(1, sc.sdp_m2 / max_sdp) : 0.5;
-    // Pondéré par capacity_score : si le client veut de la capacité, ça compte plus
     score += capScore * scoreWeights.capacity * (0.7 + capSc * 0.6);
-
-    // Risque : scénarios conservateurs scorent mieux si risk élevé
-    // COMPACT est plus sûr, SPREAD est plus risqué
     const modeRiskScore = sc.massing_mode === "COMPACT" ? 0.9 : sc.massing_mode === "BALANCED" ? 0.7 : 0.4;
-    // Si risque faible (riskAdj + riskSc bas), le mode risqué est OK
     const adjustedRisk = modeRiskScore * (0.5 + (riskAdj + riskSc) / 2 * 0.5) + (1 - modeRiskScore) * (1 - (riskAdj + riskSc) / 2) * 0.5;
     score += adjustedRisk * scoreWeights.risk;
-
-    // Rendement locatif : plus de SDP = plus de loyers potentiels
     const rentScore2 = max_sdp > 0 ? Math.min(1, sc.sdp_m2 / max_sdp) * rentSc : 0.5;
     score += rentScore2 * scoreWeights.rent_potential;
-
-    // Standing match : PREMIUM → préfère SPREAD/BALANCED (espace), ECO → préfère COMPACT
     let standMatch = 0.5;
-    if (/PREMIUM|HAUT/i.test(standing_level)) {
-      standMatch = sc.massing_mode === "SPREAD" ? 1.0 : sc.massing_mode === "BALANCED" ? 0.7 : 0.3;
-    } else if (/ECO/i.test(standing_level)) {
-      standMatch = sc.massing_mode === "COMPACT" ? 1.0 : sc.massing_mode === "BALANCED" ? 0.6 : 0.3;
-    } else {
-      standMatch = sc.massing_mode === "BALANCED" ? 1.0 : 0.6; // STANDARD → préfère balanced
-    }
+    if (/PREMIUM|HAUT/i.test(standing_level)) standMatch = sc.massing_mode === "SPREAD" ? 1.0 : sc.massing_mode === "BALANCED" ? 0.7 : 0.3;
+    else if (/ECO/i.test(standing_level)) standMatch = sc.massing_mode === "COMPACT" ? 1.0 : sc.massing_mode === "BALANCED" ? 0.6 : 0.3;
+    else standMatch = sc.massing_mode === "BALANCED" ? 1.0 : 0.6;
     score += standMatch * scoreWeights.standing_match;
-
-    // Phase compatibilité : si phaseSc élevé, COMPACT et BALANCED sont phasables
     const phaseCompat = sc.massing_mode === "COMPACT" ? 0.9 : sc.massing_mode === "BALANCED" ? 0.7 : 0.4;
     score += (phaseCompat * phaseSc + 0.5 * (1 - phaseSc)) * scoreWeights.phase_compat;
-
-    // Mix compatibilité : programme mixte + mix_score élevé → préfère EN_U ou formes avec RDC commercial
     const mixCompat = commerceLevels > 0 ? 0.8 + mixSc * 0.2 : 0.5;
     score += mixCompat * scoreWeights.mix_compat;
-
     sc.recommendation_score = Math.round(score * 1000) / 1000;
   }
 
-  // Déterminer le scénario recommandé
   let recommended = "A";
   if (r.B.recommendation_score > r[recommended].recommendation_score) recommended = "B";
   if (r.C.recommendation_score > r[recommended].recommendation_score) recommended = "C";
@@ -683,7 +1087,6 @@ function computeSmartScenarios({
   r.B.recommended = recommended === "B";
   r.C.recommended = recommended === "C";
 
-  // Justification de la recommandation
   const recSc = r[recommended];
   const reasons = [];
   if (recSc.budget_fit === "DANS_BUDGET") reasons.push("respecte le budget");
@@ -697,14 +1100,15 @@ function computeSmartScenarios({
   const recommendation_reason = reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
 
   const meta = {
+    engine_version: "56.9",
+    mode: isProgramDriven ? "PROGRAM_DRIVEN" : "REGULATION_DRIVEN",
+    program_key: programKey || "NONE",
     zoning_type, primary_driver, cos, ces, floor_height,
     max_fp: Math.round(max_fp), max_sdp: Math.round(max_sdp), absMaxLevels,
     envelope_bbox: Math.round(envelope_bbox), envelope_poly_area: Math.round(envelope_area),
     program_main, commerce_levels: commerceLevels, force_commerce: forceCommerce,
-    site_saturation_level, ratios_used: ratios,
+    target_units, standing_level,
     budget_pressure: Math.round(budgetPressure * 100) / 100,
-    standing_level, standing_factor: standingFactor,
-    density_pressure_factor: dpf, density_band, density_band_mult: densityBandMult,
     feasibility_posture, posture_mod: postureMod,
     risk_adjusted: riskAdj, risk_penalty: Math.round(riskPenalty * 1000) / 1000,
     driver_intensity, intensity_spread: intensitySpread,
@@ -713,11 +1117,12 @@ function computeSmartScenarios({
     recommendation_reason,
   };
 
-  console.log(`│ A(REF):     fp=${r.A.fp_m2}m² × ${r.A.levels}niv = ${r.A.sdp_m2}m² SDP (${r.A.cos_ratio_pct}% COS) [${r.A.massing_mode}] ${r.A.cos_compliance} cost=${r.A.estimated_cost} ${r.A.budget_fit} score=${r.A.recommendation_score}`);
-  console.log(`│ B(SPREAD):  fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}% COS) [${r.B.massing_mode}] ${r.B.cos_compliance} cost=${r.B.estimated_cost} ${r.B.budget_fit} score=${r.B.recommendation_score}`);
-  console.log(`│ C(COMPACT): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}% COS) [${r.C.massing_mode}] ${r.C.cos_compliance} cost=${r.C.estimated_cost} ${r.C.budget_fit} score=${r.C.recommendation_score}`);
+  console.log(`│`);
+  console.log(`│ A(${r.A.role}): fp=${r.A.fp_m2}m² × ${r.A.levels}niv = ${r.A.sdp_m2}m² SDP (${r.A.cos_ratio_pct}%COS) ${r.A.cos_compliance} | ${r.A.unit_mix_detail}`);
+  console.log(`│ B(${r.B.role}): fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}%COS) ${r.B.cos_compliance} | ${r.B.unit_mix_detail}`);
+  console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
-  console.log(`└── end SCENARIO ENGINE v56.2 ──`);
+  console.log(`└── end SCENARIO ENGINE v56.9 ──`);
 
   return { A: r.A, B: r.B, C: r.C, meta };
 }
@@ -2023,7 +2428,7 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, server_version: "56.7",
+      ok: true, cached: false, server_version: "56.9",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
