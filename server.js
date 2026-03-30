@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "57.11" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "57.13" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -69,7 +69,7 @@ app.post("/diag-massing", (req, res) => {
     masAreaShoelace = Math.abs(masAreaShoelace) / 2;
 
     res.json({
-      server_version: "57.11",
+      server_version: "57.13",
       input: { fp_m2: fp, site_area: Number(site_area), setbacks: { front: Number(setback_front), side: Number(setback_side), back: Number(setback_back) } },
       parcel: {
         centroid: { lat: cLat, lon: cLon },
@@ -125,7 +125,7 @@ app.get("/diag-scenarios", (req, res) => {
     density_pressure_factor: 1, driver_intensity: "MEDIUM",
   });
   res.json({
-    version: "57.11", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
+    version: "57.13", zoning: zt, site_area: sa, envelope: `${ew}x${ed}`,
     CES: ZONING_CES[zt], COS: ZONING_COS[zt],
     fp_A: scenarios.A.fp_m2, fp_B: scenarios.B.fp_m2, fp_C: scenarios.C.fp_m2,
     levels_A: scenarios.A.levels, levels_B: scenarios.B.levels, levels_C: scenarios.C.levels,
@@ -674,7 +674,7 @@ const PROGRAM_RULES = {
       const t3 = rest - t2; // tout le reste en T3
       return { T2: t2, T3: Math.max(1, t3), T4: t4, ...(t5 > 0 ? { T5: t5 } : {}) };
     },
-    max_units_per_floor: { ECO: 6, STD: 4, PREM: 3 }, max_floors: 8,
+    max_units_per_floor: { ECO: 8, STD: 6, PREM: 4 }, max_floors: 8,
     circulation_ratio: { ECO: 0.16, STD: 0.18, PREM: 0.22 },
     body_depth_m: { ECO: 12, STD: 13, PREM: 15 },
     ground_reserve: { A: 0.22, B: 0.30, C: 0.38 }, parking_per_unit: 1.2,
@@ -726,11 +726,224 @@ const PROGRAM_RULES = {
     ground_reserve: { A: 0.25, B: 0.30, C: 0.40 }, parking_per_unit: 1,
     requires_pilotis: "auto", rdc_commerce: false,
   },
+  // ── 7 NOUVEAUX USAGES (prompt expert architecte-urbaniste africain) ──
+  RESIDENCE_MEUBLEE: {
+    // Appart-hôtel / résidence meublée : unités compactes reproductibles
+    // Back-of-house important (accueil, linge, maintenance, stockage)
+    default_mix_fn: (n) => {
+      if (n <= 4) return { STUDIO: n };
+      const studio = Math.round(n * 0.40);
+      const t2 = Math.round(n * 0.40);
+      const t3 = n - studio - t2;
+      return { STUDIO: Math.max(1, studio), T2: Math.max(1, t2), T3: Math.max(0, t3) };
+    },
+    max_units_per_floor: { ECO: 10, STD: 8, PREM: 5 }, max_floors: 7,
+    circulation_ratio: { ECO: 0.22, STD: 0.25, PREM: 0.28 },
+    body_depth_m: { ECO: 13, STD: 14, PREM: 15 },
+    ground_reserve: { A: 0.25, B: 0.30, C: 0.38 }, parking_per_unit: 0.6,
+    requires_pilotis: "auto", rdc_commerce: false,
+  },
+  HOTEL_URBAIN: {
+    // Hôtel compact urbain : chambres standardisées, BOH important
+    // target_units = nombre de clés (chambres)
+    default_mix_fn: (n) => {
+      const standard = Math.round(n * 0.70);
+      const suite = n - standard;
+      return { CHAMBRE: Math.max(1, standard), SUITE: Math.max(0, suite) };
+    },
+    max_units_per_floor: { ECO: 14, STD: 10, PREM: 6 }, max_floors: 8,
+    circulation_ratio: { ECO: 0.26, STD: 0.30, PREM: 0.35 },
+    body_depth_m: { ECO: 14, STD: 16, PREM: 18 },
+    ground_reserve: { A: 0.22, B: 0.28, C: 0.35 }, parking_per_unit: 0.4,
+    requires_pilotis: false, rdc_commerce: false, rdc_height_m: 4.5,
+  },
+  CLINIQUE: {
+    // Centre médical / clinique de quartier
+    // Circulation très importante (brancards, attente, imagerie)
+    default_mix_fn: (n) => {
+      const consult = Math.round(n * 0.50);
+      const imagerie = Math.max(1, Math.round(n * 0.15));
+      const service = n - consult - imagerie;
+      return { CONSULTATION: Math.max(1, consult), IMAGERIE: imagerie, SERVICE: Math.max(1, service) };
+    },
+    max_units_per_floor: { ECO: 8, STD: 6, PREM: 4 }, max_floors: 4,
+    circulation_ratio: { ECO: 0.28, STD: 0.32, PREM: 0.35 },
+    body_depth_m: { ECO: 16, STD: 18, PREM: 20 },
+    ground_reserve: { A: 0.30, B: 0.35, C: 0.42 }, parking_per_unit: 2.5,
+    requires_pilotis: false, rdc_commerce: false,
+  },
+  CENTRE_COMMERCIAL: {
+    // Retail de proximité / galerie commerciale active
+    // Profondeur importante, réserves, livraisons
+    default_mix_fn: (n) => {
+      const boutique = Math.round(n * 0.70);
+      const ancre = n - boutique;
+      return { BOUTIQUE: Math.max(1, boutique), ANCRE: Math.max(0, ancre) };
+    },
+    max_units_per_floor: { ECO: 10, STD: 8, PREM: 5 }, max_floors: 3,
+    circulation_ratio: { ECO: 0.22, STD: 0.25, PREM: 0.28 },
+    body_depth_m: { ECO: 18, STD: 20, PREM: 22 },
+    ground_reserve: { A: 0.20, B: 0.28, C: 0.35 }, parking_per_unit: 3.5,
+    requires_pilotis: false, rdc_commerce: true, rdc_height_m: 4.5,
+  },
+  SCOLAIRE: {
+    // Établissement scolaire privé : salles de classe + administration + cour
+    // Cour = élément dimensionnant (min 30-40% du terrain)
+    default_mix_fn: (n) => {
+      const classes = Math.round(n * 0.65);
+      const admin = Math.max(1, Math.round(n * 0.15));
+      const service = n - classes - admin;
+      return { CLASSE: Math.max(1, classes), ADMIN: admin, SERVICE: Math.max(1, service) };
+    },
+    max_units_per_floor: { ECO: 6, STD: 4, PREM: 3 }, max_floors: 3,
+    circulation_ratio: { ECO: 0.25, STD: 0.28, PREM: 0.30 },
+    body_depth_m: { ECO: 10, STD: 11, PREM: 12 },
+    ground_reserve: { A: 0.45, B: 0.52, C: 0.58 }, parking_per_unit: 0.1,
+    requires_pilotis: false, rdc_commerce: false,
+  },
+  ENTREPOT: {
+    // Entrepôt / logistique légère / semi-industriel
+    // Grande emprise, faible hauteur, cour de manœuvre importante
+    fp_from_envelope: true,
+    default_mix_fn: (n) => ({ STOCKAGE: Math.max(1, n - 1), BUREAU: 1 }),
+    max_units_per_floor: 1, max_floors: 2,
+    circulation_ratio: { ECO: 0.10, STD: 0.12, PREM: 0.15 },
+    body_depth_m: { ECO: 22, STD: 25, PREM: 28 },
+    ground_reserve: { A: 0.30, B: 0.38, C: 0.45 }, parking_per_unit: 0.8,
+    requires_pilotis: false, rdc_commerce: false,
+  },
+  MIXTE_OPPORTUNISTE: {
+    // Usage mixte africain typique : commerce RDC, étages flexibles
+    // (logement, bureaux, location courte durée selon le marché)
+    default_mix_fn: (n) => {
+      const commerce = Math.max(1, Math.round(n * 0.20));
+      const resi = n - commerce;
+      if (resi <= 2) return { COMMERCE: commerce, T3: Math.max(1, resi) };
+      const t2 = Math.max(1, Math.round(resi * 0.30));
+      return { COMMERCE: commerce, T2: t2, T3: resi - t2 };
+    },
+    max_units_per_floor: { ECO: 6, STD: 5, PREM: 3 }, max_floors: 7,
+    circulation_ratio: { ECO: 0.18, STD: 0.20, PREM: 0.24 },
+    body_depth_m: { ECO: 13, STD: 14, PREM: 16 },
+    ground_reserve: { A: 0.22, B: 0.28, C: 0.35 }, parking_per_unit: 1.0,
+    requires_pilotis: false, rdc_commerce: true, rdc_height_m: 4.0,
+  },
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v57.13: GRILLE EXPERT — Ratios architecte-urbaniste africain senior
+// ══════════════════════════════════════════════════════════════════════════════
+// CES recommandé, niveaux, efficacité brut/net, parking, profondeur bâtiment
+// Par programme × zonage × scénario (A=optimisé, B=équilibré, C=secure)
+// Source : pratique terrain Afrique francophone, logique marché Cameroun/Douala
+// Principe : constructibilité théorique ≠ faisabilité rentable
+// ══════════════════════════════════════════════════════════════════════════════
+const EXPERT_RATIOS = {
+  MAISON_INDIVIDUELLE: {
+    URBAIN:     { A: { ces: 0.38, fl: [1,2], eff: 0.88 }, B: { ces: 0.30, fl: [1,2], eff: 0.90 }, C: { ces: 0.24, fl: [1,1], eff: 0.90 } },
+    PERIURBAIN: { A: { ces: 0.30, fl: [1,2], eff: 0.88 }, B: { ces: 0.24, fl: [1,2], eff: 0.90 }, C: { ces: 0.20, fl: [1,1], eff: 0.90 } },
+    Z_DEFAULT:  { A: { ces: 0.22, fl: [1,1], eff: 0.90 }, B: { ces: 0.18, fl: [1,1], eff: 0.90 }, C: { ces: 0.15, fl: [1,1], eff: 0.90 } },
+  },
+  PETIT_COLLECTIF: {
+    URBAIN:     { A: { ces: 0.40, fl: [3,4], eff: 0.76 }, B: { ces: 0.33, fl: [2,3], eff: 0.78 }, C: { ces: 0.25, fl: [2,2], eff: 0.80 } },
+    PERIURBAIN: { A: { ces: 0.32, fl: [2,3], eff: 0.78 }, B: { ces: 0.25, fl: [2,3], eff: 0.80 }, C: { ces: 0.20, fl: [2,2], eff: 0.82 } },
+    Z_DEFAULT:  { A: { ces: 0.24, fl: [2,3], eff: 0.80 }, B: { ces: 0.20, fl: [2,2], eff: 0.82 }, C: { ces: 0.16, fl: [1,2], eff: 0.84 } },
+  },
+  IMMEUBLE_RAPPORT: {
+    // Logement collectif moyen standing — le produit standard camerounais
+    // 1950m² URBAIN : CES 42% = 819m² au sol, 3-5 niv = 2460-4095m² SDP
+    // Ventilation naturelle traversante : profondeur max 14m recommandée
+    // Stationnement au sol ~30% du terrain libre → 15-20 places
+    URBAIN:     { A: { ces: 0.42, fl: [3,5], eff: 0.78 }, B: { ces: 0.35, fl: [3,4], eff: 0.80 }, C: { ces: 0.28, fl: [2,3], eff: 0.82 } },
+    PERIURBAIN: { A: { ces: 0.34, fl: [3,4], eff: 0.80 }, B: { ces: 0.28, fl: [2,3], eff: 0.82 }, C: { ces: 0.22, fl: [2,2], eff: 0.84 } },
+    Z_DEFAULT:  { A: { ces: 0.26, fl: [2,3], eff: 0.82 }, B: { ces: 0.22, fl: [2,3], eff: 0.84 }, C: { ces: 0.18, fl: [2,2], eff: 0.85 } },
+  },
+  USAGE_MIXTE: {
+    // Commerce RDC (hauteur 4-4.5m) + logements étages
+    // Le commerce tire la rentabilité, les logements sécurisent le cash-flow
+    URBAIN:     { A: { ces: 0.45, fl: [4,6], eff: 0.74 }, B: { ces: 0.38, fl: [3,5], eff: 0.76 }, C: { ces: 0.30, fl: [3,4], eff: 0.78 } },
+    PERIURBAIN: { A: { ces: 0.35, fl: [3,5], eff: 0.76 }, B: { ces: 0.28, fl: [3,4], eff: 0.78 }, C: { ces: 0.22, fl: [2,3], eff: 0.80 } },
+    Z_DEFAULT:  { A: { ces: 0.26, fl: [2,4], eff: 0.78 }, B: { ces: 0.22, fl: [2,3], eff: 0.80 }, C: { ces: 0.18, fl: [2,2], eff: 0.82 } },
+  },
+  ACTIVITE_PRO: {
+    // Bureaux : plateaux libres, 1 place/30-40m² plancher
+    // Profondeur 14-18m selon ventilation/clim
+    URBAIN:     { A: { ces: 0.42, fl: [4,6], eff: 0.78 }, B: { ces: 0.35, fl: [3,5], eff: 0.80 }, C: { ces: 0.28, fl: [3,4], eff: 0.82 } },
+    PERIURBAIN: { A: { ces: 0.32, fl: [3,5], eff: 0.80 }, B: { ces: 0.25, fl: [2,4], eff: 0.82 }, C: { ces: 0.20, fl: [2,3], eff: 0.84 } },
+    Z_DEFAULT:  { A: { ces: 0.24, fl: [2,4], eff: 0.82 }, B: { ces: 0.20, fl: [2,3], eff: 0.84 }, C: { ces: 0.16, fl: [2,2], eff: 0.85 } },
+  },
+  PROGRAMME_FLOU: {
+    // Programme non défini → hypothèse résidentiel standard
+    URBAIN:     { A: { ces: 0.40, fl: [3,5], eff: 0.76 }, B: { ces: 0.32, fl: [2,4], eff: 0.78 }, C: { ces: 0.24, fl: [2,3], eff: 0.80 } },
+    PERIURBAIN: { A: { ces: 0.32, fl: [2,4], eff: 0.78 }, B: { ces: 0.25, fl: [2,3], eff: 0.80 }, C: { ces: 0.20, fl: [2,2], eff: 0.82 } },
+    Z_DEFAULT:  { A: { ces: 0.24, fl: [2,3], eff: 0.80 }, B: { ces: 0.20, fl: [2,2], eff: 0.82 }, C: { ces: 0.16, fl: [1,2], eff: 0.84 } },
+  },
+  RESIDENCE_MEUBLEE: {
+    // Appart-hôtel : BOH (accueil, linge, maintenance) = 25-30% du RDC
+    // Unités compactes (studios 22-28m², T2 45-55m²) → haute densité/plateau
+    URBAIN:     { A: { ces: 0.42, fl: [4,6], eff: 0.72 }, B: { ces: 0.35, fl: [3,5], eff: 0.74 }, C: { ces: 0.28, fl: [3,4], eff: 0.76 } },
+    PERIURBAIN: { A: { ces: 0.34, fl: [3,5], eff: 0.74 }, B: { ces: 0.28, fl: [3,4], eff: 0.76 }, C: { ces: 0.22, fl: [2,3], eff: 0.78 } },
+    Z_DEFAULT:  { A: { ces: 0.26, fl: [2,4], eff: 0.76 }, B: { ces: 0.22, fl: [2,3], eff: 0.78 }, C: { ces: 0.18, fl: [2,2], eff: 0.80 } },
+  },
+  HOTEL_URBAIN: {
+    // Hôtel compact : BOH lourd (30-35%), chambres 18-25m², couloirs larges
+    // Seuil critique : <40 clés = non viable ; 60-80 clés = optimal urbain
+    URBAIN:     { A: { ces: 0.48, fl: [4,7], eff: 0.68 }, B: { ces: 0.40, fl: [3,5], eff: 0.70 }, C: { ces: 0.32, fl: [3,4], eff: 0.72 } },
+    PERIURBAIN: { A: { ces: 0.38, fl: [3,5], eff: 0.70 }, B: { ces: 0.30, fl: [3,4], eff: 0.72 }, C: { ces: 0.24, fl: [2,3], eff: 0.74 } },
+    Z_DEFAULT:  { A: { ces: 0.28, fl: [2,4], eff: 0.72 }, B: { ces: 0.24, fl: [2,3], eff: 0.74 }, C: { ces: 0.20, fl: [2,2], eff: 0.76 } },
+  },
+  CLINIQUE: {
+    // Circulations dimensionnantes (brancards 2.40m, attente, accès PMR)
+    // Imagerie = rez-de-chaussée obligatoire (poids, blindage)
+    // Parking surdimensionné (patients + accompagnants + personnel)
+    URBAIN:     { A: { ces: 0.40, fl: [2,4], eff: 0.65 }, B: { ces: 0.34, fl: [2,3], eff: 0.68 }, C: { ces: 0.28, fl: [2,3], eff: 0.70 } },
+    PERIURBAIN: { A: { ces: 0.32, fl: [2,3], eff: 0.68 }, B: { ces: 0.26, fl: [2,3], eff: 0.70 }, C: { ces: 0.22, fl: [1,2], eff: 0.72 } },
+    Z_DEFAULT:  { A: { ces: 0.24, fl: [1,3], eff: 0.70 }, B: { ces: 0.20, fl: [1,2], eff: 0.72 }, C: { ces: 0.16, fl: [1,2], eff: 0.74 } },
+  },
+  CENTRE_COMMERCIAL: {
+    // Retail : profondeur 18-22m, réserves 15-20%, galerie 10-12%
+    // Parking = élément dimensionnant (3-5 places/100m² vente)
+    // >R+2 rarement viable en Afrique (flux piétons chute aux étages)
+    URBAIN:     { A: { ces: 0.50, fl: [1,3], eff: 0.70 }, B: { ces: 0.42, fl: [1,2], eff: 0.72 }, C: { ces: 0.35, fl: [1,2], eff: 0.75 } },
+    PERIURBAIN: { A: { ces: 0.38, fl: [1,2], eff: 0.72 }, B: { ces: 0.30, fl: [1,2], eff: 0.75 }, C: { ces: 0.24, fl: [1,1], eff: 0.78 } },
+    Z_DEFAULT:  { A: { ces: 0.28, fl: [1,2], eff: 0.75 }, B: { ces: 0.22, fl: [1,1], eff: 0.78 }, C: { ces: 0.18, fl: [1,1], eff: 0.80 } },
+  },
+  SCOLAIRE: {
+    // Cour = élément dimensionnant (min 35-40% du terrain en urbain)
+    // Ratio salles/admin/circulation ≈ 55/15/30%
+    // Profondeur faible (ventilation + éclairage naturel classes)
+    URBAIN:     { A: { ces: 0.38, fl: [2,3], eff: 0.68 }, B: { ces: 0.30, fl: [2,3], eff: 0.70 }, C: { ces: 0.24, fl: [1,2], eff: 0.72 } },
+    PERIURBAIN: { A: { ces: 0.28, fl: [1,3], eff: 0.70 }, B: { ces: 0.22, fl: [1,2], eff: 0.72 }, C: { ces: 0.18, fl: [1,2], eff: 0.75 } },
+    Z_DEFAULT:  { A: { ces: 0.22, fl: [1,2], eff: 0.72 }, B: { ces: 0.18, fl: [1,2], eff: 0.75 }, C: { ces: 0.15, fl: [1,1], eff: 0.78 } },
+  },
+  ENTREPOT: {
+    // Grande emprise, faible hauteur, cour manœuvre = 30-40% terrain
+    // >R+1 rarement viable (surcoût structure vs gain m²)
+    URBAIN:     { A: { ces: 0.52, fl: [1,2], eff: 0.85 }, B: { ces: 0.45, fl: [1,1], eff: 0.88 }, C: { ces: 0.38, fl: [1,1], eff: 0.90 } },
+    PERIURBAIN: { A: { ces: 0.38, fl: [1,2], eff: 0.88 }, B: { ces: 0.32, fl: [1,1], eff: 0.90 }, C: { ces: 0.25, fl: [1,1], eff: 0.90 } },
+    Z_DEFAULT:  { A: { ces: 0.28, fl: [1,1], eff: 0.90 }, B: { ces: 0.22, fl: [1,1], eff: 0.90 }, C: { ces: 0.18, fl: [1,1], eff: 0.90 } },
+  },
+  MIXTE_OPPORTUNISTE: {
+    // Le produit africain par excellence : commerce RDC + étages flexibles
+    // Résilient au marché car les étages s'adaptent (logement, bureau, meublé)
+    URBAIN:     { A: { ces: 0.45, fl: [4,6], eff: 0.74 }, B: { ces: 0.38, fl: [3,5], eff: 0.76 }, C: { ces: 0.30, fl: [3,4], eff: 0.78 } },
+    PERIURBAIN: { A: { ces: 0.35, fl: [3,5], eff: 0.76 }, B: { ces: 0.28, fl: [2,4], eff: 0.78 }, C: { ces: 0.22, fl: [2,3], eff: 0.80 } },
+    Z_DEFAULT:  { A: { ces: 0.26, fl: [2,4], eff: 0.78 }, B: { ces: 0.22, fl: [2,3], eff: 0.80 }, C: { ces: 0.18, fl: [2,2], eff: 0.82 } },
+  },
 };
 
 // ── Helper: normalise program_main string → PROGRAM_RULES key ──
 function parseProgramKey(raw) {
   const s = String(raw || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  // Nouveaux usages (v57.13 — expert africain)
+  if (/APART.?HOTEL|RESIDENCE.?MEUBLE|SERVICED|^MEUBLE/.test(s)) return "RESIDENCE_MEUBLEE";
+  if (/HOTEL|HEBERGEMENT|AUBERGE/.test(s)) return "HOTEL_URBAIN";
+  if (/CLINIQUE|MEDICAL|SANTE|HOPITAL|CABINET/.test(s)) return "CLINIQUE";
+  if (/COMMERCIAL|RETAIL|GALERIE|BOUTIQUE|CENTRE.?COM/.test(s)) return "CENTRE_COMMERCIAL";
+  if (/SCOLAIRE|ECOLE|LYCEE|COLLEGE|FORMATION|CRECHE/.test(s)) return "SCOLAIRE";
+  if (/ENTREPOT|LOGISTIQUE|INDUSTRIEL|STOCKAGE|HANGAR/.test(s)) return "ENTREPOT";
+  if (/OPPORTUNISTE|POLYVALENT|FLEXIBLE/.test(s)) return "MIXTE_OPPORTUNISTE";
+  // Usages existants
   if (/MAISON|VILLA|INDIVIDUEL/.test(s)) return "MAISON_INDIVIDUELLE";
   if (/PETIT.?COLLECTIF/.test(s)) return "PETIT_COLLECTIF";
   if (/RAPPORT|DENSE|COLLECTIF|LOCATIF/.test(s)) return "IMMEUBLE_RAPPORT";
@@ -884,7 +1097,7 @@ function computeSmartScenarios({
   const climaticZone = detectClimaticZone(zoning_type, country);
   const solarImpact = computeSolarImpact(envelope_w, envelope_d, climaticZone, parcel_orientation);
 
-  // v57.11: Le solaire est une RECOMMANDATION (façades, orientation, ventilation)
+  // v57.13: Le solaire est une RECOMMANDATION (façades, orientation, ventilation)
   // mais ne plafonne plus la géométrie — le CES réglementaire reste la contrainte structurante.
   // Si la profondeur dépasse le seuil solaire, on applique un malus coût (climatisation)
   // mais on ne réduit PAS l'emprise constructible.
@@ -895,11 +1108,11 @@ function computeSmartScenarios({
     // Malus proportionnel au dépassement (max +15% si double de la profondeur recommandée)
     const depassementRatio = Math.min(1, depassementSolaire / profondeurSolaire);
     solarImpact.malus_orientation_pct = Math.round(solarImpact.malus_orientation_pct + depassementRatio * 10);
-    console.log(`│ v57.11 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}m > recommandé ${profondeurSolaire}m (+${depassementSolaire.toFixed(1)}m) → malus clim +${solarImpact.malus_orientation_pct}% (RECOMMANDATION, CES préservé)`);
+    console.log(`│ v57.13 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}m > recommandé ${profondeurSolaire}m (+${depassementSolaire.toFixed(1)}m) → malus clim +${solarImpact.malus_orientation_pct}% (RECOMMANDATION, CES préservé)`);
   } else {
-    console.log(`│ v57.11 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}m ≤ ${profondeurSolaire}m — conforme ventilation traversante`);
+    console.log(`│ v57.13 solaire: zone=${climaticZone} profondeur D=${dConstructible.toFixed(1)}m ≤ ${profondeurSolaire}m — conforme ventilation traversante`);
   }
-  // v57.11: emprise effective = emprise constructible (retraits seuls, PAS plafonnée par le solaire)
+  // v57.13: emprise effective = emprise constructible (retraits seuls, PAS plafonnée par le solaire)
   const empriseEffective = empriseConstructible;
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -1054,6 +1267,12 @@ function computeSmartScenarios({
     let totalUnitsResult = 0;
     let hasPilotis = false;
     let pilotisLevels = 0;
+    let target_sdp_programme = 0; // ancre client : target_units × refSize / (1-circ)
+
+    // v57.13 EXPERT RATIOS — lookup pour ce programme × zonage × scénario
+    const scenarioKey = label; // A, B, C
+    const expertZone = EXPERT_RATIOS[programKey]?.[zoning_type] || EXPERT_RATIOS[programKey]?.Z_DEFAULT;
+    const expertRatio = expertZone?.[scenarioKey] || null;
 
     if (isProgramDriven) {
       // ════════════════════════════════════════════════════════════════════════
@@ -1109,16 +1328,71 @@ function computeSmartScenarios({
       const cesFill = CES_FILL_BY_ROLE[role] || 0.80;
       const maxFpByEnvelope = envelope_area * (1 - groundReserve);
 
-      // v57.9: RDC plafonné par emprise effective (retraits + contrainte solaire)
-      fpRdc = Math.round(Math.min(cesFill * effectiveMaxFp, maxFpByEnvelope, empriseEffective));
+      // ══════════════════════════════════════════════════════════════════════
+      // v57.13: EMPRISE PROGRAMME-DRIVEN — dimensionnée par le plateau optimal
+      // ══════════════════════════════════════════════════════════════════════
+      // Le plateau est le nombre d'unités/palier × la taille des logements.
+      // C'est la taille ARCHITECTURALEMENT CORRECTE pour le programme.
+      // Le CES et les niveaux sont des CONSÉQUENCES, pas des cibles.
+      //
+      // Avantages de la densification verticale :
+      // - Coût de fondation/toiture amorti sur plus de m² SDP
+      // - Plus d'espace libre au sol (parking, jardin, circulation)
+      // - Meilleures possibilités de ventilation et orientation
+      // - Valorisation foncière supérieure (m²/terrain)
+      // ══════════════════════════════════════════════════════════════════════
+      const fpMaxCes = Math.round(cesFill * effectiveMaxFp);
+      const fpMaxEnv = Math.round(maxFpByEnvelope);
+      const fpMaxRetraits = Math.round(empriseEffective);
+
+      // Plateau optimal = maxPerFloor × taille logement de référence / (1 - circulation)
+      // La taille de référence est le T3 (type dominant au Cameroun)
+      const refUnitSize = sizes.T3 || sizes.T4 || 80;
+      const fpProgramme = Math.round(maxPerFloor * refUnitSize / (1 - circRatio));
+
+      // Plancher : minimum 2 logements × refSize pour un palier viable
+      const fpMinViable = Math.round(Math.max(200, 2 * refUnitSize / (1 - circRatio)));
+
+      // ══════════════════════════════════════════════════════════════════════
+      // v57.13 : LOGIQUE PROGRAMME → TERRAIN (pas l'inverse)
+      // ══════════════════════════════════════════════════════════════════════
+      // Le client a un PROGRAMME (target_units × standing → target_sdp).
+      // Le terrain soit CONFIRME (A), ADAPTE (B), ou CONTRAINT (C) ce programme.
+      //
+      //   A (INTENSIFICATION) = terrain ADAPTE le programme client
+      //     → emprise = programme pur, terrain ne fait que PLAFONNER
+      //     → le rôle A donne la version la plus ambitieuse du programme
+      //   B (EQUILIBRE) = terrain ÉQUILIBRE le programme
+      //     → un peu moins ambitieux que A en tailles/unités
+      //   C (PRUDENT) = terrain CONTRAINT le programme
+      //     → version réduite/prudente du programme
+      //
+      // target_sdp_programme = ancre client (ce que le client VEUT en m²)
+      // Les expert ratios = DIAGNOSTIC narratif (comparaison vs grille expert)
+      // Ils ne liftent JAMAIS l'emprise. Le programme commande, le terrain plafonne.
+      // ══════════════════════════════════════════════════════════════════════
+      const fpExpertMin = expertRatio ? Math.round(expertRatio.ces * site_area) : 0;
+      const expertCesPct = expertRatio ? Math.round(expertRatio.ces * 100) : 0;
+
+      // Ancre client : surface totale que le programme demande
+      target_sdp_programme = Math.round(target_units * refUnitSize / (1 - circRatio));
+
+      // TOUS LES SCÉNARIOS = PROGRAMME PUR → terrain ne fait que plafonner
+      fpRdc = fpProgramme;
+      // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
+      fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
+      fpRdc = Math.max(fpRdc, fpMinViable);
+      fpRdc = Math.round(fpRdc);
+
+      const cesPctResult = Math.round(fpRdc / site_area * 100);
+      const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
+      console.log(`│   🏗️ v57.13 ${role}: fpProg=${fpProgramme} expertCES=${expertCesPct}% → fpRdc=${fpRdc}m² (CES=${cesPctResult}% ${cesVsExpert}) | cible_sdp=${target_sdp_programme}m²`);
 
       // ÉTAGES : extension selon le rôle
-      // v57.7: en étage, les retraits peuvent être réduits (porte-à-faux, encorbellement)
-      // v57.9: contrainte solaire s'applique aussi aux étages (profondeur de corps)
       const etageExt = ETAGE_EXTENSION_BY_ROLE[role];
       const empriseEtageMax = empriseEffective * (nbMitoyens > 0 ? 1.10 : 1.0);
       if (etageExt === "ENVELOPE") {
-        fpEtages = Math.round(Math.min(envelope_area, effectiveMaxFp, empriseEtageMax * 1.05));
+        fpEtages = Math.round(Math.min(fpRdc * 1.15, envelope_area, effectiveMaxFp, empriseEtageMax * 1.05));
       } else {
         fpEtages = Math.round(Math.min(fpRdc * (etageExt || 1.0), envelope_area, effectiveMaxFp, empriseEtageMax));
       }
@@ -1139,9 +1413,10 @@ function computeSmartScenarios({
         // ── BUREAUX : plateaux proportionnels au CES effectif et rôle scénario ──
         // v57.6: Apply roleTargetFactor to ensure A >= B >= C in floor count
         const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.0, EQUILIBRE: 0.80, PRUDENT: 0.60 })[role] || 0.80;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.40, EQUILIBRE: 0.90, PRUDENT: 0.65 })[role] || 0.90;
         const effectiveTargetBur = Math.max(1, Math.round(target_units * cesRatio * roleTargetFactor));
         floorsNeeded = Math.min(effectiveTargetBur, effectiveMaxFloors);
+        // v57.13 : niveaux = conséquence programme, pas de floor min expert
         floorsNeeded = Math.max(1, floorsNeeded);
         // COS check avec SDP duale
         while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
@@ -1210,9 +1485,10 @@ function computeSmartScenarios({
 
         // v57.6 : target résidentiel proportionnel au CES effectif × rôle
         const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.0, EQUILIBRE: 0.80, PRUDENT: 0.60 })[role] || 0.80;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.40, EQUILIBRE: 0.90, PRUDENT: 0.65 })[role] || 0.90;
         const effectiveTargetResi = Math.max(1, Math.round((target_units - commerceUnits) * cesRatio * roleTargetFactor));
         floorsNeeded = 1 + Math.ceil(effectiveTargetResi / resiPerFloor);
+        // v57.13 : niveaux = conséquence programme
         floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
         while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
 
@@ -1266,13 +1542,22 @@ function computeSmartScenarios({
         // - roleTargetFactor = ambition du scénario (A=max, B=standard, C=réduit)
         // Le nombre de logements est un RÉSULTAT, pas une cible fixe.
         const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.0, EQUILIBRE: 0.80, PRUDENT: 0.60 })[role] || 0.80;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.40, EQUILIBRE: 0.90, PRUDENT: 0.65 })[role] || 0.90;
         const effectiveTarget = Math.max(2, Math.round(target_units * cesRatio * roleTargetFactor));
 
         floorsNeeded = Math.ceil(effectiveTarget / unitsPerFloor);
+        // v57.13 : niveaux = CONSÉQUENCE PURE du programme
+        // Tous les scénarios : le nombre de niveaux découle du target effectif / unitsPerFloor
+        // Min 2 niveaux (un bâtiment collectif à 1 niveau n'a pas de sens architectural)
+        // Pas de floor min expert — le programme commande, le terrain plafonne.
         floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
         // COS check duale
         while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
+        // v57.14: anti-paradoxe zonage — empêche compensation verticale excessive
+        // Quand le terrain contraint le plateau (CES bas → fpEtages réduit → moins de logts/palier),
+        // le moteur ne doit PAS compenser en ajoutant des niveaux au-delà du besoin programme.
+        // Sans ce garde-fou, PERIURBAIN peut produire PLUS de SDP qu'URBAIN (paradoxe).
+        while (floorsNeeded > 2 && unitsPerFloor * floorsNeeded > effectiveTarget * 1.30) floorsNeeded--;
 
         totalUnits = unitsPerFloor * floorsNeeded;
 
@@ -1313,7 +1598,7 @@ function computeSmartScenarios({
       const rdcHeightM = hasRdcCommerce ? (rules.rdc_height_m || 4.0) : floor_height;
 
       const sdpDual = computeSdpDual(levels);
-      console.log(`│ ✅ ${label} (${role}) CES-DRIVEN v57.11${isBungalow ? " [BUNGALOWS]" : ""}:`);
+      console.log(`│ ✅ ${label} (${role}) CES-DRIVEN v57.13${isBungalow ? " [BUNGALOWS]" : ""}:`);
       console.log(`│   📊 CES EFFECTIF: réglementaire=${(ces*100).toFixed(0)}% → client=${(effectiveCES*100).toFixed(1)}% (clientMod=${clientCesMod.toFixed(3)}: budPres=${budgetPressure.toFixed(2)} post=${postureMod} risk=${riskPenalty.toFixed(3)} cap=${capacityBoost.toFixed(3)} dens=${densityBandMult})`);
       console.log(`│   📊 maxFp: réglementaire=${Math.round(max_fp)}m² → client=${effectiveMaxFp}m² | cesFill=${(cesFill*100).toFixed(0)}% (role=${role})`);
       console.log(`│   RDC=${fpRdc}m² (${(fpRdc/site_area*100).toFixed(0)}% terrain) | ét.=${fpEtages}m² (${(fpEtages/site_area*100).toFixed(0)}%) [${etageExt === "ENVELOPE" ? "→enveloppe" : "×" + etageExt}]`);
@@ -1439,7 +1724,7 @@ function computeSmartScenarios({
     const freeGround = envelope_area - (fpRdc || fp); // espace libre au sol = enveloppe - empreinte RDC
     const parkingEst = hasPilotis ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
 
-    // ── v57.11 PARKING DÉTAILLÉ + ESPACE DÉGAGÉ (corrigé) ──
+    // ── v57.13 PARKING DÉTAILLÉ + ESPACE DÉGAGÉ (corrigé) ──
     // Parking basé sur les places REQUISES (réglementation), pas sur tout l'espace théorique
     const parkingPerUnit = rules.parking_per_unit || 1;
     const parkingRequired = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnitsResult || 1) * parkingPerUnit));
@@ -1448,7 +1733,7 @@ function computeSmartScenarios({
     // Sol libre TOTAL = site_area - emprise RDC (inclut retraits, cour, jardin, parking)
     const solLibreTotal = site_area - (fpRdc || fp);
 
-    // v57.11: Ratio réaliste — parking requis occupe ~1/3 du sol libre, espace dégagé ~2/3
+    // v57.13: Ratio réaliste — parking requis occupe ~1/3 du sol libre, espace dégagé ~2/3
     // On dimensionne le parking sur les places requises uniquement
     const parkingM2Requis = parkingRequired * PILOTIS_CONFIG.PARKING_SPOT_M2;
     const parkingM2Effectif = hasPilotis ? 0 : Math.min(parkingM2Requis, Math.round(solLibreTotal * 0.33));
@@ -1507,7 +1792,7 @@ function computeSmartScenarios({
       ground_reserve_pct: Math.round((groundReserve || 0) * 100),
       free_ground_m2: Math.round(freeGround),
       parking_spots_estimate: parkingPlacesEffectif,
-      // v57.11 parking détaillé + espace dégagé (basé sur requis, ratio 1/3-2/3)
+      // v57.13 parking détaillé + espace dégagé (basé sur requis, ratio 1/3-2/3)
       parking_detail: {
         places_disponibles: parkingPlacesEffectif,
         places_requises: parkingRequired,
@@ -1547,6 +1832,13 @@ function computeSmartScenarios({
       circulation_ratio_pct: Math.round((circRatio || 0) * 100),
       ces_fill_pct: Math.round(((fpRdc || fp) / Math.max(1, site_area)) * 100),  // % réel du terrain occupé au sol
       body_depth_m: bodyDepth || 0,
+      // v57.13 EXPERT RATIOS — grille architecte-urbaniste africain
+      // v57.13 — ancre programme client
+      target_sdp_programme_m2: target_sdp_programme || 0,
+      // v57.13 EXPERT RATIOS — diagnostic (narrative, pas lifting)
+      expert_ces_recommande_pct: expertRatio ? Math.round(expertRatio.ces * 100) : null,
+      expert_floors_range: expertRatio?.fl || null,
+      expert_efficiency_pct: expertRatio ? Math.round(expertRatio.eff * 100) : null,
       // ── v57.6 EFFICIENCY METRICS ──
       surface_habitable_m2: Math.round(totalUseful || 0),
       ratio_efficacite_pct: sdp > 0 ? Math.round((totalUseful || 0) / sdp * 100) : 0,
@@ -1999,7 +2291,7 @@ function computeSmartScenarios({
     if (mitoDet.justification) {
       contexte.push(mitoDet.justification);
     }
-    // v57.11: orientation solaire = recommandation (pas contrainte dure)
+    // v57.13: orientation solaire = recommandation (pas contrainte dure)
     contexte.push(solarImpact.recommandation_orientation);
     if (solaireSouple) {
       contexte.push(`profondeur de batiment (${Math.round(dConstructible)}m) superieure au seuil de ventilation traversante (${profondeurSolaire}m) — prevoir des dispositifs de ventilation intermediaires (patios, gaines, double orientation)`);
@@ -2041,7 +2333,7 @@ function computeSmartScenarios({
     parkingLine.push(`emprise parking : ${pkDet.m2_parking || 0}m² (${PILOTIS_CONFIG.PARKING_SPOT_M2}m² par place, circulation comprise)`);
     extParts.push(`Stationnement : ${parkingLine.join(". ")}`);
 
-    // Espace dégagé (v57.11: ratio parking/espace basé sur requis)
+    // Espace dégagé (v57.13: ratio parking/espace basé sur requis)
     const espaceLine = [];
     espaceLine.push(`${espDet.sol_libre_total_m2 || sc.free_ground_m2}m² libres au sol (${espDet.sol_libre_pct || Math.round(solLibrePct * 100)}% du terrain)`);
     if (pkDet.source !== "PILOTIS") {
@@ -2434,7 +2726,7 @@ function computeSmartScenarios({
   const recommendation_reason = reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
 
   const meta = {
-    engine_version: "57.11",
+    engine_version: "57.13",
     mode: isProgramDriven ? "PROGRAM_DRIVEN" : "REGULATION_DRIVEN",
     program_key: programKey || "NONE",
     zoning_type, primary_driver, cos, ces, floor_height,
@@ -2557,7 +2849,7 @@ function computeSmartScenarios({
       malus_orientation_pct: solarImpact.malus_orientation_pct,
       recommandation: solarImpact.recommandation_orientation,
     },
-    engine_version: "57.11",
+    engine_version: "57.13",
   };
 
   console.log(`│`);
@@ -2565,7 +2857,7 @@ function computeSmartScenarios({
   console.log(`│ B(${r.B.role}): fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}%COS) ${r.B.cos_compliance} | ${r.B.unit_mix_detail}`);
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
-  console.log(`└── end SCENARIO ENGINE v57.11 ──`);
+  console.log(`└── end SCENARIO ENGINE v57.13 ──`);
 
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic };
 }
@@ -3871,7 +4163,7 @@ app.post("/generate-massing", async (req, res) => {
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
     }
     return res.json({
-      ok: true, cached: false, server_version: "57.11",
+      ok: true, cached: false, server_version: "57.13",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
