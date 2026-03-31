@@ -3504,6 +3504,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   mapboxgl.accessToken = '${mapboxToken}';
 
   // v49 HEKTAR PRO — vert gazon + routes beige + labels rues
+  window._map = null; // v50: will be set after map creation for pixel projection
   const hektarStyle = {
     "version": 8, "name": "Hektar Pro",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
@@ -3551,6 +3552,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
+  window._map = map; // v50: expose for pixel projection from Puppeteer
   map.addControl = function() {};
   map.on('style.load', () => {
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
@@ -3735,7 +3737,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.restore();
   const legItems = [
     { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
-    { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
+    { type: "dash", stroke: "#d02818", label: "Zone constructible (reculs)" },
     { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
@@ -3752,6 +3754,10 @@ function drawOverlays(ctx, W, H, BH, p) {
     if (item.type === "rect") {
       ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
+    } else if (item.type === "dot") {
+      ctx.beginPath(); ctx.arc(36, iy + 6, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = item.fill; ctx.fill();
+      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2; ctx.stroke();
     } else {
       ctx.beginPath(); ctx.moveTo(28, iy + 6); ctx.lineTo(44, iy + 6);
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5; ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
@@ -3809,7 +3815,8 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.restore();
   const legItems = [
     { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: "Parcelle — " + site_area + " m²" },
-    { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
+    { type: "dash", stroke: "#d02818", label: "Zone constructible (reculs)" },
+    { type: "dot", fill: "#1a6b3a", stroke: "#fff", label: "Accès principal" },
     { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiment existant" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
@@ -3826,6 +3833,10 @@ function drawLegendCompass(ctx, W, H, p) {
     if (item.type === "rect") {
       ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
+    } else if (item.type === "dot") {
+      ctx.beginPath(); ctx.arc(36, iy + 6, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = item.fill; ctx.fill();
+      ctx.strokeStyle = item.stroke; ctx.lineWidth = 2; ctx.stroke();
     } else {
       ctx.beginPath(); ctx.moveTo(28, iy + 6); ctx.lineTo(44, iy + 6);
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 2.5; ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([]);
@@ -3897,7 +3908,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.restore();
   const legItems = [
     { fill: "rgba(208,40,24,0.22)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
-    { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Enveloppe constructible" },
+    { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Zone constructible (reculs)" },
     commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
     { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv.` },
   ].filter(Boolean);
@@ -3930,10 +3941,119 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
   drawSolarArc(ctx, W, H, { bearing });
 }
+// ─── v50.1: RE-DRAW GEOMETRY ON CANVAS (post-OpenAI fidelity) ────────────────
+function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
+  if (!projectedGeometry) return;
+  const { parcel, envelope, accessLineStart, accessLineEnd, accessLabel } = projectedGeometry;
+
+  // 1. Parcelle fill — ocre semi-transparent
+  if (parcel && parcel.length >= 3) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(parcel[0].x, parcel[0].y);
+    for (let i = 1; i < parcel.length; i++) ctx.lineTo(parcel[i].x, parcel[i].y);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(196,165,106,0.40)";
+    ctx.fill();
+    // Parcelle outline — rouge continu
+    ctx.strokeStyle = "#d02818";
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([]);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 2. Enveloppe — tirets rouges
+  if (envelope && envelope.length >= 3) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(envelope[0].x, envelope[0].y);
+    for (let i = 1; i < envelope.length; i++) ctx.lineTo(envelope[i].x, envelope[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = "#d02818";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 5]);
+    ctx.globalAlpha = 0.75;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1.0;
+    ctx.restore();
+  }
+
+  // 3. Flèche d'accès principal
+  if (accessLineStart && accessLineEnd) {
+    ctx.save();
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(accessLineStart.x, accessLineStart.y);
+    ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
+    ctx.strokeStyle = "#1a6b3a";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Arrowhead
+    const dx = accessLineEnd.x - accessLineStart.x;
+    const dy = accessLineEnd.y - accessLineStart.y;
+    const angle = Math.atan2(dy, dx);
+    const headLen = 10;
+    ctx.beginPath();
+    ctx.moveTo(accessLineEnd.x, accessLineEnd.y);
+    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle - 0.4), accessLineEnd.y - headLen * Math.sin(angle - 0.4));
+    ctx.moveTo(accessLineEnd.x, accessLineEnd.y);
+    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle + 0.4), accessLineEnd.y - headLen * Math.sin(angle + 0.4));
+    ctx.strokeStyle = "#1a6b3a";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Dot at end
+    ctx.beginPath();
+    ctx.arc(accessLineEnd.x, accessLineEnd.y, 5, 0, 2 * Math.PI);
+    ctx.fillStyle = "#1a6b3a";
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Label "Accès"
+    ctx.font = "bold 11px Arial";
+    ctx.fillStyle = "#1a6b3a";
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 3;
+    ctx.textAlign = "center";
+    ctx.strokeText("Accès", accessLineEnd.x, accessLineEnd.y - 12);
+    ctx.fillText("Accès", accessLineEnd.x, accessLineEnd.y - 12);
+    ctx.restore();
+  }
+
+  // 4. Noms des rues — re-dessinés depuis les données Mapbox extraites
+  if (roadLabels && roadLabels.length > 0) {
+    roadLabels.forEach(lbl => {
+      ctx.save();
+      ctx.translate(lbl.x, lbl.y);
+      // Normalize angle so text is never upside-down
+      let angle = lbl.angle || 0;
+      if (angle > Math.PI / 2) angle -= Math.PI;
+      if (angle < -Math.PI / 2) angle += Math.PI;
+      ctx.rotate(angle);
+      ctx.font = lbl.isMajor ? "bold 11px Arial" : "10px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // White halo for readability
+      ctx.strokeStyle = "rgba(255,255,255,0.92)";
+      ctx.lineWidth = 3;
+      ctx.lineJoin = "round";
+      ctx.strokeText(lbl.name, 0, 0);
+      ctx.fillStyle = lbl.isMajor ? "#5a4a2a" : "#7a6a4a";
+      ctx.fillText(lbl.name, 0, 0);
+      ctx.restore();
+    });
+  }
+}
+
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v49 (style-ref) ═══");
+  console.log("═══ /generate v50.1 (composite-fidelity) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -3941,6 +4061,7 @@ app.post("/generate", async (req, res) => {
     slide_name = "slide_4_axo",
     zoom: zoomOverride = null,
     style_ref_url = null,
+    enhance = true,  // v50.1: set to false to skip OpenAI entirely (pure Mapbox + canvas)
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
@@ -3956,6 +4077,25 @@ app.post("/generate", async (req, res) => {
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   const bearing = computeBearing(coords, cLat, cLon);
   console.log(`zoom=${zoom} bearing=${bearing}° pitch=58°`);
+
+  // v50: compute access arrow coords (same logic as generateMapHTML) for post-OpenAI overlay
+  let bestMidLat = -Infinity, bestI = 0;
+  for (let i = 0; i < coords.length; i++) {
+    const j = (i + 1) % coords.length;
+    const midLat = (coords[i].lat + coords[j].lat) / 2;
+    if (midLat > bestMidLat) { bestMidLat = midLat; bestI = i; }
+  }
+  const accJ = (bestI + 1) % coords.length;
+  const accMidLat = (coords[bestI].lat + coords[accJ].lat) / 2;
+  const accMidLon = (coords[bestI].lon + coords[accJ].lon) / 2;
+  const edgeDx = coords[accJ].lon - coords[bestI].lon;
+  const edgeDy = coords[accJ].lat - coords[bestI].lat;
+  const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) + 0.0001;
+  const perpLat = -edgeDx / edgeLen, perpLon = edgeDy / edgeLen;
+  const arrowM = 8;
+  const accEndLat = accMidLat + perpLat * arrowM / 111320;
+  const accEndLon = accMidLon + perpLon * arrowM / (111320 * Math.cos(accMidLat * Math.PI / 180));
+
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
@@ -3965,6 +4105,70 @@ app.post("/generate", async (req, res) => {
     const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
+
+    // v50.1: PROJECT all geometry coords to pixel positions BEFORE screenshot
+    // Also extract visible road labels for post-OpenAI re-drawing
+    const projectionResult = await page.evaluate((parcelPts, envelopePts, accessLine, accessPt) => {
+      const m = window._map;
+      if (!m || !m.project) return null;
+      try {
+        const projectPts = (pts) => pts.map(p => {
+          const px = m.project([p.lon, p.lat]);
+          return { x: Math.round(px.x * 10) / 10, y: Math.round(px.y * 10) / 10 };
+        });
+        // Extract visible road labels from Mapbox rendered features
+        const roadLabels = [];
+        try {
+          const labelLayers = ['road-label-major', 'road-label-street'];
+          labelLayers.forEach(layerId => {
+            const features = m.queryRenderedFeatures(undefined, { layers: [layerId] });
+            if (features) features.forEach(f => {
+              if (f.properties && (f.properties.name_fr || f.properties.name)) {
+                const name = f.properties.name_fr || f.properties.name;
+                // Get center point of the feature for label placement
+                const geom = f.geometry;
+                if (geom && geom.type === 'LineString' && geom.coordinates.length >= 2) {
+                  const mid = Math.floor(geom.coordinates.length / 2);
+                  const coord = geom.coordinates[mid];
+                  const px = m.project(coord);
+                  // Get bearing of road segment for text rotation
+                  const prev = geom.coordinates[Math.max(0, mid - 1)];
+                  const next = geom.coordinates[Math.min(geom.coordinates.length - 1, mid + 1)];
+                  const pxPrev = m.project(prev);
+                  const pxNext = m.project(next);
+                  const angle = Math.atan2(pxNext.y - pxPrev.y, pxNext.x - pxPrev.x);
+                  if (!roadLabels.find(r => r.name === name && Math.abs(r.x - px.x) < 50)) {
+                    roadLabels.push({
+                      name, x: Math.round(px.x), y: Math.round(px.y),
+                      angle, isMajor: layerId === 'road-label-major'
+                    });
+                  }
+                }
+              }
+            });
+          });
+        } catch(e) { /* road labels extraction optional */ }
+        return {
+          geometry: {
+            parcel: projectPts(parcelPts),
+            envelope: projectPts(envelopePts),
+            accessLineStart: (() => { const p = m.project(accessLine[0]); return { x: p.x, y: p.y }; })(),
+            accessLineEnd: (() => { const p = m.project(accessLine[1]); return { x: p.x, y: p.y }; })(),
+            accessLabel: (() => { const p = m.project(accessPt); return { x: p.x, y: p.y }; })(),
+          },
+          roadLabels
+        };
+      } catch(e) { return null; }
+    },
+      coords.map(c => ({ lat: c.lat, lon: c.lon })),
+      envelopeCoords.map(c => ({ lat: c.lat, lon: c.lon })),
+      [[accMidLon, accMidLat], [accEndLon, accEndLat]],
+      [accEndLon, accEndLat]
+    );
+    const projectedGeometry = projectionResult ? projectionResult.geometry : null;
+    const roadLabels = projectionResult ? projectionResult.roadLabels || [] : [];
+    console.log(`Projected geometry: ${projectedGeometry ? 'OK' : 'FALLBACK'}, road labels: ${roadLabels.length} (${Date.now() - t0}ms)`);
+
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
@@ -3982,7 +4186,8 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    if (OPENAI_API_KEY) {
+    const shouldEnhance = enhance !== false && enhance !== "false" && enhance !== 0;
+    if (OPENAI_API_KEY && shouldEnhance) {
       try {
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
@@ -4003,7 +4208,36 @@ app.post("/generate", async (req, res) => {
         }
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
-        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\nPARCEL ZONE - NON-NEGOTIABLE:\n- There is a RED/PINK semi-transparent zone visible on the ground\n- DO NOT MOVE IT under any circumstances\n- DO NOT RESIZE IT\n- DO NOT RECOLOR IT beyond keeping it red/pink semi-transparent\n- It must stay at EXACTLY the same position, same shape, same size\n- The dashed red outline around it must also stay at exact same position\n- This zone is GPS-fixed and must not drift even 1 pixel\n\nBUILDINGS - MANDATORY:\n- Building rooftops: BRIGHT PURE WHITE #ffffff\n- Building sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Building shadow faces: warm gray #9a9690\n- Building EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\nGROUND AND VEGETATION - MANDATORY:\n- Ground inside blocks: fresh vivid green #7ab83a, slightly warm, natural sunlit grass\n- Grass texture: visible fine grain #6aa030\n- Trees: round canopy top-view, dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks and in open spaces - at least 30 trees\n- Ground is predominantly GREEN inside blocks\n\nROADS - MANDATORY:\n- Road surface: warm sandy beige #d4c49a with asphalt grain texture\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n- Roads are clearly sandy/beige, strong contrast with green blocks\n- Road grid is prominent and legible\n\nBLOCK STRUCTURE - MANDATORY:\n- Each block is surrounded by roads on all 4 sides\n- Green stays strictly inside blocks, never crosses roads\n- Block boundaries are sharp hard lines\n\nNo text, no labels, no annotations.");
+        form.append("prompt", [
+          "TASK: Subtly enhance ONLY the environment (trees, shadows, ground texture) of this architectural axonometric map.",
+          "",
+          "STYLE CONSTRAINT — THIS IS MANDATORY:",
+          "- Output MUST look like a clean digital CAD/GIS render",
+          "- FLAT solid colors, SHARP vector edges, ZERO artistic effects",
+          "- FORBIDDEN: watercolor, grain, paper texture, brush strokes, painterly effects, noise, stippling",
+          "- If in doubt, make it CLEANER and MORE DIGITAL, not more artistic",
+          "",
+          "GEOMETRY CONSTRAINT — PIXEL-PERFECT PRESERVATION:",
+          "- Do NOT move, resize, rotate, or distort ANY element",
+          "- Camera angle, pitch, bearing, composition: IDENTICAL to input",
+          "- Building footprints, positions, heights: IDENTICAL to input",
+          "- Road network layout and widths: IDENTICAL to input",
+          "- Every colored zone stays at EXACTLY the same pixel position",
+          "",
+          "WHAT TO ENHANCE (ONLY THESE):",
+          "- Add round tree canopy circles (dark green #3d7a1a) along sidewalks and in open spaces",
+          "- Add subtle cast shadows (warm gray #c4c0b8) behind buildings",
+          "- Sharpen building edges with thin black lines #1a1a1a",
+          "- Make rooftops pure white #ffffff",
+          "- Make roads flat beige #d4c49a with sharp edges",
+          "- Make ground inside blocks flat vivid green #7ab83a",
+          "",
+          "WHAT NOT TO DO:",
+          "- Do NOT add text, labels, or annotations",
+          "- Do NOT change any red/pink zone positions or shapes",
+          "- Do NOT add any texture, noise, or grain anywhere",
+          "- Do NOT make it look like a painting or watercolor",
+        ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
         });
@@ -4013,6 +4247,8 @@ app.post("/generate", async (req, res) => {
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
+          // v50.1: RE-DRAW geometry + road labels on top of OpenAI result → GPS fidelity guaranteed
+          drawGeometryOverlay(finalCtx, W, H, projectedGeometry, roadLabels);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
