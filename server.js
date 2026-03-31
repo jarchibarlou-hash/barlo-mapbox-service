@@ -1621,11 +1621,22 @@ function computeSmartScenarios({
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
       const pilotisRule = rules.requires_pilotis;
 
-      if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" &&
-        (freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT) &&
-        freeGround < parkingM2Needed))) {
+      // v57.16: ratio parking/vert — si le parking requis dépasse 40% du sol libre,
+      // le ratio 1/3 parking - 2/3 vert est impossible → pilotis auto
+      const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
+
+      if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" && (
+        // ancien seuil : sol libre insuffisant en absolu
+        ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
+          && freeGround < parkingM2Needed)
+        // v57.16 : ratio parking/vert déséquilibré → pilotis pour libérer le sol
+        || parkingRatioExceeded
+      )))) {
         hasPilotis = true;
         pilotisLevels = 1;
+        if (parkingRatioExceeded) {
+          console.log(`│   🅿️→🏗️ v57.16: parking ${Math.round(parkingM2Needed)}m² > 40% sol libre ${Math.round(freeGround)}m² → PILOTIS AUTO (ratio 1/3-2/3 impossible sans pilotis)`);
+        }
       }
 
       // Commerce au RDC
@@ -1704,8 +1715,11 @@ function computeSmartScenarios({
       const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil(fp * levels / 70));
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
+      // v57.16: ratio parking/vert
+      const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
       if ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
-          && freeGround < parkingM2Needed) {
+          && freeGround < parkingM2Needed
+          || parkingRatioExceeded) {
         hasPilotis = true;
         pilotisLevels = 1;
       }
