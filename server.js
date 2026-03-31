@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.3-HEIGHTS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.4-NOOAI" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3579,14 +3579,49 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v49: parcelle ocre + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#c4a56a', 'fill-opacity': 0.45 } }, '3d-buildings');
+      paint: { 'fill-color': '#c4a56a', 'fill-opacity': 0.30 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-opacity': 0.9 } }, '3d-buildings');
+      paint: { 'line-color': '#d02818', 'line-width': 2, 'line-opacity': 0.55 } }, '3d-buildings');
 
     // v49: enveloppe constructible — tirets rouges
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 2, 'line-dasharray': [5, 3], 'line-opacity': 0.75 } }, '3d-buildings');
+      paint: { 'line-color': '#d02818', 'line-width': 1.5, 'line-dasharray': [5, 3], 'line-opacity': 0.45 } }, '3d-buildings');
+
+    // v50.4: arbres synthétiques 3D — générés aléatoirement autour de la scène
+    const treeFeatures = [];
+    const treeSizes = [2.5, 3, 3.5, 4, 4.5, 5, 5.5];
+    const treeHeights = [4, 5, 6, 7, 8, 9, 10];
+    for (let t = 0; t < 80; t++) {
+      const angle = rand() * 2 * Math.PI;
+      const dist = 0.0004 + rand() * 0.0018; // ~40m to 200m from center
+      const tLon = ${center.lon} + dist * Math.cos(angle);
+      const tLat = ${center.lat} + dist * Math.sin(angle) * 0.7; // squish for perspective
+      // Skip if inside parcel
+      const inParcel = (function(px, py, poly) {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+          const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+          if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+        }
+        return inside;
+      })(tLon, tLat, ${JSON.stringify(parcelGeoJSON)}.geometry.coordinates[0]);
+      if (!inParcel) {
+        treeFeatures.push({
+          type: 'Feature',
+          properties: { radius: treeSizes[Math.floor(rand() * treeSizes.length)], height: treeHeights[Math.floor(rand() * treeHeights.length)] },
+          geometry: { type: 'Point', coordinates: [tLon, tLat] }
+        });
+      }
+    }
+    map.addSource('trees', { type: 'geojson', data: { type: 'FeatureCollection', features: treeFeatures } });
+    // Tree canopy as circles on ground
+    map.addLayer({ id: 'tree-shadow', type: 'circle', source: 'trees',
+      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#2d6b1a', 'circle-opacity': 0.3,
+        'circle-translate': [3, 3] } });
+    map.addLayer({ id: 'tree-canopy', type: 'circle', source: 'trees',
+      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#3d8a22',
+        'circle-stroke-width': 0.5, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.85 } });
 
     // v49: flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
@@ -4083,7 +4118,7 @@ app.post("/generate", async (req, res) => {
     slide_name = "slide_4_axo",
     zoom: zoomOverride = null,
     style_ref_url = null,
-    enhance = true,  // v50.1: set to false to skip OpenAI entirely (pure Mapbox + canvas)
+    enhance = false,  // v50.4: OpenAI désactivé par défaut — il détruit les hauteurs/routes/labels
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
@@ -4198,7 +4233,10 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
+    // v50.4: TOUS les overlays sur la version brute (pas seulement sur la version enhanced)
+    drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels);
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
+    drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -4555,7 +4593,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.3-HEIGHTS on port ${PORT}`);
+  console.log(`BARLO v50.4-NOOAI on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
