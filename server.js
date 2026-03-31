@@ -3474,7 +3474,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   const edgeDy = parcelCoords[accJ].lat - parcelCoords[bestI].lat;
   const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) + 0.0001;
   const perpLat = -edgeDx / edgeLen, perpLon = edgeDy / edgeLen;
-  const arrowM = 8; // mètres
+  const arrowM = 15; // mètres
   const accEndLat = accMidLat + perpLat * arrowM / 111320;
   const accEndLon = accMidLon + perpLon * arrowM / (111320 * Math.cos(accMidLat * Math.PI / 180));
   const accessLineGeoJSON = { type: "Feature", properties: {},
@@ -3522,19 +3522,19 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b8a478", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 18, 12] } },
+        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 18, 14] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b8a478", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 7] } },
+        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 9] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d4c49a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3.5, 18, 11] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d4c49a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 5] } },
+        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 6] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
@@ -3555,7 +3555,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   window._map = map; // v50: expose for pixel projection from Puppeteer
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.7, position: [1.5, 210, 35] });
 
     // v49: bâtiments 3D — hauteurs variées 1-4 niveaux
     map.addLayer({
@@ -3566,7 +3566,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
           0, '#fafafa', 4, '#f2f0ec', 10, '#e0ddd6', 20, '#c0bdb6', 40, '#908d88'],
         'fill-extrusion-height': ['let', 'h', ['coalesce', ['get', 'height'], 0],
           ['case', ['>', ['var', 'h'], 2], ['*', ['var', 'h'], 1.2],
-            ['match', ['%', ['to-number', ['id']], 7], 0, 4, 1, 4, 2, 7.5, 3, 7.5, 4, 11, 5, 14, 6, 4, 7.5]]],
+            ['match', ['%', ['to-number', ['id']], 11],
+              0, 3.5, 1, 3.5, 2, 3.5,           // 3 × RDC (3.5m) — ~27%
+              3, 7, 4, 7,                          // 2 × R+1 (7m) — ~18%
+              5, 10, 6, 10, 7, 10,                 // 3 × R+2 (10m) — ~27%
+              8, 13.5, 9, 13.5,                    // 2 × R+3 (13.5m) — ~18%
+              10, 17,                               // 1 × R+4 (17m) — ~9%
+              7]]],
         'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
@@ -3587,14 +3593,14 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v49: flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
     map.addLayer({ id: 'access-arrow-line', type: 'line', source: 'access-line',
-      paint: { 'line-color': '#1a6b3a', 'line-width': 3, 'line-opacity': 0.9 } });
+      paint: { 'line-color': '#1a6b3a', 'line-width': 7, 'line-opacity': 0.95 } });
     map.addSource('access-point', { type: 'geojson', data: ${JSON.stringify(accessPointGeoJSON)} });
     map.addLayer({ id: 'access-label', type: 'symbol', source: 'access-point',
-      layout: { 'text-field': 'Accès', 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 11,
-        'text-offset': [0, -1.2], 'text-anchor': 'bottom', 'text-allow-overlap': true },
-      paint: { 'text-color': '#1a6b3a', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.5 } });
+      layout: { 'text-field': 'ACCÈS', 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 18,
+        'text-offset': [0, -1.8], 'text-anchor': 'bottom', 'text-allow-overlap': true },
+      paint: { 'text-color': '#1a6b3a', 'text-halo-color': 'rgba(255,255,255,0.95)', 'text-halo-width': 2.5 } });
     map.addLayer({ id: 'access-dot', type: 'circle', source: 'access-point',
-      paint: { 'circle-radius': 5, 'circle-color': '#1a6b3a', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+      paint: { 'circle-radius': 10, 'circle-color': '#1a6b3a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -3677,7 +3683,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.7, position: [1.5, 210, 35] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -3946,17 +3952,19 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
   if (!projectedGeometry) return;
   const { parcel, envelope, accessLineStart, accessLineEnd, accessLabel } = projectedGeometry;
 
-  // 1. Parcelle fill — ocre semi-transparent
+  // 1. Parcelle — contour rouge seulement (le fill ocre est SOUS les bâtiments dans Mapbox)
+  //    On ne re-dessine PAS le fill ici pour que les bâtiments au premier plan passent devant
   if (parcel && parcel.length >= 3) {
     ctx.save();
+    // Fill très léger pour que la zone reste lisible même après OpenAI
     ctx.beginPath();
     ctx.moveTo(parcel[0].x, parcel[0].y);
     for (let i = 1; i < parcel.length; i++) ctx.lineTo(parcel[i].x, parcel[i].y);
     ctx.closePath();
-    ctx.fillStyle = "rgba(196,165,106,0.40)";
+    ctx.fillStyle = "rgba(196,165,106,0.18)"; // très léger — juste assez pour deviner la zone
     ctx.fill();
-    // Parcelle outline — rouge continu
-    ctx.strokeStyle = "#d02818";
+    // Contour rouge continu — semi-transparent pour laisser deviner derrière les bâtiments
+    ctx.strokeStyle = "rgba(208,40,24,0.70)";
     ctx.lineWidth = 2.5;
     ctx.setLineDash([]);
     ctx.stroke();
@@ -3980,48 +3988,64 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.restore();
   }
 
-  // 3. Flèche d'accès principal
+  // 3. Flèche d'accès principal — GRANDE ET VISIBLE (3x)
   if (accessLineStart && accessLineEnd) {
     ctx.save();
-    // Line
+
+    // White outline glow for contrast
+    ctx.beginPath();
+    ctx.moveTo(accessLineStart.x, accessLineStart.y);
+    ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 12;
+    ctx.lineCap = "round";
+    ctx.stroke();
+
+    // Main thick green line
     ctx.beginPath();
     ctx.moveTo(accessLineStart.x, accessLineStart.y);
     ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
     ctx.strokeStyle = "#1a6b3a";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 7;
+    ctx.lineCap = "round";
     ctx.stroke();
 
-    // Arrowhead
+    // Big arrowhead — filled triangle
     const dx = accessLineEnd.x - accessLineStart.x;
     const dy = accessLineEnd.y - accessLineStart.y;
     const angle = Math.atan2(dy, dx);
-    const headLen = 10;
+    const headLen = 28;
+    const headW = 0.45;
     ctx.beginPath();
     ctx.moveTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle - 0.4), accessLineEnd.y - headLen * Math.sin(angle - 0.4));
-    ctx.moveTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle + 0.4), accessLineEnd.y - headLen * Math.sin(angle + 0.4));
-    ctx.strokeStyle = "#1a6b3a";
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-
-    // Dot at end
-    ctx.beginPath();
-    ctx.arc(accessLineEnd.x, accessLineEnd.y, 5, 0, 2 * Math.PI);
+    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle - headW), accessLineEnd.y - headLen * Math.sin(angle - headW));
+    ctx.lineTo(accessLineEnd.x - headLen * 0.6 * Math.cos(angle), accessLineEnd.y - headLen * 0.6 * Math.sin(angle));
+    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle + headW), accessLineEnd.y - headLen * Math.sin(angle + headW));
+    ctx.closePath();
     ctx.fillStyle = "#1a6b3a";
     ctx.fill();
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Label "Accès"
-    ctx.font = "bold 11px Arial";
+    // Big dot at tip
+    ctx.beginPath();
+    ctx.arc(accessLineEnd.x, accessLineEnd.y, 10, 0, 2 * Math.PI);
     ctx.fillStyle = "#1a6b3a";
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
     ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // BIG Label "ACCÈS PRINCIPAL"
+    ctx.font = "bold 18px Arial";
+    ctx.fillStyle = "#1a6b3a";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 5;
+    ctx.lineJoin = "round";
     ctx.textAlign = "center";
-    ctx.strokeText("Accès", accessLineEnd.x, accessLineEnd.y - 12);
-    ctx.fillText("Accès", accessLineEnd.x, accessLineEnd.y - 12);
+    ctx.strokeText("ACCÈS", accessLineEnd.x, accessLineEnd.y - 22);
+    ctx.fillText("ACCÈS", accessLineEnd.x, accessLineEnd.y - 22);
     ctx.restore();
   }
 
@@ -4092,7 +4116,7 @@ app.post("/generate", async (req, res) => {
   const edgeDy = coords[accJ].lat - coords[bestI].lat;
   const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) + 0.0001;
   const perpLat = -edgeDx / edgeLen, perpLon = edgeDy / edgeLen;
-  const arrowM = 8;
+  const arrowM = 15;
   const accEndLat = accMidLat + perpLat * arrowM / 111320;
   const accEndLon = accMidLon + perpLon * arrowM / (111320 * Math.cos(accMidLat * Math.PI / 180));
 
@@ -4209,34 +4233,43 @@ app.post("/generate", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt", [
-          "TASK: Subtly enhance ONLY the environment (trees, shadows, ground texture) of this architectural axonometric map.",
+          "TASK: Enhance ONLY the environment of this architectural axonometric map. Add trees, shadows, and subtle ground detail.",
           "",
-          "STYLE CONSTRAINT — THIS IS MANDATORY:",
-          "- Output MUST look like a clean digital CAD/GIS render",
-          "- FLAT solid colors, SHARP vector edges, ZERO artistic effects",
-          "- FORBIDDEN: watercolor, grain, paper texture, brush strokes, painterly effects, noise, stippling",
-          "- If in doubt, make it CLEANER and MORE DIGITAL, not more artistic",
+          "STYLE — MANDATORY:",
+          "- Clean digital architectural render, sharp edges, solid colors",
+          "- Slightly warm and polished — like a premium urban planning firm's deliverable",
+          "- FORBIDDEN: watercolor wash, heavy grain, paper texture, painterly brush strokes",
+          "- Allowed: very subtle ground detail to break flatness (fine grass hints, road asphalt grain)",
           "",
-          "GEOMETRY CONSTRAINT — PIXEL-PERFECT PRESERVATION:",
-          "- Do NOT move, resize, rotate, or distort ANY element",
-          "- Camera angle, pitch, bearing, composition: IDENTICAL to input",
-          "- Building footprints, positions, heights: IDENTICAL to input",
-          "- Road network layout and widths: IDENTICAL to input",
+          "GEOMETRY — DO NOT MODIFY:",
+          "- Camera, pitch, bearing, composition: IDENTICAL to input",
+          "- Building footprints, positions, heights: IDENTICAL — buildings MUST vary in height (some low 1-floor, some tall 4-floor)",
+          "- Road layout and widths: IDENTICAL",
           "- Every colored zone stays at EXACTLY the same pixel position",
           "",
-          "WHAT TO ENHANCE (ONLY THESE):",
-          "- Add round tree canopy circles (dark green #3d7a1a) along sidewalks and in open spaces",
-          "- Add subtle cast shadows (warm gray #c4c0b8) behind buildings",
-          "- Sharpen building edges with thin black lines #1a1a1a",
-          "- Make rooftops pure white #ffffff",
-          "- Make roads flat beige #d4c49a with sharp edges",
-          "- Make ground inside blocks flat vivid green #7ab83a",
+          "BUILDINGS — MANDATORY:",
+          "- Rooftops: pure white #ffffff",
+          "- Sunlit faces: white to #faf9f6",
+          "- Shadow faces: warm gray #9a9690",
+          "- ALL building edges: visible thin black lines #1a1a1a",
+          "- Cast shadows: each building casts a warm gray #b8b4ae shadow on the ground, projecting to the northeast",
+          "- Height variation MUST be visible — some buildings are 1 floor (3m), some 2 (7m), some 3 (10m), some 4 (14m)",
           "",
-          "WHAT NOT TO DO:",
-          "- Do NOT add text, labels, or annotations",
-          "- Do NOT change any red/pink zone positions or shapes",
-          "- Do NOT add any texture, noise, or grain anywhere",
-          "- Do NOT make it look like a painting or watercolor",
+          "ROADS — MANDATORY:",
+          "- Road surface: warm GRAY #b0aba5 with very subtle asphalt texture",
+          "- Road borders/edges: darker gray #8a8580, clean edge",
+          "- Sidewalks: light cream strip #e0dbd0",
+          "- Roads clearly contrast with green blocks — gray vs green",
+          "",
+          "GROUND & VEGETATION — MANDATORY:",
+          "- Ground inside blocks: vivid green #7ab83a with VERY SLIGHT grass texture (subtle tonal variation, NOT watercolor)",
+          "- Trees: round canopy circles, dark green #3d7a1a with lighter highlights #5aaa28, varied sizes",
+          "- Place trees densely along roads and in open spaces — at least 30 trees",
+          "",
+          "DO NOT:",
+          "- Do NOT add text, labels, annotations",
+          "- Do NOT move any red/pink zone",
+          "- Do NOT flatten building heights — keep the variation",
         ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
