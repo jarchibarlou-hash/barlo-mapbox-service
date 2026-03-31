@@ -1326,20 +1326,48 @@ function computeSmartScenarios({
 
       // ── CES_FILL : constantes architecturales PURES (ne dépendent PAS du client) ──
       const cesFill = CES_FILL_BY_ROLE[role] || 0.80;
-      const maxFpByEnvelope = envelope_area * (1 - groundReserve);
 
       // ══════════════════════════════════════════════════════════════════════
-      // v57.13: EMPRISE PROGRAMME-DRIVEN — dimensionnée par le plateau optimal
+      // v57.15: RÉSERVE TERRAIN DYNAMIQUE — parking + espace vert
+      // ══════════════════════════════════════════════════════════════════════
+      // Le programme est le driver #1, MAIS il est AFFECTÉ par les besoins
+      // terrain : parking requis + espace vert. Si ça ne tient pas au sol,
+      // le moteur MONTE EN HAUTEUR plutôt que de s'étaler.
+      //
+      // Logique : free_ground = enveloppe - emprise
+      //   → 1/3 free_ground = parking
+      //   → 2/3 free_ground = espace vert
+      //   → donc : free_ground ≥ parkingM2 × 3 (pour respecter le ratio 1/3-2/3)
+      //   → donc : emprise ≤ enveloppe - (parkingM2 × 3)
+      //
+      // Si la contrainte est trop forte (>55% de l'enveloppe réservée),
+      // on plafonne la réserve mais le diagnostic le signale.
+      // ══════════════════════════════════════════════════════════════════════
+      const parkingPerUnitEst = rules.parking_per_unit || 1;
+      const roleTargetFactorEst = ({ INTENSIFICATION: 1.40, EQUILIBRE: 0.90, PRUDENT: 0.65 })[role] || 0.90;
+      const estUnitsForRole = Math.max(2, Math.round(target_units * roleTargetFactorEst));
+      const estParkingSpots = Math.ceil(estUnitsForRole * parkingPerUnitEst);
+      const estParkingM2 = estParkingSpots * PILOTIS_CONFIG.PARKING_SPOT_M2; // 25m²/place
+      // Règle 1/3 parking, 2/3 vert → free_ground ≥ parkingM2 × 3
+      const minFreeGroundForParking = estParkingM2 * 3;
+      // Garde-fou : la réserve ne peut pas dépasser 55% de l'enveloppe
+      const effectiveReserve = Math.min(minFreeGroundForParking, envelope_area * 0.55);
+      const fpMaxAfterReserves = Math.round(envelope_area - effectiveReserve);
+      // groundReserve classique (ancien système) comme fallback
+      const maxFpByEnvelope = Math.min(
+        envelope_area * (1 - groundReserve),
+        Math.max(200, fpMaxAfterReserves)   // réserve dynamique, plancher 200m²
+      );
+
+      // ══════════════════════════════════════════════════════════════════════
+      // v57.15: EMPRISE PROGRAMME-DRIVEN — dimensionnée par le plateau optimal
       // ══════════════════════════════════════════════════════════════════════
       // Le plateau est le nombre d'unités/palier × la taille des logements.
       // C'est la taille ARCHITECTURALEMENT CORRECTE pour le programme.
       // Le CES et les niveaux sont des CONSÉQUENCES, pas des cibles.
       //
-      // Avantages de la densification verticale :
-      // - Coût de fondation/toiture amorti sur plus de m² SDP
-      // - Plus d'espace libre au sol (parking, jardin, circulation)
-      // - Meilleures possibilités de ventilation et orientation
-      // - Valorisation foncière supérieure (m²/terrain)
+      // Quand la réserve terrain réduit l'emprise → le moteur MONTE en hauteur.
+      // C'est l'interdépendance programme ↔ terrain que vise l'architecte.
       // ══════════════════════════════════════════════════════════════════════
       const fpMaxCes = Math.round(cesFill * effectiveMaxFp);
       const fpMaxEnv = Math.round(maxFpByEnvelope);
@@ -1386,7 +1414,9 @@ function computeSmartScenarios({
 
       const cesPctResult = Math.round(fpRdc / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
-      console.log(`│   🏗️ v57.13 ${role}: fpProg=${fpProgramme} expertCES=${expertCesPct}% → fpRdc=${fpRdc}m² (CES=${cesPctResult}% ${cesVsExpert}) | cible_sdp=${target_sdp_programme}m²`);
+      const reserveActive = fpMaxAfterReserves < fpProgramme;
+      console.log(`│   🏗️ v57.15 ${role}: fpProg=${fpProgramme} → fpRdc=${fpRdc}m² (CES=${cesPctResult}% ${cesVsExpert}) | cible_sdp=${target_sdp_programme}m²`);
+      console.log(`│   🅿️ réserve terrain: ${estParkingSpots} places × 25m² = ${estParkingM2}m² parking | free_ground_min=${Math.round(minFreeGroundForParking)}m² | fpMaxReserve=${fpMaxAfterReserves}m² ${reserveActive ? "⚡CONTRAINT" : "✓ok"}`);
 
       // ÉTAGES : extension selon le rôle
       const etageExt = ETAGE_EXTENSION_BY_ROLE[role];
@@ -1553,11 +1583,16 @@ function computeSmartScenarios({
         floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
         // COS check duale
         while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
-        // v57.14: anti-paradoxe zonage — empêche compensation verticale excessive
+        // v57.15: anti-paradoxe zonage — empêche compensation verticale excessive
         // Quand le terrain contraint le plateau (CES bas → fpEtages réduit → moins de logts/palier),
         // le moteur ne doit PAS compenser en ajoutant des niveaux au-delà du besoin programme.
-        // Sans ce garde-fou, PERIURBAIN peut produire PLUS de SDP qu'URBAIN (paradoxe).
-        while (floorsNeeded > 2 && unitsPerFloor * floorsNeeded > effectiveTarget * 1.30) floorsNeeded--;
+        // Sans ce garde-fou, un CES restrictif (PERIURBAIN, PAVILLON) peut produire PLUS de SDP
+        // qu'un CES permissif (URBAIN) — paradoxe architectural.
+        // Double garde-fou : unités ET SDP ne doivent pas dépasser le programme.
+        while (floorsNeeded > 2 && unitsPerFloor * floorsNeeded > effectiveTarget * 1.20) floorsNeeded--;
+        // SDP cap : la SDP ne doit pas dépasser ce que le programme demande (avec marge role)
+        const sdpCapProgramme = Math.round(target_sdp_programme * roleTargetFactor * 1.35);
+        while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > sdpCapProgramme) floorsNeeded--;
 
         totalUnits = unitsPerFloor * floorsNeeded;
 
