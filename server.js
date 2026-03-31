@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.5-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.6-SETBACKS" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3564,12 +3564,14 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
           0, '#fafafa', 4, '#f2f0ec', 10, '#e0ddd6', 20, '#c0bdb6', 40, '#908d88'],
-        'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 20],
-              0, 3.5, 1, 3.5, 2, 3.5, 3, 3.5, 4, 3.5, 5, 3.5,   // 6 × RDC (3.5m) — 30%
-              6, 7, 7, 7, 8, 7, 9, 7, 10, 7, 11, 7,               // 6 × R+1 (7m) — 30%
-              12, 10, 13, 10, 14, 10, 15, 10,                      // 4 × R+2 (10m) — 20%
-              16, 13, 17, 13,                                       // 2 × R+3 (13m) — 10%
-              18, 16, 19, 16,                                       // 2 × R+4 (16m) — 10%
+        'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 50],
+              0,3.5, 1,3.5, 2,3.5, 3,3.5, 4,3.5, 5,3.5, 6,3.5, 7,3.5, 8,3.5, 9,3.5,
+              10,3.5, 11,3.5, 12,3.5, 13,3.5, 14,3.5, 15,3.5, 16,3.5, 17,3.5, 18,3.5, 19,3.5,
+              20,3.5, 21,3.5, 22,3.5, 23,3.5, 24,3.5,             // 25 × RDC (3.5m) — 50%
+              25,7, 26,7, 27,7, 28,7, 29,7, 30,7, 31,7, 32,7, 33,7, 34,7,
+              35,7, 36,7, 37,7, 38,7, 39,7, 40,7, 41,7, 42,7, 43,7, 44,7,
+              45,7, 46,7, 47,7, 48,7,                              // 24 × R+1 (7m) — 48%
+              49, 10,                                                // 1 × R+2 (10m) — 2%
               7],
         'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
@@ -3579,7 +3581,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v49: parcelle ocre + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#c4a56a', 'fill-opacity': 0.30 } }, '3d-buildings');
+      paint: { 'fill-color': '#d4c49a', 'fill-opacity': 0.55 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d02818', 'line-width': 2, 'line-opacity': 0.55 } }, '3d-buildings');
 
@@ -3590,11 +3592,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
     // v50.4: arbres synthétiques 3D — générés aléatoirement autour de la scène
     const treeFeatures = [];
-    const treeSizes = [2.5, 3, 3.5, 4, 4.5, 5, 5.5];
-    const treeHeights = [4, 5, 6, 7, 8, 9, 10];
-    for (let t = 0; t < 80; t++) {
+    const treeSizes = [3, 3.5, 4, 4.5, 5, 5.5, 6, 7];
+    const treeHeights = [5, 6, 7, 8, 9, 10, 11];
+    for (let t = 0; t < 160; t++) {
       const angle = rand() * 2 * Math.PI;
-      const dist = 0.0004 + rand() * 0.0018; // ~40m to 200m from center
+      const dist = 0.0003 + rand() * 0.0022; // ~30m to 250m from center
       const tLon = ${center.lon} + dist * Math.cos(angle);
       const tLat = ${center.lat} + dist * Math.sin(angle) * 0.7; // squish for perspective
       // Skip if inside parcel
@@ -4075,6 +4077,60 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.restore();
   }
 
+  // 3b. Annotations de recul — "3m" latéral, "5m" face route
+  if (envelope && envelope.length >= 3) {
+    ctx.save();
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#1a1a1a";
+    ctx.strokeStyle = "rgba(255,255,255,0.92)";
+    ctx.lineWidth = 4;
+    ctx.lineJoin = "round";
+
+    // Trouver le côté face route = côté avec le y pixel le plus GRAND (plus bas à l'écran = plus proche de la caméra = face route)
+    const edges = [];
+    for (let i = 0; i < envelope.length; i++) {
+      const a = envelope[i];
+      const b = envelope[(i + 1) % envelope.length];
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const len = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      edges.push({ mx, my, len, angle, idx: i });
+    }
+    // Trier par y descendant — le côté avec le plus grand y moyen est face route
+    edges.sort((a, b) => b.my - a.my);
+    const frontEdge = edges[0]; // face route → "5m"
+    const lateralEdges = edges.slice(1); // tous les autres → "3m"
+
+    // Dessiner "5m" sur le côté face route
+    let fa = frontEdge.angle;
+    if (fa > Math.PI / 2) fa -= Math.PI;
+    if (fa < -Math.PI / 2) fa += Math.PI;
+    ctx.save();
+    ctx.translate(frontEdge.mx, frontEdge.my);
+    ctx.rotate(fa);
+    ctx.strokeText("5m", 0, -12);
+    ctx.fillText("5m", 0, -12);
+    ctx.restore();
+
+    // Dessiner "3m" sur les côtés latéraux
+    lateralEdges.forEach(edge => {
+      if (edge.len < 20) return; // skip très petits côtés
+      let la = edge.angle;
+      if (la > Math.PI / 2) la -= Math.PI;
+      if (la < -Math.PI / 2) la += Math.PI;
+      ctx.save();
+      ctx.translate(edge.mx, edge.my);
+      ctx.rotate(la);
+      ctx.strokeText("3m", 0, -12);
+      ctx.fillText("3m", 0, -12);
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+
   // 4. Noms des rues — re-dessinés depuis les données Mapbox extraites
   if (roadLabels && roadLabels.length > 0) {
     roadLabels.forEach(lbl => {
@@ -4279,12 +4335,12 @@ app.post("/generate", async (req, res) => {
           "WHAT TO IMPROVE (SUBTLE ONLY):",
           "- Add soft ambient occlusion shadows at building bases",
           "- Slightly refine tree canopy shapes (keep them as circles, make edges softer)",
-          "- Add very subtle warm lighting — like golden hour",
+          "- Clean neutral daylight lighting — NO golden hour, NO warm color cast, NO bloom glow",
           "- Smooth out any aliasing artifacts",
           "- Make the overall image look like a premium architectural visualization",
           "",
-          "STYLE: Clean, warm, professional architectural render. NOT watercolor, NOT painterly.",
-          "Think: high-end real estate marketing material.",
+          "STYLE: Clean, neutral, professional architectural render. NOT watercolor, NOT painterly, NOT warm/golden.",
+          "Think: high-end real estate marketing brochure in neutral daylight. Crisp and modern.",
         ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -4295,7 +4351,8 @@ app.post("/generate", async (req, res) => {
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-          // v50.5: OpenAI reçoit l'image COMPLÈTE → on re-dessine juste légende/boussole pour netteté
+          // v50.6: OpenAI reçoit l'image COMPLÈTE → on re-dessine géométrie+légende+boussole pour netteté
+          drawGeometryOverlay(finalCtx, W, H, projectedGeometry, roadLabels);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
@@ -4571,7 +4628,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.5-POLISH on port ${PORT}`);
+  console.log(`BARLO v50.6-SETBACKS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
