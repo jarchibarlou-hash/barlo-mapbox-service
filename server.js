@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.2-GRAYROADS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.3-HEIGHTS" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3522,29 +3522,29 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 18, 14] } },
+        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 18, 12] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 9] } },
+        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 18, 7] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3.5, 18, 11] } },
+        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 6] } },
+        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 5.5] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 15, 10, 17, 13], "symbol-placement": "line", "text-max-angle": 30, "text-padding": 20, "text-allow-overlap": false },
-        "paint": { "text-color": "#5a4a2a", "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 1.5 } },
+          "text-size": ["interpolate", ["linear"], ["zoom"], 14, 9, 17, 13], "symbol-placement": "line", "text-max-angle": 35, "text-padding": 10, "text-allow-overlap": false },
+        "paint": { "text-color": "#4a3a1a", "text-halo-color": "rgba(255,255,255,0.92)", "text-halo-width": 2 } },
       { "id": "road-label-street", "type": "symbol", "source": "composite", "source-layer": "road",
-        "filter": ["match", ["get", "class"], ["street", "street_limited"], true, false], "minzoom": 16,
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false], "minzoom": 14,
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 16, 8, 18, 11], "symbol-placement": "line", "text-max-angle": 30, "text-padding": 30, "text-allow-overlap": false },
-        "paint": { "text-color": "#7a6a4a", "text-halo-color": "rgba(255,255,255,0.75)", "text-halo-width": 1 } }
+          "text-size": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 11], "symbol-placement": "line", "text-max-angle": 35, "text-padding": 10, "text-allow-overlap": false },
+        "paint": { "text-color": "#5a4a2a", "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 1.5 } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3564,15 +3564,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
           0, '#fafafa', 4, '#f2f0ec', 10, '#e0ddd6', 20, '#c0bdb6', 40, '#908d88'],
-        'fill-extrusion-height': ['let', 'h', ['coalesce', ['get', 'height'], 0],
-          ['case', ['>', ['var', 'h'], 2], ['*', ['var', 'h'], 1.2],
-            ['match', ['%', ['to-number', ['id']], 11],
+        'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 11],
               0, 3.5, 1, 3.5, 2, 3.5,           // 3 × RDC (3.5m) — ~27%
               3, 7, 4, 7,                          // 2 × R+1 (7m) — ~18%
               5, 10, 6, 10, 7, 10,                 // 3 × R+2 (10m) — ~27%
-              8, 13.5, 9, 13.5,                    // 2 × R+3 (13.5m) — ~18%
-              10, 17,                               // 1 × R+4 (17m) — ~9%
-              7]]],
+              8, 14, 9, 14,                        // 2 × R+3 (14m) — ~18%
+              10, 18,                               // 1 × R+4 (18m) — ~9%
+              7],
         'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
@@ -3596,7 +3594,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: { 'line-color': '#1a6b3a', 'line-width': 7, 'line-opacity': 0.95 } });
     map.addSource('access-point', { type: 'geojson', data: ${JSON.stringify(accessPointGeoJSON)} });
     map.addLayer({ id: 'access-label', type: 'symbol', source: 'access-point',
-      layout: { 'text-field': 'ACCÈS', 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 18,
+      layout: { 'text-field': 'ACCÈS PRINCIPAL', 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 16,
         'text-offset': [0, -1.8], 'text-anchor': 'bottom', 'text-allow-overlap': true },
       paint: { 'text-color': '#1a6b3a', 'text-halo-color': 'rgba(255,255,255,0.95)', 'text-halo-width': 2.5 } });
     map.addLayer({ id: 'access-dot', type: 'circle', source: 'access-point',
@@ -3952,20 +3950,20 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
   if (!projectedGeometry) return;
   const { parcel, envelope, accessLineStart, accessLineEnd, accessLabel } = projectedGeometry;
 
-  // 1. Parcelle — contour rouge seulement (le fill ocre est SOUS les bâtiments dans Mapbox)
-  //    On ne re-dessine PAS le fill ici pour que les bâtiments au premier plan passent devant
+  // 1. Parcelle — NE PAS re-dessiner en canvas overlay
+  //    La parcelle est déjà dans le rendu Mapbox SOUS les bâtiments 3D (z-order correct)
+  //    Si on la re-dessinait ici, elle passerait PAR-DESSUS les bâtiments (pas de z-buffer en 2D)
+  //    → On laisse OpenAI/Mapbox gérer la parcelle, seul le contour très léger est ajouté
   if (parcel && parcel.length >= 3) {
     ctx.save();
-    // Fill très léger pour que la zone reste lisible même après OpenAI
     ctx.beginPath();
     ctx.moveTo(parcel[0].x, parcel[0].y);
     for (let i = 1; i < parcel.length; i++) ctx.lineTo(parcel[i].x, parcel[i].y);
     ctx.closePath();
-    ctx.fillStyle = "rgba(196,165,106,0.18)"; // très léger — juste assez pour deviner la zone
-    ctx.fill();
-    // Contour rouge continu — semi-transparent pour laisser deviner derrière les bâtiments
-    ctx.strokeStyle = "rgba(208,40,24,0.70)";
-    ctx.lineWidth = 2.5;
+    // PAS de fill du tout — la couleur ocre vient de Mapbox (sous les bâtiments)
+    // Contour ultra-léger juste pour renforcer la lisibilité — estompé derrière les bâtiments
+    ctx.strokeStyle = "rgba(208,40,24,0.25)";
+    ctx.lineWidth = 1.2;
     ctx.setLineDash([]);
     ctx.stroke();
     ctx.restore();
@@ -3979,9 +3977,9 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     for (let i = 1; i < envelope.length; i++) ctx.lineTo(envelope[i].x, envelope[i].y);
     ctx.closePath();
     ctx.strokeStyle = "#d02818";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 5]);
-    ctx.globalAlpha = 0.75;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.globalAlpha = 0.45;
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.globalAlpha = 1.0;
@@ -4044,8 +4042,8 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.lineWidth = 5;
     ctx.lineJoin = "round";
     ctx.textAlign = "center";
-    ctx.strokeText("ACCÈS", accessLineEnd.x, accessLineEnd.y - 22);
-    ctx.fillText("ACCÈS", accessLineEnd.x, accessLineEnd.y - 22);
+    ctx.strokeText("ACCÈS PRINCIPAL", accessLineEnd.x, accessLineEnd.y - 22);
+    ctx.fillText("ACCÈS PRINCIPAL", accessLineEnd.x, accessLineEnd.y - 22);
     ctx.restore();
   }
 
@@ -4557,7 +4555,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.2-GRAYROADS on port ${PORT}`);
+  console.log(`BARLO v50.3-HEIGHTS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
