@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.6-SETBACKS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.7-NOCACHE" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -4289,8 +4289,9 @@ app.post("/generate", async (req, res) => {
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-    const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}.png`;
-    const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
+    const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15); // 20260401_120609
+    const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_${ts}.png`;
+    const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true, cacheControl: "0" });
     if (ue) return res.status(500).json({ error: ue.message });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
@@ -4356,11 +4357,11 @@ app.post("/generate", async (req, res) => {
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
-          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
+          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced_${ts}.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-            enhancedUrl = pd2.publicUrl;
+            enhancedUrl = pd2.publicUrl + cacheBust2;
           }
         }
       } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
@@ -4523,9 +4524,10 @@ app.post("/generate-massing", async (req, res) => {
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const folder = `hektar/${String(lead_id).trim()}_${slug}`;
-  const basePath = `${folder}/${slideName}.png`;
-  const enhancedPath = `${folder}/${slideName}_enhanced.png`;
-  // Cache disabled for debugging
+  const tsM = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15);
+  const basePath = `${folder}/${slideName}_${tsM}.png`;
+  const enhancedPath = `${folder}/${slideName}_enhanced_${tsM}.png`;
+  // Anti-cache: timestamp dans le chemin + cacheControl: 0
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
@@ -4548,7 +4550,7 @@ app.post("/generate-massing", async (req, res) => {
       typology: massingCoords._typology,
     });
     const png = canvas.toBuffer("image/png");
-    await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
+    await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true, cacheControl: "0" });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
@@ -4597,10 +4599,10 @@ app.post("/generate-massing", async (req, res) => {
             typology: massingCoords._typology,
           });
           const finalPng = fCanvas.toBuffer("image/png");
-          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-            enhancedUrl = pd2.publicUrl;
+            enhancedUrl = pd2.publicUrl + cacheBust;
             console.log(`✓ Enhanced: ${enhancedUrl} (${Date.now() - t0}ms)`);
           }
         }
@@ -4628,7 +4630,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.6-SETBACKS on port ${PORT}`);
+  console.log(`BARLO v50.7-NOCACHE on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
