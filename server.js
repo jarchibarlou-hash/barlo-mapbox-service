@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.4-NOOAI" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.5-POLISH" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3564,12 +3564,12 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
           0, '#fafafa', 4, '#f2f0ec', 10, '#e0ddd6', 20, '#c0bdb6', 40, '#908d88'],
-        'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 11],
-              0, 3.5, 1, 3.5, 2, 3.5,           // 3 × RDC (3.5m) — ~27%
-              3, 7, 4, 7,                          // 2 × R+1 (7m) — ~18%
-              5, 10, 6, 10, 7, 10,                 // 3 × R+2 (10m) — ~27%
-              8, 14, 9, 14,                        // 2 × R+3 (14m) — ~18%
-              10, 18,                               // 1 × R+4 (18m) — ~9%
+        'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 20],
+              0, 3.5, 1, 3.5, 2, 3.5, 3, 3.5, 4, 3.5, 5, 3.5,   // 6 × RDC (3.5m) — 30%
+              6, 7, 7, 7, 8, 7, 9, 7, 10, 7, 11, 7,               // 6 × R+1 (7m) — 30%
+              12, 10, 13, 10, 14, 10, 15, 10,                      // 4 × R+2 (10m) — 20%
+              16, 13, 17, 13,                                       // 2 × R+3 (13m) — 10%
+              18, 16, 19, 16,                                       // 2 × R+4 (16m) — 10%
               7],
         'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
@@ -3625,15 +3625,8 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
     // v49: flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
-    map.addLayer({ id: 'access-arrow-line', type: 'line', source: 'access-line',
-      paint: { 'line-color': '#1a6b3a', 'line-width': 7, 'line-opacity': 0.95 } });
-    map.addSource('access-point', { type: 'geojson', data: ${JSON.stringify(accessPointGeoJSON)} });
-    map.addLayer({ id: 'access-label', type: 'symbol', source: 'access-point',
-      layout: { 'text-field': 'ACCÈS PRINCIPAL', 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 16,
-        'text-offset': [0, -1.8], 'text-anchor': 'bottom', 'text-allow-overlap': true },
-      paint: { 'text-color': '#1a6b3a', 'text-halo-color': 'rgba(255,255,255,0.95)', 'text-halo-width': 2.5 } });
-    map.addLayer({ id: 'access-dot', type: 'circle', source: 'access-point',
-      paint: { 'circle-radius': 10, 'circle-color': '#1a6b3a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+    // v50.5: flèche Mapbox supprimée — tout est dessiné en canvas overlay (1 seul label, pas de doublon)
+    // On garde juste la source pour la projection pixel
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -4021,7 +4014,7 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.restore();
   }
 
-  // 3. Flèche d'accès principal — GRANDE ET VISIBLE (3x)
+  // 3. Flèche d'accès principal — NOIRE, un seul label
   if (accessLineStart && accessLineEnd) {
     ctx.save();
 
@@ -4029,17 +4022,17 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.beginPath();
     ctx.moveTo(accessLineStart.x, accessLineStart.y);
     ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.lineWidth = 12;
+    ctx.strokeStyle = "rgba(255,255,255,0.6)";
+    ctx.lineWidth = 10;
     ctx.lineCap = "round";
     ctx.stroke();
 
-    // Main thick green line
+    // Main thick BLACK line
     ctx.beginPath();
     ctx.moveTo(accessLineStart.x, accessLineStart.y);
     ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.strokeStyle = "#1a6b3a";
-    ctx.lineWidth = 7;
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 5;
     ctx.lineCap = "round";
     ctx.stroke();
 
@@ -4055,30 +4048,30 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.lineTo(accessLineEnd.x - headLen * 0.6 * Math.cos(angle), accessLineEnd.y - headLen * 0.6 * Math.sin(angle));
     ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle + headW), accessLineEnd.y - headLen * Math.sin(angle + headW));
     ctx.closePath();
-    ctx.fillStyle = "#1a6b3a";
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Dot at tip
+    ctx.beginPath();
+    ctx.arc(accessLineEnd.x, accessLineEnd.y, 7, 0, 2 * Math.PI);
+    ctx.fillStyle = "#1a1a1a";
     ctx.fill();
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Big dot at tip
-    ctx.beginPath();
-    ctx.arc(accessLineEnd.x, accessLineEnd.y, 10, 0, 2 * Math.PI);
-    ctx.fillStyle = "#1a6b3a";
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // BIG Label "ACCÈS PRINCIPAL"
-    ctx.font = "bold 18px Arial";
-    ctx.fillStyle = "#1a6b3a";
+    // Label "Accès principal" — noir, une seule fois
+    ctx.font = "bold 15px Arial";
+    ctx.fillStyle = "#1a1a1a";
     ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.lineWidth = 5;
     ctx.lineJoin = "round";
     ctx.textAlign = "center";
-    ctx.strokeText("ACCÈS PRINCIPAL", accessLineEnd.x, accessLineEnd.y - 22);
-    ctx.fillText("ACCÈS PRINCIPAL", accessLineEnd.x, accessLineEnd.y - 22);
+    ctx.strokeText("Accès principal", accessLineEnd.x, accessLineEnd.y - 18);
+    ctx.fillText("Accès principal", accessLineEnd.x, accessLineEnd.y - 18);
     ctx.restore();
   }
 
@@ -4118,7 +4111,7 @@ app.post("/generate", async (req, res) => {
     slide_name = "slide_4_axo",
     zoom: zoomOverride = null,
     style_ref_url = null,
-    enhance = false,  // v50.4: OpenAI désactivé par défaut — il détruit les hauteurs/routes/labels
+    enhance = true,  // v50.5: OpenAI réactivé en mode POLISH (après overlays, pas avant)
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
@@ -4269,43 +4262,29 @@ app.post("/generate", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt", [
-          "TASK: Enhance ONLY the environment of this architectural axonometric map. Add trees, shadows, and subtle ground detail.",
+          "TASK: Polish this architectural site plan. Make it look premium and smooth. DO NOT redesign it.",
           "",
-          "STYLE — MANDATORY:",
-          "- Clean digital architectural render, sharp edges, solid colors",
-          "- Slightly warm and polished — like a premium urban planning firm's deliverable",
-          "- FORBIDDEN: watercolor wash, heavy grain, paper texture, painterly brush strokes",
-          "- Allowed: very subtle ground detail to break flatness (fine grass hints, road asphalt grain)",
+          "THIS IMAGE IS ALREADY COMPLETE. It contains buildings, roads, a legend, labels, and annotations.",
+          "Your ONLY job is to make it look slightly more refined and professional.",
           "",
-          "GEOMETRY — DO NOT MODIFY:",
-          "- Camera, pitch, bearing, composition: IDENTICAL to input",
-          "- Building footprints, positions, heights: IDENTICAL — buildings MUST vary in height (some low 1-floor, some tall 4-floor)",
-          "- Road layout and widths: IDENTICAL",
-          "- Every colored zone stays at EXACTLY the same pixel position",
+          "RULES — ABSOLUTE:",
+          "- PRESERVE every building exactly as-is: same positions, same heights, same shapes",
+          "- PRESERVE every road exactly as-is: same color (gray), same width, same position",
+          "- PRESERVE all text, labels, arrows, and UI elements exactly as-is",
+          "- PRESERVE the legend box in the top-left corner",
+          "- PRESERVE the compass in the top-right corner",
+          "- PRESERVE the red/orange parcel zone at the exact same position",
+          "- PRESERVE all building HEIGHT DIFFERENCES — some are short (1 floor), some tall (4 floors)",
           "",
-          "BUILDINGS — MANDATORY:",
-          "- Rooftops: pure white #ffffff",
-          "- Sunlit faces: white to #faf9f6",
-          "- Shadow faces: warm gray #9a9690",
-          "- ALL building edges: visible thin black lines #1a1a1a",
-          "- Cast shadows: each building casts a warm gray #b8b4ae shadow on the ground, projecting to the northeast",
-          "- Height variation MUST be visible — some buildings are 1 floor (3m), some 2 (7m), some 3 (10m), some 4 (14m)",
+          "WHAT TO IMPROVE (SUBTLE ONLY):",
+          "- Add soft ambient occlusion shadows at building bases",
+          "- Slightly refine tree canopy shapes (keep them as circles, make edges softer)",
+          "- Add very subtle warm lighting — like golden hour",
+          "- Smooth out any aliasing artifacts",
+          "- Make the overall image look like a premium architectural visualization",
           "",
-          "ROADS — MANDATORY:",
-          "- Road surface: warm GRAY #b0aba5 with very subtle asphalt texture",
-          "- Road borders/edges: darker gray #8a8580, clean edge",
-          "- Sidewalks: light cream strip #e0dbd0",
-          "- Roads clearly contrast with green blocks — gray vs green",
-          "",
-          "GROUND & VEGETATION — MANDATORY:",
-          "- Ground inside blocks: vivid green #7ab83a with VERY SLIGHT grass texture (subtle tonal variation, NOT watercolor)",
-          "- Trees: round canopy circles, dark green #3d7a1a with lighter highlights #5aaa28, varied sizes",
-          "- Place trees densely along roads and in open spaces — at least 30 trees",
-          "",
-          "DO NOT:",
-          "- Do NOT add text, labels, annotations",
-          "- Do NOT move any red/pink zone",
-          "- Do NOT flatten building heights — keep the variation",
+          "STYLE: Clean, warm, professional architectural render. NOT watercolor, NOT painterly.",
+          "Think: high-end real estate marketing material.",
         ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -4316,8 +4295,7 @@ app.post("/generate", async (req, res) => {
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-          // v50.1: RE-DRAW geometry + road labels on top of OpenAI result → GPS fidelity guaranteed
-          drawGeometryOverlay(finalCtx, W, H, projectedGeometry, roadLabels);
+          // v50.5: OpenAI reçoit l'image COMPLÈTE → on re-dessine juste légende/boussole pour netteté
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
@@ -4593,7 +4571,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.4-NOOAI on port ${PORT}`);
+  console.log(`BARLO v50.5-POLISH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
