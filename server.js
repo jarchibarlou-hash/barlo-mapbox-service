@@ -3794,10 +3794,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#c89418', 'line-width': 3, 'line-opacity': 0.85 } }, '3d-buildings');
 
-    // v51.2: Enveloppe constructible (zone de recul) — bien visible, tirets contrastés
+    // v51.8: Enveloppe constructible — PAS de fill (évite zone bleue parasite), tirets seulement
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
-    map.addLayer({ id: 'envelope-fill', type: 'fill', source: 'envelope',
-      paint: { 'fill-color': '#d4a020', 'fill-opacity': 0.08 } }, '3d-buildings');
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#c89418', 'line-width': 1.8, 'line-dasharray': [6, 3], 'line-opacity': 0.6 } }, '3d-buildings');
 
@@ -3823,23 +3821,26 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       paint: { 'fill-extrusion-color': '#444', 'fill-extrusion-height': ${h + 0.04},
         'fill-extrusion-base': ${h - 0.04}, 'fill-extrusion-opacity': 0.65 } });`).join('')}
 
-    // Arbres synthétiques — candidats (filtrage après idle)
+    // v51.8: Arbres synthétiques — exclure parcelle ET enveloppe
     const treeSizes = [8, 9, 10, 11, 12, 13, 14, 15];
     const treeHeights = [6, 8, 10, 12, 14];
     const treeCandidates = [];
+    const pipTest = function(px, py, poly) {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+        if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+      }
+      return inside;
+    };
+    const parcelPoly = ${JSON.stringify(parcelGeoJSON)}.geometry.coordinates[0];
+    const envelopePoly = ${JSON.stringify(envelopeGeoJSON)}.geometry.coordinates[0];
     for (let t = 0; t < 200; t++) {
       const angle = rng() * 2 * Math.PI;
       const dist = 0.0003 + rng() * 0.0022;
       const tLon = ${center.lon} + dist * Math.cos(angle);
       const tLat = ${center.lat} + dist * Math.sin(angle) * 0.7;
-      const inParcel = (function(px, py, poly) {
-        let inside = false;
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-          const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
-          if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
-        }
-        return inside;
-      })(tLon, tLat, ${JSON.stringify(parcelGeoJSON)}.geometry.coordinates[0]);
+      const inParcel = pipTest(tLon, tLat, parcelPoly);
       if (!inParcel) {
         treeCandidates.push({ lon: tLon, lat: tLat,
           radius: treeSizes[Math.floor(rng() * treeSizes.length)],
@@ -3852,8 +3853,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   let rendered = false;
   map.on('idle', () => {
     if (rendered) return; rendered = true;
-    // v51.3: Filtrage arbres renforcé — vérifier un carré de 12px autour du point (pas juste le pixel central)
-    const roadLayers = ['3d-buildings', 'road-fill-secondary', 'road-fill-street', 'road-case-secondary', 'road-case-street'];
+    // v51.8: Filtrage arbres renforcé — exclure routes, bâtiments, parcelle, enveloppe
+    const roadLayers = ['3d-buildings', 'road-fill-secondary', 'road-fill-street', 'road-case-secondary', 'road-case-street', 'parcel-fill', 'envelope-outline'];
     const treeFeatures = [];
     (window.__treeCandidates || []).forEach(tc => {
       const px = map.project([tc.lon, tc.lat]);
