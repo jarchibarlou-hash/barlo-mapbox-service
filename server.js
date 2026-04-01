@@ -3899,9 +3899,11 @@ app.post("/generate-massing", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust;
     if (OPENAI_API_KEY) {
       try {
+        console.log(`[POLISH] Starting OpenAI polish... (key: ${OPENAI_API_KEY.substring(0,8)}...)`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
+        console.log(`[POLISH] Resized image: ${pngResized.length} bytes`);
         const form = new FormData();
         form.append("model", "gpt-image-1");
         form.append("image", pngResized, { filename: "massing.png", contentType: "image/png" });
@@ -3913,11 +3915,12 @@ app.post("/generate-massing", async (req, res) => {
               const rCanvas = createCanvas(1024, 1024);
               rCanvas.getContext("2d").drawImage(await loadImage(refBuf), 0, 0, 1024, 1024);
               form.append("image", rCanvas.toBuffer("image/png"), { filename: "style_ref.png", contentType: "image/png" });
+              console.log("[POLISH] Style ref image attached");
             }
           } catch (e) { console.warn("Style ref error:", e.message); }
         }
         form.append("size", "1024x1024");
-        form.append("input_fidelity", "high");
+        form.append("response_format", "b64_json");
         form.append("prompt",
           "POLISH ONLY — enhance this architectural massing render. ZERO structural modification.\n\n" +
           "ABSOLUTE CONSTRAINTS (NON-NEGOTIABLE):\n" +
@@ -3929,7 +3932,7 @@ app.post("/generate-massing", async (req, res) => {
           "- The BLUE building floors #8bb0d8 must keep their EXACT color and position\n" +
           "- The ORANGE commerce RDC #e8a030 must keep its EXACT color and position\n" +
           "- The horizontal GAPS between floors must remain visible (they show floor levels)\n" +
-          "- The legend, annotations and section diagram must NOT be modified or removed\n\n" +
+          "- The annotations must NOT be modified or removed\n\n" +
           "POLISH ALLOWED:\n" +
           "- Sharpen edges on existing buildings (clean dark lines #555)\n" +
           "- Existing buildings: white rooftops #ffffff, warm gray shadows #b0aaa0\n" +
@@ -3945,11 +3948,17 @@ app.post("/generate-massing", async (req, res) => {
           "- NO removal of annotations or diagram\n\n" +
           "Result: clean, architectural, data-driven, premium client presentation quality."
         );
+        console.log("[POLISH] Calling OpenAI images/edits...");
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
         });
+        console.log(`[POLISH] OpenAI response status: ${oaiRes.status}`);
         const oaiJson = await oaiRes.json();
+        if (oaiJson.error) {
+          console.error(`[POLISH] OpenAI API error: ${JSON.stringify(oaiJson.error)}`);
+        }
         if (oaiJson.data?.[0]?.b64_json) {
+          console.log(`[POLISH] Got b64_json response (${oaiJson.data[0].b64_json.length} chars)`);
           const enhBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           const fCanvas = createCanvas(W, H);
           fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
@@ -3964,10 +3973,17 @@ app.post("/generate-massing", async (req, res) => {
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
             enhancedUrl = pd2.publicUrl;
-            console.log(`✓ Enhanced: ${enhancedUrl} (${Date.now() - t0}ms)`);
+            console.log(`✓ Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          } else {
+            console.error(`[POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
           }
+        } else {
+          console.warn(`[POLISH] No b64_json in response. Keys: ${JSON.stringify(Object.keys(oaiJson))}`);
+          if (oaiJson.data?.[0]) console.warn(`[POLISH] data[0] keys: ${JSON.stringify(Object.keys(oaiJson.data[0]))}`);
         }
-      } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
+      } catch (oaiErr) { console.error("[POLISH] Exception:", oaiErr.message, oaiErr.stack); }
+    } else {
+      console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
       ok: true, cached: false, server_version: "58.1-HEKTAR-POLISH",
