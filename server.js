@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.7-NOCACHE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.8-ROADS" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3519,22 +3519,24 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
         "paint": { "fill-color": "#6aad3a" } },
+      // Routes — largeurs réalistes: secondary/primary = 2 voies (7m), street = 1 voie (4m)
+      // Case = bordure grise foncée, Fill = chaussée grise claire, pas de vert visible
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 18, 12] } },
+        "paint": { "line-color": "#7a7570", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 16, 16, 18, 22] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8580", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 18, 7] } },
+        "paint": { "line-color": "#7a7570", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 10, 18, 14] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#c0bbb5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 14, 18, 20] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b0aba5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 5.5] } },
+        "paint": { "line-color": "#c0bbb5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 12] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
@@ -3555,7 +3557,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   window._map = map; // v50: expose for pixel projection from Puppeteer
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.7, position: [1.5, 210, 35] });
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.85, position: [1.2, 210, 30] });
 
     // v49: bâtiments 3D — hauteurs variées 1-4 niveaux
     map.addLayer({
@@ -3580,10 +3582,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
     // v49: parcelle ocre + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    // v50.8: parcelle sable bien visible, très différenciée de l'herbe verte
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c49a', 'fill-opacity': 0.55 } }, '3d-buildings');
+      paint: { 'fill-color': '#c8b080', 'fill-opacity': 0.8 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 2, 'line-opacity': 0.55 } }, '3d-buildings');
+      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-opacity': 0.7 } }, '3d-buildings');
 
     // v49: enveloppe constructible — tirets rouges
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
@@ -3592,8 +3595,8 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
     // v50.4: arbres synthétiques 3D — générés aléatoirement autour de la scène
     const treeFeatures = [];
-    const treeSizes = [3, 3.5, 4, 4.5, 5, 5.5, 6, 7];
-    const treeHeights = [5, 6, 7, 8, 9, 10, 11];
+    const treeSizes = [7, 8, 9, 10, 11, 12, 13, 14];  // v50.8: arbres plus volumineux, à l'échelle
+    const treeHeights = [6, 8, 10, 12, 14];
     for (let t = 0; t < 160; t++) {
       const angle = rand() * 2 * Math.PI;
       const dist = 0.0003 + rand() * 0.0022; // ~30m to 250m from center
@@ -3619,11 +3622,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addSource('trees', { type: 'geojson', data: { type: 'FeatureCollection', features: treeFeatures } });
     // Tree canopy as circles on ground
     map.addLayer({ id: 'tree-shadow', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#2d6b1a', 'circle-opacity': 0.3,
-        'circle-translate': [3, 3] } });
+      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#1a4a0e', 'circle-opacity': 0.35,
+        'circle-translate': [4, 4], 'circle-blur': 0.4 } });
     map.addLayer({ id: 'tree-canopy', type: 'circle', source: 'trees',
       paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#3d8a22',
-        'circle-stroke-width': 0.5, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.85 } });
+        'circle-stroke-width': 1.2, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.9, 'circle-blur': 0.15 } });
 
     // v49: flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
@@ -3689,19 +3692,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 16, 16, 18, 22] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 10, 18, 14] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 14, 18, 20] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 12] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3711,7 +3714,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.7, position: [1.5, 210, 35] });
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.85, position: [1.2, 210, 30] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -3850,7 +3853,7 @@ function drawLegendCompass(ctx, W, H, p) {
   const legItems = [
     { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: "Parcelle — " + site_area + " m²" },
     { type: "dash", stroke: "#d02818", label: "Zone constructible (reculs)" },
-    { type: "dot", fill: "#1a6b3a", stroke: "#fff", label: "Accès principal" },
+    // Accès principal supprimé v50.8
     { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiment existant" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
@@ -4016,66 +4019,7 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
     ctx.restore();
   }
 
-  // 3. Flèche d'accès principal — NOIRE, un seul label
-  if (accessLineStart && accessLineEnd) {
-    ctx.save();
-
-    // White outline glow for contrast
-    ctx.beginPath();
-    ctx.moveTo(accessLineStart.x, accessLineStart.y);
-    ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.strokeStyle = "rgba(255,255,255,0.6)";
-    ctx.lineWidth = 10;
-    ctx.lineCap = "round";
-    ctx.stroke();
-
-    // Main thick BLACK line
-    ctx.beginPath();
-    ctx.moveTo(accessLineStart.x, accessLineStart.y);
-    ctx.lineTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.strokeStyle = "#1a1a1a";
-    ctx.lineWidth = 5;
-    ctx.lineCap = "round";
-    ctx.stroke();
-
-    // Big arrowhead — filled triangle
-    const dx = accessLineEnd.x - accessLineStart.x;
-    const dy = accessLineEnd.y - accessLineStart.y;
-    const angle = Math.atan2(dy, dx);
-    const headLen = 28;
-    const headW = 0.45;
-    ctx.beginPath();
-    ctx.moveTo(accessLineEnd.x, accessLineEnd.y);
-    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle - headW), accessLineEnd.y - headLen * Math.sin(angle - headW));
-    ctx.lineTo(accessLineEnd.x - headLen * 0.6 * Math.cos(angle), accessLineEnd.y - headLen * 0.6 * Math.sin(angle));
-    ctx.lineTo(accessLineEnd.x - headLen * Math.cos(angle + headW), accessLineEnd.y - headLen * Math.sin(angle + headW));
-    ctx.closePath();
-    ctx.fillStyle = "#1a1a1a";
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Dot at tip
-    ctx.beginPath();
-    ctx.arc(accessLineEnd.x, accessLineEnd.y, 7, 0, 2 * Math.PI);
-    ctx.fillStyle = "#1a1a1a";
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Label "Accès principal" — noir, une seule fois
-    ctx.font = "bold 15px Arial";
-    ctx.fillStyle = "#1a1a1a";
-    ctx.strokeStyle = "rgba(255,255,255,0.95)";
-    ctx.lineWidth = 5;
-    ctx.lineJoin = "round";
-    ctx.textAlign = "center";
-    ctx.strokeText("Accès principal", accessLineEnd.x, accessLineEnd.y - 18);
-    ctx.fillText("Accès principal", accessLineEnd.x, accessLineEnd.y - 18);
-    ctx.restore();
-  }
+  // 3. Accès principal — SUPPRIMÉ (v50.8)
 
   // 3b. Annotations de recul — "3m" latéral, "5m" face route
   if (envelope && envelope.length >= 3) {
@@ -4334,7 +4278,7 @@ app.post("/generate", async (req, res) => {
           "- PRESERVE all building HEIGHT DIFFERENCES — some are short (1 floor), some tall (4 floors)",
           "",
           "WHAT TO IMPROVE (SUBTLE ONLY):",
-          "- Add soft ambient occlusion shadows at building bases",
+          "- Add STRONG ambient occlusion shadows at building bases — dark, clearly visible cast shadows",
           "- Slightly refine tree canopy shapes (keep them as circles, make edges softer)",
           "- Clean neutral daylight lighting — NO golden hour, NO warm color cast, NO bloom glow",
           "- Smooth out any aliasing artifacts",
@@ -4630,7 +4574,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.7-NOCACHE on port ${PORT}`);
+  console.log(`BARLO v50.8-ROADS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
