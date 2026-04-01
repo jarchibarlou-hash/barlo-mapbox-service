@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.2-HEKTAR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.3-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3668,26 +3668,32 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
+  // Note: massingGeoJSON height will be overridden by fill-extrusion per-level slices
   const massingGeoJSON = {
     type: "Feature",
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  const commerceH = massingParams.commerce_levels * massingParams.floor_height;
-  // v51.2: utiliser levels (source de vérité) au lieu de total_height/floor_height
-  const floorLines = [];
-  const totalLevels = massingParams.levels || Math.round(massingParams.total_height / massingParams.floor_height);
-  const effectiveFloorH = massingParams.total_height / totalLevels;
-  for (let f = 1; f < totalLevels; f++) {
-    floorLines.push(f * effectiveFloorH);
-  }
-  // v51.2: tranches par niveau pour opacité bleutée
-  const levelSlices = [];
+  // v51.3: RDC commerce = 4m, étages courants = floor_height (3m)
+  const commLevels = massingParams.commerce_levels || 0;
+  const commFloorH = massingParams.commerce_floor_height || 4.0;
+  const fH = massingParams.floor_height;
+  const commerceH = commLevels * commFloorH;
+  const totalLevels = massingParams.levels || Math.round(massingParams.total_height / fH);
+  // Calculer les hauteurs cumulées par niveau (commerce + habitation)
+  const levelHeights = [];
+  let cumH = 0;
   for (let lv = 0; lv < totalLevels; lv++) {
-    const base = lv * effectiveFloorH;
-    const top = Math.min((lv + 1) * effectiveFloorH, massingParams.total_height);
-    levelSlices.push({ lv, base, top });
+    const thisH = (lv < commLevels) ? commFloorH : fH;
+    levelHeights.push({ base: cumH, top: cumH + thisH });
+    cumH += thisH;
   }
+  const floorLines = [];
+  for (let f = 1; f < totalLevels; f++) {
+    floorLines.push(levelHeights[f].base);
+  }
+  // v51.3: tranches par niveau pour opacité bleutée
+  const levelSlices = levelHeights.map((h, lv) => ({ lv, base: h.base, top: h.top }));
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -3724,19 +3730,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#e0dcd4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 17, 18, 19, 28] } },
+        "paint": { "line-color": "#d0c8b8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 17, 18, 19, 28] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#e0dcd4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 17, 12, 19, 18] } },
+        "paint": { "line-color": "#d0c8b8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 17, 12, 19, 18] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#f2efe8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 15, 19, 24] } },
+        "paint": { "line-color": "#e8e2d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 15, 19, 24] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#f2efe8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 17, 10, 19, 15] } },
+        "paint": { "line-color": "#e8e2d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 17, 10, 19, 15] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
@@ -3815,12 +3821,12 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
       paint: { 'line-color': '#333', 'line-width': 1.8, 'line-opacity': 0.8 } });
 
-    // ── v51.2: Lignes d'étages bien marquées (bandes fines sombres) ──
+    // ── v51.3: Lignes d'étages fines et nettes ──
     ${floorLines.map((h, i) => `
     map.addSource('floor-${i}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     map.addLayer({ id: 'floor-line-${i}', type: 'fill-extrusion', source: 'floor-${i}',
-      paint: { 'fill-extrusion-color': '#555', 'fill-extrusion-height': ${h + 0.06},
-        'fill-extrusion-base': ${h - 0.06}, 'fill-extrusion-opacity': 0.8 } });`).join('')}
+      paint: { 'fill-extrusion-color': '#444', 'fill-extrusion-height': ${h + 0.04},
+        'fill-extrusion-base': ${h - 0.04}, 'fill-extrusion-opacity': 0.65 } });`).join('')}
 
     // Arbres synthétiques — candidats (filtrage après idle)
     const treeSizes = [8, 9, 10, 11, 12, 13, 14, 15];
@@ -3851,11 +3857,14 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   let rendered = false;
   map.on('idle', () => {
     if (rendered) return; rendered = true;
-    // Filtrer arbres — pas sur routes ni bâtiments
+    // v51.3: Filtrage arbres renforcé — vérifier un carré de 12px autour du point (pas juste le pixel central)
+    const roadLayers = ['3d-buildings', 'road-fill-secondary', 'road-fill-street', 'road-case-secondary', 'road-case-street'];
     const treeFeatures = [];
     (window.__treeCandidates || []).forEach(tc => {
       const px = map.project([tc.lon, tc.lat]);
-      const hits = map.queryRenderedFeatures(px, { layers: ['3d-buildings', 'road-fill-secondary', 'road-fill-street', 'road-case-secondary', 'road-case-street'] });
+      // Vérifier un carré de 12px pour mieux détecter les routes étroites
+      const bbox = [[px.x - 6, px.y - 6], [px.x + 6, px.y + 6]];
+      const hits = map.queryRenderedFeatures(bbox, { layers: roadLayers });
       if (hits.length === 0) {
         treeFeatures.push({ type: 'Feature',
           properties: { radius: tc.radius, height: tc.height, trunk: Math.max(2, Math.round(tc.radius * 0.2)) },
@@ -4536,7 +4545,7 @@ app.post("/generate-massing", async (req, res) => {
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
   const envW = Number(envelope_w);
   const envD = Number(envelope_d);
-  const floorH = Number(fh_raw) || 3.2;
+  const floorH = Number(fh_raw) || 3.0;
   const label = String(massing_label).toUpperCase();
 
   // ── Déterminer les paramètres du scénario ──
@@ -4590,15 +4599,18 @@ app.post("/generate-massing", async (req, res) => {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
     levels = Number(levels_raw);
-    totalH = Number(height_raw) || levels * floorH;
     commerceLevels = Number(commerce_raw);
+    // v51.3: hauteur totale = commerce (4m/niv) + habitation (floorH/niv)
+    totalH = Number(height_raw) || (commerceLevels * commerceFloorH + (levels - commerceLevels) * floorH);
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
   }
 
   const slideName = slide_name || ("massing_" + label.toLowerCase());
-  const commerceH = commerceLevels * floorH;
+  // v51.3: RDC commerce = 4m (hauteur libre ~3.5m), étages courants = floor_height (3m)
+  const commerceFloorH = 4.0;
+  const commerceH = commerceLevels * commerceFloorH;
   const habitationLevels = levels - commerceLevels;
   const { w: mw, d: md, offset_x: ox, offset_y: oy } = computeMassingDimensions(fp, envW, envD);
   console.log(`fp_m2=${fp} → ${mw}m×${md}m offset[${ox.toFixed(1)},${oy.toFixed(1)}]`);
@@ -4659,7 +4671,7 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
+      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, commerce_floor_height: commerceFloorH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     // v51.0: projeter massing coords en pixels pour les annotations de surface par étage
@@ -4789,7 +4801,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51.2-HEKTAR on port ${PORT}`);
+  console.log(`BARLO v51.3-HEKTAR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
