@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.4-HEKTAR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.5-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -216,7 +216,7 @@ function computeZoomMassing(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const mpp = (ext * 0.45) / 1280;  // v51.4: zoom x4 total — très serré sur le bâtiment
+  const mpp = (ext * 0.72) / 1280;  // v51.5: zoom x2.5 centré sur le bâtiment
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(19, Math.max(17, Math.round(z * 4) / 4));
 }
@@ -3806,31 +3806,27 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#c89418', 'line-width': 1.8, 'line-dasharray': [6, 3], 'line-opacity': 0.6 } }, '3d-buildings');
 
-    // ── v51.4: BÂTIMENT PROJET — enveloppe bleutée transparente + plateaux gris opaques ──
+    // ── v51.5: BÂTIMENT PROJET — style v51.3 avec opacité -25% ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
       paint: { 'fill-extrusion-color': '#d4a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.7, 'fill-extrusion-vertical-gradient': false } });` : ""}
-    // v51.4: Enveloppe bleutée TRÈS transparente (on voit à travers)
+        'fill-extrusion-opacity': 0.58, 'fill-extrusion-vertical-gradient': false } });` : ""}
+    // v51.5: Tranches bleutées par niveau — opacité réduite de 25% (0.55 → 0.41)
     ${levelSlices.map(s => `
     map.addSource('massing-lv-${s.lv}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     map.addLayer({ id: 'massing-lv-${s.lv}', type: 'fill-extrusion', source: 'massing-lv-${s.lv}',
-      paint: { 'fill-extrusion-color': '#c8d8e8', 'fill-extrusion-height': ${s.top},
-        'fill-extrusion-base': ${s.base}, 'fill-extrusion-opacity': 0.3, 'fill-extrusion-vertical-gradient': false } });`).join('')}
-    // v51.4: Plateaux gris clair OPAQUES à chaque niveau (dalles visibles)
-    ${levelSlices.map(s => `
-    map.addSource('plateau-${s.lv}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
-    map.addLayer({ id: 'plateau-${s.lv}', type: 'fill-extrusion', source: 'plateau-${s.lv}',
-      paint: { 'fill-extrusion-color': '#d5d5d5', 'fill-extrusion-height': ${s.base + 0.12},
-        'fill-extrusion-base': ${s.base}, 'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': false } });`).join('')}
-    // Plateau de toiture
-    map.addSource('plateau-top', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
-    map.addLayer({ id: 'plateau-top', type: 'fill-extrusion', source: 'plateau-top',
-      paint: { 'fill-extrusion-color': '#d5d5d5', 'fill-extrusion-height': ${levelSlices[levelSlices.length - 1].top},
-        'fill-extrusion-base': ${levelSlices[levelSlices.length - 1].top - 0.12}, 'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': false } });
-    // Contour du bâtiment — arêtes noires fines
+      paint: { 'fill-extrusion-color': '#d8e4f0', 'fill-extrusion-height': ${s.top},
+        'fill-extrusion-base': ${s.base}, 'fill-extrusion-opacity': 0.41, 'fill-extrusion-vertical-gradient': false } });`).join('')}
+    // Contour du bâtiment projet — arêtes noires nettes
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
-      paint: { 'line-color': '#333', 'line-width': 1.2, 'line-opacity': 0.75 } });
+      paint: { 'line-color': '#333', 'line-width': 1.8, 'line-opacity': 0.8 } });
+
+    // v51.5: Lignes d'étages fines et nettes (style v51.3)
+    ${floorLines.map((h, i) => `
+    map.addSource('floor-${i}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
+    map.addLayer({ id: 'floor-line-${i}', type: 'fill-extrusion', source: 'floor-${i}',
+      paint: { 'fill-extrusion-color': '#444', 'fill-extrusion-height': ${h + 0.04},
+        'fill-extrusion-base': ${h - 0.04}, 'fill-extrusion-opacity': 0.65 } });`).join('')}
 
     // Arbres synthétiques — candidats (filtrage après idle)
     const treeSizes = [8, 9, 10, 11, 12, 13, 14, 15];
@@ -4066,25 +4062,25 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
   ctx.restore();
 }
-// ─── OVERLAYS CANVAS — MASSING v51.4 (pas de légende, annotations alignées sur floor lines) ──
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, massingPixels, floorLineYs }) {
-  // v51.4: Boussole compacte en bas à droite
+// ─── OVERLAYS CANVAS — MASSING v51.5 (PAS de légende, boussole + flèches + total) ──
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, massingPixels }) {
+  // Boussole en haut à droite
   ctx.save();
-  ctx.translate(W - 50, H - 50);
-  ctx.shadowColor = "rgba(0,0,0,0.12)"; ctx.shadowBlur = 6; ctx.shadowOffsetY = 1;
-  ctx.beginPath(); ctx.arc(0, 0, 22, 0, 2 * Math.PI);
-  ctx.fillStyle = "rgba(255,255,255,0.94)"; ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 0.8; ctx.stroke();
+  ctx.translate(W - 58, 58);
+  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
+  ctx.fillStyle = "rgba(255,255,255,0.96)"; ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
-  ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(-4, -2); ctx.lineTo(0, -6); ctx.lineTo(4, -2); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
   ctx.fillStyle = "#d02818"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 14); ctx.lineTo(-4, 2); ctx.lineTo(0, 6); ctx.lineTo(4, 2); ctx.closePath();
+  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
   ctx.fillStyle = "#ccc"; ctx.fill();
   ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 10px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -16);
+  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -22);
   ctx.restore();
 
-  // v51.4: PAS de légende — annotations directement alignées sur les floor lines du bâtiment
+  // v51.5: PAS de légende — directement les flèches par niveau
   if (massingPixels && massingPixels.length >= 3) {
     const cx = massingPixels.reduce((s, p) => s + p.x, 0) / massingPixels.length;
     const maxX = Math.max(...massingPixels.map(p => p.x));
@@ -4092,44 +4088,30 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const maxY = Math.max(...massingPixels.map(p => p.y));
     const surfPerFloor = fp_m2;
     const totalLevels = levels;
-    const arrowStartX = maxX + 8;
-    const arrowEndX = maxX + 22;
-    const labelX = arrowEndX + 5;
-    // Utiliser floorLineYs (positions Y projetées des floor lines) si disponible
-    // Sinon distribuer uniformément
+    const arrowStartX = maxX + 12;
+    const arrowEndX = maxX + 30;
+    const labelX = arrowEndX + 6;
     const buildingPixelH = maxY - minY;
+    const levelPixelH = buildingPixelH / totalLevels;
     ctx.save();
     for (let lv = 0; lv < totalLevels; lv++) {
-      // Position Y alignée sur la ligne d'étage : milieu de chaque tranche
-      let lvY;
-      if (floorLineYs && floorLineYs.length >= totalLevels - 1) {
-        // floorLineYs[0] = Y de la ligne entre RDC et R+1, etc.
-        const topOfLevel = lv < totalLevels - 1 ? floorLineYs[lv] : minY;
-        const bottomOfLevel = lv > 0 ? floorLineYs[lv - 1] : maxY;
-        lvY = (topOfLevel + bottomOfLevel) / 2;
-      } else {
-        const levelPixelH = buildingPixelH / totalLevels;
-        lvY = maxY - (lv * levelPixelH) - levelPixelH / 2;
-      }
+      const lvY = maxY - (lv * levelPixelH) - levelPixelH / 2;
       const lvName = lv === 0 ? "RDC" : `R+${lv}`;
       const lvLabel = `${lvName} : ${surfPerFloor} m²`;
-      // Ligne fine de repère
       ctx.strokeStyle = accent_color || "#c89418";
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2.5;
       ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(arrowStartX, lvY);
       ctx.lineTo(arrowEndX, lvY);
       ctx.stroke();
-      // Petit triangle
       ctx.fillStyle = accent_color || "#c89418";
       ctx.beginPath();
-      ctx.moveTo(arrowStartX - 1, lvY - 2.5);
-      ctx.lineTo(arrowStartX + 3, lvY);
-      ctx.lineTo(arrowStartX - 1, lvY + 2.5);
+      ctx.moveTo(arrowStartX - 2, lvY - 3);
+      ctx.lineTo(arrowStartX + 4, lvY);
+      ctx.lineTo(arrowStartX - 2, lvY + 3);
       ctx.closePath();
       ctx.fill();
-      // Label
       ctx.font = "bold 10px Arial";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
@@ -4140,8 +4122,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
       ctx.strokeText(lvLabel, labelX, lvY);
       ctx.fillText(lvLabel, labelX, lvY);
     }
-    // Total SDP
-    const totalY = maxY + 16;
+    const totalY = maxY + 18;
     ctx.font = "bold 11px Arial";
     ctx.textAlign = "center";
     ctx.fillStyle = "rgba(30,30,30,0.85)";
@@ -4669,29 +4650,12 @@ app.post("/generate-massing", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0, W, H);
-    // v51.4: calculer floorLineYs — positions Y interpolées pour chaque floor line
-    const commFloorH_px = commerceFloorH;
-    const flH = floorH;
-    const commLv = commerceLevels;
-    const floorLineHeights = [];
-    for (let f = 1; f < levels; f++) {
-      const h = (f <= commLv) ? f * commFloorH_px : commLv * commFloorH_px + (f - commLv) * flH;
-      floorLineHeights.push(h);
-    }
-    let floorLineYs = null;
-    if (massingPixels && massingPixels.length >= 3) {
-      const minYp = Math.min(...massingPixels.map(p => p.y));
-      const maxYp = Math.max(...massingPixels.map(p => p.y));
-      const bH = maxYp - minYp;
-      const actualTotalH = commLv * commFloorH_px + (levels - commLv) * flH;
-      floorLineYs = floorLineHeights.map(h => maxYp - (h / actualTotalH) * bH);
-    }
     const overlayParams = {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
       typology: massingCoords._typology,
-      massingPixels, floorLineYs,
+      massingPixels,
     };
     drawMassingOverlays(ctx, W, H, overlayParams);
     const png = canvas.toBuffer("image/png");
@@ -4791,7 +4755,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51.4-HEKTAR on port ${PORT}`);
+  console.log(`BARLO v51.5-HEKTAR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
