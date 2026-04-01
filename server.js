@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.1-HEKTAR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.2-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3640,17 +3640,16 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       }
     });
     map.addSource('trees', { type: 'geojson', data: { type: 'FeatureCollection', features: treeFeatures } });
+    // v51.2: Arbres — style Hektar, subtils, à l'échelle, opacité réduite
     map.addLayer({ id: 'tree-shadow', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['*', ['get', 'radius'], 1.1], 'circle-color': '#1a3a0a', 'circle-opacity': 0.3,
-        'circle-translate': [5, 5], 'circle-blur': 0.5 } });
-    map.addLayer({ id: 'tree-trunk', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'trunk'], 'circle-color': '#6b4226', 'circle-opacity': 0.9 } });
+      paint: { 'circle-radius': ['*', ['get', 'radius'], 1.15], 'circle-color': '#2a4a12', 'circle-opacity': 0.18,
+        'circle-translate': [4, 4], 'circle-blur': 0.4 } });
     map.addLayer({ id: 'tree-canopy', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#4a9a2e',
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.85, 'circle-blur': 0.12 } });
+      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#b0c890',
+        'circle-stroke-width': 0.5, 'circle-stroke-color': '#8aaa60', 'circle-opacity': 0.45, 'circle-blur': 0.08 } });
     map.addLayer({ id: 'tree-highlight', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['*', ['get', 'radius'], 0.45], 'circle-color': '#7ac048',
-        'circle-opacity': 0.4, 'circle-blur': 0.6 } });
+      paint: { 'circle-radius': ['*', ['get', 'radius'], 0.4], 'circle-color': '#c8daa8',
+        'circle-opacity': 0.3, 'circle-blur': 0.3 } });
     setTimeout(() => { window.__MAP_READY = true; }, 1200);
   });
   setTimeout(() => { window.__MAP_READY = true; }, 30000);
@@ -3675,11 +3674,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
   const commerceH = massingParams.commerce_levels * massingParams.floor_height;
-  // v51.0: génération des étages comme lignes 3D séparées
+  // v51.2: génération des étages comme lignes 3D séparées + tranches bleutées
   const floorLines = [];
   const totalLevels = Math.round(massingParams.total_height / massingParams.floor_height);
   for (let f = 1; f < totalLevels; f++) {
     floorLines.push(f * massingParams.floor_height);
+  }
+  // v51.2: tranches par niveau pour opacité bleutée
+  const levelSlices = [];
+  for (let lv = 0; lv < totalLevels; lv++) {
+    const base = (lv === 0 ? commerceH : lv * massingParams.floor_height);
+    const top = Math.min((lv + 1) * massingParams.floor_height, massingParams.total_height);
+    if (base >= massingParams.total_height) break;
+    levelSlices.push({ lv, base, top });
   }
   return `<!DOCTYPE html>
 <html>
@@ -3699,37 +3706,37 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
-  // v51.1: Style Hektar MASSING — fond très clair, bâtiments transparents, routes subtiles
+  // v51.2: Style Hektar MASSING — blanc cassé, routes claires, espaces verts beiges, arêtes noires
   const hektarStyle = {
-    "version": 8, "name": "Hektar Massing",
+    "version": 8, "name": "Hektar Massing v51.2",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
       { "id": "background", "type": "background", "paint": { "background-color": "#f5f3ef" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#dce8f0" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#e4edf4" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#e8f0e0" } },
+        "paint": { "fill-color": "#ede8d8" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
         "paint": { "fill-color": "#f0eee8" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d8d4cc", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 17, 18, 19, 28] } },
+        "paint": { "line-color": "#e0dcd4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 17, 18, 19, 28] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d8d4cc", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 17, 12, 19, 18] } },
+        "paint": { "line-color": "#e0dcd4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 17, 12, 19, 18] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ece8e2", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 15, 19, 24] } },
+        "paint": { "line-color": "#f2efe8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 15, 19, 24] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ece8e2", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 17, 10, 19, 15] } },
+        "paint": { "line-color": "#f2efe8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 17, 10, 19, 15] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
@@ -3772,37 +3779,48 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       },
     });
 
-    // v51.1: Parcelle — contour subtil, fond légèrement teinté
+    // v51.2: Arêtes noires des bâtiments environnants pour faire ressortir les volumes
+    map.addLayer({
+      id: '3d-buildings-edges', source: 'composite', 'source-layer': 'building',
+      filter: ['==', 'extrude', 'true'], type: 'line', minzoom: 13,
+      paint: { 'line-color': '#222', 'line-width': 0.4, 'line-opacity': 0.35 },
+    });
+
+    // v51.2: Parcelle — contour bien marqué, fond teinté
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#e8dfc8', 'fill-opacity': 0.5 } }, '3d-buildings');
+      paint: { 'fill-color': '#e8dfc8', 'fill-opacity': 0.45 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d4a020', 'line-width': 2, 'line-opacity': 0.6 } }, '3d-buildings');
+      paint: { 'line-color': '#c89418', 'line-width': 3, 'line-opacity': 0.85 } }, '3d-buildings');
 
-    // Enveloppe constructible — tirets subtils
+    // v51.2: Enveloppe constructible (zone de recul) — bien visible, tirets contrastés
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
+    map.addLayer({ id: 'envelope-fill', type: 'fill', source: 'envelope',
+      paint: { 'fill-color': '#d4a020', 'fill-opacity': 0.08 } }, '3d-buildings');
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 1.2, 'line-dasharray': [5, 3], 'line-opacity': 0.35 } }, '3d-buildings');
+      paint: { 'line-color': '#c89418', 'line-width': 1.8, 'line-dasharray': [6, 3], 'line-opacity': 0.6 } }, '3d-buildings');
 
-    // ── BÂTIMENT PROJET (massing) — bien contrasté, légère opacité ──
+    // ── v51.2: BÂTIMENT PROJET (massing) — opacité bleutée par niveau ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
       paint: { 'fill-extrusion-color': '#d4a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.82, 'fill-extrusion-vertical-gradient': true } });` : ""}
-    map.addLayer({ id: 'massing-habitation', type: 'fill-extrusion', source: 'massing',
-      paint: { 'fill-extrusion-color': '#f0ede8', 'fill-extrusion-height': ${massingParams.total_height},
-        'fill-extrusion-base': ${commerceH}, 'fill-extrusion-opacity': 0.82, 'fill-extrusion-vertical-gradient': true } });
-    // Contour du bâtiment projet — couleur accent bien visible
+        'fill-extrusion-opacity': 0.78, 'fill-extrusion-vertical-gradient': false } });` : ""}
+    // v51.2: Chaque niveau = tranche bleutée semi-transparente empilée
+    ${levelSlices.map(s => `
+    map.addSource('massing-lv-${s.lv}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
+    map.addLayer({ id: 'massing-lv-${s.lv}', type: 'fill-extrusion', source: 'massing-lv-${s.lv}',
+      paint: { 'fill-extrusion-color': '#d8e4f0', 'fill-extrusion-height': ${s.top},
+        'fill-extrusion-base': ${s.base}, 'fill-extrusion-opacity': 0.55, 'fill-extrusion-vertical-gradient': false } });`).join('')}
+    // Contour du bâtiment projet — arêtes noires nettes
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
-      paint: { 'line-color': '${massingParams.accent_color}', 'line-width': 2.5, 'line-opacity': 0.9 } });
+      paint: { 'line-color': '#333', 'line-width': 1.8, 'line-opacity': 0.8 } });
 
-    // ── Lignes d'étages sur le bâtiment projet ──
-    // On crée une ligne à chaque niveau sur le contour du massing
+    // ── v51.2: Lignes d'étages bien marquées (bandes fines sombres) ──
     ${floorLines.map((h, i) => `
     map.addSource('floor-${i}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     map.addLayer({ id: 'floor-line-${i}', type: 'fill-extrusion', source: 'floor-${i}',
-      paint: { 'fill-extrusion-color': '#888', 'fill-extrusion-height': ${h + 0.08},
-        'fill-extrusion-base': ${h - 0.08}, 'fill-extrusion-opacity': 0.7 } });`).join('')}
+      paint: { 'fill-extrusion-color': '#555', 'fill-extrusion-height': ${h + 0.06},
+        'fill-extrusion-base': ${h - 0.06}, 'fill-extrusion-opacity': 0.8 } });`).join('')}
 
     // Arbres synthétiques — candidats (filtrage après idle)
     const treeSizes = [8, 9, 10, 11, 12, 13, 14, 15];
@@ -4085,30 +4103,65 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
 
-  // v51.0: annotation surface par étage sur le bâtiment projet
+  // v51.2: Flèches par niveau avec label "niv RDC: x m²", "niv 1: x m²" etc.
   if (massingPixels && massingPixels.length >= 3) {
-    // Calculer le centre du massing projeté
     const cx = massingPixels.reduce((s, p) => s + p.x, 0) / massingPixels.length;
     const cy = massingPixels.reduce((s, p) => s + p.y, 0) / massingPixels.length;
-    // Surface par niveau = empreinte (identique à chaque étage pour un volume simple)
+    // Trouver le bord droit du massing projeté
+    const maxX = Math.max(...massingPixels.map(p => p.x));
+    const minY = Math.min(...massingPixels.map(p => p.y));
+    const maxY = Math.max(...massingPixels.map(p => p.y));
     const surfPerFloor = fp_m2;
+    const totalLevels = levels;
+    const arrowStartX = maxX + 12;
+    const arrowEndX = maxX + 30;
+    const labelX = arrowEndX + 6;
+    // Distribuer les niveaux verticalement sur la hauteur projetée du bâtiment
+    const buildingPixelH = maxY - minY;
+    const levelPixelH = buildingPixelH / totalLevels;
     ctx.save();
+    for (let lv = 0; lv < totalLevels; lv++) {
+      // Y position: du bas vers le haut (RDC en bas)
+      const lvY = maxY - (lv * levelPixelH) - levelPixelH / 2;
+      const lvName = lv === 0 ? "RDC" : `R+${lv}`;
+      const lvLabel = `${lvName} : ${surfPerFloor} m²`;
+      // Flèche courte parallèle (style du screenshot de référence)
+      ctx.strokeStyle = accent_color || "#c89418";
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(arrowStartX, lvY);
+      ctx.lineTo(arrowEndX, lvY);
+      ctx.stroke();
+      // Petit triangle au bout
+      ctx.fillStyle = accent_color || "#c89418";
+      ctx.beginPath();
+      ctx.moveTo(arrowStartX - 2, lvY - 3);
+      ctx.lineTo(arrowStartX + 4, lvY);
+      ctx.lineTo(arrowStartX - 2, lvY + 3);
+      ctx.closePath();
+      ctx.fill();
+      // Label texte
+      ctx.font = "bold 10px Arial";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(30,30,30,0.9)";
+      ctx.strokeStyle = "rgba(255,255,255,0.92)";
+      ctx.lineWidth = 3;
+      ctx.lineJoin = "round";
+      ctx.strokeText(lvLabel, labelX, lvY);
+      ctx.fillText(lvLabel, labelX, lvY);
+    }
+    // Total SDP en dessous
+    const totalY = maxY + 18;
     ctx.font = "bold 11px Arial";
     ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
     ctx.fillStyle = "rgba(30,30,30,0.85)";
     ctx.strokeStyle = "rgba(255,255,255,0.9)";
     ctx.lineWidth = 3;
-    ctx.lineJoin = "round";
-    // Afficher la surface au centre du massing (une seule annotation propre)
-    const surfLabel = `${surfPerFloor} m²/niv.`;
-    ctx.strokeText(surfLabel, cx, cy - 5);
-    ctx.fillText(surfLabel, cx, cy - 5);
-    // Total
-    const totalLabel = `Total: ${surfPerFloor * levels} m² SDP`;
-    ctx.font = "bold 10px Arial";
-    ctx.strokeText(totalLabel, cx, cy + 10);
-    ctx.fillText(totalLabel, cx, cy + 10);
+    const totalLabel = `Total: ${surfPerFloor * totalLevels} m² SDP`;
+    ctx.strokeText(totalLabel, cx, totalY);
+    ctx.fillText(totalLabel, cx, totalY);
     ctx.restore();
   }
 
@@ -4656,37 +4709,34 @@ app.post("/generate-massing", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt", [
-          "TASK: Polish this architectural massing view into a premium Hektar-style render. DO NOT redesign.",
+          "TASK: Polish this architectural massing diagram into a clean, premium Hektar-style render. DO NOT redesign.",
           "",
-          "THIS IS AN ARCHITECTURAL MASSING DIAGRAM showing a proposed building on a site.",
-          "The surrounding buildings are LIGHT GRAY and SEMI-TRANSPARENT — they are context, not the focus.",
-          "The PROPOSED BUILDING in the center is the main subject — it must stand out clearly.",
+          "THIS IS AN ARCHITECTURAL MASSING DIAGRAM showing a proposed building (light blue/translucent) on a site with surrounding context buildings (white/gray with dark edges).",
           "",
-          "STYLE REFERENCE — 'HEKTAR' AESTHETIC:",
-          "- Overall: Clean, minimalist, white/light gray palette with subtle shadows",
-          "- Surrounding buildings: very light gray (#e0ddd8), semi-transparent, like a white architectural model",
-          "- Proposed building: slightly warmer white, with VISIBLE FLOOR LINES (horizontal bands on facades)",
-          "- Ground: very light warm gray (#f2f0ea), almost white",
-          "- Roads: subtle beige/cream lines, barely visible",
-          "- Trees: soft green circles with gentle shadows, like watercolor dots",
-          "- Parcel outline: subtle golden/ochre line",
+          "STYLE — STRICT RULES:",
+          "- SHARP and CRISP rendering. NO blur, NO tilt-shift, NO depth of field, NO gaussian blur on edges.",
+          "- NO watercolor effect. NO painterly texture. KEEP the clean vector/diagrammatic look.",
+          "- Every building must stay SHARP at every distance from center.",
+          "- Stylized but CLEAN — like a premium architectural competition axonometric (BIG / OMA / MVRDV style).",
           "",
-          "RULES — DO NOT BREAK:",
-          "- KEEP every building at its EXACT position, footprint, and height",
-          "- KEEP the proposed building's floor lines visible and sharp",
-          "- KEEP the legend and compass exactly as-is",
-          "- KEEP all text readable",
+          "WHAT TO KEEP EXACTLY AS-IS:",
+          "- EVERY building at its EXACT position, footprint, height, and edge lines",
+          "- The proposed building's floor lines (dark horizontal bands) — must stay VISIBLE and SHARP",
+          "- The parcel outline (golden/ochre line) — must stay visible",
+          "- The setback zone (dashed golden line) — must stay visible",
+          "- The legend box, compass, and ALL text/annotations — pixel-perfect, readable",
+          "- The small arrows with level labels on the right side of the proposed building",
           "",
           "WHAT TO IMPROVE:",
-          "- Add soft ambient occlusion shadows at ALL building bases",
+          "- Add soft ambient occlusion shadows at building bases (subtle, not heavy)",
           "- Add gentle cast shadows falling to the southeast",
-          "- Smooth all edges, remove aliasing",
-          "- Make trees look like soft watercolor circles",
-          "- Add subtle texture to the proposed building (light concrete feel)",
-          "- The overall image should look like a premium architectural competition panel",
-          "- Cool neutral daylight, NO warm cast, NO bloom, NO golden hour",
+          "- Smooth anti-aliasing on edges but keep them SHARP — no softening",
+          "- Ground should be very light warm gray, almost white",
+          "- Roads: off-white / light cream, clean",
+          "- Trees: subtle pale green circles, NO watercolor, just soft flat circles with slight shadow",
+          "- Overall: cool neutral daylight, NO warm cast, NO bloom, NO golden hour",
           "",
-          "STYLE: Minimalist white architectural maquette. Think BIG architects / OMA competition renders.",
+          "STYLE: Minimalist white architectural model render. Clean, sharp, diagrammatic. Think BIG architects competition panels.",
         ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -4735,7 +4785,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51.1-HEKTAR on port ${PORT}`);
+  console.log(`BARLO v51.2-HEKTAR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
