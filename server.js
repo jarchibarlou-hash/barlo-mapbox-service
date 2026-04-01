@@ -3674,26 +3674,17 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  // v51.3: RDC commerce = 4m, étages courants = floor_height (3m)
-  const commLevels = massingParams.commerce_levels || 0;
-  const commFloorH = massingParams.commerce_floor_height || 4.0;
-  const fH = massingParams.floor_height;
-  const commerceH = commLevels * commFloorH;
-  const totalLevels = massingParams.levels || Math.round(massingParams.total_height / fH);
-  // Calculer les hauteurs cumulées par niveau (commerce + habitation)
-  const levelHeights = [];
-  let cumH = 0;
-  for (let lv = 0; lv < totalLevels; lv++) {
-    const thisH = (lv < commLevels) ? commFloorH : fH;
-    levelHeights.push({ base: cumH, top: cumH + thisH });
-    cumH += thisH;
-  }
+  const commerceH = massingParams.commerce_levels * massingParams.floor_height;
+  // v51.3: niveaux réguliers simples
   const floorLines = [];
+  const totalLevels = massingParams.levels || Math.round(massingParams.total_height / massingParams.floor_height);
   for (let f = 1; f < totalLevels; f++) {
-    floorLines.push(levelHeights[f].base);
+    floorLines.push(f * massingParams.floor_height);
   }
-  // v51.3: tranches par niveau pour opacité bleutée
-  const levelSlices = levelHeights.map((h, lv) => ({ lv, base: h.base, top: h.top }));
+  const levelSlices = [];
+  for (let lv = 0; lv < totalLevels; lv++) {
+    levelSlices.push({ lv, base: lv * massingParams.floor_height, top: (lv + 1) * massingParams.floor_height });
+  }
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4561,17 +4552,14 @@ app.post("/generate-massing", async (req, res) => {
     fp = Number(fp_m2_raw);
     levels = Number(levels_raw);
     commerceLevels = Number(commerce_raw);
-    // v51.3: hauteur totale = commerce (4m/niv) + habitation (floorH/niv)
-    totalH = Number(height_raw) || (commerceLevels * commerceFloorH + (levels - commerceLevels) * floorH);
+    totalH = Number(height_raw) || levels * floorH;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
   }
 
   const slideName = slide_name || ("massing_" + label.toLowerCase());
-  // v51.3: RDC commerce = 4m (hauteur libre ~3.5m), étages courants = floor_height (3m)
-  const commerceFloorH = 4.0;
-  const commerceH = commerceLevels * commerceFloorH;
+  const commerceH = commerceLevels * floorH;
   const habitationLevels = levels - commerceLevels;
   const { w: mw, d: md, offset_x: ox, offset_y: oy } = computeMassingDimensions(fp, envW, envD);
   console.log(`fp_m2=${fp} → ${mw}m×${md}m offset[${ox.toFixed(1)},${oy.toFixed(1)}]`);
@@ -4632,7 +4620,7 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, commerce_floor_height: commerceFloorH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
+      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     // v51.0: projeter massing coords en pixels pour les annotations de surface par étage
