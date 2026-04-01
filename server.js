@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.7-HEKTAR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.8-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3677,7 +3677,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   const commerceH = massingParams.commerce_levels * massingParams.floor_height;
   // v51.3: niveaux réguliers simples
   const floorLines = [];
-  const totalLevels = massingParams.levels || Math.round(massingParams.total_height / massingParams.floor_height);
+  // v51.8: levels est LA source de vérité — jamais de division hauteur/floor_height
+  const totalLevels = massingParams.levels;
   for (let f = 1; f < totalLevels; f++) {
     floorLines.push(f * massingParams.floor_height);
   }
@@ -4542,7 +4543,8 @@ app.post("/generate-massing", async (req, res) => {
     const sc = scenarios[label] || scenarios.A;
     fp = sc.fp_m2;
     levels = sc.levels;
-    totalH = sc.height_m;
+    // v51.8: TOUJOURS forcer totalH = levels × floorH (cohérence floor lines)
+    totalH = levels * floorH;
     commerceLevels = sc.commerce_levels;
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
