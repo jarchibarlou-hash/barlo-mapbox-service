@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.8-ROADS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "50.9-FINAL" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -3519,24 +3519,25 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
         "paint": { "fill-color": "#6aad3a" } },
-      // Routes — largeurs réalistes: secondary/primary = 2 voies (7m), street = 1 voie (4m)
-      // Case = bordure grise foncée, Fill = chaussée grise claire, pas de vert visible
+      // Routes v50.9 — largeurs TRÈS larges pour être réalistes à l'échelle
+      // Primary/secondary = 2 voies (7m réels) → ~18-24px, street = 1 voie (4m) → ~10-14px
+      // Case = bordure trottoir gris foncé, Fill = asphalte gris clair, AUCUN vert visible
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#7a7570", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 16, 16, 18, 22] } },
+        "paint": { "line-color": "#8a857e", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 16, 16, 24, 18, 36] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#7a7570", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 10, 18, 14] } },
+        "paint": { "line-color": "#8a857e", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 16, 16, 18, 22] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c0bbb5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 14, 18, 20] } },
+        "paint": { "line-color": "#d0ccc6", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 13, 16, 20, 18, 32] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c0bbb5", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 12] } },
+        "paint": { "line-color": "#d0ccc6", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 12, 18, 18] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
@@ -3564,8 +3565,9 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
+        // v50.9: bâtiments beiges/blancs clairs — jamais sombres
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#fafafa', 4, '#f2f0ec', 10, '#e0ddd6', 20, '#c0bdb6', 40, '#908d88'],
+          0, '#fcfaf6', 4, '#f5f2ec', 10, '#ece8e0', 20, '#e5e0d8', 40, '#ddd8d0'],
         'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 50],
               0,3.5, 1,3.5, 2,3.5, 3,3.5, 4,3.5, 5,3.5, 6,3.5, 7,3.5, 8,3.5, 9,3.5,
               10,3.5, 11,3.5, 12,3.5, 13,3.5, 14,3.5, 15,3.5, 16,3.5, 17,3.5, 18,3.5, 19,3.5,
@@ -3593,16 +3595,16 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#d02818', 'line-width': 1.5, 'line-dasharray': [5, 3], 'line-opacity': 0.45 } }, '3d-buildings');
 
-    // v50.4: arbres synthétiques 3D — générés aléatoirement autour de la scène
-    const treeFeatures = [];
-    const treeSizes = [7, 8, 9, 10, 11, 12, 13, 14];  // v50.8: arbres plus volumineux, à l'échelle
+    // v50.9: arbres réalistes — canopée + tronc + ombre, PAS sur routes ni bâtiments
+    // On génère les candidats, puis on filtre après idle via queryRenderedFeatures
+    const treeCandidates = [];
+    const treeSizes = [8, 9, 10, 11, 12, 13, 14, 15];
     const treeHeights = [6, 8, 10, 12, 14];
-    for (let t = 0; t < 160; t++) {
+    for (let t = 0; t < 200; t++) {
       const angle = rand() * 2 * Math.PI;
-      const dist = 0.0003 + rand() * 0.0022; // ~30m to 250m from center
+      const dist = 0.0003 + rand() * 0.0022;
       const tLon = ${center.lon} + dist * Math.cos(angle);
-      const tLat = ${center.lat} + dist * Math.sin(angle) * 0.7; // squish for perspective
-      // Skip if inside parcel
+      const tLat = ${center.lat} + dist * Math.sin(angle) * 0.7;
       const inParcel = (function(px, py, poly) {
         let inside = false;
         for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -3612,30 +3614,46 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         return inside;
       })(tLon, tLat, ${JSON.stringify(parcelGeoJSON)}.geometry.coordinates[0]);
       if (!inParcel) {
-        treeFeatures.push({
-          type: 'Feature',
-          properties: { radius: treeSizes[Math.floor(rand() * treeSizes.length)], height: treeHeights[Math.floor(rand() * treeHeights.length)] },
-          geometry: { type: 'Point', coordinates: [tLon, tLat] }
-        });
+        treeCandidates.push({ lon: tLon, lat: tLat,
+          radius: treeSizes[Math.floor(rand() * treeSizes.length)],
+          height: treeHeights[Math.floor(rand() * treeHeights.length)] });
       }
     }
-    map.addSource('trees', { type: 'geojson', data: { type: 'FeatureCollection', features: treeFeatures } });
-    // Tree canopy as circles on ground
-    map.addLayer({ id: 'tree-shadow', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#1a4a0e', 'circle-opacity': 0.35,
-        'circle-translate': [4, 4], 'circle-blur': 0.4 } });
-    map.addLayer({ id: 'tree-canopy', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#3d8a22',
-        'circle-stroke-width': 1.2, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.9, 'circle-blur': 0.15 } });
+    // Arbres seront ajoutés après idle (pour pouvoir queryRenderedFeatures)
+    window.__treeCandidates = treeCandidates;
 
-    // v49: flèche d'accès principal
+    // v50.8: flèche accès supprimée
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
-    // v50.5: flèche Mapbox supprimée — tout est dessiné en canvas overlay (1 seul label, pas de doublon)
-    // On garde juste la source pour la projection pixel
   });
   let rendered = false;
-  map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
-  setTimeout(() => { window.__MAP_READY = true; }, 28000);
+  map.on('idle', () => {
+    if (rendered) return; rendered = true;
+    // v50.9: filtrer arbres — rejeter ceux sur routes ou bâtiments
+    const treeFeatures = [];
+    (window.__treeCandidates || []).forEach(tc => {
+      const px = map.project([tc.lon, tc.lat]);
+      const hits = map.queryRenderedFeatures(px, { layers: ['3d-buildings', 'road-fill-secondary', 'road-fill-street', 'road-case-secondary', 'road-case-street'] });
+      if (hits.length === 0) {
+        treeFeatures.push({ type: 'Feature',
+          properties: { radius: tc.radius, height: tc.height, trunk: Math.max(2, Math.round(tc.radius * 0.2)) },
+          geometry: { type: 'Point', coordinates: [tc.lon, tc.lat] } });
+      }
+    });
+    map.addSource('trees', { type: 'geojson', data: { type: 'FeatureCollection', features: treeFeatures } });
+    map.addLayer({ id: 'tree-shadow', type: 'circle', source: 'trees',
+      paint: { 'circle-radius': ['*', ['get', 'radius'], 1.1], 'circle-color': '#1a3a0a', 'circle-opacity': 0.3,
+        'circle-translate': [5, 5], 'circle-blur': 0.5 } });
+    map.addLayer({ id: 'tree-trunk', type: 'circle', source: 'trees',
+      paint: { 'circle-radius': ['get', 'trunk'], 'circle-color': '#6b4226', 'circle-opacity': 0.9 } });
+    map.addLayer({ id: 'tree-canopy', type: 'circle', source: 'trees',
+      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#4a9a2e',
+        'circle-stroke-width': 1.5, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.85, 'circle-blur': 0.12 } });
+    map.addLayer({ id: 'tree-highlight', type: 'circle', source: 'trees',
+      paint: { 'circle-radius': ['*', ['get', 'radius'], 0.45], 'circle-color': '#7ac048',
+        'circle-opacity': 0.4, 'circle-blur': 0.6 } });
+    setTimeout(() => { window.__MAP_READY = true; }, 2500);
+  });
+  setTimeout(() => { window.__MAP_READY = true; }, 30000);
 })();
 </script>
 </body>
@@ -3720,7 +3738,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
+          0, '#fcfaf6', 4, '#f5f2ec', 10, '#ece8e0', 20, '#e5e0d8', 40, '#ddd8d0'],
         'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
         'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
@@ -3981,7 +3999,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 // ─── v50.1: RE-DRAW GEOMETRY ON CANVAS (post-OpenAI fidelity) ────────────────
 function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
   if (!projectedGeometry) return;
-  const { parcel, envelope, accessLineStart, accessLineEnd, accessLabel } = projectedGeometry;
+  const { parcel, envelope, frontEdgeIdx = 0, accessLineStart, accessLineEnd, accessLabel } = projectedGeometry;
 
   // 1. Parcelle — NE PAS re-dessiner en canvas overlay
   //    La parcelle est déjà dans le rendu Mapbox SOUS les bâtiments 3D (z-order correct)
@@ -4021,57 +4039,39 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
 
   // 3. Accès principal — SUPPRIMÉ (v50.8)
 
-  // 3b. Annotations de recul — "3m" latéral, "5m" face route
+  // 3b. Annotations de recul — "5m" face route (frontEdgeIdx), "3m" tous les autres
   if (envelope && envelope.length >= 3) {
     ctx.save();
-    ctx.font = "bold 13px Arial";
+    ctx.font = "bold 14px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#1a1a1a";
-    ctx.strokeStyle = "rgba(255,255,255,0.92)";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.lineWidth = 4;
     ctx.lineJoin = "round";
 
-    // Trouver le côté face route = côté avec le y pixel le plus GRAND (plus bas à l'écran = plus proche de la caméra = face route)
-    const edges = [];
     for (let i = 0; i < envelope.length; i++) {
       const a = envelope[i];
       const b = envelope[(i + 1) % envelope.length];
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
       const len = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-      const angle = Math.atan2(b.y - a.y, b.x - a.x);
-      edges.push({ mx, my, len, angle, idx: i });
-    }
-    // Trier par y descendant — le côté avec le plus grand y moyen est face route
-    edges.sort((a, b) => b.my - a.my);
-    const frontEdge = edges[0]; // face route → "5m"
-    const lateralEdges = edges.slice(1); // tous les autres → "3m"
-
-    // Dessiner "5m" sur le côté face route
-    let fa = frontEdge.angle;
-    if (fa > Math.PI / 2) fa -= Math.PI;
-    if (fa < -Math.PI / 2) fa += Math.PI;
-    ctx.save();
-    ctx.translate(frontEdge.mx, frontEdge.my);
-    ctx.rotate(fa);
-    ctx.strokeText("5m", 0, -12);
-    ctx.fillText("5m", 0, -12);
-    ctx.restore();
-
-    // Dessiner "3m" sur les côtés latéraux
-    lateralEdges.forEach(edge => {
-      if (edge.len < 20) return; // skip très petits côtés
-      let la = edge.angle;
-      if (la > Math.PI / 2) la -= Math.PI;
-      if (la < -Math.PI / 2) la += Math.PI;
+      if (len < 25) continue; // skip très petits côtés
+      const isFront = (i === frontEdgeIdx);
+      const label = isFront ? "5m" : "3m";
+      let angle = Math.atan2(b.y - a.y, b.x - a.x);
+      if (angle > Math.PI / 2) angle -= Math.PI;
+      if (angle < -Math.PI / 2) angle += Math.PI;
+      // Perpendiculaire vers l'extérieur pour offset le label
+      const nx = -(b.y - a.y) / len;
+      const ny = (b.x - a.x) / len;
       ctx.save();
-      ctx.translate(edge.mx, edge.my);
-      ctx.rotate(la);
-      ctx.strokeText("3m", 0, -12);
-      ctx.fillText("3m", 0, -12);
+      ctx.translate(mx + nx * 16, my + ny * 16);
+      ctx.rotate(angle);
+      ctx.strokeText(label, 0, 0);
+      ctx.fillText(label, 0, 0);
       ctx.restore();
-    });
+    }
     ctx.restore();
   }
 
@@ -4156,6 +4156,9 @@ app.post("/generate", async (req, res) => {
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
 
+    // v50.9: pass front edge index to browser for setback annotations
+    await page.evaluate((idx) => { window.__FRONT_EDGE_IDX = idx; }, bestI);
+
     // v50.1: PROJECT all geometry coords to pixel positions BEFORE screenshot
     // Also extract visible road labels for post-OpenAI re-drawing
     const projectionResult = await page.evaluate((parcelPts, envelopePts, accessLine, accessPt) => {
@@ -4202,6 +4205,7 @@ app.post("/generate", async (req, res) => {
           geometry: {
             parcel: projectPts(parcelPts),
             envelope: projectPts(envelopePts),
+            frontEdgeIdx: window.__FRONT_EDGE_IDX || 0,
             accessLineStart: (() => { const p = m.project(accessLine[0]); return { x: p.x, y: p.y }; })(),
             accessLineEnd: (() => { const p = m.project(accessLine[1]); return { x: p.x, y: p.y }; })(),
             accessLabel: (() => { const p = m.project(accessPt); return { x: p.x, y: p.y }; })(),
@@ -4263,29 +4267,29 @@ app.post("/generate", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt", [
-          "TASK: Polish this architectural site plan. Make it look premium and smooth. DO NOT redesign it.",
+          "TASK: Smoothly polish this architectural 3D site plan. Make it look like a high-end render. DO NOT redesign anything.",
           "",
-          "THIS IMAGE IS ALREADY COMPLETE. It contains buildings, roads, a legend, labels, and annotations.",
-          "Your ONLY job is to make it look slightly more refined and professional.",
+          "THIS IMAGE IS ALREADY COMPLETE AND CORRECT. Buildings, roads, trees, legend, labels — everything is placed correctly.",
+          "Your ONLY job is to make the rendering smoother and more photorealistic.",
           "",
-          "RULES — ABSOLUTE:",
-          "- PRESERVE every building exactly as-is: same positions, same heights, same shapes",
-          "- PRESERVE every road exactly as-is: same color (gray), same width, same position",
-          "- PRESERVE all text, labels, arrows, and UI elements exactly as-is",
-          "- PRESERVE the legend box in the top-left corner",
-          "- PRESERVE the compass in the top-right corner",
-          "- PRESERVE the red/orange parcel zone at the exact same position",
-          "- PRESERVE all building HEIGHT DIFFERENCES — some are short (1 floor), some tall (4 floors)",
+          "RULES — ABSOLUTE — DO NOT BREAK:",
+          "- KEEP every building at its EXACT position, shape, and height. Buildings are BEIGE/WHITE — keep them light colored.",
+          "- KEEP every road at its EXACT width, color (gray asphalt), and position. Roads must stay wide and gray.",
+          "- KEEP the green trees — make them rounder and more natural looking with soft shadows",
+          "- KEEP the sandy/ochre parcel zone exactly where it is",
+          "- KEEP the legend box and compass exactly as-is",
+          "- KEEP all text and labels readable — do NOT distort any text",
           "",
-          "WHAT TO IMPROVE (SUBTLE ONLY):",
-          "- Add STRONG ambient occlusion shadows at building bases — dark, clearly visible cast shadows",
-          "- Slightly refine tree canopy shapes (keep them as circles, make edges softer)",
-          "- Clean neutral daylight lighting — NO golden hour, NO warm color cast, NO bloom glow",
-          "- Smooth out any aliasing artifacts",
-          "- Make the overall image look like a premium architectural visualization",
+          "WHAT TO IMPROVE (SMOOTHING ONLY):",
+          "- Add smooth ambient occlusion shadows at building bases",
+          "- Add soft realistic cast shadows from buildings onto the ground",
+          "- Make tree canopies look like real foliage with gentle shadows underneath",
+          "- Smooth all edges and remove aliasing artifacts",
+          "- Add subtle material textures: slight concrete feel on buildings, asphalt texture on roads, grass texture on green areas",
+          "- Neutral cool daylight — absolutely NO golden hour, NO warm cast, NO bloom",
           "",
-          "STYLE: Clean, neutral, professional architectural render. NOT watercolor, NOT painterly, NOT warm/golden.",
-          "Think: high-end real estate marketing brochure in neutral daylight. Crisp and modern.",
+          "STYLE: Ultra-smooth, photorealistic maquette render. Like a professional architectural model photo.",
+          "Think: Dezeen magazine quality, clean Nordic architecture visualization. Cool neutral light.",
         ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -4574,7 +4578,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v50.8-ROADS on port ${PORT}`);
+  console.log(`BARLO v50.9-FINAL on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
