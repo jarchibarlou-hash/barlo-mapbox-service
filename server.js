@@ -3674,18 +3674,18 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
   const commerceH = massingParams.commerce_levels * massingParams.floor_height;
-  // v51.2: génération des étages comme lignes 3D séparées + tranches bleutées
+  // v51.2: utiliser levels (source de vérité) au lieu de total_height/floor_height
   const floorLines = [];
-  const totalLevels = Math.round(massingParams.total_height / massingParams.floor_height);
+  const totalLevels = massingParams.levels || Math.round(massingParams.total_height / massingParams.floor_height);
+  const effectiveFloorH = massingParams.total_height / totalLevels;
   for (let f = 1; f < totalLevels; f++) {
-    floorLines.push(f * massingParams.floor_height);
+    floorLines.push(f * effectiveFloorH);
   }
   // v51.2: tranches par niveau pour opacité bleutée
   const levelSlices = [];
   for (let lv = 0; lv < totalLevels; lv++) {
-    const base = (lv === 0 ? commerceH : lv * massingParams.floor_height);
-    const top = Math.min((lv + 1) * massingParams.floor_height, massingParams.total_height);
-    if (base >= massingParams.total_height) break;
+    const base = lv * effectiveFloorH;
+    const top = Math.min((lv + 1) * effectiveFloorH, massingParams.total_height);
     levelSlices.push({ lv, base, top });
   }
   return `<!DOCTYPE html>
@@ -4659,7 +4659,7 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor }, MAPBOX_TOKEN);
+      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     // v51.0: projeter massing coords en pixels pour les annotations de surface par étage
