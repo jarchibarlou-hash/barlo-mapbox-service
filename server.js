@@ -202,9 +202,9 @@ function computeZoomMassing(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const mpp = (ext * 1.8) / 1280;
+  const mpp = (ext * 0.9) / 1280;  // x2 zoom — parcelle centrée et proche
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(18, Math.max(16.5, Math.round(z * 4) / 4));
+  return Math.min(19, Math.max(17, Math.round(z * 4) / 4));
 }
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -3565,114 +3565,48 @@ function drawSolarArc(ctx, W, H, p) {
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology }) {
-  // ── Scale factor : adaptatif 1280 ou 2560 ──
   const s = W / 1280;
 
-  // ── BOUSSOLE N en haut à droite ──
+  // ── BOUSSOLE N en bas à droite ──
   ctx.save();
-  ctx.translate(W - 58*s, 58*s);
-  ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8*s; ctx.shadowOffsetY = 2*s;
-  ctx.beginPath(); ctx.arc(0, 0, 28*s, 0, 2 * Math.PI);
-  ctx.fillStyle = "rgba(255,255,255,0.96)"; ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1*s; ctx.stroke();
+  ctx.translate(W - 60*s, H - 60*s);
+  ctx.shadowColor = "rgba(0,0,0,0.12)"; ctx.shadowBlur = 6*s; ctx.shadowOffsetY = 2*s;
+  ctx.beginPath(); ctx.arc(0, 0, 32*s, 0, 2 * Math.PI);
+  ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#c8a020"; ctx.lineWidth = 2*s; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
-  ctx.beginPath(); ctx.moveTo(0, -18*s); ctx.lineTo(-5*s, -3*s); ctx.lineTo(0, -8*s); ctx.lineTo(5*s, -3*s); ctx.closePath();
-  ctx.fillStyle = "#c8a020"; ctx.fill();
-  ctx.beginPath(); ctx.moveTo(0, 18*s); ctx.lineTo(-5*s, 3*s); ctx.lineTo(0, 8*s); ctx.lineTo(5*s, 3*s); ctx.closePath();
-  ctx.fillStyle = "#ccc"; ctx.fill();
-  ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "center"; ctx.fillStyle = "#c8a020"; ctx.fillText("N", 0, -22*s);
+  ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "center";
+  ctx.fillStyle = "#c8a020"; ctx.fillText("N", 0, -18*s);
+  ctx.fillStyle = "#bbb"; ctx.fillText("S", 0, 24*s);
+  ctx.fillStyle = "#bbb"; ctx.fillText("O", -22*s, 4*s);
+  ctx.fillStyle = "#bbb"; ctx.fillText("E", 22*s, 4*s);
   ctx.restore();
 
-  // ── LÉGENDE en haut à gauche ──
-  const legItems = [
-    { fill: "rgba(200,160,32,0.0)", stroke: "#c8a020", dash: false, label: `Parcelle — ${site_area} m²` },
-    { fill: "rgba(184,148,44,0.0)", stroke: "#b8942c", dash: true,  label: "Limite séparative" },
-    commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
-    { fill: "#8bb0d8", stroke: "#2c4a6e", dash: false, label: `Habitation — ${habitation_levels} niv.` },
-  ].filter(Boolean);
-  const legPad = 14*s, legLH = 26*s, legW = 320*s;
-  const legH = legPad * 2 + legItems.length * legLH + 52*s;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12*s; ctx.shadowOffsetY = 3*s;
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.beginPath(); ctx.roundRect(16*s, 16*s, legW, legH, 8*s); ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1*s; ctx.stroke();
-  ctx.restore();
-  ctx.font = `bold ${14*s}px Arial`; ctx.fillStyle = "#2c4a6e"; ctx.textAlign = "left";
-  ctx.fillText(`Option ${label}`, 28*s, 16*s + legPad + 2*s);
-  const typoLabels = { BLOC: "Bloc compact", BARRE: "Barre / Lamelle", EN_U: "Forme en U", EN_L: "Forme en L", EXTENSION: "Extension" };
-  if (typology) { ctx.font = `bold ${11*s}px Arial`; ctx.fillStyle = "#2c4a6e"; ctx.fillText(`Typologie : ${typoLabels[typology] || typology}`, 170*s, 16*s + legPad + 2*s); }
-  ctx.font = `${12*s}px Arial`; ctx.fillStyle = "#555";
-  ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28*s, 16*s + legPad + 18*s);
-  if (scenario_role) { ctx.font = `italic ${11*s}px Arial`; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28*s, 16*s + legPad + 34*s); }
-  legItems.forEach((item, i) => {
-    const iy = 16*s + legPad + 48*s + i * legLH;
-    ctx.save();
-    ctx.fillStyle = item.fill || "transparent"; ctx.beginPath(); ctx.roundRect(28*s, iy, 16*s, 13*s, 2*s); ctx.fill();
-    if (item.dash) ctx.setLineDash([4*s, 2*s]);
-    ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5*s; ctx.stroke(); ctx.setLineDash([]);
-    ctx.restore();
-    ctx.font = `${12*s}px Arial`; ctx.fillStyle = "#444"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 52*s, iy + 11*s);
-  });
-  ctx.font = `${8*s}px Arial`; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap", 28*s, 16*s + legH - 6*s);
-
-  // ── COUPE BÂTIMENT : RDC, R+1, R+2... avec surfaces par étage ──
+  // ── ANNOTATIONS ÉTAGES : traits + labels à droite du bâtiment (style référence) ──
+  // Positionnées au centre-droit de l'image
   const rdcH_m = commerce_levels > 0 ? 4.0 : 3.0;
   const etageH_m = 3.0;
   const realTotalH = rdcH_m + (levels - 1) * etageH_m;
   const sdpTotale = fp_m2 * levels;
-  const secX = W - 220*s, secY = H - 50*s;
-  const secPxPerM = 8*s;
-  const secFloorW = 90*s, secGap = 3*s;
-  const secTotalH = realTotalH * secPxPerM + (levels - 1) * secGap;
-  const secStartY = secY - secTotalH;
-  // Fond blanc semi-transparent
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.06)"; ctx.shadowBlur = 10*s; ctx.shadowOffsetY = 3*s;
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.beginPath(); ctx.roundRect(secX - 16*s, secStartY - 40*s, secFloorW + 130*s, secTotalH + 65*s, 8*s); ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 0.5*s; ctx.stroke();
-  ctx.restore();
-  // Titre
-  ctx.font = `bold ${11*s}px Arial`; ctx.fillStyle = "#2c4a6e"; ctx.textAlign = "left";
-  ctx.fillText("COUPE", secX, secStartY - 24*s);
-  ctx.font = `${10*s}px Arial`; ctx.fillStyle = "#888";
-  ctx.fillText(`SDP totale : ${sdpTotale.toLocaleString("fr-FR")} m²`, secX, secStartY - 10*s);
-  // Étages de bas en haut avec hauteurs réelles
-  let cumY = secY;
+  // Espacement vertical entre annotations (adapté à la perspective)
+  const annX = W * 0.62;         // position X des annotations (à droite du bâtiment)
+  const annBaseY = H * 0.58;     // base du RDC (approximation perspective)
+  const annStepY = -32 * s;      // espacement vertical entre étages
+  const lineLen = 14 * s;
   for (let f = 0; f < levels; f++) {
-    const hM = f === 0 ? rdcH_m : etageH_m;
-    const hPx = hM * secPxPerM;
-    const fy = cumY - hPx;
-    const isComm = f < commerce_levels;
-    ctx.fillStyle = isComm ? "rgba(232,160,48,0.85)" : "rgba(139,176,216,0.65)";
-    ctx.beginPath(); ctx.roundRect(secX, fy, secFloorW, hPx - secGap, 3*s); ctx.fill();
-    ctx.strokeStyle = isComm ? "#c07020" : "#2c4a6e"; ctx.lineWidth = 1*s; ctx.stroke();
+    const y = annBaseY + f * annStepY;
     const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-    ctx.font = `bold ${10*s}px Arial`; ctx.fillStyle = isComm ? "#7a4410" : "#1a3a5c"; ctx.textAlign = "center";
-    ctx.fillText(floorLabel, secX + secFloorW / 2, fy + hPx / 2 - 2*s);
-    ctx.font = `${9*s}px Arial`; ctx.fillStyle = "#999";
-    ctx.fillText(`${hM}m`, secX + secFloorW / 2, fy + hPx / 2 + 10*s);
-    ctx.font = `${10*s}px Arial`; ctx.fillStyle = "#666"; ctx.textAlign = "left";
-    ctx.fillText(`${fp_m2} m²`, secX + secFloorW + 8*s, fy + hPx / 2 + 3*s);
-    cumY = fy;
+    // Petit trait horizontal
+    ctx.beginPath();
+    ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
+    ctx.strokeStyle = "#2c4a6e"; ctx.lineWidth = 2*s; ctx.stroke();
+    // Label : "R+2 : 596 m²"
+    ctx.font = `bold ${12*s}px Arial`; ctx.fillStyle = "#2c4a6e"; ctx.textAlign = "left";
+    ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
   }
-  // Ligne sol
-  ctx.beginPath(); ctx.moveTo(secX - 4*s, secY + 2*s); ctx.lineTo(secX + secFloorW + 4*s, secY + 2*s);
-  ctx.strokeStyle = "#999"; ctx.lineWidth = 2*s; ctx.stroke();
-  // Hauteur totale
-  ctx.beginPath(); ctx.moveTo(secX - 8*s, cumY); ctx.lineTo(secX - 8*s, secY);
-  ctx.strokeStyle = "#aaa"; ctx.lineWidth = 1*s; ctx.stroke();
-  ctx.font = `${9*s}px Arial`; ctx.fillStyle = "#999"; ctx.textAlign = "center";
-  ctx.save(); ctx.translate(secX - 14*s, (cumY + secY) / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText(`H = ${realTotalH.toFixed(1)}m`, 0, 0);
-  ctx.restore();
-
-  drawSolarArc(ctx, W, H, { bearing });
+  // Total SDP en bas
+  ctx.font = `${12*s}px Arial`; ctx.fillStyle = "#555"; ctx.textAlign = "left";
+  ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
 app.post("/generate", async (req, res) => {
