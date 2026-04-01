@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.5-HEKTAR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.6-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -216,7 +216,7 @@ function computeZoomMassing(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const mpp = (ext * 0.72) / 1280;  // v51.5: zoom x2.5 centré sur le bâtiment
+  const mpp = (ext * 0.9) / 1280;  // v51.3: zoom x2 — cadrage serré sur la parcelle
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(19, Math.max(17, Math.round(z * 4) / 4));
 }
@@ -3806,17 +3806,17 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#c89418', 'line-width': 1.8, 'line-dasharray': [6, 3], 'line-opacity': 0.6 } }, '3d-buildings');
 
-    // ── v51.5: BÂTIMENT PROJET — style v51.3 avec opacité -25% ──
+    // ── BÂTIMENT PROJET (massing) — opacité bleutée par niveau (v51.3) ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
       paint: { 'fill-extrusion-color': '#d4a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.58, 'fill-extrusion-vertical-gradient': false } });` : ""}
-    // v51.5: Tranches bleutées par niveau — opacité réduite de 25% (0.55 → 0.41)
+        'fill-extrusion-opacity': 0.78, 'fill-extrusion-vertical-gradient': false } });` : ""}
+    // Chaque niveau = tranche bleutée semi-transparente empilée (v51.3)
     ${levelSlices.map(s => `
     map.addSource('massing-lv-${s.lv}', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     map.addLayer({ id: 'massing-lv-${s.lv}', type: 'fill-extrusion', source: 'massing-lv-${s.lv}',
       paint: { 'fill-extrusion-color': '#d8e4f0', 'fill-extrusion-height': ${s.top},
-        'fill-extrusion-base': ${s.base}, 'fill-extrusion-opacity': 0.41, 'fill-extrusion-vertical-gradient': false } });`).join('')}
+        'fill-extrusion-base': ${s.base}, 'fill-extrusion-opacity': 0.55, 'fill-extrusion-vertical-gradient': false } });`).join('')}
     // Contour du bâtiment projet — arêtes noires nettes
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
       paint: { 'line-color': '#333', 'line-width': 1.8, 'line-opacity': 0.8 } });
@@ -4062,7 +4062,7 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
   ctx.restore();
 }
-// ─── OVERLAYS CANVAS — MASSING v51.5 (PAS de légende, boussole + flèches + total) ──
+// ─── OVERLAYS CANVAS — MASSING v51.6 (légende v51.3 + flèches alignées sur floor lines) ──
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, massingPixels }) {
   // Boussole en haut à droite
   ctx.save();
@@ -4079,8 +4079,42 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.rotate((bearing || 0) * Math.PI / 180);
   ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -22);
   ctx.restore();
+  // Légende (identique v51.3)
+  const legItems = [
+    { fill: "rgba(208,40,24,0.22)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
+    { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Zone constructible (reculs)" },
+    commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
+    { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv.` },
+  ].filter(Boolean);
+  const legPad = 14, legLH = 26, legW = 340;
+  const legH = legPad * 2 + legItems.length * legLH + 52;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "rgba(255,255,255,0.97)";
+  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.restore();
+  ctx.font = "bold 14px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.textAlign = "left";
+  ctx.fillText(`Option ${label}`, 28, 16 + legPad + 2);
+  ctx.font = "12px Arial"; ctx.fillStyle = "#555";
+  ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28, 16 + legPad + 18);
+  if (scenario_role) { ctx.font = "italic 11px Arial"; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28, 16 + legPad + 34); }
+  const typoLabels = { BLOC: "Bloc compact", BARRE: "Barre / Lamelle", EN_U: "Forme en U", EN_L: "Forme en L", EXTENSION: "Extension" };
+  if (typology) { ctx.font = "bold 11px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.fillText(`Typologie : ${typoLabels[typology] || typology}`, 170, 16 + legPad + 2); }
+  legItems.forEach((item, i) => {
+    const iy = 16 + legPad + 48 + i * legLH;
+    ctx.save();
+    ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
+    if (item.dash) ctx.setLineDash([4, 2]);
+    ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
+    ctx.fillText(item.label, 52, iy + 11);
+  });
+  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
+  ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
 
-  // v51.5: PAS de légende — directement les flèches par niveau
+  // v51.6: Flèches par niveau ALIGNÉES sur les floor lines du bâtiment
   if (massingPixels && massingPixels.length >= 3) {
     const cx = massingPixels.reduce((s, p) => s + p.x, 0) / massingPixels.length;
     const maxX = Math.max(...massingPixels.map(p => p.x));
@@ -4092,10 +4126,24 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const arrowEndX = maxX + 30;
     const labelX = arrowEndX + 6;
     const buildingPixelH = maxY - minY;
-    const levelPixelH = buildingPixelH / totalLevels;
+    // Calculer les Y des floor lines (proportionnel aux hauteurs réelles)
+    const commLv = commerce_levels || 0;
+    const commFH = 4.0;
+    const habFH = floor_height || 3.0;
+    const realTotalH = commLv * commFH + (totalLevels - commLv) * habFH;
+    // Y de chaque floor line (séparation entre niveaux)
+    const floorYs = [];
+    let cumH = 0;
+    for (let lv = 0; lv < totalLevels; lv++) {
+      const thisH = (lv < commLv) ? commFH : habFH;
+      floorYs.push({ base: cumH, top: cumH + thisH, mid: cumH + thisH / 2 });
+      cumH += thisH;
+    }
     ctx.save();
     for (let lv = 0; lv < totalLevels; lv++) {
-      const lvY = maxY - (lv * levelPixelH) - levelPixelH / 2;
+      // Position Y alignée sur le milieu de chaque tranche réelle
+      const ratio = floorYs[lv].mid / realTotalH;
+      const lvY = maxY - ratio * buildingPixelH;
       const lvName = lv === 0 ? "RDC" : `R+${lv}`;
       const lvLabel = `${lvName} : ${surfPerFloor} m²`;
       ctx.strokeStyle = accent_color || "#c89418";
@@ -4755,7 +4803,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51.5-HEKTAR on port ${PORT}`);
+  console.log(`BARLO v51.6-HEKTAR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
