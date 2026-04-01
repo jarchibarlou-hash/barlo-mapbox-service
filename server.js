@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "57.13" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.0-HEKTAR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3280,7 +3280,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  const commerceH = massingParams.commerce_levels * massingParams.floor_height;
+  const rdcH = massingParams.rdc_height || (massingParams.commerce_levels > 0 ? 4.0 : 3.0);
+  const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -3350,23 +3351,43 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
     });
+    // ── PARCELLE : contour ocre jaune, pas de fill ──
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.22 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
+      paint: { 'line-color': '#c8a020', 'line-width': 2.5, 'line-opacity': 0.9 } }, '3d-buildings');
+    // ── ENVELOPE (limite séparative) : ocre tirets ──
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#2563eb', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.80 } }, '3d-buildings');
+      paint: { 'line-color': '#b8942c', 'line-width': 1.8, 'line-dasharray': [6, 3], 'line-opacity': 0.70 } }, '3d-buildings');
+    // ── MASSING : étages individuels, RDC=${rdcH}m, courants=${etageH}m, gaps entre niveaux ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
-    ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
-      paint: { 'fill-extrusion-color': '#e8a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true } });` : ""}
-    map.addLayer({ id: 'massing-habitation', type: 'fill-extrusion', source: 'massing',
-      paint: { 'fill-extrusion-color': '#ffffff', 'fill-extrusion-height': ${massingParams.total_height},
-        'fill-extrusion-base': ${commerceH}, 'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true } });
+    const rdcH = ${rdcH};
+    const etageH = ${etageH};
+    const totalLevels = ${massingParams.levels || Math.round(massingParams.total_height / etageH)};
+    const commLevels = ${massingParams.commerce_levels};
+    const gap = 0.06;
+    for (let f = 0; f < totalLevels; f++) {
+      // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
+      const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
+      const top  = f === 0 ? rdcH : rdcH + f * etageH;
+      // Gap entre étages (trait de niveau) : uniquement ENTRE les étages, pas en bas ni en haut
+      const baseH = f > 0 ? base + gap / 2 : 0;
+      const topH  = f < totalLevels - 1 ? top - gap / 2 : top;
+      const isComm = f < commLevels;
+      map.addLayer({
+        id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
+        paint: {
+          'fill-extrusion-color': isComm ? '#e8a030' : '#8bb0d8',
+          'fill-extrusion-height': topH,
+          'fill-extrusion-base': baseH,
+          'fill-extrusion-opacity': isComm ? 0.90 : 0.72,
+          'fill-extrusion-vertical-gradient': true,
+        },
+      });
+    }
+    // ── Contour emprise au sol : bleu foncé ──
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
-      paint: { 'line-color': '${massingParams.accent_color}', 'line-width': 3, 'line-opacity': 1 } });
+      paint: { 'line-color': '#2c4a6e', 'line-width': 2.5, 'line-opacity': 0.9 } });
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -3544,6 +3565,7 @@ function drawSolarArc(ctx, W, H, p) {
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology }) {
+  // ── BOUSSOLE N en haut à droite ──
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -3552,37 +3574,39 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
   ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
-  ctx.fillStyle = "#d02818"; ctx.fill();
+  ctx.fillStyle = "#c8a020"; ctx.fill();
   ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
   ctx.fillStyle = "#ccc"; ctx.fill();
   ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -22);
+  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#c8a020"; ctx.fillText("N", 0, -22);
   ctx.restore();
+
+  // ── LÉGENDE en haut à gauche ──
   const legItems = [
-    { fill: "rgba(208,40,24,0.22)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
-    { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Enveloppe constructible" },
+    { fill: "rgba(200,160,32,0.0)", stroke: "#c8a020", dash: false, label: `Parcelle — ${site_area} m²` },
+    { fill: "rgba(184,148,44,0.0)", stroke: "#b8942c", dash: true,  label: "Limite séparative" },
     commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
-    { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv.` },
+    { fill: "#8bb0d8", stroke: "#2c4a6e", dash: false, label: `Habitation — ${habitation_levels} niv.` },
   ].filter(Boolean);
-  const legPad = 14, legLH = 26, legW = 340;
+  const legPad = 14, legLH = 26, legW = 320;
   const legH = legPad * 2 + legItems.length * legLH + 52;
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
-  ctx.fillStyle = "rgba(255,255,255,0.97)";
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
-  ctx.font = "bold 14px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.textAlign = "left";
+  ctx.font = "bold 14px Arial"; ctx.fillStyle = "#2c4a6e"; ctx.textAlign = "left";
   ctx.fillText(`Option ${label}`, 28, 16 + legPad + 2);
+  const typoLabels = { BLOC: "Bloc compact", BARRE: "Barre / Lamelle", EN_U: "Forme en U", EN_L: "Forme en L", EXTENSION: "Extension" };
+  if (typology) { ctx.font = "bold 11px Arial"; ctx.fillStyle = "#2c4a6e"; ctx.fillText(`Typologie : ${typoLabels[typology] || typology}`, 170, 16 + legPad + 2); }
   ctx.font = "12px Arial"; ctx.fillStyle = "#555";
   ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28, 16 + legPad + 18);
   if (scenario_role) { ctx.font = "italic 11px Arial"; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28, 16 + legPad + 34); }
-  const typoLabels = { BLOC: "Bloc compact", BARRE: "Barre / Lamelle", EN_U: "Forme en U", EN_L: "Forme en L", EXTENSION: "Extension" };
-  if (typology) { ctx.font = "bold 11px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.fillText(`Typologie : ${typoLabels[typology] || typology}`, 170, 16 + legPad + 2); }
   legItems.forEach((item, i) => {
     const iy = 16 + legPad + 48 + i * legLH;
     ctx.save();
-    ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
+    ctx.fillStyle = item.fill || "transparent"; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
     if (item.dash) ctx.setLineDash([4, 2]);
     ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
     ctx.restore();
@@ -3591,6 +3615,63 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
+
+  // ── COUPE BÂTIMENT : RDC, R+1, R+2... avec surfaces par étage ──
+  const rdcH_m = commerce_levels > 0 ? 4.0 : 3.0;
+  const etageH_m = 3.0;
+  const realTotalH = rdcH_m + (levels - 1) * etageH_m;
+  const sdpTotale = fp_m2 * levels;
+  const secX = W - 200, secY = H - 40;
+  const secPxPerM = 6;   // pixels par mètre en coupe
+  const secFloorW = 80, secGap = 2;
+  const secTotalH = realTotalH * secPxPerM + (levels - 1) * secGap;
+  const secStartY = secY - secTotalH;
+  // Fond blanc semi-transparent
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.06)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.beginPath(); ctx.roundRect(secX - 12, secStartY - 34, secFloorW + 120, secTotalH + 58, 6); ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 0.5; ctx.stroke();
+  ctx.restore();
+  // Titre
+  ctx.font = "bold 10px Arial"; ctx.fillStyle = "#2c4a6e"; ctx.textAlign = "left";
+  ctx.fillText("COUPE", secX, secStartY - 20);
+  ctx.font = "9px Arial"; ctx.fillStyle = "#888";
+  ctx.fillText(`SDP totale : ${sdpTotale.toLocaleString("fr-FR")} m²`, secX, secStartY - 8);
+  // Étages de bas en haut avec hauteurs réelles
+  let cumY = secY;
+  for (let f = 0; f < levels; f++) {
+    const hM = f === 0 ? rdcH_m : etageH_m;
+    const hPx = hM * secPxPerM;
+    const fy = cumY - hPx;
+    const isComm = f < commerce_levels;
+    // Rectangle étage (proportionnel à la hauteur réelle)
+    ctx.fillStyle = isComm ? "rgba(232,160,48,0.85)" : "rgba(139,176,216,0.65)";
+    ctx.beginPath(); ctx.roundRect(secX, fy, secFloorW, hPx - secGap, 2); ctx.fill();
+    ctx.strokeStyle = isComm ? "#c07020" : "#2c4a6e"; ctx.lineWidth = 0.8; ctx.stroke();
+    // Label étage + hauteur
+    const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+    ctx.font = "bold 9px Arial"; ctx.fillStyle = isComm ? "#7a4410" : "#1a3a5c"; ctx.textAlign = "center";
+    ctx.fillText(floorLabel, secX + secFloorW / 2, fy + hPx / 2 - 2);
+    ctx.font = "8px Arial"; ctx.fillStyle = "#999";
+    ctx.fillText(`${hM}m`, secX + secFloorW / 2, fy + hPx / 2 + 8);
+    // Surface par étage (à droite)
+    ctx.font = "9px Arial"; ctx.fillStyle = "#666"; ctx.textAlign = "left";
+    ctx.fillText(`${fp_m2} m²`, secX + secFloorW + 6, fy + hPx / 2 + 2);
+    cumY = fy;
+  }
+  // Ligne sol
+  ctx.beginPath(); ctx.moveTo(secX - 4, secY + 2); ctx.lineTo(secX + secFloorW + 4, secY + 2);
+  ctx.strokeStyle = "#999"; ctx.lineWidth = 1.5; ctx.stroke();
+  // Hauteur totale (annotation à gauche)
+  ctx.beginPath(); ctx.moveTo(secX - 6, cumY); ctx.lineTo(secX - 6, secY);
+  ctx.strokeStyle = "#aaa"; ctx.lineWidth = 0.7; ctx.stroke();
+  ctx.font = "8px Arial"; ctx.fillStyle = "#999"; ctx.textAlign = "center";
+  ctx.save(); ctx.translate(secX - 10, (cumY + secY) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(`H = ${realTotalH.toFixed(1)}m`, 0, 0);
+  ctx.restore();
+
   drawSolarArc(ctx, W, H, { bearing });
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
@@ -3850,21 +3931,24 @@ app.post("/generate-massing", async (req, res) => {
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
+    await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
+    const rdcH = commerceLevels > 0 ? 4.0 : 3.0;   // RDC commerce = 4m, sinon 3m
+    const etageH = 3.0;                              // étages courants = 3m
+    const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor }, MAPBOX_TOKEN);
+      { total_height: realTotalH, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
-    const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+    const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 2560, height: 2560 } });
     await page.close();
-    const W = 1280, H = 1280;
+    const W = 2560, H = 2560;
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0, W, H);
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
-      total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
+      total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
       typology: massingCoords._typology,
     });
     const png = canvas.toBuffer("image/png");
@@ -3894,13 +3978,13 @@ app.post("/generate-massing", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt",
-          "Restyle this axonometric urban planning map into a premium architectural massing illustration.\n\n" +
+          "Restyle this axonometric urban planning map into a premium Hektar-style architectural massing illustration.\n\n" +
           "GEOMETRY — ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\n" +
-          "PARCEL ZONE — NON-NEGOTIABLE:\n- The RED/PINK semi-transparent zone on the ground must NOT MOVE\n- DO NOT MOVE IT, DO NOT RESIZE IT, DO NOT RECOLOR IT\n- GPS-fixed, must not drift even 1 pixel\n- The dashed red outline must also stay at exact same position\n\n" +
-          "PROPOSED MASSING — CRITICAL:\n- There is a NEW BUILDING VOLUME on the parcel — the architectural proposal\n- Keep its exact position, footprint and height — do NOT alter it\n- Orange/warm levels = COMMERCE floors (ground floor)\n- White levels = HABITATION floors\n- Add visible horizontal lines on building faces to show each floor\n- Strong black edges #1a1a1a on all proposed building corners\n- The proposed building must clearly stand out from surrounding buildings\n\n" +
-          "EXISTING BUILDINGS:\n- Rooftops: BRIGHT PURE WHITE #ffffff with strong black edges\n- Sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Shadow faces: warm gray #9a9690\n- EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\n" +
-          "GROUND AND VEGETATION:\n- Ground inside blocks: fresh vivid green #7ab83a, natural sunlit grass\n- Trees: round canopy dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks — at least 30 trees\n\n" +
-          "ROADS:\n- Road surface: warm sandy beige #d4c49a\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n\nNo text, no labels, no annotations."
+          "PARCEL ZONE — NON-NEGOTIABLE:\n- The OCHRE/YELLOW outline around the parcel must NOT MOVE\n- DO NOT MOVE IT, DO NOT RESIZE IT\n- Keep the ochre yellow color #c8a020\n- GPS-fixed, must not drift even 1 pixel\n- The dashed ochre separative limit must also stay at exact same position\n\n" +
+          "PROPOSED MASSING — CRITICAL:\n- There is a NEW BUILDING VOLUME on the parcel — the architectural proposal\n- Keep its exact position, footprint and height — do NOT alter it\n- The building has BLUE semi-transparent floors #8bb0d8 — keep this color\n- Orange levels at ground = COMMERCE floors — keep orange #e8a030\n- Visible horizontal GAPS between each floor — keep them, they show floor lines\n- Strong dark blue edges #2c4a6e on all proposed building corners\n- The proposed building must clearly stand out from surrounding buildings\n- ABSOLUTELY NO trees, vegetation, or any object ON the building site/parcel\n\n" +
+          "EXISTING BUILDINGS:\n- Rooftops: BRIGHT PURE WHITE #ffffff\n- Sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Shadow faces: warm gray #b0aaa0\n- EDGES: clean dark lines #555 on edges (NOT too heavy)\n- Cast shadows: solid warm gray #c4c0b8\n\n" +
+          "GROUND AND VEGETATION:\n- Ground: light warm white #f2f0ec\n- Trees ONLY OUTSIDE the parcel: round canopy green #5a9a2a with SLIGHT OPACITY (0.7)\n- Trees along sidewalks — at least 20 trees, semi-transparent\n- ZERO trees inside the parcel boundary — leave the site completely clear\n\n" +
+          "ROADS:\n- Road surface: warm sandy beige #d4c49a\n- Road borders: subtle #c0a878\n- Sidewalks: cream strip #ede4cc\n\nNo text, no labels, no annotations. Clean Hektar architectural style."
         );
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -3913,7 +3997,7 @@ app.post("/generate-massing", async (req, res) => {
           drawMassingOverlays(fCanvas.getContext("2d"), W, H, {
             site_area: Number(site_area), bearing, label,
             levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
-            total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
+            total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
             typology: massingCoords._typology,
           });
           const finalPng = fCanvas.toBuffer("image/png");
