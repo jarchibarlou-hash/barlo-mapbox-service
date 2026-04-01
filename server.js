@@ -3675,17 +3675,20 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
   const commerceH = massingParams.commerce_levels * massingParams.floor_height;
-  // v51.3: niveaux réguliers simples
-  const floorLines = [];
-  // v51.8: levels est LA source de vérité — jamais de division hauteur/floor_height
+  // v51.8: levels est LA source de vérité UNIQUE — AUCUN fallback
   const totalLevels = massingParams.levels;
+  const floorH = massingParams.floor_height;
+  // Sécurité : forcer la hauteur du GeoJSON à levels × floor_height
+  massingParams.total_height = totalLevels * floorH;
+  const floorLines = [];
   for (let f = 1; f < totalLevels; f++) {
-    floorLines.push(f * massingParams.floor_height);
+    floorLines.push(f * floorH);
   }
   const levelSlices = [];
   for (let lv = 0; lv < totalLevels; lv++) {
-    levelSlices.push({ lv, base: lv * massingParams.floor_height, top: (lv + 1) * massingParams.floor_height });
+    levelSlices.push({ lv, base: lv * floorH, top: (lv + 1) * floorH });
   }
+  console.log(\`[MASSING-HTML] levels=\${totalLevels} floorH=\${floorH} totalH=\${massingParams.total_height} floorLines=[\${floorLines}] slices=\${levelSlices.length}\`);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4622,6 +4625,12 @@ app.post("/generate-massing", async (req, res) => {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
+    // v51.8: VÉRIFICATION CRITIQUE — totalH DOIT être = levels × floorH
+    console.log(`[MASSING-CHECK] levels=${levels} floorH=${floorH} totalH=${totalH} CHECK=${levels * floorH} MATCH=${totalH === levels * floorH}`);
+    if (totalH !== levels * floorH) {
+      console.warn(`[MASSING-FIX] totalH MISMATCH! Forcing ${levels} × ${floorH} = ${levels * floorH} (was ${totalH})`);
+      totalH = levels * floorH;
+    }
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
       { total_height: totalH, commerce_levels: commerceLevels, floor_height: floorH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
