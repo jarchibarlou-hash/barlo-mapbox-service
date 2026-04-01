@@ -3688,7 +3688,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   for (let lv = 0; lv < totalLevels; lv++) {
     levelSlices.push({ lv, base: lv * floorH, top: (lv + 1) * floorH });
   }
-  console.log(\`[MASSING-HTML] levels=\${totalLevels} floorH=\${floorH} totalH=\${massingParams.total_height} floorLines=[\${floorLines}] slices=\${levelSlices.length}\`);
+  console.log("[MASSING-HTML] levels=" + totalLevels + " floorH=" + floorH + " totalH=" + massingParams.total_height + " floorLines=[" + floorLines.join(",") + "] slices=" + levelSlices.length);
   return `<!DOCTYPE html>
 <html>
 <head>
