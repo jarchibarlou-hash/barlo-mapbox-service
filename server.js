@@ -4552,7 +4552,8 @@ app.post("/generate-massing", async (req, res) => {
     fp = Number(fp_m2_raw);
     levels = Number(levels_raw);
     commerceLevels = Number(commerce_raw);
-    totalH = Number(height_raw) || levels * floorH;
+    // v51.7: hauteur totale = levels × floor_height pour cohérence floor lines/tranches
+    totalH = levels * floorH;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
