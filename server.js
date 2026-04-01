@@ -3662,9 +3662,11 @@ app.post("/generate", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust2;
     if (OPENAI_API_KEY) {
       try {
+        console.log("[SLIDE4-POLISH] Starting OpenAI polish for slide 4 AXO...");
         const resizedCanvas = createCanvas(1024, 1024);
-        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
+        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
+        console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes`);
         const form = new FormData();
         form.append("model", "gpt-image-1");
         form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
@@ -3676,17 +3678,25 @@ app.post("/generate", async (req, res) => {
               const refCanvas = createCanvas(1024, 1024);
               refCanvas.getContext("2d").drawImage(await loadImage(refBuf), 0, 0, 1024, 1024);
               form.append("image", refCanvas.toBuffer("image/png"), { filename: "style_ref.png", contentType: "image/png" });
+              console.log("[SLIDE4-POLISH] Style ref attached");
             }
           } catch (e) { console.warn("Style ref fetch error:", e.message); }
         }
         form.append("size", "1024x1024");
+        form.append("response_format", "b64_json");
         form.append("input_fidelity", "high");
         form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\nPARCEL ZONE - NON-NEGOTIABLE:\n- There is a RED/PINK semi-transparent zone visible on the ground\n- DO NOT MOVE IT under any circumstances\n- DO NOT RESIZE IT\n- DO NOT RECOLOR IT beyond keeping it red/pink semi-transparent\n- It must stay at EXACTLY the same position, same shape, same size\n- The dashed red outline around it must also stay at exact same position\n- This zone is GPS-fixed and must not drift even 1 pixel\n\nBUILDINGS - MANDATORY:\n- Building rooftops: BRIGHT PURE WHITE #ffffff\n- Building sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Building shadow faces: warm gray #9a9690\n- Building EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\nGROUND AND VEGETATION - MANDATORY:\n- Ground inside blocks: fresh vivid green #7ab83a, slightly warm, natural sunlit grass\n- Grass texture: visible fine grain #6aa030\n- Trees: round canopy top-view, dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks and in open spaces - at least 30 trees\n- Ground is predominantly GREEN inside blocks\n\nROADS - MANDATORY:\n- Road surface: warm sandy beige #d4c49a with asphalt grain texture\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n- Roads are clearly sandy/beige, strong contrast with green blocks\n- Road grid is prominent and legible\n\nBLOCK STRUCTURE - MANDATORY:\n- Each block is surrounded by roads on all 4 sides\n- Green stays strictly inside blocks, never crosses roads\n- Block boundaries are sharp hard lines\n\nNo text, no labels, no annotations.");
+        console.log("[SLIDE4-POLISH] Calling OpenAI images/edits...");
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
         });
+        console.log(`[SLIDE4-POLISH] OpenAI status: ${oaiRes.status}`);
         const oaiJson = await oaiRes.json();
+        if (oaiJson.error) {
+          console.error(`[SLIDE4-POLISH] OpenAI error: ${JSON.stringify(oaiJson.error)}`);
+        }
         if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
+          console.log(`[SLIDE4-POLISH] Got b64_json (${oaiJson.data[0].b64_json.length} chars)`);
           const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
@@ -3699,9 +3709,15 @@ app.post("/generate", async (req, res) => {
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
             enhancedUrl = pd2.publicUrl;
+            console.log(`✓ [SLIDE4-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          } else {
+            console.error(`[SLIDE4-POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
           }
+        } else {
+          console.warn(`[SLIDE4-POLISH] No b64_json. Response keys: ${JSON.stringify(Object.keys(oaiJson))}`);
+          if (oaiJson.data?.[0]) console.warn(`[SLIDE4-POLISH] data[0] keys: ${JSON.stringify(Object.keys(oaiJson.data[0]))}`);
         }
-      } catch (oaiErr) { console.warn("OpenAI error:", oaiErr.message); }
+      } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
