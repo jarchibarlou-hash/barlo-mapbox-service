@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.6-HEKTAR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.7-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -4062,9 +4062,9 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
   ctx.restore();
 }
-// ─── OVERLAYS CANVAS — MASSING v51.6 (légende v51.3 + flèches alignées sur floor lines) ──
+// ─── OVERLAYS CANVAS — MASSING v51.7 (v51.3 EXACT sans légende) ──
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, massingPixels }) {
-  // Boussole en haut à droite
+  // Boussole en haut à droite (identique v51.3)
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -4079,44 +4079,11 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.rotate((bearing || 0) * Math.PI / 180);
   ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818"; ctx.fillText("N", 0, -22);
   ctx.restore();
-  // Légende (identique v51.3)
-  const legItems = [
-    { fill: "rgba(208,40,24,0.22)", stroke: "#d02818", dash: false, label: `Parcelle — ${site_area} m²` },
-    { fill: "rgba(208,40,24,0.0)",  stroke: "#d02818", dash: true,  label: "Zone constructible (reculs)" },
-    commerce_levels > 0 && { fill: "#e8a030", stroke: "#c07020", dash: false, label: `Commerce — ${commerce_levels} niv. (RDC)` },
-    { fill: "#ffffff", stroke: "#333", dash: false, label: `Habitation — ${habitation_levels} niv.` },
-  ].filter(Boolean);
-  const legPad = 14, legLH = 26, legW = 340;
-  const legH = legPad * 2 + legItems.length * legLH + 52;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
-  ctx.fillStyle = "rgba(255,255,255,0.97)";
-  ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#e4e0d8"; ctx.lineWidth = 1; ctx.stroke();
-  ctx.restore();
-  ctx.font = "bold 14px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.textAlign = "left";
-  ctx.fillText(`Option ${label}`, 28, 16 + legPad + 2);
-  ctx.font = "12px Arial"; ctx.fillStyle = "#555";
-  ctx.fillText(`${levels} niv. · H=${total_height}m · Empreinte ${fp_m2}m²`, 28, 16 + legPad + 18);
-  if (scenario_role) { ctx.font = "italic 11px Arial"; ctx.fillStyle = "#888"; ctx.fillText(scenario_role, 28, 16 + legPad + 34); }
-  const typoLabels = { BLOC: "Bloc compact", BARRE: "Barre / Lamelle", EN_U: "Forme en U", EN_L: "Forme en L", EXTENSION: "Extension" };
-  if (typology) { ctx.font = "bold 11px Arial"; ctx.fillStyle = accent_color || "#2a5298"; ctx.fillText(`Typologie : ${typoLabels[typology] || typology}`, 170, 16 + legPad + 2); }
-  legItems.forEach((item, i) => {
-    const iy = 16 + legPad + 48 + i * legLH;
-    ctx.save();
-    ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
-    if (item.dash) ctx.setLineDash([4, 2]);
-    ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
-    ctx.restore();
-    ctx.font = "12px Arial"; ctx.fillStyle = "#444"; ctx.textAlign = "left";
-    ctx.fillText(item.label, 52, iy + 11);
-  });
-  ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap", 28, 16 + legH - 6);
 
-  // v51.6: Flèches par niveau ALIGNÉES sur les floor lines du bâtiment
+  // v51.7: PAS de légende — flèches identiques v51.3 (distribution uniforme)
   if (massingPixels && massingPixels.length >= 3) {
     const cx = massingPixels.reduce((s, p) => s + p.x, 0) / massingPixels.length;
+    const cy = massingPixels.reduce((s, p) => s + p.y, 0) / massingPixels.length;
     const maxX = Math.max(...massingPixels.map(p => p.x));
     const minY = Math.min(...massingPixels.map(p => p.y));
     const maxY = Math.max(...massingPixels.map(p => p.y));
@@ -4126,24 +4093,10 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const arrowEndX = maxX + 30;
     const labelX = arrowEndX + 6;
     const buildingPixelH = maxY - minY;
-    // Calculer les Y des floor lines (proportionnel aux hauteurs réelles)
-    const commLv = commerce_levels || 0;
-    const commFH = 4.0;
-    const habFH = floor_height || 3.0;
-    const realTotalH = commLv * commFH + (totalLevels - commLv) * habFH;
-    // Y de chaque floor line (séparation entre niveaux)
-    const floorYs = [];
-    let cumH = 0;
-    for (let lv = 0; lv < totalLevels; lv++) {
-      const thisH = (lv < commLv) ? commFH : habFH;
-      floorYs.push({ base: cumH, top: cumH + thisH, mid: cumH + thisH / 2 });
-      cumH += thisH;
-    }
+    const levelPixelH = buildingPixelH / totalLevels;
     ctx.save();
     for (let lv = 0; lv < totalLevels; lv++) {
-      // Position Y alignée sur le milieu de chaque tranche réelle
-      const ratio = floorYs[lv].mid / realTotalH;
-      const lvY = maxY - ratio * buildingPixelH;
+      const lvY = maxY - (lv * levelPixelH) - levelPixelH / 2;
       const lvName = lv === 0 ? "RDC" : `R+${lv}`;
       const lvLabel = `${lvName} : ${surfPerFloor} m²`;
       ctx.strokeStyle = accent_color || "#c89418";
@@ -4803,7 +4756,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51.6-HEKTAR on port ${PORT}`);
+  console.log(`BARLO v51.7-HEKTAR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
