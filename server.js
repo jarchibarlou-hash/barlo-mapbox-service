@@ -4672,16 +4672,20 @@ app.post("/generate-massing", async (req, res) => {
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     await page.close();
     const W = 1280, H = 1280;
+    // v51.2: Image BRUTE sans overlays pour OpenAI (évite corruption texte)
+    const rawPng = screenshotBuf;
+    // Version avec overlays pour fallback (si pas d'OpenAI)
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0, W, H);
-    drawMassingOverlays(ctx, W, H, {
+    const overlayParams = {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: totalH, floor_height: floorH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
       typology: massingCoords._typology,
       massingPixels,
-    });
+    };
+    drawMassingOverlays(ctx, W, H, overlayParams);
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true, cacheControl: "0" });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
@@ -4689,8 +4693,9 @@ app.post("/generate-massing", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust;
     if (OPENAI_API_KEY) {
       try {
+        // v51.2: envoyer image BRUTE (sans overlays) à OpenAI pour éviter corruption texte
         const resizedCanvas = createCanvas(1024, 1024);
-        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
+        resizedCanvas.getContext("2d").drawImage(await loadImage(rawPng), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const form = new FormData();
         form.append("model", "gpt-image-1");
@@ -4724,8 +4729,7 @@ app.post("/generate-massing", async (req, res) => {
           "- The proposed building's floor lines (dark horizontal bands) — must stay VISIBLE and SHARP",
           "- The parcel outline (golden/ochre line) — must stay visible",
           "- The setback zone (dashed golden line) — must stay visible",
-          "- The legend box, compass, and ALL text/annotations — pixel-perfect, readable",
-          "- The small arrows with level labels on the right side of the proposed building",
+          "- There is NO text or legend in this image — do NOT add any text, labels, or annotations",
           "",
           "WHAT TO IMPROVE:",
           "- Add soft ambient occlusion shadows at building bases (subtle, not heavy)",
