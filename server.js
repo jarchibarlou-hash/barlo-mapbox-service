@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.0-MASSING" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "51.1-HEKTAR" }));
 
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
@@ -216,9 +216,9 @@ function computeZoomMassing(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const mpp = (ext * 1.8) / 1280;
+  const mpp = (ext * 0.9) / 1280;  // v51.1: zoom x2 — cadrage serré sur la parcelle
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(18, Math.max(16.5, Math.round(z * 4) / 4));
+  return Math.min(19, Math.max(17, Math.round(z * 4) / 4));
 }
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -3651,7 +3651,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addLayer({ id: 'tree-highlight', type: 'circle', source: 'trees',
       paint: { 'circle-radius': ['*', ['get', 'radius'], 0.45], 'circle-color': '#7ac048',
         'circle-opacity': 0.4, 'circle-blur': 0.6 } });
-    setTimeout(() => { window.__MAP_READY = true; }, 2500);
+    setTimeout(() => { window.__MAP_READY = true; }, 1200);
   });
   setTimeout(() => { window.__MAP_READY = true; }, 30000);
 })();
@@ -3687,7 +3687,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
 <meta charset="utf-8">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { width: 1280px; height: 1280px; overflow: hidden; background: #6aad3a; }
+  body { width: 1280px; height: 1280px; overflow: hidden; background: #f5f3ef; }
   #map { width: 1280px; height: 1280px; }
   .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-group { display: none !important; }
 </style>
@@ -3699,47 +3699,42 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
-  // v51.0: MÊME style Hektar Pro que Slide 4 AXO — fond vert, routes larges grises
+  // v51.1: Style Hektar MASSING — fond très clair, bâtiments transparents, routes subtiles
   const hektarStyle = {
     "version": 8, "name": "Hektar Massing",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#6aad3a" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#88c4e0" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#f5f3ef" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#dce8f0" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#5a9a2e" } },
+        "paint": { "fill-color": "#e8f0e0" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#6aad3a" } },
+        "paint": { "fill-color": "#f0eee8" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a857e", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 16, 16, 24, 18, 36] } },
+        "paint": { "line-color": "#d8d4cc", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 17, 18, 19, 28] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a857e", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 10, 16, 16, 18, 22] } },
+        "paint": { "line-color": "#d8d4cc", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 17, 12, 19, 18] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d0ccc6", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 13, 16, 20, 18, 32] } },
+        "paint": { "line-color": "#ece8e2", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 15, 19, 24] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d0ccc6", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 12, 18, 18] } },
+        "paint": { "line-color": "#ece8e2", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 17, 10, 19, 15] } },
       { "id": "road-label-major", "type": "symbol", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 14, 9, 17, 13], "symbol-placement": "line", "text-max-angle": 35, "text-padding": 10, "text-allow-overlap": false },
-        "paint": { "text-color": "#5a4a2a", "text-halo-color": "rgba(255,255,255,0.92)", "text-halo-width": 2 } },
-      { "id": "road-label-street", "type": "symbol", "source": "composite", "source-layer": "road",
-        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false], "minzoom": 14,
-        "layout": { "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]], "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 11], "symbol-placement": "line", "text-max-angle": 35, "text-padding": 10, "text-allow-overlap": false },
-        "paint": { "text-color": "#5a4a2a", "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 1.5 } }
+          "text-size": ["interpolate", ["linear"], ["zoom"], 14, 8, 17, 11], "symbol-placement": "line", "text-max-angle": 35, "text-padding": 10 },
+        "paint": { "text-color": "#aaa59a", "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.5 } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3754,15 +3749,15 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   const rng = rand();
 
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.85, position: [1.2, 210, 30] });
+    // v51.1: éclairage doux pour ombres portées visibles
+    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.6, position: [1.2, 210, 30] });
 
-    // v51.0: MÊMES hauteurs que Slide 4 (50% RDC, 48% R+1, 2% R+2)
+    // v51.1: bâtiments environnants LÉGERS — gris très clair, semi-transparents, pas de contours noirs
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
-        'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#fcfaf6', 4, '#f5f2ec', 10, '#ece8e0', 20, '#e5e0d8', 40, '#ddd8d0'],
+        'fill-extrusion-color': '#e8e6e2',
         'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 50],
               0,3.5, 1,3.5, 2,3.5, 3,3.5, 4,3.5, 5,3.5, 6,3.5, 7,3.5, 8,3.5, 9,3.5,
               10,3.5, 11,3.5, 12,3.5, 13,3.5, 14,3.5, 15,3.5, 16,3.5, 17,3.5, 18,3.5, 19,3.5,
@@ -3773,32 +3768,33 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
               49, 10,
               7],
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
+        'fill-extrusion-opacity': 0.55, 'fill-extrusion-vertical-gradient': true,
       },
     });
 
-    // Parcelle sable + contour rouge
+    // v51.1: Parcelle — contour subtil, fond légèrement teinté
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#c8b080', 'fill-opacity': 0.8 } }, '3d-buildings');
+      paint: { 'fill-color': '#e8dfc8', 'fill-opacity': 0.5 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-opacity': 0.7 } }, '3d-buildings');
+      paint: { 'line-color': '#d4a020', 'line-width': 2, 'line-opacity': 0.6 } }, '3d-buildings');
 
-    // Enveloppe constructible
+    // Enveloppe constructible — tirets subtils
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 1.5, 'line-dasharray': [5, 3], 'line-opacity': 0.45 } }, '3d-buildings');
+      paint: { 'line-color': '#d02818', 'line-width': 1.2, 'line-dasharray': [5, 3], 'line-opacity': 0.35 } }, '3d-buildings');
 
-    // ── BÂTIMENT PROJET (massing) ──
+    // ── BÂTIMENT PROJET (massing) — bien contrasté, légère opacité ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     ${commerceH > 0 ? `map.addLayer({ id: 'massing-commerce', type: 'fill-extrusion', source: 'massing',
-      paint: { 'fill-extrusion-color': '#e8a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.88, 'fill-extrusion-vertical-gradient': true } });` : ""}
+      paint: { 'fill-extrusion-color': '#d4a030', 'fill-extrusion-height': ${commerceH}, 'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.82, 'fill-extrusion-vertical-gradient': true } });` : ""}
     map.addLayer({ id: 'massing-habitation', type: 'fill-extrusion', source: 'massing',
-      paint: { 'fill-extrusion-color': '#f5f5f5', 'fill-extrusion-height': ${massingParams.total_height},
-        'fill-extrusion-base': ${commerceH}, 'fill-extrusion-opacity': 0.88, 'fill-extrusion-vertical-gradient': true } });
+      paint: { 'fill-extrusion-color': '#f0ede8', 'fill-extrusion-height': ${massingParams.total_height},
+        'fill-extrusion-base': ${commerceH}, 'fill-extrusion-opacity': 0.82, 'fill-extrusion-vertical-gradient': true } });
+    // Contour du bâtiment projet — couleur accent bien visible
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
-      paint: { 'line-color': '${massingParams.accent_color}', 'line-width': 3, 'line-opacity': 1 } });
+      paint: { 'line-color': '${massingParams.accent_color}', 'line-width': 2.5, 'line-opacity': 0.9 } });
 
     // ── Lignes d'étages sur le bâtiment projet ──
     // On crée une ligne à chaque niveau sur le contour du massing
@@ -3848,19 +3844,15 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
           geometry: { type: 'Point', coordinates: [tc.lon, tc.lat] } });
       }
     });
+    // v51.1: arbres Hektar — subtils, vert doux
     map.addSource('trees', { type: 'geojson', data: { type: 'FeatureCollection', features: treeFeatures } });
     map.addLayer({ id: 'tree-shadow', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['*', ['get', 'radius'], 1.1], 'circle-color': '#1a3a0a', 'circle-opacity': 0.3,
-        'circle-translate': [5, 5], 'circle-blur': 0.5 } });
-    map.addLayer({ id: 'tree-trunk', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'trunk'], 'circle-color': '#6b4226', 'circle-opacity': 0.9 } });
+      paint: { 'circle-radius': ['*', ['get', 'radius'], 0.9], 'circle-color': '#8aaa70', 'circle-opacity': 0.15,
+        'circle-translate': [3, 3], 'circle-blur': 0.6 } });
     map.addLayer({ id: 'tree-canopy', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#4a9a2e',
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#2a6018', 'circle-opacity': 0.85, 'circle-blur': 0.12 } });
-    map.addLayer({ id: 'tree-highlight', type: 'circle', source: 'trees',
-      paint: { 'circle-radius': ['*', ['get', 'radius'], 0.45], 'circle-color': '#7ac048',
-        'circle-opacity': 0.4, 'circle-blur': 0.6 } });
-    setTimeout(() => { window.__MAP_READY = true; }, 2500);
+      paint: { 'circle-radius': ['get', 'radius'], 'circle-color': '#a0c878',
+        'circle-stroke-width': 0.5, 'circle-stroke-color': '#80a858', 'circle-opacity': 0.55, 'circle-blur': 0.25 } });
+    setTimeout(() => { window.__MAP_READY = true; }, 1200);
   });
   setTimeout(() => { window.__MAP_READY = true; }, 30000);
 })();
@@ -4229,7 +4221,7 @@ function drawGeometryOverlay(ctx, W, H, projectedGeometry, roadLabels) {
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate v50.1 (composite-fidelity) ═══");
+  console.log("═══ /generate v51.1 (composite-fidelity) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -4237,8 +4229,14 @@ app.post("/generate", async (req, res) => {
     slide_name = "slide_4_axo",
     zoom: zoomOverride = null,
     style_ref_url = null,
-    enhance = true,  // v50.5: OpenAI réactivé en mode POLISH (après overlays, pas avant)
+    enhance = true,
+    skip_generate = false,  // v51.0: si true, skip la génération (pour ne pas bloquer le massing)
   } = req.body;
+  // v51.0: skip rapide si demandé
+  if (skip_generate === true || skip_generate === "true") {
+    console.log("SKIP /generate (skip_generate=true)");
+    return res.json({ ok: true, skipped: true, message: "Slide 4 generation skipped" });
+  }
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
   if (!BROWSERLESS_TOKEN) return res.status(500).json({ error: "BROWSERLESS_TOKEN manquant" });
@@ -4658,31 +4656,37 @@ app.post("/generate-massing", async (req, res) => {
         form.append("size", "1024x1024");
         form.append("input_fidelity", "high");
         form.append("prompt", [
-          "TASK: Smoothly polish this architectural massing 3D view. Make it look like a premium render. DO NOT redesign anything.",
+          "TASK: Polish this architectural massing view into a premium Hektar-style render. DO NOT redesign.",
           "",
-          "THIS IMAGE IS ALREADY COMPLETE. The proposed building, surrounding buildings, roads, trees, and annotations are all correctly placed.",
-          "Your ONLY job is to make the rendering smoother and more photorealistic.",
+          "THIS IS AN ARCHITECTURAL MASSING DIAGRAM showing a proposed building on a site.",
+          "The surrounding buildings are LIGHT GRAY and SEMI-TRANSPARENT — they are context, not the focus.",
+          "The PROPOSED BUILDING in the center is the main subject — it must stand out clearly.",
           "",
-          "RULES — ABSOLUTE — DO NOT BREAK:",
-          "- KEEP the PROPOSED BUILDING (the distinctive volume on the sandy parcel) at its EXACT position, shape, and height",
-          "- The proposed building has FLOOR LINES (thin gray bands) — KEEP them visible and crisp",
-          "- KEEP every surrounding building at its EXACT position. Buildings are BEIGE/WHITE — keep them light colored.",
-          "- KEEP every road at its EXACT width and color (gray asphalt). Roads must stay wide and gray.",
-          "- KEEP the green trees — make them rounder and more natural with soft shadows",
-          "- KEEP the sandy/ochre parcel zone exactly where it is",
-          "- KEEP the legend box and compass exactly as-is",
-          "- KEEP all text and labels readable — do NOT distort any text",
+          "STYLE REFERENCE — 'HEKTAR' AESTHETIC:",
+          "- Overall: Clean, minimalist, white/light gray palette with subtle shadows",
+          "- Surrounding buildings: very light gray (#e0ddd8), semi-transparent, like a white architectural model",
+          "- Proposed building: slightly warmer white, with VISIBLE FLOOR LINES (horizontal bands on facades)",
+          "- Ground: very light warm gray (#f2f0ea), almost white",
+          "- Roads: subtle beige/cream lines, barely visible",
+          "- Trees: soft green circles with gentle shadows, like watercolor dots",
+          "- Parcel outline: subtle golden/ochre line",
           "",
-          "WHAT TO IMPROVE (SMOOTHING ONLY):",
-          "- Add smooth ambient occlusion shadows at building bases",
-          "- Add soft realistic cast shadows from buildings onto the ground",
-          "- Make tree canopies look like real foliage with gentle shadows",
-          "- Smooth all edges and remove aliasing artifacts",
-          "- Add subtle material textures: concrete on buildings, asphalt on roads, grass on green areas",
-          "- The PROPOSED BUILDING should look slightly more refined than surroundings — like a clean architectural maquette",
-          "- Neutral cool daylight — NO golden hour, NO warm cast, NO bloom",
+          "RULES — DO NOT BREAK:",
+          "- KEEP every building at its EXACT position, footprint, and height",
+          "- KEEP the proposed building's floor lines visible and sharp",
+          "- KEEP the legend and compass exactly as-is",
+          "- KEEP all text readable",
           "",
-          "STYLE: Ultra-smooth, photorealistic maquette render. Dezeen magazine quality. Cool neutral light.",
+          "WHAT TO IMPROVE:",
+          "- Add soft ambient occlusion shadows at ALL building bases",
+          "- Add gentle cast shadows falling to the southeast",
+          "- Smooth all edges, remove aliasing",
+          "- Make trees look like soft watercolor circles",
+          "- Add subtle texture to the proposed building (light concrete feel)",
+          "- The overall image should look like a premium architectural competition panel",
+          "- Cool neutral daylight, NO warm cast, NO bloom, NO golden hour",
+          "",
+          "STYLE: Minimalist white architectural maquette. Think BIG architects / OMA competition renders.",
         ].join("\n"));
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -4731,7 +4735,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v51.0-MASSING on port ${PORT}`);
+  console.log(`BARLO v51.1-HEKTAR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
