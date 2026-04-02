@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.3-HEKTAR-REALISTIC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "60.0-V49-RESTORE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -136,6 +136,21 @@ function brng(p1, p2) {
   const x = Math.cos(p1.lat * Math.PI / 180) * Math.sin(p2.lat * Math.PI / 180) -
     Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+function computeAccessPoint(coords, cLat, cLon) {
+  // Le côté "avant" = le côté dont le milieu a la plus haute latitude (face route)
+  let bestMidLat = -Infinity, bestI = 0;
+  for (let i = 0; i < coords.length; i++) {
+    const j = (i + 1) % coords.length;
+    const midLat = (coords[i].lat + coords[j].lat) / 2;
+    if (midLat > bestMidLat) { bestMidLat = midLat; bestI = i; }
+  }
+  const j = (bestI + 1) % coords.length;
+  const midLat = (coords[bestI].lat + coords[j].lat) / 2;
+  const midLon = (coords[bestI].lon + coords[j].lon) / 2;
+  const edgeBrng = brng(coords[bestI], coords[j]);
+  const outBrng = (edgeBrng + 90) % 360;
+  return { lat: midLat, lon: midLon, bearing: outBrng };
 }
 function computeEnvelope(coords, cLat, cLon, front, side, back) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -3176,6 +3191,21 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
+
+  // v49: accès principal auto-détecté
+  const access = computeAccessPoint(parcelCoords, center.lat, center.lon);
+  const arrowLen = 8;
+  const accEndLat = access.lat + (arrowLen / R_EARTH) * 180 / Math.PI * Math.cos(access.bearing * Math.PI / 180);
+  const accEndLon = access.lon + (arrowLen / (R_EARTH * Math.cos(access.lat * Math.PI / 180))) * 180 / Math.PI * Math.sin(access.bearing * Math.PI / 180);
+  const accessLineGeoJSON = {
+    type: "Feature", properties: {},
+    geometry: { type: "LineString", coordinates: [[access.lon, access.lat], [accEndLon, accEndLat]] },
+  };
+  const accessPointGeoJSON = {
+    type: "Feature", properties: { label: "Accès" },
+    geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
+  };
+
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
   return `<!DOCTYPE html>
 <html>
@@ -3197,123 +3227,152 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
+
+  // ═══════════════════════════════════════════════════════════════════
+  // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
+  // ═══════════════════════════════════════════════════════════════════
   const hektarStyle = {
-    "version": 8, "name": "Hektar",
-    "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
+    "version": 8,
+    "name": "Hektar Pro",
+    "sources": {
+      "mapbox-streets": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8" },
+      "mapbox-terrain": { "type": "vector", "url": "mapbox://mapbox.mapbox-terrain-v2" },
+      "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" }
+    },
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#5a9848" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
-      { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
+      { "id": "background", "type": "background",
+        "paint": { "background-color": "#6aad3a" } },
+      { "id": "water", "type": "fill",
+        "source": "composite", "source-layer": "water",
+        "paint": { "fill-color": "#a8cce0" } },
+      { "id": "landuse-park", "type": "fill",
+        "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#468538" } },
-      { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
+        "paint": { "fill-color": "#5a9e2e" } },
+      { "id": "landuse-urban", "type": "fill",
+        "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#5a9848" } },
-      { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "paint": { "fill-color": "#6aad3a" } },
+      { "id": "road-case-secondary", "type": "line",
+        "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 14] } },
-      { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
+        "paint": { "line-color": "#b8a478", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 18, 12] } },
+      { "id": "road-case-street", "type": "line",
+        "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 16, 5, 18, 9] } },
-      { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "paint": { "line-color": "#b8a478", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 7] } },
+      { "id": "road-fill-secondary", "type": "line",
+        "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#6b6b6b", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
-      { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
+        "paint": { "line-color": "#d4c49a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+      { "id": "road-fill-street", "type": "line",
+        "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#7a7a7a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 4, 18, 7] } },
-      { "id": "road-label", "type": "symbol", "source": "composite", "source-layer": "road",
-        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "street"], true, false],
-        "layout": { "text-field": ["get", "name"], "text-size": 10, "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"],
-          "symbol-placement": "line", "text-max-angle": 30 },
-        "paint": { "text-color": "#ffffff", "text-halo-color": "#333333", "text-halo-width": 1 } }
+        "paint": { "line-color": "#d4c49a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 5] } },
+      { "id": "road-label-major", "type": "symbol",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": {
+          "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]],
+          "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 15, 10, 17, 13],
+          "symbol-placement": "line", "text-max-angle": 30, "text-padding": 20, "text-allow-overlap": false
+        },
+        "paint": { "text-color": "#5a4a2a", "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 1.5 }
+      },
+      { "id": "road-label-street", "type": "symbol",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited"], true, false],
+        "minzoom": 16,
+        "layout": {
+          "text-field": ["coalesce", ["get", "name_fr"], ["get", "name"]],
+          "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 16, 8, 18, 11],
+          "symbol-placement": "line", "text-max-angle": 30, "text-padding": 30, "text-allow-overlap": false
+        },
+        "paint": { "text-color": "#7a6a4a", "text-halo-color": "rgba(255,255,255,0.75)", "text-halo-width": 1 }
+      }
     ]
   };
+
   const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
+
   map.on('style.load', () => {
-    // Directional sun light for realistic shadow projection
-    map.setLight({ anchor: 'map', color: '#fff5e6', intensity: 0.6, position: [1.5, 210, 30] });
+    // v49: Lumière directionnelle pour ombres et profondeur
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+
+    const labelLayerId = undefined;
+
+    // v49: BÂTIMENTS 3D — hauteurs variées via hash sur ID
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
-        'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#f8f6f2', 4, '#f0ece6', 10, '#e6e2da', 20, '#d4d0c8', 40, '#b0aca4'],
-        // Height distribution: hash building ID → 45% R+1(6m), 53% R+2(9m), 2% R+3(12m)
+        'fill-extrusion-color': [
+          'interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
+          0,  '#fafafa',
+          4,  '#f2f0ec',
+          10, '#e0ddd6',
+          20, '#c0bdb6',
+          40, '#908d88',
+        ],
         'fill-extrusion-height': [
-          'case',
-          // If OSM has real height data, use it
-          ['has', 'height'], ['get', 'height'],
-          // Otherwise: use building footprint area as pseudo-random seed
-          // Small footprint (<120m²) → mostly R+1, large → mix R+1/R+2/R+3
-          ['<', ['coalesce', ['get', 'area'], 80], 60], 6,   // tiny → R+1
-          ['<', ['%', ['coalesce', ['id'], 0], 100], 45], 6,  // 45% → R+1 (6m)
-          ['<', ['%', ['coalesce', ['id'], 0], 100], 98], 9,  // 53% → R+2 (9m)
-          12                                                     // 2%  → R+3 (12m)
+          'let', 'h', ['coalesce', ['get', 'height'], 0],
+          ['case',
+            ['>', ['var', 'h'], 2], ['*', ['var', 'h'], 1.2],
+            ['match', ['%', ['to-number', ['id']], 7],
+              0, 4, 1, 4, 2, 7.5, 3, 7.5, 4, 11, 5, 14, 6, 4, 7.5
+            ]
+          ]
         ],
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
+        'fill-extrusion-opacity': 1.0,
+        'fill-extrusion-vertical-gradient': true,
       },
-    });
-    // ── PARCELLE: ocre/terre (pas vert) ──
+    }, labelLayerId);
+
+    // v49: Parcelle — ocre terre
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#c4a550', 'fill-opacity': 0.45 } }, '3d-buildings');
+      paint: { 'fill-color': '#c4a56a', 'fill-opacity': 0.45 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#b8922a', 'line-width': 2.5, 'line-opacity': 1 } }, '3d-buildings');
-    // ── ENVELOPE ──
+      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-opacity': 0.9 } }, '3d-buildings');
+
+    // v49: Enveloppe constructible — tirets rouges
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d04030', 'line-width': 2, 'line-dasharray': [5, 3], 'line-opacity': 0.80 } }, '3d-buildings');
-    // ── TREES: dense circles along roads using POI layer ──
-    map.addLayer({
-      id: 'trees-poi', source: 'composite', 'source-layer': 'poi_label',
-      filter: ['any',
-        ['match', ['get', 'maki'], ['park', 'garden', 'cemetery'], true, false],
-        ['match', ['get', 'type'], ['Park', 'Garden', 'Recreation Ground'], true, false]
-      ],
-      type: 'circle', minzoom: 13,
-      paint: { 'circle-radius': 8, 'circle-color': '#2d7a1e', 'circle-opacity': 0.85, 'circle-blur': 0.3 }
+      paint: { 'line-color': '#d02818', 'line-width': 2,
+               'line-dasharray': [5, 3], 'line-opacity': 0.75 } }, '3d-buildings');
+
+    // v49: Flèche d'accès principal
+    map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
+    map.addLayer({ id: 'access-arrow-line', type: 'line', source: 'access-line',
+      paint: { 'line-color': '#1a6b3a', 'line-width': 3, 'line-opacity': 0.9 } });
+    map.addSource('access-point', { type: 'geojson', data: ${JSON.stringify(accessPointGeoJSON)} });
+    map.addLayer({ id: 'access-label', type: 'symbol', source: 'access-point',
+      layout: {
+        'text-field': 'Accès',
+        'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+        'text-size': 11, 'text-offset': [0, -1.2], 'text-anchor': 'bottom',
+        'icon-image': '', 'text-allow-overlap': true
+      },
+      paint: { 'text-color': '#1a6b3a', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.5 }
     });
-    // ── SYNTHETIC TREES: scatter along road network for density ──
-    // Use road vertices as seed positions for tree placement
-    const roadFeatures = map.querySourceFeatures('composite', { sourceLayer: 'road' });
-    const treePts = [];
-    for (const f of roadFeatures) {
-      if (!f.geometry || !f.geometry.coordinates) continue;
-      const coords = f.geometry.type === 'LineString' ? f.geometry.coordinates :
-                     f.geometry.type === 'MultiLineString' ? f.geometry.coordinates.flat() : [];
-      for (let i = 0; i < coords.length; i++) {
-        // Place trees every ~3rd vertex, offset 8-15m from road center
-        if (i % 3 !== 0) continue;
-        const [lng, lat] = coords[i];
-        const offsetLng = 0.00012 * (((i * 7 + Math.round(lng * 10000)) % 3) - 1);
-        const offsetLat = 0.00012 * (((i * 11 + Math.round(lat * 10000)) % 3) - 1);
-        treePts.push([lng + offsetLng, lat + offsetLat]);
-      }
-    }
-    if (treePts.length > 0) {
-      map.addSource('synth-trees', { type: 'geojson', data: {
-        type: 'FeatureCollection',
-        features: treePts.map(c => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: {} }))
-      }});
-      map.addLayer({
-        id: 'synth-trees-layer', source: 'synth-trees', type: 'circle',
-        paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15, 4, 17, 8, 18, 12],
-                 'circle-color': '#2d7a1e', 'circle-opacity': 0.8, 'circle-blur': 0.25 }
-      });
-    }
+    map.addLayer({ id: 'access-dot', type: 'circle', source: 'access-point',
+      paint: { 'circle-radius': 5, 'circle-color': '#1a6b3a', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
   });
+
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
   setTimeout(() => { window.__MAP_READY = true; }, 28000);
@@ -3825,58 +3884,118 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    // ── IA POLISH: strict realistic render, ZERO artistic effect ──
+    // ── v49: Post-processing OpenAI gpt-image-1 /edits — préserve géométrie ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting IA polish (strict realistic)...");
+        console.log("[SLIDE4-POLISH] Calling OpenAI gpt-image-1 edits...");
+        // Envoyer uniquement la partie carte 1280×1280 redimensionnée en 1024×1024
         const resizedCanvas = createCanvas(1024, 1024);
-        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
+        const resizedCtx = resizedCanvas.getContext("2d");
+        const fullImg = await loadImage(png);
+        resizedCtx.drawImage(fullImg, 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
-        const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
-        const polishPrompt = "STRICT IMAGE EDITING TASK. You must edit this image with ZERO tolerance for geometry changes. FORBIDDEN: moving/resizing/reshaping/adding/removing any building or object, changing camera angle or zoom, any artistic filter (watercolor, bloom, glow, blur, vignette, painterly effect, cartoon, stylization). GEOMETRY IS 100% FROZEN. ALLOWED edits ONLY: (1) Enhance shadow realism — sharpen existing building shadows on ground. (2) Add subtle concrete/plaster texture to building facades. (3) Slightly improve material contrast between rooftops and facades. That is ALL. The trees are already placed in the image — do NOT add or move them. The output must look like a sharp, sober, realistic photograph of an architectural maquette. Clinical precision. No creativity. No invention.";
-        console.log("[SLIDE4-POLISH] Calling Responses API (gpt-4o)...");
-        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            input: [{ role: "user", content: [
-              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-              { type: "input_text", text: polishPrompt }
-            ]}],
-            tools: [{ type: "image_generation", quality: "high", size: "1024x1024" }]
-          })
-        });
-        console.log(`[SLIDE4-POLISH] Status: ${oaiRes.status}`);
-        const oaiJson = await oaiRes.json();
-        if (oaiJson.error) console.error(`[SLIDE4-POLISH] Error: ${JSON.stringify(oaiJson.error)}`);
-        let polishedB64 = null;
-        if (oaiJson.output) {
-          for (const item of oaiJson.output) {
-            if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-          }
+
+        const form = new FormData();
+        form.append("model", "gpt-image-1");
+        form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
+
+        // Injection image de référence de style si fournie
+        if (style_ref_url) {
+          try {
+            console.log("[SLIDE4-POLISH] Fetching style reference: " + style_ref_url);
+            const refRes = await fetch(style_ref_url);
+            if (refRes.ok) {
+              const refBuf = Buffer.from(await refRes.arrayBuffer());
+              const refCanvas = createCanvas(1024, 1024);
+              refCanvas.getContext("2d").drawImage(await loadImage(refBuf), 0, 0, 1024, 1024);
+              const refPng = refCanvas.toBuffer("image/png");
+              form.append("image", refPng, { filename: "style_ref.png", contentType: "image/png" });
+              console.log("[SLIDE4-POLISH] Style reference injected (" + refBuf.length + " bytes)");
+            }
+          } catch (e) { console.warn("[SLIDE4-POLISH] Style ref fetch error:", e.message); }
         }
-        if (polishedB64) {
-          console.log(`[SLIDE4-POLISH] Got image (${polishedB64.length} chars)`);
-          const enhBuf = Buffer.from(polishedB64, "base64");
-          const fCanvas = createCanvas(W, H);
-          const fCtx = fCanvas.getContext("2d");
-          fCtx.drawImage(await loadImage(enhBuf), 0, 0, W, H);
-          drawLegendCompass(fCtx, W, H, { site_area: Number(site_area), bearing });
-          drawSolarArc(fCtx, W, H, { bearing });
-          const finalPng = fCanvas.toBuffer("image/png");
+        form.append("size", "1024x1024");
+        form.append("input_fidelity", "high");
+        // v49: prompt CLEAN — style vectoriel net, pas de grain, pas d'aquarelle
+        form.append("prompt", "Enhance this axonometric urban planning 3D map into a CLEAN, CRISP architectural illustration.\n\nSTYLE - CRITICAL:\n- CLEAN VECTOR RENDER — NO watercolor, NO grain, NO paper texture, NO artistic filter\n- Sharp flat colors, smooth gradients, clean edges\n- Professional architectural visualization style — like a high-end urban planning presentation\n- Matte finish, no noise, no brush strokes\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\nPARCEL ZONE - NON-NEGOTIABLE:\n- There is an OCHRE/SANDY semi-transparent zone on the ground with a red outline\n- DO NOT MOVE, RESIZE or RECOLOR it — it is GPS-fixed\n- The dashed red outline must stay at exact same position\n\nBUILDINGS:\n- Rooftops: flat white #f8f8f8\n- Sunlit faces: white #fafafa\n- Shadow faces: warm gray #aaa8a2\n- EDGES: clean dark lines #333 on all corners and edges — crisp, not sketchy\n- FLOOR LINES: ONLY on the main project building (the one sitting on the ochre/sandy parcel zone), add thin horizontal lines (#ccc8c0, 1px) at each floor level on its facades to mark stories. Space them evenly (~3.2m per floor). Do NOT add floor lines on surrounding environment buildings — those stay clean and smooth.\n- Cast shadows: flat warm gray #bbb8b0, sharp edge\n\nGROUND:\n- Keep the green ground color exactly as-is\n- Add round-canopy trees (dark green #3d7a1a, highlight #5aaa28) along roads and in open spaces\n- Trees should be CLEAN circles with flat shading, no watercolor effect\n- At least 25-30 trees scattered realistically\n\nROADS:\n- Keep sandy beige color exactly as-is\n- Clean flat surface, no grain texture\n\nNo text, no labels, no annotations, no watermarks.");
+
+        const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() },
+          body: form,
+        });
+
+        const oaiJson = await oaiRes.json();
+        console.log(`[SLIDE4-POLISH] OpenAI /edits status: ${oaiRes.status} (${Date.now() - t0}ms)`);
+
+        if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
+          const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
+          console.log(`[SLIDE4-POLISH] Enhanced map: ${enhancedMapBuf.length} bytes`);
+          // Recomposer : enhanced + légende + boussole + arc solaire
+          const finalCanvas = createCanvas(W, H);
+          const finalCtx = finalCanvas.getContext("2d");
+          finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
+          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
+          drawSolarArc(finalCtx, W, H, { bearing });
+          const finalPng = finalCanvas.toBuffer("image/png");
+          console.log(`[SLIDE4-POLISH] Final enhanced PNG: ${finalPng.length} bytes (${Date.now() - t0}ms)`);
           const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-            enhancedUrl = pd2.publicUrl + cacheBust2;
-            console.log(`✓ [SLIDE4-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
+            enhancedUrl = pd2.publicUrl;
+            console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          } else {
+            console.warn("[SLIDE4-POLISH] Enhanced upload error:", ue2.message);
           }
         } else {
-          console.warn("[SLIDE4-POLISH] No image in response");
+          console.warn("[SLIDE4-POLISH] OpenAI no image data:", JSON.stringify(oaiJson).substring(0, 300));
+          // ── Fallback: Responses API if /edits rejects gpt-image-1 ──
+          if (oaiRes.status !== 200) {
+            console.log("[SLIDE4-POLISH] Falling back to Responses API (gpt-4o)...");
+            const b64Input = pngResized.toString("base64");
+            const respRes = await fetch("https://api.openai.com/v1/responses", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                input: [{ role: "user", content: [
+                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                  { type: "input_text", text: "STRICT IMAGE EDITING TASK. Edit this image with ZERO tolerance for geometry changes. FORBIDDEN: moving/resizing/reshaping/adding/removing any building, changing camera angle. ALLOWED: enhance shadow realism, add subtle texture to facades, improve material contrast. Output = sharp realistic architectural maquette photograph. No creativity, no invention, no artistic filter." }
+                ]}],
+                tools: [{ type: "image_generation", quality: "high", size: "1024x1024" }]
+              })
+            });
+            console.log(`[SLIDE4-POLISH] Responses API status: ${respRes.status}`);
+            const respJson = await respRes.json();
+            let polishedB64 = null;
+            if (respJson.output) {
+              for (const item of respJson.output) {
+                if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+              }
+            }
+            if (polishedB64) {
+              const enhBuf = Buffer.from(polishedB64, "base64");
+              const fCanvas = createCanvas(W, H);
+              const fCtx = fCanvas.getContext("2d");
+              fCtx.drawImage(await loadImage(enhBuf), 0, 0, W, H);
+              drawLegendCompass(fCtx, W, H, { site_area: Number(site_area), bearing });
+              drawSolarArc(fCtx, W, H, { bearing });
+              const fallbackPng = fCanvas.toBuffer("image/png");
+              const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
+              const { error: ue3 } = await sb.storage.from("massing-images").upload(enhancedPath, fallbackPng, { contentType: "image/png", upsert: true });
+              if (!ue3) {
+                const { data: pd3 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+                enhancedUrl = pd3.publicUrl;
+                console.log(`✓ [SLIDE4-POLISH] Fallback enhanced: ${enhancedUrl} (${Date.now() - t0}ms)`);
+              }
+            }
+          }
         }
       } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
+    } else {
+      console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — skipping enhancement");
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
@@ -4152,7 +4271,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "59.3-HEKTAR-REALISTIC",
+      ok: true, cached: false, server_version: "60.0-V49-RESTORE",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
