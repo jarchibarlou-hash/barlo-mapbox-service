@@ -3674,7 +3674,7 @@ app.post("/generate", async (req, res) => {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "gpt-image-1",
+            model: "gpt-4.1-mini",
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -3929,7 +3929,7 @@ app.post("/generate-massing", async (req, res) => {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "gpt-image-1",
+            model: "gpt-4.1-mini",
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
