@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.0-TRIPLE-FALLBACK" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.1-PHOTOREALISTIC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3920,7 +3920,7 @@ app.post("/generate", async (req, res) => {
         const pngResized = resizedCanvas.toBuffer("image/png");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
 
-        const polishPrompt = "HIGH FIDELITY EDIT of this axonometric urban planning 3D map. Transform the simple volumetric base into a near-photorealistic rendering suitable for client presentation.\n\nABSOLUTE PRIORITY — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The parcel zone with red/ochre outline is GPS-fixed — preserve exactly\n- Keep all text labels and dimension annotations exactly as-is\n- If conflict between visual fidelity and data accuracy → DATA WINS\n\nMATERIALS:\n- ROADS: realistic gray asphalt/bitumen texture — slightly granular, subtle surface variation. Keep the existing gray road color.\n- SITE TERRAIN (ochre/brown parcel zone): natural earth texture — ochre/brown, fine grain. NOT green.\n- ENVIRONMENT GROUND: differentiated green vegetation — realistic lawn with subtle tonal variation between areas. Rich green, not flat.\n\nLIGHTING:\n- Natural soft sunlight from consistent direction\n- Shadows coherent with sun orientation\n- Controlled contrast — not blown out, not flat\n\nSHADOWS:\n- Realistic cast shadows from all buildings onto ground\n- Reinforces volume readability\n- Consistent shadow direction across all objects\n\nBUILDINGS:\n- Light shading on facades for floor/story readability\n- Readable edges and corners — clean dark edge lines\n- NO over-detail — this is still massing, not full architecture\n- Varied building heights must be preserved as-is\n\nVEGETATION:\n- Add 30-40 semi-realistic trees along roads and open spaces\n- Slight variation in size and tone — NOT cloned copies\n- Natural integration into context — with subtle shadow underneath each tree\n- Round canopy shape, dark green with lighter green highlights\n\nQUALITY:\n- HD sharp rendering — clean contours\n- NO artistic blur, NO watercolor, NO painting texture, NO bloom, NO grain\n- NO cinematic filter, NO stylization\n- Sober realism, precision, readability\n- No invented text, no added labels, no watermarks";
+        const polishPrompt = "PHOTOREALISTIC EDIT of this axonometric urban planning 3D map. Apply realistic material textures and lighting to make it look like a high-end architectural rendering.\n\nABSOLUTE PRIORITY — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The parcel zone with red/ochre outline is GPS-fixed — preserve exactly\n- Keep all text labels, dimension annotations, legend, compass exactly as-is\n- If conflict between visual fidelity and data accuracy → DATA WINS\n\nMATERIAL TEXTURES (key focus — make them convincingly real):\n- ROADS: worn gray asphalt with visible micro-grain, subtle tire marks and surface imperfections. Realistic bitumen look.\n- SITE TERRAIN (ochre/brown parcel): dry natural earth with fine sandy grain, subtle cracks and tonal variation. Warm ochre-brown, NOT green.\n- GRASS/GROUND: photorealistic mown lawn — rich green with natural tonal patches, slight yellowing near edges, realistic grass blade texture visible at this scale. NOT flat or uniform.\n- BUILDING FACADES: light concrete/plaster with subtle weathering, faint panel joints or floor lines. Warm off-white to light gray.\n- BUILDING ROOFS: flat roofs with slight gray concrete texture.\n\nBUILDINGS:\n- Surrounding context buildings are low-rise suburban: 1 to 2 stories (3m to 7m height). Preserve their existing varied heights.\n- Subtle facade shading to show floor levels\n- Clean readable edges with thin dark contour lines\n- NO architectural detail — this is massing, keep it simple but textured\n\nLIGHTING & SHADOWS:\n- Warm natural afternoon sunlight from consistent direction\n- Soft realistic cast shadows from all buildings and trees onto ground\n- Ambient occlusion at building bases for grounding\n- Controlled contrast — warm tones, not cold or flat\n\nVEGETATION:\n- 30-40 semi-realistic trees along roads and in open areas\n- Varied sizes (small to medium), varied green tones — NOT identical copies\n- Round organic canopy shapes with dark green cores and lighter highlights\n- Each tree casts a soft shadow on the ground beneath it\n\nQUALITY:\n- Photorealistic architectural rendering quality\n- Sharp HD resolution — clean contours, no blur\n- NO artistic filters, NO watercolor, NO painting effect, NO bloom, NO grain\n- NO stylization — pure sober realism\n- No invented text, no added labels, no watermarks";
 
         let polishedB64 = null;
 
@@ -4371,7 +4371,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.0-TRIPLE-FALLBACK",
+      ok: true, cached: false, server_version: "61.1-PHOTOREALISTIC",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4392,7 +4392,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.0-TRIPLE-FALLBACK on port ${PORT}`);
+  console.log(`BARLO v61.1-PHOTOREALISTIC on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
