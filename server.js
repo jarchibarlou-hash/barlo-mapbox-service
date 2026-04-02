@@ -3669,19 +3669,8 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes`);
         const form = new FormData();
         form.append("model", "gpt-image-1");
-        form.append("image[]", pngResized, { filename: "slide.png", contentType: "image/png" });
-        if (style_ref_url) {
-          try {
-            const refRes = await fetch(style_ref_url);
-            if (refRes.ok) {
-              const refBuf = Buffer.from(await refRes.arrayBuffer());
-              const refCanvas = createCanvas(1024, 1024);
-              refCanvas.getContext("2d").drawImage(await loadImage(refBuf), 0, 0, 1024, 1024);
-              form.append("image[]", refCanvas.toBuffer("image/png"), { filename: "style_ref.png", contentType: "image/png" });
-              console.log("[SLIDE4-POLISH] Style ref attached");
-            }
-          } catch (e) { console.warn("Style ref fetch error:", e.message); }
-        }
+        form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
+        console.log("[SLIDE4-POLISH] Single image attached (no style_ref to avoid duplicate param)");
         form.append("size", "1024x1024");
         form.append("response_format", "b64_json");
         form.append("input_fidelity", "high");
@@ -3922,19 +3911,8 @@ app.post("/generate-massing", async (req, res) => {
         console.log(`[POLISH] Resized image: ${pngResized.length} bytes`);
         const form = new FormData();
         form.append("model", "gpt-image-1");
-        form.append("image[]", pngResized, { filename: "massing.png", contentType: "image/png" });
-        if (style_ref_url) {
-          try {
-            const refRes = await fetch(style_ref_url);
-            if (refRes.ok) {
-              const refBuf = Buffer.from(await refRes.arrayBuffer());
-              const rCanvas = createCanvas(1024, 1024);
-              rCanvas.getContext("2d").drawImage(await loadImage(refBuf), 0, 0, 1024, 1024);
-              form.append("image[]", rCanvas.toBuffer("image/png"), { filename: "style_ref.png", contentType: "image/png" });
-              console.log("[POLISH] Style ref image attached");
-            }
-          } catch (e) { console.warn("Style ref error:", e.message); }
-        }
+        form.append("image", pngResized, { filename: "massing.png", contentType: "image/png" });
+        console.log("[POLISH] Single image attached (no style_ref to avoid duplicate param)");
         form.append("size", "1024x1024");
         form.append("response_format", "b64_json");
         form.append("prompt",
