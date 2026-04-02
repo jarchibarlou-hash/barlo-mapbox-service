@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.8-MIMIC-TARGET" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.9-CLEAN-SMOOTH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3921,7 +3921,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Transform this 3D axonometric urban map into a professional semi-realistic architectural rendering. GEOMETRY 100% FROZEN — every building, road, parcel outline, label, legend, compass stays exactly in place. Precise visual spec to follow: BUILDINGS: warm light gray concrete facades (NOT pure white — slightly warm beige-gray tone like #d5d0c8). Visible soft shadow on side faces. Roofs flat medium gray. Buildings vary in height (1 and 2 stories). GRASS: rich natural green (#5a9e3a range) with visible depth — darker green in shaded areas, lighter in sunlit areas. Subtle organic texture, NOT flat uniform color. PARCEL SITE (central outlined zone): warm sandy beige earth (#c4a060 range) — bare dry soil, clearly contrasting with surrounding green. ROADS: dark gray asphalt (#666666 range), subtle grain, clearly visible as roads. TREES: 20-25 round-canopy trees scattered along roads and open areas. Dark green cores with lighter green highlights. Varied sizes (small 3m to medium 6m). Each casts a small soft circular shadow on ground. LIGHTING: warm soft afternoon light from one direction. Buildings have gentle warm shadow on one side. Overall warm tone — NOT cold, NOT sterile. Soft cast shadows on ground behind buildings, consistent direction. ATMOSPHERE: slightly softer/hazier in the far background for depth. Overall feel: professional warm 3D architectural render, mid-afternoon light, calm and readable. NOT dramatic, NOT cinematic, NOT dark.";
+        const polishPrompt = "Clean polished edit of this 3D axonometric urban map. GEOMETRY 100% FROZEN — do not move any element. Style: clean professional 3D architectural maquette — smooth, neat, readable. NOT photorealistic, NOT artistic, NOT dramatic. Like a high-quality SketchUp or Lumion render. BUILDINGS: smooth light gray-white facades, clean edges, soft shadow on one side only. Varied heights preserved. GRASS: smooth bright green surface with very gentle tonal variation — clean and neat, like a well-kept lawn render. NOT rough texture, NOT patchy. PARCEL SITE (outlined central zone): smooth warm beige-ochre surface — clean bare earth look, clearly different from green. ROADS: smooth flat dark gray. TREES: 15-20 clean round green trees along roads — simple, neat shapes, small shadow beneath each. LIGHTING: bright even daylight, very soft shadows. Clean, airy, well-lit. NO dark areas, NO moody atmosphere, NO cinematic grading. Overall: CLEAN, SMOOTH, BRIGHT, PROFESSIONAL.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.8-MIMIC-TARGET",
+      ok: true, cached: false, server_version: "61.9-CLEAN-SMOOTH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.8-MIMIC-TARGET on port ${PORT}`);
+  console.log(`BARLO v61.9-CLEAN-SMOOTH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
