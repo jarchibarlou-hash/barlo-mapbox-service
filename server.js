@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.7-TEXTURE-EARTH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.8-MIMIC-TARGET" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3921,7 +3921,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Light realistic enhancement of this 3D axonometric urban map. GEOMETRY IS ABSOLUTELY FROZEN — DO NOT move, resize, reshape, add or remove ANY building, road, parcel outline, label, legend, or compass element. Every shape stays pixel-for-pixel identical. Apply ONLY these 4 texture enhancements: (1) GREEN AREAS: make the grass slightly more realistic with subtle blade texture and gentle tonal variation — bright fresh green, well-lit. (2) ROADS: add subtle gray asphalt grain texture — keep them flat gray but slightly more realistic. (3) TREES: add 20-25 varied semi-realistic round green trees along roads and open spaces — different sizes, small soft shadows beneath each. (4) THE PARCEL SITE (the outlined zone in the center): must be clearly BARE EARTH — warm brown/ochre dry soil texture, clearly DIFFERENT from the surrounding green grass. This is critical: the parcel must NOT be green, it must be brown earth. KEEP buildings bright white/light gray as they are. KEEP lighting bright, clean, airy. Do NOT darken. Do NOT add dramatic or cinematic effects. Soft ambient shadows at building bases only.";
+        const polishPrompt = "Transform this 3D axonometric urban map into a professional semi-realistic architectural rendering. GEOMETRY 100% FROZEN — every building, road, parcel outline, label, legend, compass stays exactly in place. Precise visual spec to follow: BUILDINGS: warm light gray concrete facades (NOT pure white — slightly warm beige-gray tone like #d5d0c8). Visible soft shadow on side faces. Roofs flat medium gray. Buildings vary in height (1 and 2 stories). GRASS: rich natural green (#5a9e3a range) with visible depth — darker green in shaded areas, lighter in sunlit areas. Subtle organic texture, NOT flat uniform color. PARCEL SITE (central outlined zone): warm sandy beige earth (#c4a060 range) — bare dry soil, clearly contrasting with surrounding green. ROADS: dark gray asphalt (#666666 range), subtle grain, clearly visible as roads. TREES: 20-25 round-canopy trees scattered along roads and open areas. Dark green cores with lighter green highlights. Varied sizes (small 3m to medium 6m). Each casts a small soft circular shadow on ground. LIGHTING: warm soft afternoon light from one direction. Buildings have gentle warm shadow on one side. Overall warm tone — NOT cold, NOT sterile. Soft cast shadows on ground behind buildings, consistent direction. ATMOSPHERE: slightly softer/hazier in the far background for depth. Overall feel: professional warm 3D architectural render, mid-afternoon light, calm and readable. NOT dramatic, NOT cinematic, NOT dark.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.7-TEXTURE-EARTH",
+      ok: true, cached: false, server_version: "61.8-MIMIC-TARGET",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.7-TEXTURE-EARTH on port ${PORT}`);
+  console.log(`BARLO v61.8-MIMIC-TARGET on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
