@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.6-MINIMAL-EDIT" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.7-TEXTURE-EARTH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3921,7 +3921,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Very minimal edit of this 3D axonometric urban map. This is already a good render — only enhance it slightly. ABSOLUTE RULE: DO NOT change geometry, camera angle, building positions, building sizes, building heights, road positions, road widths, parcel shape, labels, legend, or compass. Everything must stay EXACTLY where it is pixel-for-pixel. Only 3 small changes allowed: (1) Make the green ground slightly more textured — add subtle grass texture with gentle tonal variation, keep it bright green. (2) Add about 20 small round green trees scattered naturally along roads and near buildings — varied sizes, with tiny shadows beneath. (3) Add very soft ambient shadows at the base of buildings for grounding. KEEP buildings white/light gray as they are. KEEP roads gray as they are. KEEP parcel terrain ochre/brown as it is. KEEP lighting bright and clean. Do NOT darken the image. Do NOT add dramatic lighting. Do NOT change colors. Do NOT add any cinematic effect. Output should look 95% identical to input, just slightly enhanced.";
+        const polishPrompt = "Light realistic enhancement of this 3D axonometric urban map. GEOMETRY IS ABSOLUTELY FROZEN — DO NOT move, resize, reshape, add or remove ANY building, road, parcel outline, label, legend, or compass element. Every shape stays pixel-for-pixel identical. Apply ONLY these 4 texture enhancements: (1) GREEN AREAS: make the grass slightly more realistic with subtle blade texture and gentle tonal variation — bright fresh green, well-lit. (2) ROADS: add subtle gray asphalt grain texture — keep them flat gray but slightly more realistic. (3) TREES: add 20-25 varied semi-realistic round green trees along roads and open spaces — different sizes, small soft shadows beneath each. (4) THE PARCEL SITE (the outlined zone in the center): must be clearly BARE EARTH — warm brown/ochre dry soil texture, clearly DIFFERENT from the surrounding green grass. This is critical: the parcel must NOT be green, it must be brown earth. KEEP buildings bright white/light gray as they are. KEEP lighting bright, clean, airy. Do NOT darken. Do NOT add dramatic or cinematic effects. Soft ambient shadows at building bases only.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.6-MINIMAL-EDIT",
+      ok: true, cached: false, server_version: "61.7-TEXTURE-EARTH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.6-MINIMAL-EDIT on port ${PORT}`);
+  console.log(`BARLO v61.7-TEXTURE-EARTH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
