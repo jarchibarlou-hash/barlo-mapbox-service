@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.1-PHOTOREALISTIC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.2-FAST-MEDIUM" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3911,122 +3911,37 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    // ── v61.0: Polish via /v1/images/edits (gpt-image-1) → fallback Responses API (gpt-4.1 + action:edit) ──
+    // ── v61.2: Polish via /v1/images/edits — SINGLE METHOD, MEDIUM quality for speed ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v61.0...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v61.2 (medium, fast)...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
 
-        const polishPrompt = "PHOTOREALISTIC EDIT of this axonometric urban planning 3D map. Apply realistic material textures and lighting to make it look like a high-end architectural rendering.\n\nABSOLUTE PRIORITY — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The parcel zone with red/ochre outline is GPS-fixed — preserve exactly\n- Keep all text labels, dimension annotations, legend, compass exactly as-is\n- If conflict between visual fidelity and data accuracy → DATA WINS\n\nMATERIAL TEXTURES (key focus — make them convincingly real):\n- ROADS: worn gray asphalt with visible micro-grain, subtle tire marks and surface imperfections. Realistic bitumen look.\n- SITE TERRAIN (ochre/brown parcel): dry natural earth with fine sandy grain, subtle cracks and tonal variation. Warm ochre-brown, NOT green.\n- GRASS/GROUND: photorealistic mown lawn — rich green with natural tonal patches, slight yellowing near edges, realistic grass blade texture visible at this scale. NOT flat or uniform.\n- BUILDING FACADES: light concrete/plaster with subtle weathering, faint panel joints or floor lines. Warm off-white to light gray.\n- BUILDING ROOFS: flat roofs with slight gray concrete texture.\n\nBUILDINGS:\n- Surrounding context buildings are low-rise suburban: 1 to 2 stories (3m to 7m height). Preserve their existing varied heights.\n- Subtle facade shading to show floor levels\n- Clean readable edges with thin dark contour lines\n- NO architectural detail — this is massing, keep it simple but textured\n\nLIGHTING & SHADOWS:\n- Warm natural afternoon sunlight from consistent direction\n- Soft realistic cast shadows from all buildings and trees onto ground\n- Ambient occlusion at building bases for grounding\n- Controlled contrast — warm tones, not cold or flat\n\nVEGETATION:\n- 30-40 semi-realistic trees along roads and in open areas\n- Varied sizes (small to medium), varied green tones — NOT identical copies\n- Round organic canopy shapes with dark green cores and lighter highlights\n- Each tree casts a soft shadow on the ground beneath it\n\nQUALITY:\n- Photorealistic architectural rendering quality\n- Sharp HD resolution — clean contours, no blur\n- NO artistic filters, NO watercolor, NO painting effect, NO bloom, NO grain\n- NO stylization — pure sober realism\n- No invented text, no added labels, no watermarks";
+        const polishPrompt = "Photorealistic edit of this axonometric 3D urban map. GEOMETRY 100% FROZEN: same camera, buildings, roads, parcel outline, labels, legend, compass. DO NOT move/add/remove anything. Apply: realistic gray asphalt texture on roads, natural ochre earth on parcel terrain, rich green realistic lawn with tonal variation, light concrete texture on building facades, flat gray roofs. Buildings are low-rise suburban 1-2 stories. Add 30 varied semi-realistic trees along roads. Warm afternoon sunlight, coherent cast shadows, ambient occlusion at building bases. Sharp HD, no blur, no artistic filter, no watercolor, no stylization. Sober photorealism only.";
 
-        let polishedB64 = null;
+        const { Blob } = await import("buffer");
+        const formData = new FormData();
+        formData.append("image", new Blob([pngResized], { type: "image/png" }), "input.png");
+        formData.append("prompt", polishPrompt);
+        formData.append("model", "gpt-image-1");
+        formData.append("size", "1024x1024");
+        formData.append("quality", "medium");
+        formData.append("response_format", "b64_json");
 
-        // ── METHOD 1: /v1/images/edits with gpt-image-1 (direct edit endpoint) ──
-        try {
-          console.log("[SLIDE4-POLISH] Trying /v1/images/edits with gpt-image-1...");
-          const { Blob } = await import("buffer");
-          const formData = new FormData();
-          const imageBlob = new Blob([pngResized], { type: "image/png" });
-          formData.append("image", imageBlob, "input.png");
-          formData.append("prompt", polishPrompt);
-          formData.append("model", "gpt-image-1");
-          formData.append("size", "1024x1024");
-          formData.append("quality", "high");
-          formData.append("response_format", "b64_json");
+        const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
+          body: formData
+        });
+        console.log(`[SLIDE4-POLISH] /edits status: ${editsRes.status} (${Date.now() - t0}ms)`);
+        const editsJson = await editsRes.json();
 
-          const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
-            body: formData
-          });
-          console.log(`[SLIDE4-POLISH] /edits status: ${editsRes.status}`);
-          const editsJson = await editsRes.json();
-
-          if (editsJson.data && editsJson.data[0] && editsJson.data[0].b64_json) {
-            polishedB64 = editsJson.data[0].b64_json;
-            console.log(`[SLIDE4-POLISH] /edits SUCCESS — got image (${polishedB64.length} chars)`);
-          } else if (editsJson.error) {
-            console.warn(`[SLIDE4-POLISH] /edits error: ${JSON.stringify(editsJson.error)} — trying Responses API...`);
-          } else {
-            console.warn(`[SLIDE4-POLISH] /edits no image: ${JSON.stringify(editsJson).substring(0, 300)} — trying Responses API...`);
-          }
-        } catch (editsErr) {
-          console.warn(`[SLIDE4-POLISH] /edits exception: ${editsErr.message} — trying Responses API...`);
-        }
-
-        // ── METHOD 2 (fallback): Responses API with gpt-4.1 + image_generation tool + action:edit ──
-        if (!polishedB64) {
-          try {
-            console.log("[SLIDE4-POLISH] Trying Responses API with gpt-4.1 + action:edit + input_fidelity:high...");
-            const b64Input = pngResized.toString("base64");
-            const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-4.1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: polishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-              })
-            });
-            console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
-            const oaiJson = await oaiRes.json();
-            if (oaiJson.error) {
-              console.error(`[SLIDE4-POLISH] Responses API error: ${JSON.stringify(oaiJson.error)}`);
-            } else if (oaiJson.output) {
-              for (const item of oaiJson.output) {
-                if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-              }
-              if (polishedB64) {
-                console.log(`[SLIDE4-POLISH] Responses API SUCCESS — got image (${polishedB64.length} chars)`);
-              } else {
-                console.warn("[SLIDE4-POLISH] Responses API no image_generation_call:", JSON.stringify(oaiJson.output.map(o => o.type)));
-              }
-            }
-          } catch (respErr) {
-            console.error(`[SLIDE4-POLISH] Responses API exception: ${respErr.message}`);
-          }
-        }
-
-        // ── METHOD 3 (last resort): Responses API with gpt-image-1 model + action:edit ──
-        if (!polishedB64) {
-          try {
-            console.log("[SLIDE4-POLISH] Last resort: Responses API with gpt-image-1 + action:edit...");
-            const b64Input = pngResized.toString("base64");
-            const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-image-1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: polishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-              })
-            });
-            console.log(`[SLIDE4-POLISH] gpt-image-1 Responses status: ${oaiRes.status}`);
-            const oaiJson = await oaiRes.json();
-            if (oaiJson.error) {
-              console.error(`[SLIDE4-POLISH] gpt-image-1 error: ${JSON.stringify(oaiJson.error)}`);
-            } else if (oaiJson.output) {
-              for (const item of oaiJson.output) {
-                if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-              }
-              if (polishedB64) console.log(`[SLIDE4-POLISH] gpt-image-1 SUCCESS — got image (${polishedB64.length} chars)`);
-            }
-          } catch (lastErr) {
-            console.error(`[SLIDE4-POLISH] Last resort exception: ${lastErr.message}`);
-          }
-        }
-
-        // ── Upload enhanced image ──
-        if (polishedB64) {
+        if (editsJson.data && editsJson.data[0] && editsJson.data[0].b64_json) {
+          const polishedB64 = editsJson.data[0].b64_json;
+          console.log(`[SLIDE4-POLISH] SUCCESS (${polishedB64.length} chars, ${Date.now() - t0}ms)`);
           const enhancedMapBuf = Buffer.from(polishedB64, "base64");
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
@@ -4034,7 +3949,6 @@ app.post("/generate", async (req, res) => {
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back) });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
-          console.log(`[SLIDE4-POLISH] Final enhanced PNG: ${finalPng.length} bytes (${Date.now() - t0}ms)`);
           const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
           if (!ue2) {
@@ -4042,14 +3956,14 @@ app.post("/generate", async (req, res) => {
             enhancedUrl = pd2.publicUrl;
             console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
           } else {
-            console.warn("[SLIDE4-POLISH] Enhanced upload error:", ue2.message);
+            console.warn("[SLIDE4-POLISH] Upload error:", ue2.message);
           }
         } else {
-          console.warn("[SLIDE4-POLISH] ALL 3 METHODS FAILED — returning base image only");
+          console.warn("[SLIDE4-POLISH] No image:", JSON.stringify(editsJson.error || editsJson).substring(0, 300));
         }
       } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
     } else {
-      console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — skipping enhancement");
+      console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — skipping");
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
@@ -4245,106 +4159,36 @@ app.post("/generate-massing", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
-    // ── v61.0: Massing polish — triple fallback ──
+    // ── v61.2: Massing polish — SINGLE METHOD, MEDIUM quality for speed ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v61.0...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v61.2 (medium, fast)...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
-        console.log(`[MASSING-POLISH] Resized image: ${pngResized.length} bytes`);
+        console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes`);
 
-        const polishPrompt = "HIGH FIDELITY EDIT of this 3D axonometric massing view. Transform into near-photorealistic rendering for client presentation.\n\nABSOLUTE PRIORITY — GEOMETRY IS 100% FROZEN:\n- Preserve EVERY building shape, volume, position, size, roofline, camera angle with ZERO deviation\n- Do NOT move, add, remove, resize ANY building or element\n- Keep ochre parcel boundary, blue floor layers, orange commerce base, dimension labels EXACTLY as-is\n- If conflict between visual fidelity and data accuracy → DATA WINS\n\nMATERIALS: Roads = realistic gray asphalt texture. Site terrain = natural ochre/brown earth. Environment = differentiated green vegetation.\nLIGHTING: Natural soft sunlight, coherent shadows with orientation, controlled contrast.\nSHADOWS: Realistic cast shadows from buildings, consistent direction, reinforces volume readability.\nBUILDINGS: Light facade shading for story readability, clean edge lines, no over-detail.\nVEGETATION: 30-40 semi-realistic trees along roads, slight variation, natural integration with subtle shadows.\nQUALITY: HD sharp, no blur, no watercolor, no painting texture, no stylization. Sober realism.\nNo invented text, no added labels, no watermarks.";
+        const polishPrompt = "Photorealistic edit of this 3D massing view. GEOMETRY 100% FROZEN: same camera, buildings, volumes, parcel outline, labels, overlays. DO NOT move/add/remove anything. Apply: realistic gray asphalt on roads, ochre earth on parcel, rich green lawn, light concrete on facades. Preserve blue floor layers, orange commerce base. Add 30 varied trees. Warm sunlight, coherent shadows. Sharp HD, no blur, no artistic filter, sober photorealism only.";
 
-        let polishedB64 = null;
+        const { Blob } = await import("buffer");
+        const formData = new FormData();
+        formData.append("image", new Blob([pngResized], { type: "image/png" }), "input.png");
+        formData.append("prompt", polishPrompt);
+        formData.append("model", "gpt-image-1");
+        formData.append("size", "1024x1024");
+        formData.append("quality", "medium");
+        formData.append("response_format", "b64_json");
+        const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
+          body: formData
+        });
+        console.log(`[MASSING-POLISH] /edits status: ${editsRes.status} (${Date.now() - t0}ms)`);
+        const editsJson = await editsRes.json();
 
-        // ── METHOD 1: /v1/images/edits with gpt-image-1 ──
-        try {
-          console.log("[MASSING-POLISH] Trying /v1/images/edits with gpt-image-1...");
-          const { Blob } = await import("buffer");
-          const formData = new FormData();
-          const imageBlob = new Blob([pngResized], { type: "image/png" });
-          formData.append("image", imageBlob, "input.png");
-          formData.append("prompt", polishPrompt);
-          formData.append("model", "gpt-image-1");
-          formData.append("size", "1024x1024");
-          formData.append("quality", "high");
-          formData.append("response_format", "b64_json");
-          const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
-            body: formData
-          });
-          console.log(`[MASSING-POLISH] /edits status: ${editsRes.status}`);
-          const editsJson = await editsRes.json();
-          if (editsJson.data && editsJson.data[0] && editsJson.data[0].b64_json) {
-            polishedB64 = editsJson.data[0].b64_json;
-            console.log(`[MASSING-POLISH] /edits SUCCESS (${polishedB64.length} chars)`);
-          } else if (editsJson.error) {
-            console.warn(`[MASSING-POLISH] /edits error: ${JSON.stringify(editsJson.error)}`);
-          }
-        } catch (e1) { console.warn(`[MASSING-POLISH] /edits exception: ${e1.message}`); }
-
-        // ── METHOD 2: Responses API gpt-4.1 + action:edit ──
-        if (!polishedB64) {
-          try {
-            console.log("[MASSING-POLISH] Trying Responses API gpt-4.1 + action:edit...");
-            const b64Input = pngResized.toString("base64");
-            const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-4.1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: polishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-              })
-            });
-            console.log(`[MASSING-POLISH] Responses gpt-4.1 status: ${oaiRes.status}`);
-            const oaiJson = await oaiRes.json();
-            if (oaiJson.error) { console.warn(`[MASSING-POLISH] gpt-4.1 error: ${JSON.stringify(oaiJson.error)}`); }
-            else if (oaiJson.output) {
-              for (const item of oaiJson.output) {
-                if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-              }
-              if (polishedB64) console.log(`[MASSING-POLISH] gpt-4.1 SUCCESS (${polishedB64.length} chars)`);
-            }
-          } catch (e2) { console.warn(`[MASSING-POLISH] gpt-4.1 exception: ${e2.message}`); }
-        }
-
-        // ── METHOD 3: Responses API gpt-image-1 + action:edit ──
-        if (!polishedB64) {
-          try {
-            console.log("[MASSING-POLISH] Trying Responses API gpt-image-1 + action:edit...");
-            const b64Input = pngResized.toString("base64");
-            const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-image-1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: polishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-              })
-            });
-            console.log(`[MASSING-POLISH] gpt-image-1 status: ${oaiRes.status}`);
-            const oaiJson = await oaiRes.json();
-            if (oaiJson.error) { console.error(`[MASSING-POLISH] gpt-image-1 error: ${JSON.stringify(oaiJson.error)}`); }
-            else if (oaiJson.output) {
-              for (const item of oaiJson.output) {
-                if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-              }
-              if (polishedB64) console.log(`[MASSING-POLISH] gpt-image-1 SUCCESS (${polishedB64.length} chars)`);
-            }
-          } catch (e3) { console.error(`[MASSING-POLISH] gpt-image-1 exception: ${e3.message}`); }
-        }
-
-        // ── Upload enhanced ──
-        if (polishedB64) {
+        if (editsJson.data && editsJson.data[0] && editsJson.data[0].b64_json) {
+          const polishedB64 = editsJson.data[0].b64_json;
+          console.log(`[MASSING-POLISH] SUCCESS (${polishedB64.length} chars, ${Date.now() - t0}ms)`);
           const enhBuf = Buffer.from(polishedB64, "base64");
           const fCanvas = createCanvas(W, H);
           fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
@@ -4364,14 +4208,14 @@ app.post("/generate-massing", async (req, res) => {
             console.error(`[MASSING-POLISH] Upload error: ${JSON.stringify(ue2)}`);
           }
         } else {
-          console.warn(`[MASSING-POLISH] ALL 3 METHODS FAILED — returning base image only`);
+          console.warn(`[MASSING-POLISH] No image: ${JSON.stringify(editsJson.error || editsJson).substring(0, 300)}`);
         }
-      } catch (oaiErr) { console.error("[MASSING-POLISH] Exception:", oaiErr.message, oaiErr.stack); }
+      } catch (oaiErr) { console.error("[MASSING-POLISH] Exception:", oaiErr.message); }
     } else {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.1-PHOTOREALISTIC",
+      ok: true, cached: false, server_version: "61.2-FAST-MEDIUM",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4392,7 +4236,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.1-PHOTOREALISTIC on port ${PORT}`);
+  console.log(`BARLO v61.2-FAST-MEDIUM on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
