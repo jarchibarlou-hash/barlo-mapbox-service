@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.2-HEKTAR-REALISTIC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.3-HEKTAR-REALISTIC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3265,14 +3265,54 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
     });
+    // ── PARCELLE: ocre/terre (pas vert) ──
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d02818', 'fill-opacity': 0.22 } }, '3d-buildings');
+      paint: { 'fill-color': '#c4a550', 'fill-opacity': 0.45 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 3, 'line-opacity': 1 } }, '3d-buildings');
+      paint: { 'line-color': '#b8922a', 'line-width': 2.5, 'line-opacity': 1 } }, '3d-buildings');
+    // ── ENVELOPE ──
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#2563eb', 'line-width': 2.5, 'line-dasharray': [5, 3], 'line-opacity': 0.80 } }, '3d-buildings');
+      paint: { 'line-color': '#d04030', 'line-width': 2, 'line-dasharray': [5, 3], 'line-opacity': 0.80 } }, '3d-buildings');
+    // ── TREES: dense circles along roads using POI layer ──
+    map.addLayer({
+      id: 'trees-poi', source: 'composite', 'source-layer': 'poi_label',
+      filter: ['any',
+        ['match', ['get', 'maki'], ['park', 'garden', 'cemetery'], true, false],
+        ['match', ['get', 'type'], ['Park', 'Garden', 'Recreation Ground'], true, false]
+      ],
+      type: 'circle', minzoom: 13,
+      paint: { 'circle-radius': 8, 'circle-color': '#2d7a1e', 'circle-opacity': 0.85, 'circle-blur': 0.3 }
+    });
+    // ── SYNTHETIC TREES: scatter along road network for density ──
+    // Use road vertices as seed positions for tree placement
+    const roadFeatures = map.querySourceFeatures('composite', { sourceLayer: 'road' });
+    const treePts = [];
+    for (const f of roadFeatures) {
+      if (!f.geometry || !f.geometry.coordinates) continue;
+      const coords = f.geometry.type === 'LineString' ? f.geometry.coordinates :
+                     f.geometry.type === 'MultiLineString' ? f.geometry.coordinates.flat() : [];
+      for (let i = 0; i < coords.length; i++) {
+        // Place trees every ~3rd vertex, offset 8-15m from road center
+        if (i % 3 !== 0) continue;
+        const [lng, lat] = coords[i];
+        const offsetLng = 0.00012 * (((i * 7 + Math.round(lng * 10000)) % 3) - 1);
+        const offsetLat = 0.00012 * (((i * 11 + Math.round(lat * 10000)) % 3) - 1);
+        treePts.push([lng + offsetLng, lat + offsetLat]);
+      }
+    }
+    if (treePts.length > 0) {
+      map.addSource('synth-trees', { type: 'geojson', data: {
+        type: 'FeatureCollection',
+        features: treePts.map(c => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: {} }))
+      }});
+      map.addLayer({
+        id: 'synth-trees-layer', source: 'synth-trees', type: 'circle',
+        paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 15, 4, 17, 8, 18, 12],
+                 'circle-color': '#2d7a1e', 'circle-opacity': 0.8, 'circle-blur': 0.25 }
+      });
+    }
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -3794,7 +3834,7 @@ app.post("/generate", async (req, res) => {
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
-        const polishPrompt = "You are receiving a 3D axonometric architectural site plan. ABSOLUTE RULES — violating ANY of these is a critical failure: (1) DO NOT MOVE, RESIZE, RESHAPE, ADD, OR REMOVE ANY BUILDING. Every single building footprint, height, and position must remain EXACTLY as in the input image. (2) DO NOT CHANGE THE CAMERA ANGLE OR ZOOM. (3) DO NOT ADD ANY ARTISTIC FILTER — no watercolor, no painterly effect, no blur, no glow, no vignette. (4) ONLY ALLOWED CHANGES: add realistic soft shadows cast by buildings onto the ground, add small round dark-green tree canopies (like architectural model trees) scattered along streets, add subtle material texture to building facades (concrete/plaster look). (5) The output must look like a high-quality photograph of a physical architectural scale model (maquette). Sharp, clean, sober, realistic.";
+        const polishPrompt = "STRICT IMAGE EDITING TASK. You must edit this image with ZERO tolerance for geometry changes. FORBIDDEN: moving/resizing/reshaping/adding/removing any building or object, changing camera angle or zoom, any artistic filter (watercolor, bloom, glow, blur, vignette, painterly effect, cartoon, stylization). GEOMETRY IS 100% FROZEN. ALLOWED edits ONLY: (1) Enhance shadow realism — sharpen existing building shadows on ground. (2) Add subtle concrete/plaster texture to building facades. (3) Slightly improve material contrast between rooftops and facades. That is ALL. The trees are already placed in the image — do NOT add or move them. The output must look like a sharp, sober, realistic photograph of an architectural maquette. Clinical precision. No creativity. No invention.";
         console.log("[SLIDE4-POLISH] Calling Responses API (gpt-4o)...");
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4112,7 +4152,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "59.2-HEKTAR-REALISTIC",
+      ok: true, cached: false, server_version: "59.3-HEKTAR-REALISTIC",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
