@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "60.2-GRAY-ROADS-TREES" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "60.3-HIGH-FIDELITY" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3923,7 +3923,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
 
-        const polishPrompt = "Edit this axonometric urban planning 3D map into a premium architectural maquette photograph. STRICT RULES — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The OCHRE/SANDY parcel zone with red dashed outline is GPS-fixed — do NOT move or recolor it\n- Keep all white text labels and dimension annotations exactly as-is\n\nSURFACE EDITS ONLY:\n- BUILDINGS: concrete/plaster texture on facades. Rooftops: flat light gray. Sunlit faces: warm white. Shadow faces: warm gray. Sharp dark edge lines on all building corners. Varied building heights must be preserved.\n- GROUND: vivid green grass everywhere (except roads and parcel). Rich, realistic lawn texture.\n- ROADS: gray asphalt surface — keep the existing gray road color. Clean flat bitumen texture, no cracks.\n- TREES: Add 30-40 round dark-green tree canopies (#3d7a1a with #5aaa28 highlights) scattered along roads and in open spaces between buildings. Realistic round canopy shape with subtle shadow underneath. Mix of sizes.\n- SHADOWS: warm gray cast shadows from buildings onto ground. Sharp edges.\n- No watercolor, no artistic filter, no bloom, no grain, no brush strokes.\n- No invented text, no added labels, no watermarks.\n\nThe final image must look like a high-end photograph of a physical architectural scale model (maquette) under warm directional lighting.";
+        const polishPrompt = "HIGH FIDELITY EDIT of this axonometric urban planning 3D map. Transform the simple volumetric base into a near-photorealistic rendering suitable for client presentation.\n\nABSOLUTE PRIORITY — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The parcel zone with red/ochre outline is GPS-fixed — preserve exactly\n- Keep all text labels and dimension annotations exactly as-is\n- If conflict between visual fidelity and data accuracy → DATA WINS\n\nMATERIALS:\n- ROADS: realistic gray asphalt/bitumen texture — slightly granular, subtle surface variation. Keep the existing gray road color.\n- SITE TERRAIN (ochre/brown parcel zone): natural earth texture — ochre/brown, fine grain. NOT green.\n- ENVIRONMENT GROUND: differentiated green vegetation — realistic lawn with subtle tonal variation between areas. Rich green, not flat.\n\nLIGHTING:\n- Natural soft sunlight from consistent direction\n- Shadows coherent with sun orientation\n- Controlled contrast — not blown out, not flat\n\nSHADOWS:\n- Realistic cast shadows from all buildings onto ground\n- Reinforces volume readability\n- Consistent shadow direction across all objects\n\nBUILDINGS:\n- Light shading on facades for floor/story readability\n- Readable edges and corners — clean dark edge lines\n- NO over-detail — this is still massing, not full architecture\n- Varied building heights must be preserved as-is\n\nVEGETATION:\n- Add 30-40 semi-realistic trees along roads and open spaces\n- Slight variation in size and tone — NOT cloned copies\n- Natural integration into context — with subtle shadow underneath each tree\n- Round canopy shape, dark green with lighter green highlights\n\nQUALITY:\n- HD sharp rendering — clean contours\n- NO artistic blur, NO watercolor, NO painting texture, NO bloom, NO grain\n- NO cinematic filter, NO stylization\n- Sober realism, precision, readability\n- No invented text, no added labels, no watermarks";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4179,7 +4179,7 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized image: ${pngResized.length} bytes`);
 
-        const polishPrompt = "Edit this 3D axonometric massing view. STRICT RULES — GEOMETRY IS 100% FROZEN:\n- Preserve EVERY building shape, volume, position, size, roofline, camera angle with ZERO deviation\n- Do NOT move, add, remove, resize ANY building or element\n- Keep ochre parcel boundary, blue floor layers, orange commerce base, dimension labels EXACTLY as-is\n\nALLOWED EDITS ONLY:\n- Repaint surfaces: vivid green grass on ground, sandy beige roads, white rooftops, warm gray facade shadows\n- Add dark edge lines on building corners\n- Add small round dark-green tree canopies along streets — clean circles, flat shading\n- Sharpen building shadows\n- No blur, no watercolor, no artistic interpretation, no text, no labels\n- Sharp, clean, photorealistic maquette photograph";
+        const polishPrompt = "HIGH FIDELITY EDIT of this 3D axonometric massing view. Transform into near-photorealistic rendering for client presentation.\n\nABSOLUTE PRIORITY — GEOMETRY IS 100% FROZEN:\n- Preserve EVERY building shape, volume, position, size, roofline, camera angle with ZERO deviation\n- Do NOT move, add, remove, resize ANY building or element\n- Keep ochre parcel boundary, blue floor layers, orange commerce base, dimension labels EXACTLY as-is\n- If conflict between visual fidelity and data accuracy → DATA WINS\n\nMATERIALS: Roads = realistic gray asphalt texture. Site terrain = natural ochre/brown earth. Environment = differentiated green vegetation.\nLIGHTING: Natural soft sunlight, coherent shadows with orientation, controlled contrast.\nSHADOWS: Realistic cast shadows from buildings, consistent direction, reinforces volume readability.\nBUILDINGS: Light facade shading for story readability, clean edge lines, no over-detail.\nVEGETATION: 30-40 semi-realistic trees along roads, slight variation, natural integration with subtle shadows.\nQUALITY: HD sharp, no blur, no watercolor, no painting texture, no stylization. Sober realism.\nNo invented text, no added labels, no watermarks.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4233,7 +4233,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "60.2-GRAY-ROADS-TREES",
+      ok: true, cached: false, server_version: "60.3-HIGH-FIDELITY",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4254,7 +4254,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v60.2-GRAY-ROADS-TREES on port ${PORT}`);
+  console.log(`BARLO v60.3-HIGH-FIDELITY on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
