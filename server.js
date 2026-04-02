@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.5-SUBTLE-LIGHT" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.6-MINIMAL-EDIT" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3921,7 +3921,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "SUBTLE light polish of this 3D axonometric urban map. Keep it very close to the original — minimal changes. GEOMETRY 100% FROZEN. DO NOT move, add, or remove any element. Keep same camera, buildings, roads, labels, legend, compass. ONLY apply these LIGHT enhancements: (1) Buildings stay BRIGHT WHITE with very soft gray shadow on side faces — clean and crisp. (2) Ground around buildings becomes VIVID BRIGHT GREEN grass — saturated, fresh, well-lit. (3) The ochre/brown parcel zone stays as warm beige/sand earth — NOT green. (4) Roads stay flat GRAY. (5) Add a FEW small green trees (15-20) — subtle, not overwhelming. (6) Overall lighting stays BRIGHT, CLEAN, AIRY — like midday sun. NO dark mood, NO dramatic shadows, NO cinematic color grading. Keep it looking like a clean 3D architectural model render, not a photograph. Minimal intervention.";
+        const polishPrompt = "Very minimal edit of this 3D axonometric urban map. This is already a good render — only enhance it slightly. ABSOLUTE RULE: DO NOT change geometry, camera angle, building positions, building sizes, building heights, road positions, road widths, parcel shape, labels, legend, or compass. Everything must stay EXACTLY where it is pixel-for-pixel. Only 3 small changes allowed: (1) Make the green ground slightly more textured — add subtle grass texture with gentle tonal variation, keep it bright green. (2) Add about 20 small round green trees scattered naturally along roads and near buildings — varied sizes, with tiny shadows beneath. (3) Add very soft ambient shadows at the base of buildings for grounding. KEEP buildings white/light gray as they are. KEEP roads gray as they are. KEEP parcel terrain ochre/brown as it is. KEEP lighting bright and clean. Do NOT darken the image. Do NOT add dramatic lighting. Do NOT change colors. Do NOT add any cinematic effect. Output should look 95% identical to input, just slightly enhanced.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4177,7 +4177,7 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Clean sober realistic edit of this 3D massing view. GEOMETRY 100% FROZEN: same camera, buildings, volumes, parcel outline, labels, overlays. DO NOT move/add/remove anything. BUILDINGS: clean WHITE facades, light gray roofs, subtle edge shading. Preserve blue floor layers, orange commerce base. ROADS: medium gray asphalt. PARCEL: bare brown/ochre earth — NOT green. ENVIRONMENT: bright green lawn, clear contrast with earth parcel. Add 25 varied green trees. LIGHTING: bright daylight, soft shadows, clean and airy — NOT dark/dramatic. Sharp HD, no artistic filter.";
+        const polishPrompt = "Very minimal edit of this 3D massing view. Already a good render — only enhance slightly. ABSOLUTE RULE: DO NOT change geometry, camera, building positions/sizes/heights, parcel shape, labels, overlays, blue floor layers, orange commerce base. Everything stays EXACTLY where it is. Only 3 changes: (1) Subtle grass texture on green ground — gentle tonal variation, keep bright green. (2) Add 20 small round green trees along roads — varied sizes, tiny shadows beneath. (3) Soft ambient shadows at building bases. KEEP buildings white. KEEP roads gray. KEEP parcel ochre/brown. KEEP lighting bright and clean. Do NOT darken. Do NOT add dramatic lighting or cinematic effects. 95% identical to input.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.5-SUBTLE-LIGHT",
+      ok: true, cached: false, server_version: "61.6-MINIMAL-EDIT",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.5-SUBTLE-LIGHT on port ${PORT}`);
+  console.log(`BARLO v61.6-MINIMAL-EDIT on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
