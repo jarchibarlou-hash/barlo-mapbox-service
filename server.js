@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.3-RESPONSES-FAST" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.4-SOBER-BRIGHT" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3921,7 +3921,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Photorealistic edit of this axonometric 3D urban map. GEOMETRY 100% FROZEN: same camera, buildings, roads, parcel outline, labels, legend, compass. DO NOT move/add/remove anything. Apply: realistic gray asphalt texture on roads, natural ochre earth on parcel terrain, rich green realistic lawn with tonal variation, light concrete texture on building facades, flat gray roofs. Buildings are low-rise suburban 1-2 stories. Add 30 varied semi-realistic trees along roads. Warm afternoon sunlight, coherent cast shadows, ambient occlusion at building bases. Sharp HD, no blur, no artistic filter, no watercolor, no stylization. Sober photorealism only.";
+        const polishPrompt = "Clean sober realistic edit of this axonometric 3D urban planning map. GEOMETRY 100% FROZEN: same camera angle, same building positions, same roads, same parcel outline, same labels, legend, compass. DO NOT move, add, or remove any element. BUILDINGS: clean WHITE/light gray facades, flat light gray roofs, subtle edge shading. Surrounding buildings MUST vary in height: mix of 1-story (4m) and 2-story (7-8m) houses — preserve the existing height variation. ROADS: medium gray asphalt, clean and flat. PARCEL TERRAIN (ochre zone): bare brown/ochre EARTH texture — dry soil, clearly different from green areas. NOT green. ENVIRONMENT GROUND: bright fresh GREEN lawn, well-maintained, natural tonal variation. Clear contrast between earth parcel and green surroundings. TREES: add 25-30 varied green trees along roads and open spaces, round canopy, different sizes. LIGHTING: bright daylight, soft shadows, clean and airy — NOT dark, NOT dramatic, NOT moody. Sharp HD, no blur, no artistic filter, no stylization.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4177,7 +4177,7 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Photorealistic edit of this 3D massing view. GEOMETRY 100% FROZEN: same camera, buildings, volumes, parcel outline, labels, overlays. DO NOT move/add/remove anything. Apply: realistic gray asphalt on roads, ochre earth on parcel, rich green lawn, light concrete on facades. Preserve blue floor layers, orange commerce base. Add 30 varied trees. Warm sunlight, coherent shadows. Sharp HD, no blur, no artistic filter, sober photorealism only.";
+        const polishPrompt = "Clean sober realistic edit of this 3D massing view. GEOMETRY 100% FROZEN: same camera, buildings, volumes, parcel outline, labels, overlays. DO NOT move/add/remove anything. BUILDINGS: clean WHITE facades, light gray roofs, subtle edge shading. Preserve blue floor layers, orange commerce base. ROADS: medium gray asphalt. PARCEL: bare brown/ochre earth — NOT green. ENVIRONMENT: bright green lawn, clear contrast with earth parcel. Add 25 varied green trees. LIGHTING: bright daylight, soft shadows, clean and airy — NOT dark/dramatic. Sharp HD, no artistic filter.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.3-RESPONSES-FAST",
+      ok: true, cached: false, server_version: "61.4-SOBER-BRIGHT",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.3-RESPONSES-FAST on port ${PORT}`);
+  console.log(`BARLO v61.4-SOBER-BRIGHT on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
