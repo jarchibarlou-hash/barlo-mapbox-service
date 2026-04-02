@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.4-SOBER-BRIGHT" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.5-SUBTLE-LIGHT" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3921,7 +3921,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Clean sober realistic edit of this axonometric 3D urban planning map. GEOMETRY 100% FROZEN: same camera angle, same building positions, same roads, same parcel outline, same labels, legend, compass. DO NOT move, add, or remove any element. BUILDINGS: clean WHITE/light gray facades, flat light gray roofs, subtle edge shading. Surrounding buildings MUST vary in height: mix of 1-story (4m) and 2-story (7-8m) houses — preserve the existing height variation. ROADS: medium gray asphalt, clean and flat. PARCEL TERRAIN (ochre zone): bare brown/ochre EARTH texture — dry soil, clearly different from green areas. NOT green. ENVIRONMENT GROUND: bright fresh GREEN lawn, well-maintained, natural tonal variation. Clear contrast between earth parcel and green surroundings. TREES: add 25-30 varied green trees along roads and open spaces, round canopy, different sizes. LIGHTING: bright daylight, soft shadows, clean and airy — NOT dark, NOT dramatic, NOT moody. Sharp HD, no blur, no artistic filter, no stylization.";
+        const polishPrompt = "SUBTLE light polish of this 3D axonometric urban map. Keep it very close to the original — minimal changes. GEOMETRY 100% FROZEN. DO NOT move, add, or remove any element. Keep same camera, buildings, roads, labels, legend, compass. ONLY apply these LIGHT enhancements: (1) Buildings stay BRIGHT WHITE with very soft gray shadow on side faces — clean and crisp. (2) Ground around buildings becomes VIVID BRIGHT GREEN grass — saturated, fresh, well-lit. (3) The ochre/brown parcel zone stays as warm beige/sand earth — NOT green. (4) Roads stay flat GRAY. (5) Add a FEW small green trees (15-20) — subtle, not overwhelming. (6) Overall lighting stays BRIGHT, CLEAN, AIRY — like midday sun. NO dark mood, NO dramatic shadows, NO cinematic color grading. Keep it looking like a clean 3D architectural model render, not a photograph. Minimal intervention.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.4-SOBER-BRIGHT",
+      ok: true, cached: false, server_version: "61.5-SUBTLE-LIGHT",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.4-SOBER-BRIGHT on port ${PORT}`);
+  console.log(`BARLO v61.5-SUBTLE-LIGHT on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
