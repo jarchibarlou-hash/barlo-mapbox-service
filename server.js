@@ -3950,48 +3950,9 @@ app.post("/generate", async (req, res) => {
             console.warn("[SLIDE4-POLISH] Enhanced upload error:", ue2.message);
           }
         } else {
-          console.warn("[SLIDE4-POLISH] OpenAI no image data:", JSON.stringify(oaiJson).substring(0, 300));
-          // ── Fallback: Responses API if /edits rejects gpt-image-1 ──
-          if (oaiRes.status !== 200) {
-            console.log("[SLIDE4-POLISH] Falling back to Responses API (gpt-4o)...");
-            const b64Input = pngResized.toString("base64");
-            const respRes = await fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-4o",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: "STRICT IMAGE EDITING TASK. Edit this image with ZERO tolerance for geometry changes. FORBIDDEN: moving/resizing/reshaping/adding/removing any building, changing camera angle. ALLOWED: enhance shadow realism, add subtle texture to facades, improve material contrast. Output = sharp realistic architectural maquette photograph. No creativity, no invention, no artistic filter." }
-                ]}],
-                tools: [{ type: "image_generation", quality: "high", size: "1024x1024" }]
-              })
-            });
-            console.log(`[SLIDE4-POLISH] Responses API status: ${respRes.status}`);
-            const respJson = await respRes.json();
-            let polishedB64 = null;
-            if (respJson.output) {
-              for (const item of respJson.output) {
-                if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-              }
-            }
-            if (polishedB64) {
-              const enhBuf = Buffer.from(polishedB64, "base64");
-              const fCanvas = createCanvas(W, H);
-              const fCtx = fCanvas.getContext("2d");
-              fCtx.drawImage(await loadImage(enhBuf), 0, 0, W, H);
-              drawLegendCompass(fCtx, W, H, { site_area: Number(site_area), bearing });
-              drawSolarArc(fCtx, W, H, { bearing });
-              const fallbackPng = fCanvas.toBuffer("image/png");
-              const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-              const { error: ue3 } = await sb.storage.from("massing-images").upload(enhancedPath, fallbackPng, { contentType: "image/png", upsert: true });
-              if (!ue3) {
-                const { data: pd3 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-                enhancedUrl = pd3.publicUrl;
-                console.log(`✓ [SLIDE4-POLISH] Fallback enhanced: ${enhancedUrl} (${Date.now() - t0}ms)`);
-              }
-            }
-          }
+          console.warn("[SLIDE4-POLISH] OpenAI /edits failed or no image data:", JSON.stringify(oaiJson).substring(0, 300));
+          console.log("[SLIDE4-POLISH] NO FALLBACK — returning Mapbox base image (geometry 100% preserved)");
+          // PAS de fallback Responses API — il régénère l'image et casse la géométrie
         }
       } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
     } else {
@@ -4219,29 +4180,8 @@ app.post("/generate-massing", async (req, res) => {
           console.log(`[POLISH] /edits SUCCESS — got image (${polishedB64.length} chars)`);
         } else {
           console.warn(`[POLISH] /edits failed: ${JSON.stringify(editsJson.error || editsJson)}`);
-          // ── Attempt 2: Responses API fallback ──
-          console.log("[POLISH] Falling back to Responses API (gpt-4o)...");
-          const b64Input = pngResized.toString("base64");
-          const respRes = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              input: [{ role: "user", content: [
-                { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                { type: "input_text", text: polishPrompt }
-              ]}],
-              tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
-            })
-          });
-          console.log(`[POLISH] Responses API status: ${respRes.status}`);
-          const respJson = await respRes.json();
-          if (respJson.error) console.error(`[POLISH] Responses API error: ${JSON.stringify(respJson.error)}`);
-          if (respJson.output) {
-            for (const item of respJson.output) {
-              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-            }
-          }
+          console.log("[POLISH] NO FALLBACK — returning Mapbox base image (geometry 100% preserved)");
+          // PAS de fallback Responses API — il régénère l'image et casse la géométrie
         }
         if (polishedB64) {
           console.log(`[POLISH] Got final image (${polishedB64.length} chars)`);
