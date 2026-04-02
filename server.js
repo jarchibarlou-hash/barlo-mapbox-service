@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "62.3-FIX-MODEL" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "63.0-PHOTOREALISTIC-PROMPT" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3914,14 +3914,31 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v62.3-FIX-MODEL...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v63.0-PHOTOREALISTIC-PROMPT...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Edit this image with ZERO geometry changes. Do not move or reshape any building, road, or outline. Only make these 3 specific changes: (1) Change the central parcel zone color from green/ochre to realistic brown EARTH — dry bare soil, clearly not grass. (2) Add 20 semi-realistic green trees scattered along roads and open spaces. (3) Add soft realistic shadows beneath buildings and trees. Keep everything else exactly as it is — same buildings, same white color, same roads, same green grass outside the parcel, same labels, same legend, same compass.";
+        const polishPrompt = `You are an expert architectural visualization renderer. Transform this 3D schematic urban massing image into a photorealistic architectural rendering while STRICTLY preserving 100% of the geometric integrity.
+
+HARD CONSTRAINTS (NON-NEGOTIABLE):
+- Do NOT modify building footprints, volumes, heights, parcel boundaries, or setback distances (3m, 5m labels)
+- No deformation, no smoothing, no reinterpretation of any structure
+- Preserve exact camera angle, perspective, framing, field of view — pixel-to-pixel alignment
+- Keep all roads, parcel layout, building positions — do not add or remove any structure
+- Keep all UI overlays: legend box (top-left), compass rose (bottom-right), setback labels, street names
+
+STYLE TRANSFER — apply these visual upgrades ONLY:
+1. MATERIALS: Replace flat colors with realistic materials — concrete/plaster on buildings, asphalt on roads, brown dry earth/bare soil on the central parcel zone (NOT green grass inside the parcel), realistic grass texture on surrounding areas
+2. VEGETATION: Add semi-realistic trees (varied sizes, natural distribution) along roads and open spaces, plus bushes — must feel natural not grid-based
+3. LIGHTING: Realistic sunlight with soft shadows, global illumination, ambient occlusion, contact shadows beneath buildings and trees
+4. SUBTLE REALISM: Slight vegetation variation, micro-textures, subtle atmospheric perspective, realistic color grading
+
+FAILURE CASES TO AVOID: Changing building shapes, moving objects, over-stylization, cartoonish vegetation, loss of parcel boundaries, removing labels/overlays
+
+OUTPUT: Photorealistic render, same resolution, sober and clean — like a professional architectural maquette rendering. Think step-by-step before generating.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4170,14 +4187,31 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v62.3-FIX-MODEL...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v63.0-PHOTOREALISTIC-PROMPT...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Edit this image with ZERO geometry changes. Do not move or reshape any building, road, or outline. Keep all overlays, blue floor layers, orange commerce base, labels exactly as-is. Only make these 3 specific changes: (1) Change the parcel zone to realistic brown EARTH — dry bare soil, not grass. (2) Add 20 semi-realistic green trees along roads. (3) Add soft realistic shadows beneath buildings and trees. Keep everything else exactly as it is.";
+        const polishPrompt = `You are an expert architectural visualization renderer. Transform this 3D schematic urban massing model into a photorealistic architectural rendering while STRICTLY preserving 100% of the geometric integrity.
+
+HARD CONSTRAINTS (NON-NEGOTIABLE):
+- Do NOT modify building footprints, volumes, heights, parcel boundaries, or any massing geometry
+- No deformation, no smoothing, no reinterpretation of any structure
+- Preserve exact camera angle, perspective, framing, field of view — pixel-to-pixel alignment
+- Keep all roads, parcel layout, building positions — do not add or remove any structure
+- Keep all overlays: blue floor layers, orange commerce base, labels, legend, compass exactly as-is
+
+STYLE TRANSFER — apply these visual upgrades ONLY:
+1. MATERIALS: Replace flat colors with realistic materials — concrete/plaster on buildings, asphalt on roads, brown dry earth/bare soil on the central parcel zone (NOT green grass inside the parcel), realistic grass texture on surrounding areas
+2. VEGETATION: Add semi-realistic trees (varied sizes, natural distribution) along roads and open spaces, plus bushes — must feel natural not grid-based
+3. LIGHTING: Realistic sunlight with soft shadows, global illumination, ambient occlusion, contact shadows beneath buildings and trees
+4. SUBTLE REALISM: Slight vegetation variation, micro-textures, subtle atmospheric perspective, realistic color grading
+
+FAILURE CASES TO AVOID: Changing building shapes, moving objects, over-stylization, cartoonish vegetation, loss of parcel boundaries, removing labels/overlays
+
+OUTPUT: Photorealistic render, same resolution, sober and clean — like a professional architectural maquette rendering. Think step-by-step before generating.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4266,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "62.3-FIX-MODEL",
+      ok: true, cached: false, server_version: "63.0-PHOTOREALISTIC-PROMPT",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4287,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v62.3-FIX-MODEL on port ${PORT}`);
+  console.log(`BARLO v63.0-PHOTOREALISTIC-PROMPT on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
