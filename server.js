@@ -3673,7 +3673,7 @@ app.post("/generate", async (req, res) => {
         console.log("[SLIDE4-POLISH] Single image attached, model=dall-e-2");
         form.append("size", "1024x1024");
         form.append("response_format", "b64_json");
-        form.append("prompt", "Restyle this axonometric urban planning map into a premium architectural site analysis illustration.\n\nGEOMETRY - ABSOLUTE CONSTRAINTS:\n- Keep EXACTLY the same camera angle, pitch, bearing and composition\n- Keep EXACTLY the same building footprints, positions and heights\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add or remove any building or road\n\nPARCEL ZONE - NON-NEGOTIABLE:\n- There is a RED/PINK semi-transparent zone visible on the ground\n- DO NOT MOVE IT under any circumstances\n- DO NOT RESIZE IT\n- DO NOT RECOLOR IT beyond keeping it red/pink semi-transparent\n- It must stay at EXACTLY the same position, same shape, same size\n- The dashed red outline around it must also stay at exact same position\n- This zone is GPS-fixed and must not drift even 1 pixel\n\nBUILDINGS - MANDATORY:\n- Building rooftops: BRIGHT PURE WHITE #ffffff\n- Building sunlit faces: PURE WHITE #ffffff to #faf9f6\n- Building shadow faces: warm gray #9a9690\n- Building EDGES: MANDATORY strong black lines #1a1a1a on ALL edges and corners\n- Cast shadows: solid warm gray #c4c0b8\n\nGROUND AND VEGETATION - MANDATORY:\n- Ground inside blocks: fresh vivid green #7ab83a, slightly warm, natural sunlit grass\n- Grass texture: visible fine grain #6aa030\n- Trees: round canopy top-view, dark green #3d7a1a with highlight #5aaa28, vary sizes\n- Place trees densely along sidewalks and in open spaces - at least 30 trees\n- Ground is predominantly GREEN inside blocks\n\nROADS - MANDATORY:\n- Road surface: warm sandy beige #d4c49a with asphalt grain texture\n- Road borders: darker #b8a478, sharp edge\n- Sidewalks: cream strip #ede4cc\n- Roads are clearly sandy/beige, strong contrast with green blocks\n- Road grid is prominent and legible\n\nBLOCK STRUCTURE - MANDATORY:\n- Each block is surrounded by roads on all 4 sides\n- Green stays strictly inside blocks, never crosses roads\n- Block boundaries are sharp hard lines\n\nNo text, no labels, no annotations.");
+        form.append("prompt", "Restyle as premium architectural illustration. Keep exact same geometry, camera, buildings, roads. White rooftops, warm gray shadows, black edges. Green grass inside blocks, round dark-green trees along streets. Sandy beige roads, cream sidewalks. Keep red/pink parcel zone at exact position. No text or labels.");
         console.log("[SLIDE4-POLISH] Calling OpenAI images/edits...");
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
@@ -3914,33 +3914,7 @@ app.post("/generate-massing", async (req, res) => {
         console.log("[POLISH] Single image attached, model=dall-e-2");
         form.append("size", "1024x1024");
         form.append("response_format", "b64_json");
-        form.append("prompt",
-          "POLISH ONLY — enhance this architectural massing render. ZERO structural modification.\n\n" +
-          "ABSOLUTE CONSTRAINTS (NON-NEGOTIABLE):\n" +
-          "- Keep EXACTLY the same geometry: every building, road, volume at EXACT same position\n" +
-          "- Keep EXACTLY the same camera angle, pitch, bearing, zoom, composition\n" +
-          "- Do NOT move, resize, add or remove ANY element\n" +
-          "- The OCHRE parcel outline #c8a020 must NOT move — GPS-fixed\n" +
-          "- The dashed ochre separative limit #b8942c must NOT move\n" +
-          "- The BLUE building floors #8bb0d8 must keep their EXACT color and position\n" +
-          "- The ORANGE commerce RDC #e8a030 must keep its EXACT color and position\n" +
-          "- The horizontal GAPS between floors must remain visible (they show floor levels)\n" +
-          "- The annotations must NOT be modified or removed\n\n" +
-          "POLISH ALLOWED:\n" +
-          "- Sharpen edges on existing buildings (clean dark lines #555)\n" +
-          "- Existing buildings: white rooftops #ffffff, warm gray shadows #b0aaa0\n" +
-          "- Cast shadows: warm gray #c4c0b8 — subtle, architectural\n" +
-          "- Ground: light warm #f2f0ec, roads: sandy beige #d4c49a\n" +
-          "- Add semi-transparent trees (opacity 0.7) ONLY OUTSIDE the parcel boundary\n" +
-          "- ZERO trees, vegetation, or ANY object inside the parcel — site must be completely clear\n" +
-          "- Improve contrast and readability\n\n" +
-          "FORBIDDEN:\n" +
-          "- NO watercolor, artistic textures, creative blur\n" +
-          "- NO modification of volumes, heights or positions\n" +
-          "- NO addition of uncontrolled elements\n" +
-          "- NO removal of annotations or diagram\n\n" +
-          "Result: clean, architectural, data-driven, premium client presentation quality."
-        );
+        form.append("prompt", "Polish this architectural massing render. Keep exact same geometry, camera, volumes, colors. Sharpen building edges, add warm gray shadows. White rooftops, sandy beige roads. Add trees only outside the ochre parcel boundary. Keep blue floors, orange commerce, floor gaps, annotations. Clean premium architectural quality. No watercolor or artistic effects.");
         console.log("[POLISH] Calling OpenAI images/edits...");
         const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
