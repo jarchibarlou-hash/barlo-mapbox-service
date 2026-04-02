@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.5-HEKTAR-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.6-HEKTAR-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3198,35 +3198,35 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
   const hektarStyle = {
-    "version": 8, "name": "Hektar-Green",
+    "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#4a8c3f" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#f2f0ec" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c8dce8" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#3d7a30" } },
+        "paint": { "fill-color": "#e0ddd4" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#4a8c3f" } },
+        "paint": { "fill-color": "#ebe8e2" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8c7d60", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8c7d60", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c8b890", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c8b890", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3242,7 +3242,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#ffffff', 4, '#f8f6f2', 10, '#f0ece4', 20, '#e0dcd4', 40, '#c8c4bc'],
+          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
         'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
         'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
@@ -3301,35 +3301,35 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
   const hektarStyle = {
-    "version": 8, "name": "Hektar-Green",
+    "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#4a8c3f" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#f2f0ec" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c8dce8" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#3d7a30" } },
+        "paint": { "fill-color": "#e0ddd4" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#4a8c3f" } },
+        "paint": { "fill-color": "#ebe8e2" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8c7d60", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8c7d60", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c8b890", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c8b890", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3345,7 +3345,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#ffffff', 4, '#f8f6f2', 10, '#f0ece4', 20, '#e0dcd4', 40, '#c8c4bc'],
+          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
         'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
         'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
@@ -3668,13 +3668,13 @@ app.post("/generate", async (req, res) => {
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-        const polishPrompt = "This image is PERFECT. DO NOT redraw it. DO NOT change buildings, roads, colors, camera, parcels, or any geometry. The ONLY change allowed: add small round dark-green tree canopy circles (like architectural maquette trees) scattered along the streets between buildings. Nothing else changes. Output must be identical to input except for added trees.";
-        console.log("[SLIDE4-POLISH] Calling OpenAI Responses API (gpt-4o-mini + image_generation)...");
+        const polishPrompt = "Edit this 3D architectural axonometric rendering. PRESERVE EVERY building shape, position, size, and the exact camera angle — geometry must be pixel-identical. Only change surface colors: paint all flat ground areas vivid green grass, paint roads sandy beige, keep building rooftops clean white with warm gray shadows on facades. Add small round dark-green tree canopies along streets. Keep the red/pink parcel highlight exactly as-is. NO watercolor effect, NO artistic blur, NO style transfer — keep it photorealistic and sharp like an architectural maquette photo.";
+        console.log("[SLIDE4-POLISH] Calling OpenAI Responses API (gpt-4o + image_generation)...");
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "gpt-4o-mini",
+            model: "gpt-4o",
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -3919,13 +3919,13 @@ app.post("/generate-massing", async (req, res) => {
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-        const polishPrompt = "This image is PERFECT. DO NOT redraw it. DO NOT change buildings, massing volumes, roads, colors, camera, parcels, annotations, or any geometry. The ONLY change allowed: add small round dark-green tree canopy circles (like architectural maquette trees) scattered along the streets between buildings. Nothing else changes. Output must be identical to input except for added trees.";
-        console.log("[POLISH] Calling OpenAI Responses API (gpt-4o-mini + image_generation)...");
+        const polishPrompt = "Edit this 3D architectural massing rendering. PRESERVE EVERY building shape, volume, position, size, and the exact camera angle — geometry must be pixel-identical. Only change surface colors: paint all flat ground areas vivid green grass, paint roads sandy beige, keep building rooftops clean white with warm gray shadows on facades. Add small round dark-green tree canopies along streets. Keep the ochre parcel boundary, blue floor layers, orange commerce base, dimension labels, and all overlays exactly as-is. NO watercolor effect, NO artistic blur, NO style transfer — keep it photorealistic and sharp like an architectural maquette photo.";
+        console.log("[POLISH] Calling OpenAI Responses API (gpt-4o + image_generation)...");
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "gpt-4o-mini",
+            model: "gpt-4o",
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -3972,7 +3972,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "58.5-HEKTAR-POLISH",
+      ok: true, cached: false, server_version: "58.6-HEKTAR-POLISH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
