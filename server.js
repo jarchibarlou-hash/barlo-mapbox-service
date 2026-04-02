@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.7-HEKTAR-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.0-HEKTAR-CANVAS" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3473,6 +3473,115 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.textAlign = "right"; ctx.font = "9px Arial"; ctx.fillStyle = "#ddd";
   ctx.fillText("BARLO · Diagnostic foncier automatisé", W - pad, BY + BH - 16);
 }
+// ─── COLOR REMAP — remplace les teintes beige Mapbox par vert/sable architectural ──
+function applyColorRemap(ctx, W, H) {
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const d = imgData.data;
+  // Color distance helper
+  const dist = (r, g, b, tr, tg, tb) => Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb);
+  // Target ground colors (Mapbox beige tones → green grass)
+  // background #f2f0ec (242,240,236), parks #e0ddd4 (224,221,212), urban #ebe8e2 (235,232,226)
+  // Target road colors (Mapbox tan → sandy beige)
+  // road-fill #eae4d4 (234,228,212), road-case #ccc4ae (204,196,174)
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i+1], b = d[i+2];
+    // Skip mostly white/bright pixels (buildings, rooftops) — R>235 AND G>235 AND B>230
+    if (r > 235 && g > 235 && b > 230) continue;
+    // Skip dark pixels (shadows, edges) — brightness < 120
+    const brightness = (r + g + b) / 3;
+    if (brightness < 120) continue;
+    // Skip reddish/pinkish pixels (parcel zone)
+    if (r > 180 && g < 140 && b < 140) continue;
+    // Skip blueish pixels (envelope lines, water)
+    if (b > r + 20 && b > g + 10) continue;
+    // Road detection: tan/warm gray tones where R > G > B with specific ranges
+    const isRoad = dist(r, g, b, 234, 228, 212) < 30 || dist(r, g, b, 204, 196, 174) < 30 ||
+                   (r > 180 && g > 170 && b > 140 && b < 190 && r - b > 30 && r - b < 70 && g - b > 20);
+    if (isRoad) {
+      // Sandy beige road
+      const factor = brightness / 220;
+      d[i]   = Math.min(255, Math.round(195 * factor));  // R
+      d[i+1] = Math.min(255, Math.round(180 * factor));  // G
+      d[i+2] = Math.min(255, Math.round(145 * factor));  // B
+      continue;
+    }
+    // Ground detection: beige/warm gray tones (background, parks, urban landuse)
+    const isGround = dist(r, g, b, 242, 240, 236) < 25 || dist(r, g, b, 224, 221, 212) < 25 ||
+                     dist(r, g, b, 235, 232, 226) < 25 ||
+                     (r > 190 && g > 190 && b > 180 && Math.abs(r - g) < 15 && r - b < 30 && r - b > -5);
+    if (isGround) {
+      // Green grass — slight variation based on original brightness for natural look
+      const factor = brightness / 240;
+      const variation = ((i / 4) % 7) * 2 - 6; // subtle per-pixel noise
+      d[i]   = Math.min(255, Math.round((75 + variation) * factor));   // R
+      d[i+1] = Math.min(255, Math.round((145 + variation) * factor));  // G
+      d[i+2] = Math.min(255, Math.round((60 + variation) * factor));   // B
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+// Helper: draw random trees along edges of roads (seeded by position for consistency)
+function drawTrees(ctx, W, H) {
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const d = imgData.data;
+  // Find road-to-grass boundary pixels and place trees there
+  const treePositions = [];
+  const step = 28; // check every N pixels for tree placement
+  for (let y = step; y < H - step; y += step) {
+    for (let x = step; x < W - step; x += step) {
+      const idx = (y * W + x) * 4;
+      const r = d[idx], g = d[idx+1], b = d[idx+2];
+      // Is this a green grass pixel?
+      if (g > 100 && g > r * 1.3 && g > b * 1.5) {
+        // Check if there's a road nearby (within ~15px)
+        let nearRoad = false;
+        for (let dy = -15; dy <= 15; dy += 5) {
+          for (let dx = -15; dx <= 15; dx += 5) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+            const ni = (ny * W + nx) * 4;
+            const nr = d[ni], ng = d[ni+1], nb = d[ni+2];
+            // Sandy road color detection
+            if (nr > 160 && ng > 140 && nb > 100 && nr - nb > 30 && ng - nb > 20 && nr < 220) {
+              nearRoad = true; break;
+            }
+          }
+          if (nearRoad) break;
+        }
+        // Check NOT on a building (avoid white areas nearby above)
+        let nearBuilding = false;
+        for (let dy = -20; dy <= 0; dy += 5) {
+          const ni = (Math.max(0, y + dy) * W + x) * 4;
+          if (d[ni] > 230 && d[ni+1] > 230 && d[ni+2] > 220) { nearBuilding = true; break; }
+        }
+        if (nearRoad && !nearBuilding) {
+          // Pseudo-random selection (deterministic based on position)
+          if (((x * 7 + y * 13) % 5) < 2) {
+            treePositions.push({ x, y });
+          }
+        }
+      }
+    }
+  }
+  // Draw tree canopies
+  for (const t of treePositions) {
+    const radius = 8 + ((t.x * 3 + t.y * 7) % 5); // 8-12px radius
+    // Dark green circle with slight shadow
+    ctx.beginPath();
+    ctx.arc(t.x + 2, t.y + 2, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(30,60,20,0.3)";
+    ctx.fill();
+    // Main canopy
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, radius, 0, Math.PI * 2);
+    const grad = ctx.createRadialGradient(t.x - 2, t.y - 2, 1, t.x, t.y, radius);
+    grad.addColorStop(0, "#4a9e3a");
+    grad.addColorStop(0.6, "#357a28");
+    grad.addColorStop(1, "#2a6020");
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+}
 // ─── LÉGENDE + BOUSSOLE — SLIDE 4 AXO ────────────────────────────────────────
 function drawLegendCompass(ctx, W, H, p) {
   const { site_area, bearing } = p;
@@ -3650,7 +3759,13 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
+    // ── CANVAS POLISH: color remap (beige→green, roads→sandy) + trees ──
+    console.log("[SLIDE4-POLISH] Applying Canvas color remap...");
+    applyColorRemap(ctx, W, H);
+    drawTrees(ctx, W, H);
+    console.log("[SLIDE4-POLISH] Canvas polish done");
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
+    drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -3660,81 +3775,17 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    if (OPENAI_API_KEY) {
-      try {
-        // ── STRATEGY: Try /v1/images/edits (preserves geometry) first, fallback to Responses API ──
-        console.log("[SLIDE4-POLISH] Starting OpenAI polish...");
-        const resizedCanvas = createCanvas(1024, 1024);
-        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
-        const pngResized = resizedCanvas.toBuffer("image/png");
-        console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes`);
-        const polishPrompt = "Restyle this 3D axonometric city view as a premium architectural maquette photograph. STRICT RULES: preserve every single building shape, position, size, roofline, and camera angle with zero deviation. Only repaint surfaces: vivid green grass on all ground, sandy beige roads, white rooftops, warm gray facade shadows, dark edge lines on buildings. Add small round dark-green tree canopies along streets. Keep the red/pink parcel zone exactly as-is. No blur, no watercolor, no artistic interpretation. Sharp, clean, photorealistic.";
-        // ── Attempt 1: /v1/images/edits + gpt-image-1 (best for geometry preservation) ──
-        let polishedB64 = null;
-        console.log("[SLIDE4-POLISH] Trying /v1/images/edits (gpt-image-1)...");
-        const form = new FormData();
-        form.append("model", "gpt-image-1");
-        form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
-        form.append("prompt", polishPrompt);
-        form.append("size", "1024x1024");
-        form.append("response_format", "b64_json");
-        const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
-          method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
-        });
-        console.log(`[SLIDE4-POLISH] /edits status: ${editsRes.status}`);
-        const editsJson = await editsRes.json();
-        if (editsRes.status === 200 && editsJson.data?.[0]?.b64_json) {
-          polishedB64 = editsJson.data[0].b64_json;
-          console.log(`[SLIDE4-POLISH] /edits SUCCESS — got image (${polishedB64.length} chars)`);
-        } else {
-          console.warn(`[SLIDE4-POLISH] /edits failed: ${JSON.stringify(editsJson.error || editsJson)}`);
-          // ── Attempt 2: Responses API fallback ──
-          console.log("[SLIDE4-POLISH] Falling back to Responses API (gpt-4o)...");
-          const b64Input = pngResized.toString("base64");
-          const respRes = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              input: [{ role: "user", content: [
-                { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                { type: "input_text", text: polishPrompt }
-              ]}],
-              tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
-            })
-          });
-          console.log(`[SLIDE4-POLISH] Responses API status: ${respRes.status}`);
-          const respJson = await respRes.json();
-          if (respJson.error) console.error(`[SLIDE4-POLISH] Responses API error: ${JSON.stringify(respJson.error)}`);
-          if (respJson.output) {
-            for (const item of respJson.output) {
-              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-            }
-          }
-        }
-        if (polishedB64) {
-          console.log(`[SLIDE4-POLISH] Got final image (${polishedB64.length} chars)`);
-          const enhancedMapBuf = Buffer.from(polishedB64, "base64");
-          const finalCanvas = createCanvas(W, H);
-          const finalCtx = finalCanvas.getContext("2d");
-          finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
-          drawSolarArc(finalCtx, W, H, { bearing });
-          const finalPng = finalCanvas.toBuffer("image/png");
-          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
-          if (!ue2) {
-            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-            enhancedUrl = pd2.publicUrl;
-            console.log(`✓ [SLIDE4-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
-          } else {
-            console.error(`[SLIDE4-POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
-          }
-        } else {
-          console.warn(`[SLIDE4-POLISH] No image in response. Keys: ${JSON.stringify(Object.keys(oaiJson))}`);
-          if (oaiJson.output) console.warn(`[SLIDE4-POLISH] output types: ${oaiJson.output.map(o => o.type).join(", ")}`);
-        }
-      } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
+    // ── Upload enhanced version (Canvas polish already applied — same as base) ──
+    {
+      const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
+      const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, png, { contentType: "image/png", upsert: true });
+      if (!ue2) {
+        const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+        enhancedUrl = pd2.publicUrl + cacheBust2;
+        console.log(`✓ [SLIDE4-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
+      } else {
+        console.error(`[SLIDE4-POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
+      }
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
@@ -4010,7 +4061,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "58.7-HEKTAR-POLISH",
+      ok: true, cached: false, server_version: "59.0-HEKTAR-CANVAS",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
