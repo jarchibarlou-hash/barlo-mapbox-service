@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.3-HEKTAR-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.4-HEKTAR-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3668,7 +3668,7 @@ app.post("/generate", async (req, res) => {
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-        const polishPrompt = "Restyle as premium architectural illustration. Keep exact same geometry, camera, buildings, roads. White rooftops, warm gray shadows, black edges. Green grass inside blocks, round dark-green trees along streets. Sandy beige roads, cream sidewalks. Keep red/pink parcel zone at exact position. No text or labels.";
+        const polishPrompt = "DO NOT change any building shape, size, position, or camera angle. DO NOT move, add, or remove any building. This is a 3D axonometric city view. ONLY apply a texture/color pass: paint flat grass areas vivid green, paint roads sandy beige, make building rooftops white with light warm gray shadows on facades. Add small round dark-green tree canopies along streets between buildings. Keep the red/pink highlighted parcel zone EXACTLY as-is. The result must be pixel-identical in geometry to the input.";
         console.log("[SLIDE4-POLISH] Calling OpenAI Responses API (gpt-4o-mini + image_generation)...");
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -3679,7 +3679,7 @@ app.post("/generate", async (req, res) => {
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
             ]}],
-            tools: [{ type: "image_generation", quality: "low", size: "1024x1024" }]
+            tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
           })
         });
         console.log(`[SLIDE4-POLISH] OpenAI status: ${oaiRes.status}`);
@@ -3919,7 +3919,7 @@ app.post("/generate-massing", async (req, res) => {
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-        const polishPrompt = "Polish this architectural massing render. Keep EXACT geometry, camera, volumes. White rooftops, warm gray shadows, dark edge lines. Sandy beige roads. Round green trees outside parcel. Keep blue floors, orange commerce, annotations. Premium architectural quality.";
+        const polishPrompt = "DO NOT change any building shape, size, position, volume, or camera angle. DO NOT move, add, or remove any building or the massing volume. This is a 3D axonometric massing study. ONLY apply a texture/color pass: paint flat ground areas vivid green, paint roads sandy beige, make surrounding building rooftops white with light warm gray shadows. Add small round dark-green tree canopies along streets. Keep the ochre/orange parcel zone, blue floor layers, orange commerce base, dimension annotations, and all overlays EXACTLY as-is. The result must be pixel-identical in geometry.";
         console.log("[POLISH] Calling OpenAI Responses API (gpt-4o-mini + image_generation)...");
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -3930,7 +3930,7 @@ app.post("/generate-massing", async (req, res) => {
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
             ]}],
-            tools: [{ type: "image_generation", quality: "low", size: "1024x1024" }]
+            tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
           })
         });
         console.log(`[POLISH] OpenAI response status: ${oaiRes.status}`);
@@ -3972,7 +3972,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "58.3-HEKTAR-POLISH",
+      ok: true, cached: false, server_version: "58.4-HEKTAR-POLISH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
