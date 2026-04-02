@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "62.1-SOBER-REALISTIC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "62.2-EARTH-TREES-SHADOWS" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3914,14 +3914,14 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v62.1-SOBER-REALISTIC...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v62.2-EARTH-TREES-SHADOWS...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Enhance this 3D axonometric urban planning map into a sober realistic architectural visualization. Preserve all geometry exactly. Make grass realistically textured with natural green tones. Make buildings look like clean light concrete with subtle shadows. Roads should be gray asphalt. The central ochre parcel stays as bare earth. Add semi-realistic trees along roads. Sober natural daylight, soft shadows. Professional architectural rendering style — realistic but clean and readable.";
+        const polishPrompt = "Edit this image with ZERO geometry changes. Do not move or reshape any building, road, or outline. Only make these 3 specific changes: (1) Change the central parcel zone color from green/ochre to realistic brown EARTH — dry bare soil, clearly not grass. (2) Add 20 semi-realistic green trees scattered along roads and open spaces. (3) Add soft realistic shadows beneath buildings and trees. Keep everything else exactly as it is — same buildings, same white color, same roads, same green grass outside the parcel, same labels, same legend, same compass.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4170,14 +4170,14 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v62.1-SOBER-REALISTIC...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v62.2-EARTH-TREES-SHADOWS...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Enhance this 3D massing view into a sober realistic architectural visualization. Preserve all geometry, overlays, labels, blue floor layers, orange commerce base exactly. Make grass realistically textured with natural green tones. Buildings clean light concrete with subtle shadows. Roads gray asphalt. Ochre parcel stays as bare earth. Add semi-realistic trees. Sober natural daylight, soft shadows. Professional architectural rendering — realistic but clean.";
+        const polishPrompt = "Edit this image with ZERO geometry changes. Do not move or reshape any building, road, or outline. Keep all overlays, blue floor layers, orange commerce base, labels exactly as-is. Only make these 3 specific changes: (1) Change the parcel zone to realistic brown EARTH — dry bare soil, not grass. (2) Add 20 semi-realistic green trees along roads. (3) Add soft realistic shadows beneath buildings and trees. Keep everything else exactly as it is.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "62.1-SOBER-REALISTIC",
+      ok: true, cached: false, server_version: "62.2-EARTH-TREES-SHADOWS",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v62.1-SOBER-REALISTIC on port ${PORT}`);
+  console.log(`BARLO v62.2-EARTH-TREES-SHADOWS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
