@@ -3662,30 +3662,44 @@ app.post("/generate", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust2;
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting OpenAI polish for slide 4 AXO...");
+        console.log("[SLIDE4-POLISH] Starting OpenAI polish via Responses API...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
-        console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes`);
-        const form = new FormData();
-        form.append("model", "dall-e-2");
-        form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
-        console.log("[SLIDE4-POLISH] Single image attached, model=dall-e-2");
-        form.append("size", "1024x1024");
-        form.append("response_format", "b64_json");
-        form.append("prompt", "Restyle as premium architectural illustration. Keep exact same geometry, camera, buildings, roads. White rooftops, warm gray shadows, black edges. Green grass inside blocks, round dark-green trees along streets. Sandy beige roads, cream sidewalks. Keep red/pink parcel zone at exact position. No text or labels.");
-        console.log("[SLIDE4-POLISH] Calling OpenAI images/edits...");
-        const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
-          method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
+        const b64Input = pngResized.toString("base64");
+        console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
+        const polishPrompt = "Restyle this axonometric urban map as premium architectural illustration. Keep EXACT same geometry, camera angle, buildings, roads. White rooftops, warm gray shadows, strong black edges. Vivid green grass inside blocks, round dark-green trees along streets (at least 30 trees). Sandy beige roads, cream sidewalks. Keep the red/pink parcel zone at exact same position. No text, no labels.";
+        console.log("[SLIDE4-POLISH] Calling OpenAI Responses API (gpt-image-1)...");
+        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-image-1",
+            input: [{ role: "user", content: [
+              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+              { type: "input_text", text: polishPrompt }
+            ]}],
+            tools: [{ type: "image_generation", quality: "low", size: "1024x1024" }]
+          })
         });
         console.log(`[SLIDE4-POLISH] OpenAI status: ${oaiRes.status}`);
         const oaiJson = await oaiRes.json();
         if (oaiJson.error) {
           console.error(`[SLIDE4-POLISH] OpenAI error: ${JSON.stringify(oaiJson.error)}`);
         }
-        if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
-          console.log(`[SLIDE4-POLISH] Got b64_json (${oaiJson.data[0].b64_json.length} chars)`);
-          const enhancedMapBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
+        // Extract b64 image from Responses API output
+        let polishedB64 = null;
+        if (oaiJson.output) {
+          for (const item of oaiJson.output) {
+            if (item.type === "image_generation_call" && item.result) {
+              polishedB64 = item.result;
+              break;
+            }
+          }
+        }
+        if (polishedB64) {
+          console.log(`[SLIDE4-POLISH] Got image (${polishedB64.length} chars)`);
+          const enhancedMapBuf = Buffer.from(polishedB64, "base64");
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
@@ -3702,8 +3716,8 @@ app.post("/generate", async (req, res) => {
             console.error(`[SLIDE4-POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
           }
         } else {
-          console.warn(`[SLIDE4-POLISH] No b64_json. Response keys: ${JSON.stringify(Object.keys(oaiJson))}`);
-          if (oaiJson.data?.[0]) console.warn(`[SLIDE4-POLISH] data[0] keys: ${JSON.stringify(Object.keys(oaiJson.data[0]))}`);
+          console.warn(`[SLIDE4-POLISH] No image in response. Keys: ${JSON.stringify(Object.keys(oaiJson))}`);
+          if (oaiJson.output) console.warn(`[SLIDE4-POLISH] output types: ${oaiJson.output.map(o => o.type).join(", ")}`);
         }
       } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
     }
@@ -3903,30 +3917,43 @@ app.post("/generate-massing", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust;
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[POLISH] Starting OpenAI polish... (key: ${OPENAI_API_KEY.substring(0,8)}...)`);
+        console.log(`[POLISH] Starting OpenAI polish via Responses API... (key: ${OPENAI_API_KEY.substring(0,8)}...)`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
-        console.log(`[POLISH] Resized image: ${pngResized.length} bytes`);
-        const form = new FormData();
-        form.append("model", "dall-e-2");
-        form.append("image", pngResized, { filename: "massing.png", contentType: "image/png" });
-        console.log("[POLISH] Single image attached, model=dall-e-2");
-        form.append("size", "1024x1024");
-        form.append("response_format", "b64_json");
-        form.append("prompt", "Polish this architectural massing render. Keep exact same geometry, camera, volumes, colors. Sharpen building edges, add warm gray shadows. White rooftops, sandy beige roads. Add trees only outside the ochre parcel boundary. Keep blue floors, orange commerce, floor gaps, annotations. Clean premium architectural quality. No watercolor or artistic effects.");
-        console.log("[POLISH] Calling OpenAI images/edits...");
-        const oaiRes = await fetch("https://api.openai.com/v1/images/edits", {
-          method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
+        const b64Input = pngResized.toString("base64");
+        console.log(`[POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
+        const polishPrompt = "Polish this architectural massing render. Keep EXACT same geometry, camera, volumes, positions. Sharpen building edges with clean dark lines. White rooftops, warm gray shadows. Sandy beige roads. Add round green trees ONLY outside the ochre parcel boundary. Keep blue floors, orange commerce RDC, floor gaps, all annotations unchanged. Clean premium architectural quality. No watercolor or artistic effects.";
+        console.log("[POLISH] Calling OpenAI Responses API (gpt-image-1)...");
+        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-image-1",
+            input: [{ role: "user", content: [
+              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+              { type: "input_text", text: polishPrompt }
+            ]}],
+            tools: [{ type: "image_generation", quality: "low", size: "1024x1024" }]
+          })
         });
         console.log(`[POLISH] OpenAI response status: ${oaiRes.status}`);
         const oaiJson = await oaiRes.json();
         if (oaiJson.error) {
           console.error(`[POLISH] OpenAI API error: ${JSON.stringify(oaiJson.error)}`);
         }
-        if (oaiJson.data?.[0]?.b64_json) {
-          console.log(`[POLISH] Got b64_json response (${oaiJson.data[0].b64_json.length} chars)`);
-          const enhBuf = Buffer.from(oaiJson.data[0].b64_json, "base64");
+        let polishedB64 = null;
+        if (oaiJson.output) {
+          for (const item of oaiJson.output) {
+            if (item.type === "image_generation_call" && item.result) {
+              polishedB64 = item.result;
+              break;
+            }
+          }
+        }
+        if (polishedB64) {
+          console.log(`[POLISH] Got image (${polishedB64.length} chars)`);
+          const enhBuf = Buffer.from(polishedB64, "base64");
           const fCanvas = createCanvas(W, H);
           fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
           drawMassingOverlays(fCanvas.getContext("2d"), W, H, {
@@ -3945,8 +3972,8 @@ app.post("/generate-massing", async (req, res) => {
             console.error(`[POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
           }
         } else {
-          console.warn(`[POLISH] No b64_json in response. Keys: ${JSON.stringify(Object.keys(oaiJson))}`);
-          if (oaiJson.data?.[0]) console.warn(`[POLISH] data[0] keys: ${JSON.stringify(Object.keys(oaiJson.data[0]))}`);
+          console.warn(`[POLISH] No image in response. Keys: ${JSON.stringify(Object.keys(oaiJson))}`);
+          if (oaiJson.output) console.warn(`[POLISH] output types: ${oaiJson.output.map(o => o.type).join(", ")}`);
         }
       } catch (oaiErr) { console.error("[POLISH] Exception:", oaiErr.message, oaiErr.stack); }
     } else {
