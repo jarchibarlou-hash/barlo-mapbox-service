@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "60.1-RESPONSES-FIDELITY" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "60.2-GRAY-ROADS-TREES" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3259,22 +3259,22 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b8a478", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 18, 12] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 18] } },
       { "id": "road-case-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b8a478", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 7] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
       { "id": "road-fill-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d4c49a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 16, 10, 18, 16] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#d4c49a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 5] } },
+        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 16, 6, 18, 10] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -3284,7 +3284,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
           "text-size": ["interpolate", ["linear"], ["zoom"], 15, 10, 17, 13],
           "symbol-placement": "line", "text-max-angle": 30, "text-padding": 20, "text-allow-overlap": false
         },
-        "paint": { "text-color": "#5a4a2a", "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 1.5 }
+        "paint": { "text-color": "#333333", "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.5 }
       },
       { "id": "road-label-street", "type": "symbol",
         "source": "composite", "source-layer": "road",
@@ -3296,7 +3296,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
           "text-size": ["interpolate", ["linear"], ["zoom"], 16, 8, 18, 11],
           "symbol-placement": "line", "text-max-angle": 30, "text-padding": 30, "text-allow-overlap": false
         },
-        "paint": { "text-color": "#7a6a4a", "text-halo-color": "rgba(255,255,255,0.75)", "text-halo-width": 1 }
+        "paint": { "text-color": "#555555", "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 1 }
       }
     ]
   };
@@ -3698,7 +3698,7 @@ function drawTrees(ctx, W, H) {
 }
 // ─── LÉGENDE + BOUSSOLE — SLIDE 4 AXO ────────────────────────────────────────
 function drawLegendCompass(ctx, W, H, p) {
-  const { site_area, bearing } = p;
+  const { site_area, bearing, setback_front, setback_side, setback_back } = p;
   ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
@@ -3743,6 +3743,33 @@ function drawLegendCompass(ctx, W, H, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
+
+  // ── Labels reculs réglementaires (si disponibles) ──
+  if (setback_front || setback_side || setback_back) {
+    const sf = setback_front || 3, ss = setback_side || 3, sb2 = setback_back || 3;
+    // Dessiner les labels de reculs sur l'image (coins de la parcelle)
+    // Position approximative : centre-haut pour front, côtés pour side, centre-bas pour back
+    const cx = W * 0.5, cy = H * 0.5;
+    ctx.save();
+    ctx.font = "bold 16px Arial";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#d02818";
+    ctx.lineWidth = 3;
+    // Front (haut de la parcelle — vers la route)
+    ctx.strokeText(sf + "m", cx, cy - 80);
+    ctx.fillText(sf + "m", cx, cy - 80);
+    // Back (bas)
+    ctx.strokeText(sb2 + "m", cx, cy + 100);
+    ctx.fillText(sb2 + "m", cx, cy + 100);
+    // Side left
+    ctx.strokeText(ss + "m", cx - 120, cy + 10);
+    ctx.fillText(ss + "m", cx - 120, cy + 10);
+    // Side right
+    ctx.strokeText(ss + "m", cx + 120, cy + 10);
+    ctx.fillText(ss + "m", cx + 120, cy + 10);
+    ctx.restore();
+  }
 }
 // ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
 function drawSolarArc(ctx, W, H, p) {
@@ -3873,7 +3900,7 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
-    drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
+    drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back) });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -3896,7 +3923,7 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
 
-        const polishPrompt = "Edit this axonometric urban planning 3D map. STRICT RULES — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The OCHRE/SANDY parcel zone with red outline is GPS-fixed — do NOT move or recolor it\n\nALLOWED EDITS ONLY:\n- Enhance building shadows on ground (sharper, warmer gray #bbb8b0)\n- Add round dark-green tree canopies (#3d7a1a) along roads — CLEAN circles, flat shading, no watercolor\n- Sharpen building edges with thin dark lines #333\n- Keep green ground, sandy beige roads exactly as-is\n- Matte finish, no noise, no brush strokes, no grain, no watercolor, no artistic filter\n- No text, no labels, no annotations, no watermarks\n\nOutput must look like a sharp, clean, professional architectural maquette photograph.";
+        const polishPrompt = "Edit this axonometric urban planning 3D map into a premium architectural maquette photograph. STRICT RULES — GEOMETRY IS 100% FROZEN:\n- Keep EXACTLY the same camera angle, pitch, bearing, composition\n- Keep EXACTLY the same building footprints, positions, heights, shapes\n- Keep EXACTLY the same road network layout and widths\n- Do NOT move, add, remove, resize ANY building or road\n- The OCHRE/SANDY parcel zone with red dashed outline is GPS-fixed — do NOT move or recolor it\n- Keep all white text labels and dimension annotations exactly as-is\n\nSURFACE EDITS ONLY:\n- BUILDINGS: concrete/plaster texture on facades. Rooftops: flat light gray. Sunlit faces: warm white. Shadow faces: warm gray. Sharp dark edge lines on all building corners. Varied building heights must be preserved.\n- GROUND: vivid green grass everywhere (except roads and parcel). Rich, realistic lawn texture.\n- ROADS: gray asphalt surface — keep the existing gray road color. Clean flat bitumen texture, no cracks.\n- TREES: Add 30-40 round dark-green tree canopies (#3d7a1a with #5aaa28 highlights) scattered along roads and in open spaces between buildings. Realistic round canopy shape with subtle shadow underneath. Mix of sizes.\n- SHADOWS: warm gray cast shadows from buildings onto ground. Sharp edges.\n- No watercolor, no artistic filter, no bloom, no grain, no brush strokes.\n- No invented text, no added labels, no watermarks.\n\nThe final image must look like a high-end photograph of a physical architectural scale model (maquette) under warm directional lighting.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -3928,7 +3955,7 @@ app.post("/generate", async (req, res) => {
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing });
+          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back) });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
           console.log(`[SLIDE4-POLISH] Final enhanced PNG: ${finalPng.length} bytes (${Date.now() - t0}ms)`);
@@ -4206,7 +4233,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "60.1-RESPONSES-FIDELITY",
+      ok: true, cached: false, server_version: "60.2-GRAY-ROADS-TREES",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4227,7 +4254,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v56.6 on port ${PORT}`);
+  console.log(`BARLO v60.2-GRAY-ROADS-TREES on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
