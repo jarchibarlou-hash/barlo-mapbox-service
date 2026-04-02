@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.1-HEKTAR-CANVAS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.2-HEKTAR-REALISTIC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3214,19 +3214,24 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 14] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 16, 5, 18, 9] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#6b6b6b", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#7a7a7a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 4, 18, 7] } },
+      { "id": "road-label", "type": "symbol", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "street"], true, false],
+        "layout": { "text-field": ["get", "name"], "text-size": 10, "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"],
+          "symbol-placement": "line", "text-max-angle": 30 },
+        "paint": { "text-color": "#ffffff", "text-halo-color": "#333333", "text-halo-width": 1 } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3236,15 +3241,27 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    // Directional sun light for realistic shadow projection
+    map.setLight({ anchor: 'map', color: '#fff5e6', intensity: 0.6, position: [1.5, 210, 30] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
-        'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
-        'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
+          0, '#f8f6f2', 4, '#f0ece6', 10, '#e6e2da', 20, '#d4d0c8', 40, '#b0aca4'],
+        // Height distribution: hash building ID → 45% R+1(6m), 53% R+2(9m), 2% R+3(12m)
+        'fill-extrusion-height': [
+          'case',
+          // If OSM has real height data, use it
+          ['has', 'height'], ['get', 'height'],
+          // Otherwise: use building footprint area as pseudo-random seed
+          // Small footprint (<120m²) → mostly R+1, large → mix R+1/R+2/R+3
+          ['<', ['coalesce', ['get', 'area'], 80], 60], 6,   // tiny → R+1
+          ['<', ['%', ['coalesce', ['id'], 0], 100], 45], 6,  // 45% → R+1 (6m)
+          ['<', ['%', ['coalesce', ['id'], 0], 100], 98], 9,  // 53% → R+2 (9m)
+          12                                                     // 2%  → R+3 (12m)
+        ],
+        'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
     });
@@ -3757,10 +3774,6 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
-    // ── CANVAS POLISH: trees only (green ground + sandy roads already in Mapbox style) ──
-    console.log("[SLIDE4-POLISH] Drawing trees...");
-    drawTrees(ctx, W, H);
-    console.log("[SLIDE4-POLISH] Canvas polish done");
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
@@ -3772,17 +3785,58 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    // ── Upload enhanced version (Canvas polish already applied — same as base) ──
-    {
-      const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-      const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, png, { contentType: "image/png", upsert: true });
-      if (!ue2) {
-        const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-        enhancedUrl = pd2.publicUrl + cacheBust2;
-        console.log(`✓ [SLIDE4-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
-      } else {
-        console.error(`[SLIDE4-POLISH] Supabase upload error: ${JSON.stringify(ue2)}`);
-      }
+    // ── IA POLISH: strict realistic render, ZERO artistic effect ──
+    if (OPENAI_API_KEY) {
+      try {
+        console.log("[SLIDE4-POLISH] Starting IA polish (strict realistic)...");
+        const resizedCanvas = createCanvas(1024, 1024);
+        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
+        const pngResized = resizedCanvas.toBuffer("image/png");
+        const b64Input = pngResized.toString("base64");
+        console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes`);
+        const polishPrompt = "You are receiving a 3D axonometric architectural site plan. ABSOLUTE RULES — violating ANY of these is a critical failure: (1) DO NOT MOVE, RESIZE, RESHAPE, ADD, OR REMOVE ANY BUILDING. Every single building footprint, height, and position must remain EXACTLY as in the input image. (2) DO NOT CHANGE THE CAMERA ANGLE OR ZOOM. (3) DO NOT ADD ANY ARTISTIC FILTER — no watercolor, no painterly effect, no blur, no glow, no vignette. (4) ONLY ALLOWED CHANGES: add realistic soft shadows cast by buildings onto the ground, add small round dark-green tree canopies (like architectural model trees) scattered along streets, add subtle material texture to building facades (concrete/plaster look). (5) The output must look like a high-quality photograph of a physical architectural scale model (maquette). Sharp, clean, sober, realistic.";
+        console.log("[SLIDE4-POLISH] Calling Responses API (gpt-4o)...");
+        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-4o",
+            input: [{ role: "user", content: [
+              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+              { type: "input_text", text: polishPrompt }
+            ]}],
+            tools: [{ type: "image_generation", quality: "high", size: "1024x1024" }]
+          })
+        });
+        console.log(`[SLIDE4-POLISH] Status: ${oaiRes.status}`);
+        const oaiJson = await oaiRes.json();
+        if (oaiJson.error) console.error(`[SLIDE4-POLISH] Error: ${JSON.stringify(oaiJson.error)}`);
+        let polishedB64 = null;
+        if (oaiJson.output) {
+          for (const item of oaiJson.output) {
+            if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+          }
+        }
+        if (polishedB64) {
+          console.log(`[SLIDE4-POLISH] Got image (${polishedB64.length} chars)`);
+          const enhBuf = Buffer.from(polishedB64, "base64");
+          const fCanvas = createCanvas(W, H);
+          const fCtx = fCanvas.getContext("2d");
+          fCtx.drawImage(await loadImage(enhBuf), 0, 0, W, H);
+          drawLegendCompass(fCtx, W, H, { site_area: Number(site_area), bearing });
+          drawSolarArc(fCtx, W, H, { bearing });
+          const finalPng = fCanvas.toBuffer("image/png");
+          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
+          if (!ue2) {
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + cacheBust2;
+            console.log(`✓ [SLIDE4-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          }
+        } else {
+          console.warn("[SLIDE4-POLISH] No image in response");
+        }
+      } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
@@ -4058,7 +4112,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "59.1-HEKTAR-CANVAS",
+      ok: true, cached: false, server_version: "59.2-HEKTAR-REALISTIC",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
