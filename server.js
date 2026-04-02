@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.6-HEKTAR-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "58.7-HEKTAR-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3662,39 +3662,58 @@ app.post("/generate", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust2;
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting OpenAI polish (Responses API + gpt-image-1)...");
+        // ── STRATEGY: Try /v1/images/edits (preserves geometry) first, fallback to Responses API ──
+        console.log("[SLIDE4-POLISH] Starting OpenAI polish...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
-        const b64Input = pngResized.toString("base64");
-        console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-        const polishPrompt = "Edit this 3D architectural axonometric rendering. PRESERVE EVERY building shape, position, size, and the exact camera angle — geometry must be pixel-identical. Only change surface colors: paint all flat ground areas vivid green grass, paint roads sandy beige, keep building rooftops clean white with warm gray shadows on facades. Add small round dark-green tree canopies along streets. Keep the red/pink parcel highlight exactly as-is. NO watercolor effect, NO artistic blur, NO style transfer — keep it photorealistic and sharp like an architectural maquette photo.";
-        console.log("[SLIDE4-POLISH] Calling OpenAI Responses API (gpt-4o + image_generation)...");
-        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            input: [{ role: "user", content: [
-              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-              { type: "input_text", text: polishPrompt }
-            ]}],
-            tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
-          })
-        });
-        console.log(`[SLIDE4-POLISH] OpenAI status: ${oaiRes.status}`);
-        const oaiJson = await oaiRes.json();
-        if (oaiJson.error) {
-          console.error(`[SLIDE4-POLISH] OpenAI error: ${JSON.stringify(oaiJson.error)}`);
-        }
+        console.log(`[SLIDE4-POLISH] Resized image: ${pngResized.length} bytes`);
+        const polishPrompt = "Restyle this 3D axonometric city view as a premium architectural maquette photograph. STRICT RULES: preserve every single building shape, position, size, roofline, and camera angle with zero deviation. Only repaint surfaces: vivid green grass on all ground, sandy beige roads, white rooftops, warm gray facade shadows, dark edge lines on buildings. Add small round dark-green tree canopies along streets. Keep the red/pink parcel zone exactly as-is. No blur, no watercolor, no artistic interpretation. Sharp, clean, photorealistic.";
+        // ── Attempt 1: /v1/images/edits + gpt-image-1 (best for geometry preservation) ──
         let polishedB64 = null;
-        if (oaiJson.output) {
-          for (const item of oaiJson.output) {
-            if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+        console.log("[SLIDE4-POLISH] Trying /v1/images/edits (gpt-image-1)...");
+        const form = new FormData();
+        form.append("model", "gpt-image-1");
+        form.append("image", pngResized, { filename: "slide.png", contentType: "image/png" });
+        form.append("prompt", polishPrompt);
+        form.append("size", "1024x1024");
+        form.append("response_format", "b64_json");
+        const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
+        });
+        console.log(`[SLIDE4-POLISH] /edits status: ${editsRes.status}`);
+        const editsJson = await editsRes.json();
+        if (editsRes.status === 200 && editsJson.data?.[0]?.b64_json) {
+          polishedB64 = editsJson.data[0].b64_json;
+          console.log(`[SLIDE4-POLISH] /edits SUCCESS — got image (${polishedB64.length} chars)`);
+        } else {
+          console.warn(`[SLIDE4-POLISH] /edits failed: ${JSON.stringify(editsJson.error || editsJson)}`);
+          // ── Attempt 2: Responses API fallback ──
+          console.log("[SLIDE4-POLISH] Falling back to Responses API (gpt-4o)...");
+          const b64Input = pngResized.toString("base64");
+          const respRes = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              input: [{ role: "user", content: [
+                { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                { type: "input_text", text: polishPrompt }
+              ]}],
+              tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
+            })
+          });
+          console.log(`[SLIDE4-POLISH] Responses API status: ${respRes.status}`);
+          const respJson = await respRes.json();
+          if (respJson.error) console.error(`[SLIDE4-POLISH] Responses API error: ${JSON.stringify(respJson.error)}`);
+          if (respJson.output) {
+            for (const item of respJson.output) {
+              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+            }
           }
         }
         if (polishedB64) {
-          console.log(`[SLIDE4-POLISH] Got image (${polishedB64.length} chars)`);
+          console.log(`[SLIDE4-POLISH] Got final image (${polishedB64.length} chars)`);
           const enhancedMapBuf = Buffer.from(polishedB64, "base64");
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
@@ -3913,39 +3932,58 @@ app.post("/generate-massing", async (req, res) => {
     let enhancedUrl = pd.publicUrl + cacheBust;
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[POLISH] Starting OpenAI polish (Responses API + gpt-image-1)... (key: ${OPENAI_API_KEY.substring(0,8)}...)`);
+        // ── STRATEGY: Try /v1/images/edits (preserves geometry) first, fallback to Responses API ──
+        console.log(`[POLISH] Starting OpenAI polish... (key: ${OPENAI_API_KEY.substring(0,8)}...)`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
-        const b64Input = pngResized.toString("base64");
-        console.log(`[POLISH] Resized image: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-        const polishPrompt = "Edit this 3D architectural massing rendering. PRESERVE EVERY building shape, volume, position, size, and the exact camera angle — geometry must be pixel-identical. Only change surface colors: paint all flat ground areas vivid green grass, paint roads sandy beige, keep building rooftops clean white with warm gray shadows on facades. Add small round dark-green tree canopies along streets. Keep the ochre parcel boundary, blue floor layers, orange commerce base, dimension labels, and all overlays exactly as-is. NO watercolor effect, NO artistic blur, NO style transfer — keep it photorealistic and sharp like an architectural maquette photo.";
-        console.log("[POLISH] Calling OpenAI Responses API (gpt-4o + image_generation)...");
-        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            input: [{ role: "user", content: [
-              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-              { type: "input_text", text: polishPrompt }
-            ]}],
-            tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
-          })
-        });
-        console.log(`[POLISH] OpenAI response status: ${oaiRes.status}`);
-        const oaiJson = await oaiRes.json();
-        if (oaiJson.error) {
-          console.error(`[POLISH] OpenAI API error: ${JSON.stringify(oaiJson.error)}`);
-        }
+        console.log(`[POLISH] Resized image: ${pngResized.length} bytes`);
+        const polishPrompt = "Restyle this 3D axonometric massing view as a premium architectural maquette photograph. STRICT RULES: preserve every single building shape, volume, position, size, roofline, and camera angle with zero deviation. Only repaint surfaces: vivid green grass on all ground, sandy beige roads, white rooftops, warm gray facade shadows, dark edge lines. Add small round dark-green tree canopies along streets. Keep ochre parcel boundary, blue floor layers, orange commerce base, dimension labels exactly as-is. No blur, no watercolor, no artistic interpretation. Sharp, clean, photorealistic.";
+        // ── Attempt 1: /v1/images/edits + gpt-image-1 ──
         let polishedB64 = null;
-        if (oaiJson.output) {
-          for (const item of oaiJson.output) {
-            if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+        console.log("[POLISH] Trying /v1/images/edits (gpt-image-1)...");
+        const form = new FormData();
+        form.append("model", "gpt-image-1");
+        form.append("image", pngResized, { filename: "massing.png", contentType: "image/png" });
+        form.append("prompt", polishPrompt);
+        form.append("size", "1024x1024");
+        form.append("response_format", "b64_json");
+        const editsRes = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST", headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() }, body: form,
+        });
+        console.log(`[POLISH] /edits status: ${editsRes.status}`);
+        const editsJson = await editsRes.json();
+        if (editsRes.status === 200 && editsJson.data?.[0]?.b64_json) {
+          polishedB64 = editsJson.data[0].b64_json;
+          console.log(`[POLISH] /edits SUCCESS — got image (${polishedB64.length} chars)`);
+        } else {
+          console.warn(`[POLISH] /edits failed: ${JSON.stringify(editsJson.error || editsJson)}`);
+          // ── Attempt 2: Responses API fallback ──
+          console.log("[POLISH] Falling back to Responses API (gpt-4o)...");
+          const b64Input = pngResized.toString("base64");
+          const respRes = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              input: [{ role: "user", content: [
+                { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                { type: "input_text", text: polishPrompt }
+              ]}],
+              tools: [{ type: "image_generation", quality: "medium", size: "1024x1024" }]
+            })
+          });
+          console.log(`[POLISH] Responses API status: ${respRes.status}`);
+          const respJson = await respRes.json();
+          if (respJson.error) console.error(`[POLISH] Responses API error: ${JSON.stringify(respJson.error)}`);
+          if (respJson.output) {
+            for (const item of respJson.output) {
+              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+            }
           }
         }
         if (polishedB64) {
-          console.log(`[POLISH] Got image (${polishedB64.length} chars)`);
+          console.log(`[POLISH] Got final image (${polishedB64.length} chars)`);
           const enhBuf = Buffer.from(polishedB64, "base64");
           const fCanvas = createCanvas(W, H);
           fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
@@ -3972,7 +4010,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "58.6-HEKTAR-POLISH",
+      ok: true, cached: false, server_version: "58.7-HEKTAR-POLISH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
