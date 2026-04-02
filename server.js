@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "61.9-CLEAN-SMOOTH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "62.0-OVERLAY-ONLY" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3914,14 +3914,14 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v61.9-CLEAN-SMOOTH...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v62.0-OVERLAY-ONLY...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Clean polished edit of this 3D axonometric urban map. GEOMETRY 100% FROZEN — do not move any element. Style: clean professional 3D architectural maquette — smooth, neat, readable. NOT photorealistic, NOT artistic, NOT dramatic. Like a high-quality SketchUp or Lumion render. BUILDINGS: smooth light gray-white facades, clean edges, soft shadow on one side only. Varied heights preserved. GRASS: smooth bright green surface with very gentle tonal variation — clean and neat, like a well-kept lawn render. NOT rough texture, NOT patchy. PARCEL SITE (outlined central zone): smooth warm beige-ochre surface — clean bare earth look, clearly different from green. ROADS: smooth flat dark gray. TREES: 15-20 clean round green trees along roads — simple, neat shapes, small shadow beneath each. LIGHTING: bright even daylight, very soft shadows. Clean, airy, well-lit. NO dark areas, NO moody atmosphere, NO cinematic grading. Overall: CLEAN, SMOOTH, BRIGHT, PROFESSIONAL.";
+        const polishPrompt = "Apply a very light texture filter over this image. Do NOT redraw, do NOT regenerate, do NOT recompose. Keep this EXACT image as-is — same buildings, same positions, same colors, same roads, same green areas, same parcel, same labels, same everything. Only overlay subtle enhancements: slightly more realistic grass texture, gentle shadows at building bases, and add small green trees along the roads. The result must be 95% identical to the input image with just a thin layer of realism on top.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4170,14 +4170,14 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v61.9-CLEAN-SMOOTH...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v62.0-OVERLAY-ONLY...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = "Very minimal edit of this 3D massing view. Already a good render — only enhance slightly. ABSOLUTE RULE: DO NOT change geometry, camera, building positions/sizes/heights, parcel shape, labels, overlays, blue floor layers, orange commerce base. Everything stays EXACTLY where it is. Only 3 changes: (1) Subtle grass texture on green ground — gentle tonal variation, keep bright green. (2) Add 20 small round green trees along roads — varied sizes, tiny shadows beneath. (3) Soft ambient shadows at building bases. KEEP buildings white. KEEP roads gray. KEEP parcel ochre/brown. KEEP lighting bright and clean. Do NOT darken. Do NOT add dramatic lighting or cinematic effects. 95% identical to input.";
+        const polishPrompt = "Apply a very light texture filter over this image. Do NOT redraw, do NOT regenerate, do NOT recompose. Keep this EXACT image as-is — same buildings, same positions, same colors, same roads, same green areas, same parcel, same labels, same overlays, same everything. Only overlay subtle enhancements: slightly more realistic grass texture, gentle shadows at building bases, and add small green trees along the roads. The result must be 95% identical to the input image with just a thin layer of realism on top.";
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4232,7 +4232,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "61.9-CLEAN-SMOOTH",
+      ok: true, cached: false, server_version: "62.0-OVERLAY-ONLY",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4253,7 +4253,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v61.9-CLEAN-SMOOTH on port ${PORT}`);
+  console.log(`BARLO v62.0-OVERLAY-ONLY on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
