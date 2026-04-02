@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.0-HEKTAR-CANVAS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "59.1-HEKTAR-CANVAS" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3203,30 +3203,30 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#f2f0ec" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c8dce8" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#5a9848" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#e0ddd4" } },
+        "paint": { "fill-color": "#468538" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#ebe8e2" } },
+        "paint": { "fill-color": "#5a9848" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3306,30 +3306,30 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#f2f0ec" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c8dce8" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#5a9848" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#e0ddd4" } },
+        "paint": { "fill-color": "#468538" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#ebe8e2" } },
+        "paint": { "fill-color": "#5a9848" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#eae4d4", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3520,64 +3520,62 @@ function applyColorRemap(ctx, W, H) {
   }
   ctx.putImageData(imgData, 0, 0);
 }
-// Helper: draw random trees along edges of roads (seeded by position for consistency)
+// Helper: draw trees along road edges on green-background maps
 function drawTrees(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
-  // Find road-to-grass boundary pixels and place trees there
   const treePositions = [];
-  const step = 28; // check every N pixels for tree placement
+  const step = 32;
   for (let y = step; y < H - step; y += step) {
     for (let x = step; x < W - step; x += step) {
       const idx = (y * W + x) * 4;
       const r = d[idx], g = d[idx+1], b = d[idx+2];
-      // Is this a green grass pixel?
-      if (g > 100 && g > r * 1.3 && g > b * 1.5) {
-        // Check if there's a road nearby (within ~15px)
-        let nearRoad = false;
-        for (let dy = -15; dy <= 15; dy += 5) {
-          for (let dx = -15; dx <= 15; dx += 5) {
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-            const ni = (ny * W + nx) * 4;
-            const nr = d[ni], ng = d[ni+1], nb = d[ni+2];
-            // Sandy road color detection
-            if (nr > 160 && ng > 140 && nb > 100 && nr - nb > 30 && ng - nb > 20 && nr < 220) {
-              nearRoad = true; break;
-            }
-          }
-          if (nearRoad) break;
-        }
-        // Check NOT on a building (avoid white areas nearby above)
-        let nearBuilding = false;
-        for (let dy = -20; dy <= 0; dy += 5) {
-          const ni = (Math.max(0, y + dy) * W + x) * 4;
-          if (d[ni] > 230 && d[ni+1] > 230 && d[ni+2] > 220) { nearBuilding = true; break; }
-        }
-        if (nearRoad && !nearBuilding) {
-          // Pseudo-random selection (deterministic based on position)
-          if (((x * 7 + y * 13) % 5) < 2) {
-            treePositions.push({ x, y });
+      // Is this a green grass pixel? (Mapbox green background ~#5a9848 = R90,G152,B72)
+      const isGrass = (g > 80 && g > r * 1.2 && g > b * 1.4 && r < 150);
+      if (!isGrass) continue;
+      // Check road nearby (sandy ~#c4b494 = R196,G180,B148 or border ~#8a7d62)
+      let nearRoad = false;
+      for (let dy = -18; dy <= 18; dy += 6) {
+        for (let dx = -18; dx <= 18; dx += 6) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+          const ni = (ny * W + nx) * 4;
+          const nr = d[ni], ng = d[ni+1], nb = d[ni+2];
+          if (nr > 120 && ng > 100 && nb > 70 && nr > ng && nr - nb > 25 && ng - nb > 15 && nr < 230) {
+            nearRoad = true; break;
           }
         }
+        if (nearRoad) break;
+      }
+      // Not on/near building (white/bright areas)
+      let nearBuilding = false;
+      for (let dy = -24; dy <= 4; dy += 6) {
+        for (let dx = -12; dx <= 12; dx += 6) {
+          const nx = x + dx, ny = Math.max(0, Math.min(H-1, y + dy));
+          const ni = (ny * W + nx) * 4;
+          if (d[ni] > 200 && d[ni+1] > 200 && d[ni+2] > 190) { nearBuilding = true; break; }
+        }
+        if (nearBuilding) break;
+      }
+      if (nearRoad && !nearBuilding && ((x * 7 + y * 13) % 5) < 2) {
+        treePositions.push({ x, y });
       }
     }
   }
-  // Draw tree canopies
   for (const t of treePositions) {
-    const radius = 8 + ((t.x * 3 + t.y * 7) % 5); // 8-12px radius
-    // Dark green circle with slight shadow
+    const radius = 10 + ((t.x * 3 + t.y * 7) % 6);
+    // Shadow
     ctx.beginPath();
-    ctx.arc(t.x + 2, t.y + 2, radius, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(30,60,20,0.3)";
+    ctx.arc(t.x + 2, t.y + 3, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(20,50,15,0.35)";
     ctx.fill();
-    // Main canopy
+    // Canopy
     ctx.beginPath();
     ctx.arc(t.x, t.y, radius, 0, Math.PI * 2);
-    const grad = ctx.createRadialGradient(t.x - 2, t.y - 2, 1, t.x, t.y, radius);
-    grad.addColorStop(0, "#4a9e3a");
-    grad.addColorStop(0.6, "#357a28");
-    grad.addColorStop(1, "#2a6020");
+    const grad = ctx.createRadialGradient(t.x - 3, t.y - 3, 1, t.x, t.y, radius);
+    grad.addColorStop(0, "#5aad42");
+    grad.addColorStop(0.5, "#3d8a2e");
+    grad.addColorStop(1, "#2d6e22");
     ctx.fillStyle = grad;
     ctx.fill();
   }
@@ -3759,9 +3757,8 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
-    // ── CANVAS POLISH: color remap (beige→green, roads→sandy) + trees ──
-    console.log("[SLIDE4-POLISH] Applying Canvas color remap...");
-    applyColorRemap(ctx, W, H);
+    // ── CANVAS POLISH: trees only (green ground + sandy roads already in Mapbox style) ──
+    console.log("[SLIDE4-POLISH] Drawing trees...");
     drawTrees(ctx, W, H);
     console.log("[SLIDE4-POLISH] Canvas polish done");
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing });
@@ -4061,7 +4058,7 @@ app.post("/generate-massing", async (req, res) => {
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "59.0-HEKTAR-CANVAS",
+      ok: true, cached: false, server_version: "59.1-HEKTAR-CANVAS",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
