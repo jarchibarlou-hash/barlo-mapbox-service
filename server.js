@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "63.3-TEXTURED-REALISTIC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "64.0-NEUTRAL-SOBER" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3309,8 +3309,8 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   map.addControl = function() {};
 
   map.on('style.load', () => {
-    // v49: Lumière directionnelle pour ombres et profondeur
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    // v64: Lumière neutre froide — pas de teinte warm/bloom
+    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.45, position: [1.15, 210, 45] });
 
     const labelLayerId = undefined;
 
@@ -3342,18 +3342,18 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       },
     }, labelLayerId);
 
-    // v49: Parcelle — ocre terre
+    // v64: Parcelle — fond sable/beige clair bien visible + contour rouge-orangé épais
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#c4a56a', 'fill-opacity': 0.45 } }, '3d-buildings');
+      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.55 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d02818', 'line-width': 2.5, 'line-opacity': 0.9 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 3.5, 'line-opacity': 0.95 } }, '3d-buildings');
 
-    // v49: Enveloppe constructible — tirets rouges
+    // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#d02818', 'line-width': 2,
-               'line-dasharray': [5, 3], 'line-opacity': 0.75 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 2.5,
+               'line-dasharray': [6, 4], 'line-opacity': 0.85 } }, '3d-buildings');
 
     // v49: Flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
@@ -3455,7 +3455,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    // v64: Lumière neutre froide — pas de teinte warm/bloom
+    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.45, position: [1.15, 210, 45] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -3467,14 +3468,16 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    // ── PARCELLE : contour ocre jaune, pas de fill ──
+    // v64: Parcelle — fond sable/beige + contour rouge-orangé épais
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.50 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#c8a020', 'line-width': 2.5, 'line-opacity': 0.9 } }, '3d-buildings');
-    // ── ENVELOPE (limite séparative) : ocre tirets ──
+      paint: { 'line-color': '#c45030', 'line-width': 3.5, 'line-opacity': 0.95 } }, '3d-buildings');
+    // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#b8942c', 'line-width': 1.8, 'line-dasharray': [6, 3], 'line-opacity': 0.70 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 2.5, 'line-dasharray': [6, 4], 'line-opacity': 0.85 } }, '3d-buildings');
     // ── MASSING : étages individuels, RDC=${rdcH}m, courants=${etageH}m, gaps entre niveaux ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
@@ -3526,17 +3529,17 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
   ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
-  ctx.fillStyle = "#d02818"; ctx.fill();
+  ctx.fillStyle = "#c45030"; ctx.fill();
   ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
   ctx.fillStyle = "#ccc"; ctx.fill();
   ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#c45030";
   ctx.fillText("N", 0, -22);
   ctx.restore();
   const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: `Parcelle — ${site_area} m²` },
-    { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
-    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiments 3D" },
+    { type: "rect", fill: "rgba(196,80,48,0.25)", stroke: "#c45030", label: `Parcelle — ${site_area} m²` },
+    { type: "dash", stroke: "#c45030", label: "Zone constructible (reculs)" },
+    { type: "rect", fill: "#e0ddd8", stroke: "#b0ada6", label: "Bâtiments 3D" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
   const legH = legPad * 2 + legItems.length * legLH + 10;
@@ -3565,7 +3568,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   const BY = H;
   ctx.fillStyle = "#ffffff"; ctx.fillRect(0, BY, W, BH);
   ctx.beginPath(); ctx.moveTo(0, BY); ctx.lineTo(W, BY);
-  ctx.strokeStyle = "#d02818"; ctx.lineWidth = 4; ctx.stroke();
+  ctx.strokeStyle = "#c45030"; ctx.lineWidth = 4; ctx.stroke();
   const pad = 32, C1 = pad, C2 = W * 0.26, C3 = W * 0.52, C4 = W * 0.76;
   ctx.textAlign = "left";
   ctx.font = "bold 20px Arial"; ctx.fillStyle = "#111"; ctx.fillText("Lecture stratégique du site", C1, BY + 42);
@@ -3707,17 +3710,17 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.shadowColor = "transparent"; ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
   ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(-5, -3); ctx.lineTo(0, -8); ctx.lineTo(5, -3); ctx.closePath();
-  ctx.fillStyle = "#d02818"; ctx.fill();
+  ctx.fillStyle = "#c45030"; ctx.fill();
   ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(-5, 3); ctx.lineTo(0, 8); ctx.lineTo(5, 3); ctx.closePath();
   ctx.fillStyle = "#ccc"; ctx.fill();
   ctx.rotate((bearing || 0) * Math.PI / 180);
-  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#d02818";
+  ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillStyle = "#c45030";
   ctx.fillText("N", 0, -22);
   ctx.restore();
   const legItems = [
-    { type: "rect", fill: "rgba(208,40,24,0.2)", stroke: "#d02818", label: "Parcelle — " + site_area + " m²" },
-    { type: "dash", stroke: "#d02818", label: "Enveloppe constructible" },
-    { type: "rect", fill: "#e8e4dc", stroke: "#c8c4bc", label: "Bâtiment existant" },
+    { type: "rect", fill: "rgba(196,80,48,0.25)", stroke: "#c45030", label: "Parcelle — " + site_area + " m²" },
+    { type: "dash", stroke: "#c45030", label: "Zone constructible (reculs)" },
+    { type: "rect", fill: "#e0ddd8", stroke: "#b0ada6", label: "Bâtiment existant" },
   ];
   const legPad = 14, legLH = 26, legW = 300;
   const legH = legPad * 2 + legItems.length * legLH + 10;
@@ -3754,7 +3757,7 @@ function drawLegendCompass(ctx, W, H, p) {
     ctx.font = "bold 16px Arial";
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = "#d02818";
+    ctx.strokeStyle = "#c45030";
     ctx.lineWidth = 3;
     // Front (haut de la parcelle — vers la route)
     ctx.strokeText(sf + "m", cx, cy - 80);
@@ -3783,33 +3786,34 @@ function drawSolarArc(ctx, W, H, p) {
   const northRad = -(bearing) * Math.PI / 180 - Math.PI / 2;
   const sunriseAngle = northRad + Math.PI / 2;
   const sunsetAngle  = northRad + 3 * Math.PI / 2;
+  // v64: Arc solaire sobre — teintes neutres, pas de bloom doré
   ctx.beginPath(); ctx.arc(SX, SY, SR - 6, sunriseAngle, sunsetAngle);
-  ctx.strokeStyle = "rgba(255,170,0,0.15)"; ctx.lineWidth = 14; ctx.stroke();
+  ctx.strokeStyle = "rgba(180,160,100,0.12)"; ctx.lineWidth = 14; ctx.stroke();
   ctx.beginPath(); ctx.arc(SX, SY, SR - 6, sunriseAngle, sunsetAngle);
   const grad = ctx.createLinearGradient(
     SX + Math.cos(sunriseAngle) * SR, SY + Math.sin(sunriseAngle) * SR,
     SX + Math.cos(sunsetAngle)  * SR, SY + Math.sin(sunsetAngle)  * SR);
-  grad.addColorStop(0, "rgba(220,120,0,0.5)"); grad.addColorStop(0.5, "rgba(230,170,0,0.8)"); grad.addColorStop(1, "rgba(200,80,0,0.5)");
-  ctx.strokeStyle = grad; ctx.lineWidth = 5; ctx.stroke();
+  grad.addColorStop(0, "rgba(180,120,40,0.4)"); grad.addColorStop(0.5, "rgba(200,160,60,0.6)"); grad.addColorStop(1, "rgba(180,100,30,0.4)");
+  ctx.strokeStyle = grad; ctx.lineWidth = 4; ctx.stroke();
   const sunAngle = northRad + Math.PI;
   const sunX = SX + Math.cos(sunAngle) * (SR - 6), sunY = SY + Math.sin(sunAngle) * (SR - 6);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     ctx.beginPath(); ctx.moveTo(sunX + Math.cos(a) * 6, sunY + Math.sin(a) * 6);
     ctx.lineTo(sunX + Math.cos(a) * 10, sunY + Math.sin(a) * 10);
-    ctx.strokeStyle = "rgba(200,140,0,0.7)"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = "rgba(160,130,50,0.5)"; ctx.lineWidth = 1.5; ctx.stroke();
   }
-  ctx.fillStyle = "#e8b800"; ctx.beginPath(); ctx.arc(sunX, sunY, 5, 0, 2 * Math.PI); ctx.fill();
+  ctx.fillStyle = "#c8a030"; ctx.beginPath(); ctx.arc(sunX, sunY, 5, 0, 2 * Math.PI); ctx.fill();
   [
-    { label: "N", angle: northRad, color: "#d02818", font: "bold 11px Arial" },
+    { label: "N", angle: northRad, color: "#c45030", font: "bold 11px Arial" },
     { label: "S", angle: northRad + Math.PI, color: "#aaa", font: "9px Arial" },
-    { label: "E", angle: sunriseAngle, color: "#b08020", font: "bold 10px Arial" },
-    { label: "O", angle: sunsetAngle, color: "#b08020", font: "bold 10px Arial" },
+    { label: "E", angle: sunriseAngle, color: "#888", font: "bold 10px Arial" },
+    { label: "O", angle: sunsetAngle, color: "#888", font: "bold 10px Arial" },
   ].forEach(function(l) {
     const lx = SX + Math.cos(l.angle) * (SR + 4), ly = SY + Math.sin(l.angle) * (SR + 4);
     ctx.font = l.font; ctx.fillStyle = l.color; ctx.textAlign = "center"; ctx.fillText(l.label, lx, ly + 4);
   });
-  ctx.font = "7px Arial"; ctx.fillStyle = "#ccc"; ctx.textAlign = "center";
+  ctx.font = "7px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "center";
   ctx.fillText("ENSOLEILLEMENT", SX, SY + SR + 18);
   ctx.restore();
 }
@@ -3823,10 +3827,10 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.shadowColor = "rgba(0,0,0,0.12)"; ctx.shadowBlur = 6*s; ctx.shadowOffsetY = 2*s;
   ctx.beginPath(); ctx.arc(0, 0, 32*s, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#c8a020"; ctx.lineWidth = 2*s; ctx.stroke();
+  ctx.shadowColor = "transparent"; ctx.strokeStyle = "#c45030"; ctx.lineWidth = 2*s; ctx.stroke();
   ctx.rotate(-(bearing || 0) * Math.PI / 180);
   ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "center";
-  ctx.fillStyle = "#c8a020"; ctx.fillText("N", 0, -18*s);
+  ctx.fillStyle = "#c45030"; ctx.fillText("N", 0, -18*s);
   ctx.fillStyle = "#bbb"; ctx.fillText("S", 0, 24*s);
   ctx.fillStyle = "#bbb"; ctx.fillText("O", -22*s, 4*s);
   ctx.fillStyle = "#bbb"; ctx.fillText("E", 22*s, 4*s);
@@ -3914,7 +3918,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v63.3-TEXTURED-REALISTIC...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v64.0-NEUTRAL-SOBER...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -3925,15 +3929,20 @@ app.post("/generate", async (req, res) => {
 
 REMOVE all text labels (3m, 5m, street names) — they will be redrawn as overlay. Do NOT render any text or numbers.
 
-Apply ONLY these realistic texture upgrades:
-- BUILDINGS: Light cream/white concrete with subtle plaster texture and micro-imperfections. Soft realistic shadows and ambient occlusion on all buildings. Slight height variation visible through shadow depth.
-- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width — clearly visible.
-- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. The red/orange parcel boundary must remain clearly visible.
-- GRASS (outside parcel): Realistic textured green grass — not flat color. Varied shades of green with natural look.
-- TREES: Add 12-15 semi-realistic 3D trees with rounded canopy and shadow, scattered naturally along roads and in open spaces. Varied sizes. Not too dense, not too sparse.
-- LIGHTING: Warm natural sunlight from consistent direction. Soft cast shadows from all buildings and trees. Subtle atmospheric haze in the distance.
+CRITICAL — PARCEL DIFFERENTIATION:
+- The PARCEL SITE (central zone marked with a solid red-orange border line) must be CLEARLY DIFFERENTIATED from surrounding terrain. Fill the parcel with a light sandy beige/tan bare earth texture (#d4c8a0 tone). It must look like cleared bare ground — distinctly different from the green grass outside.
+- The solid red-orange parcel BOUNDARY LINE must remain thick, continuous, and highly visible (not faded or blended).
+- INSIDE the parcel, there is a DASHED red-orange line showing the SETBACK ZONE (zone de recul). This dashed line must also remain clearly visible and distinct from the solid boundary.
+- The area between the solid boundary and the dashed setback line represents the regulatory setback — keep it visually readable.
 
-Style reference: sober professional architectural maquette photo — realistic textures but clean and readable, not artistic or dramatic.`;
+Apply these realistic texture upgrades:
+- BUILDINGS: Cool-toned light gray concrete with subtle plaster texture. Neutral shadows and ambient occlusion — NO warm/golden tint. Clean matte finish.
+- ROADS: Medium-dark gray asphalt texture. Keep roads their existing width — clearly visible.
+- GRASS (OUTSIDE parcel only): Realistic textured green grass — varied natural shades. The parcel itself must NOT be green.
+- TREES: Add 10-12 semi-realistic 3D trees with rounded canopy and shadow, scattered naturally along roads and in open spaces. Varied sizes. NOT inside the parcel boundary.
+- LIGHTING: Neutral diffuse daylight — NO warm sunlight, NO golden hour, NO bloom effect, NO atmospheric warm haze. Cool white light like an overcast day. Soft shadows from a high angle. Clean and clinical.
+
+Style: sober professional architectural maquette photo under neutral studio lighting — clean, technical, readable. No artistic effects, no warm glow, no bloom.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4182,7 +4191,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v63.3-TEXTURED-REALISTIC...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v64.0-NEUTRAL-SOBER...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -4193,15 +4202,19 @@ app.post("/generate-massing", async (req, res) => {
 
 REMOVE all text labels (floor counts, legend text, compass text) — they will be redrawn as overlay. Do NOT render any text or numbers.
 
-Apply ONLY these realistic texture upgrades:
-- BUILDINGS: Light cream/white concrete with subtle plaster texture. The colored floor indicators (blue/orange) must remain visible. Soft realistic shadows and ambient occlusion.
-- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width.
-- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. Red/orange parcel boundary must remain clearly visible.
-- GRASS (outside parcel): Realistic textured green grass — varied shades, natural look.
-- TREES: Add 12-15 semi-realistic 3D trees scattered naturally along roads. Varied sizes. Not too dense.
-- LIGHTING: Warm natural sunlight. Soft cast shadows from buildings and trees. Subtle atmospheric haze in distance.
+CRITICAL — PARCEL DIFFERENTIATION:
+- The PARCEL SITE (central zone marked with a solid red-orange border line) must be CLEARLY DIFFERENTIATED from surrounding terrain. Fill the parcel with a light sandy beige/tan bare earth texture (#d4c8a0 tone). It must look like cleared bare ground — distinctly different from the green grass outside.
+- The solid red-orange parcel BOUNDARY LINE must remain thick, continuous, and highly visible.
+- INSIDE the parcel, the DASHED red-orange line shows the SETBACK ZONE (zone de recul). This dashed line must remain clearly visible and distinct from the solid boundary.
 
-Style: sober professional architectural maquette photo — realistic textures but clean and readable.`;
+Apply these realistic texture upgrades:
+- BUILDINGS: Cool-toned light gray concrete with subtle plaster texture. The colored floor indicators (blue/orange) on the massing must remain visible. Neutral shadows — NO warm/golden tint.
+- ROADS: Medium-dark gray asphalt texture. Keep roads their existing width.
+- GRASS (OUTSIDE parcel only): Realistic textured green grass — varied natural shades. The parcel itself must NOT be green.
+- TREES: Add 10-12 semi-realistic 3D trees scattered naturally along roads. Varied sizes. NOT inside the parcel boundary.
+- LIGHTING: Neutral diffuse daylight — NO warm sunlight, NO golden hour, NO bloom effect, NO atmospheric warm haze. Cool white light like an overcast day. Soft shadows from a high angle.
+
+Style: sober professional architectural maquette photo under neutral studio lighting — clean, technical, readable. No artistic effects, no warm glow, no bloom.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4256,7 +4269,7 @@ Style: sober professional architectural maquette photo — realistic textures bu
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "63.3-TEXTURED-REALISTIC",
+      ok: true, cached: false, server_version: "64.0-NEUTRAL-SOBER",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4277,7 +4290,7 @@ Style: sober professional architectural maquette photo — realistic textures bu
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v63.3-TEXTURED-REALISTIC on port ${PORT}`);
+  console.log(`BARLO v64.0-NEUTRAL-SOBER on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
