@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "66.1-ULTRA-MINIMAL-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "66.2-ASPHALT-REALISTIC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3269,7 +3269,12 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 16, 10, 18, 16] } },
+        "paint": { "line-color": "#9a9a9a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 16, 10, 18, 16] } },
+      { "id": "road-center-secondary", "type": "line",
+        "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 16, 4, 18, 6] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
@@ -3441,6 +3446,10 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
         "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+      { "id": "road-center-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#5a5040", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 3] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
@@ -3920,7 +3929,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v66.1-ULTRA-MINIMAL-POLISH...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v66.2-ASPHALT-REALISTIC...");
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
@@ -3928,22 +3937,24 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply a VERY SUBTLE realistic texture pass on this 3D architectural rendering. MINIMAL changes only.
+        const polishPrompt = `Make this 3D architectural rendering look like a realistic photograph of an architectural scale model (maquette).
 
-STRICT RULES:
-1. DO NOT change ANY geometry, position, size, or shape of buildings, roads, or parcels.
-2. DO NOT add ANY text, labels, legend, compass, UI, watermark, inset image, or frame.
-3. DO NOT add artistic effects, filters, vignettes, or color grading.
-4. Output is ONE single image, same composition, same camera angle.
+FORBIDDEN — do NOT do any of these:
+- Do NOT add text, labels, legends, UI elements, watermarks, or annotations.
+- Do NOT add any inset image, picture-in-picture, photo frame, or secondary image.
+- Do NOT change camera angle, composition, or crop.
+- Do NOT add artistic filters, vignettes, or fantasy/stylized effects.
 
-SUBTLE ENHANCEMENTS ONLY:
-- Add slight concrete texture to building surfaces (keep them white/light gray).
-- Add subtle grass texture to green areas (keep same green color).
-- Add soft realistic shadows under buildings and trees (same sun direction).
-- Add 10-12 small trees with shadows along roads (NOT inside the orange parcel zone).
-- Keep the sandy beige parcel area, red-orange boundary, and dashed setback line exactly as-is.
+REQUIRED realistic enhancements:
+- Buildings: add subtle white concrete/plaster texture. Keep them white/light gray. Add strong cast SHADOWS on the ground from every building.
+- Grass: make the green areas look like realistic grass with natural texture and varied shades.
+- Roads: add dark asphalt texture to roads. Keep exact same width and position.
+- Trees: add 15-20 realistic trees with dark green canopy AND visible cast shadows on the ground. Place along roads and between buildings. Do NOT place trees inside the sandy beige parcel zone.
+- Shadows: EVERY building and EVERY tree must cast a clear dark shadow on the ground. All shadows in the same direction. This is critical for realism.
+- Parcel: keep the sandy beige fill, solid red-orange border, and dashed setback line exactly as-is.
+- Lighting: natural daylight, subtle warmth. No bloom, no haze.
 
-Keep the image almost identical to the input. Just add minimal realism. No creativity.`;
+The result should look like a clean professional photograph of an architectural maquette. Realistic but sober.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4195,7 +4206,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v66.1-ULTRA-MINIMAL-POLISH...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v66.2-ASPHALT-REALISTIC...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4203,23 +4214,25 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply a VERY SUBTLE realistic texture pass on this 3D architectural massing rendering. MINIMAL changes only.
+        const polishPrompt = `Make this 3D architectural massing rendering look like a realistic photograph of an architectural scale model (maquette).
 
-STRICT RULES:
-1. DO NOT change ANY geometry, position, size, or shape of buildings, roads, or parcels.
-2. DO NOT add ANY text, labels, legend, compass, UI, watermark, inset image, or frame.
-3. DO NOT add artistic effects, filters, vignettes, or color grading.
-4. KEEP the colored floor layers (blue, orange) on the central massing building exactly as-is.
-5. Output is ONE single image, same composition, same camera angle.
+FORBIDDEN — do NOT do any of these:
+- Do NOT add text, labels, legends, UI elements, watermarks, or annotations.
+- Do NOT add any inset image, picture-in-picture, photo frame, or secondary image.
+- Do NOT change camera angle, composition, or crop.
+- Do NOT add artistic filters, vignettes, or fantasy/stylized effects.
 
-SUBTLE ENHANCEMENTS ONLY:
-- Add slight concrete texture to surrounding building surfaces (keep them white/light gray).
-- Add subtle grass texture to green areas (keep same green color).
-- Add soft realistic shadows under buildings and trees (same sun direction).
-- Add 10-12 small trees with shadows along roads (NOT inside the orange parcel zone).
-- Keep the sandy beige parcel area, red-orange boundary, and dashed setback line exactly as-is.
+REQUIRED realistic enhancements:
+- Surrounding buildings: add subtle white concrete/plaster texture. Keep them white/light gray. Add strong cast SHADOWS on the ground.
+- Central massing building: KEEP the colored floor layers (blue, orange) exactly as-is. Add subtle shadow and depth.
+- Grass: make the green areas look like realistic grass with natural texture.
+- Roads: add dark asphalt texture. Keep exact same width and position.
+- Trees: add 15-20 realistic trees with dark green canopy AND visible cast shadows. Place along roads and between buildings. NOT inside the sandy beige parcel zone.
+- Shadows: EVERY building and EVERY tree must cast a clear dark shadow. All same direction. Critical for realism.
+- Parcel: keep sandy beige fill, solid red-orange border, dashed setback line exactly as-is.
+- Lighting: natural daylight, subtle warmth. No bloom, no haze.
 
-Keep the image almost identical to the input. Just add minimal realism. No creativity.`;
+The result should look like a clean professional photograph of an architectural maquette. Realistic but sober.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4274,7 +4287,7 @@ Keep the image almost identical to the input. Just add minimal realism. No creat
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "66.1-ULTRA-MINIMAL-POLISH",
+      ok: true, cached: false, server_version: "66.2-ASPHALT-REALISTIC",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4295,7 +4308,7 @@ Keep the image almost identical to the input. Just add minimal realism. No creat
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v66.1-ULTRA-MINIMAL-POLISH on port ${PORT}`);
+  console.log(`BARLO v66.2-ASPHALT-REALISTIC on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
