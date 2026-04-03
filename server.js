@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "63.0-PHOTOREALISTIC-PROMPT" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "63.1-CACHE-BUST" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3914,7 +3914,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v63.0-PHOTOREALISTIC-PROMPT...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v63.1-CACHE-BUST...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -3974,10 +3974,10 @@ OUTPUT: Photorealistic render, same resolution, sober and clean — like a profe
             drawSolarArc(finalCtx, W, H, { bearing });
             const finalPng = finalCanvas.toBuffer("image/png");
             const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
+            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
             if (!ue2) {
               const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-              enhancedUrl = pd2.publicUrl;
+              enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
               console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
             } else {
               console.warn("[SLIDE4-POLISH] Upload error:", ue2.message);
@@ -4187,7 +4187,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v63.0-PHOTOREALISTIC-PROMPT...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v63.1-CACHE-BUST...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -4249,10 +4249,10 @@ OUTPUT: Photorealistic render, same resolution, sober and clean — like a profe
               typology: massingCoords._typology,
             });
             const finalPng = fCanvas.toBuffer("image/png");
-            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true });
+            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
             if (!ue2) {
               const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-              enhancedUrl = pd2.publicUrl;
+              enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
               console.log(`✓ [MASSING-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
             } else {
               console.error(`[MASSING-POLISH] Upload error: ${JSON.stringify(ue2)}`);
@@ -4266,7 +4266,7 @@ OUTPUT: Photorealistic render, same resolution, sober and clean — like a profe
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "63.0-PHOTOREALISTIC-PROMPT",
+      ok: true, cached: false, server_version: "63.1-CACHE-BUST",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4287,7 +4287,7 @@ OUTPUT: Photorealistic render, same resolution, sober and clean — like a profe
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v63.0-PHOTOREALISTIC-PROMPT on port ${PORT}`);
+  console.log(`BARLO v63.1-CACHE-BUST on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
