@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "65.0-REFERENCE-MATCH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "65.2-NO-DOUBLE-OVERLAY" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3904,6 +3904,10 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
+    // v65.2: N'ajouter NI légende NI labels NI boussole AVANT le polish AI
+    // pour éviter le dédoublement — tout sera dessiné APRÈS le polish
+    const pngClean = canvas.toBuffer("image/png");
+    // Version avec overlays (fallback si pas d'AI polish)
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back) });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
@@ -3918,9 +3922,10 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v65.0-REFERENCE-MATCH...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v65.2-NO-DOUBLE-OVERLAY...");
         const resizedCanvas = createCanvas(1024, 1024);
-        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
+        // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
+        resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
@@ -3929,22 +3934,24 @@ app.post("/generate", async (req, res) => {
 
 ABSOLUTE RULE: Preserve ALL existing geometry EXACTLY — every building footprint, volume, height, road position, and parcel boundary must stay PIXEL-PERFECT. Do NOT move, resize, reshape, add or remove ANY building or road. The Mapbox 3D geometry is sacred.
 
-REMOVE all text labels (3m, 5m, street names) — they will be redrawn as vector overlay. Do NOT render any text or numbers.
+DO NOT add ANY text, labels, numbers, legends, compass, UI elements, watermarks, or annotations. Do NOT write "3m", "5m", street names, or any text at all. All overlays will be added separately as vector graphics.
+
+DO NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
 
 PARCEL DIFFERENTIATION (CRITICAL):
 - The PARCEL (central zone with solid red-orange border) must be filled with light sandy beige bare earth texture — clearly different from the green grass outside.
 - The solid red-orange BOUNDARY LINE must remain thick, continuous, highly visible.
-- The DASHED red-orange line inside = SETBACK ZONE (zone de recul, 5m from road side). Must remain clearly visible and distinct from the solid boundary.
+- The DASHED red-orange line inside = SETBACK ZONE (zone de recul). Must remain clearly visible and distinct from the solid boundary.
 
 TEXTURE UPGRADES (apply on top of existing geometry):
-- BUILDINGS: Light warm gray concrete with subtle plaster texture — NOT pure white, NOT dark. Natural variation between lighter (#f2f0ec) and slightly darker (#e0ddd6) tones depending on height. Strong realistic cast shadows on the ground from each building. Ambient occlusion at building bases.
-- ROADS: Dark gray asphalt with subtle wear texture. Same width as existing.
+- BUILDINGS: Light warm gray concrete with subtle plaster texture — NOT pure white, NOT dark. Natural variation between lighter (#f2f0ec) and slightly darker (#e0ddd6) tones depending on height. Strong realistic cast shadows on the ground from each building. Ambient occlusion at building bases. Buildings should look like clean architectural maquette — 1 to 3 floors max.
+- ROADS: Dark gray asphalt with subtle wear texture. Keep EXACT same width and position as existing.
 - GRASS (outside parcel ONLY): Rich realistic green grass with varied shades and natural texture. The parcel itself must NOT be green.
 - TREES: Add 15-20 realistic 3D trees with rounded dark green canopy and VISIBLE CAST SHADOWS on the ground. Scatter along roads and in open green spaces between buildings. Varied sizes (small to medium). Do NOT place trees inside the parcel boundary.
 - SHADOWS: Every building and every tree must cast a clear, realistic shadow on the ground. Shadows should all go in the same direction (consistent sun angle). This is essential for depth and realism.
 - LIGHTING: Natural neutral daylight — very slightly warm but NOT golden, NO bloom, NO atmospheric haze. Clean and sober like an architectural maquette photo.
 
-Style: professional architectural maquette photograph — clean, sober, realistic. Light gray concrete buildings, green grass, visible shadows, clear parcel boundary.`;
+Style: professional architectural maquette photograph — clean, sober, realistic. Light gray concrete buildings, green grass, visible shadows, clear parcel boundary. NO text, NO labels, NO UI.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4179,6 +4186,9 @@ app.post("/generate-massing", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0, W, H);
+    // v65.2: Image SANS overlays pour le polish AI (éviter dédoublement)
+    const pngClean = canvas.toBuffer("image/png");
+    // Version avec overlays (fallback si pas d'AI polish)
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
@@ -4193,9 +4203,10 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v65.0-REFERENCE-MATCH...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v65.2-NO-DOUBLE-OVERLAY...`);
         const resizedCanvas = createCanvas(1024, 1024);
-        resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
+        // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
+        resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
@@ -4204,7 +4215,9 @@ app.post("/generate-massing", async (req, res) => {
 
 ABSOLUTE RULE: Preserve ALL existing geometry EXACTLY — every building footprint, volume, height, road position, and parcel boundary must stay PIXEL-PERFECT. Do NOT move, resize, reshape, add or remove ANY building or road. The Mapbox 3D geometry is sacred. KEEP the colored floor layers (blue, orange) on the massing building exactly as-is.
 
-REMOVE all text labels (floor counts, legend text, compass text) — they will be redrawn as vector overlay. Do NOT render any text or numbers.
+DO NOT add ANY text, labels, numbers, legends, compass, UI elements, watermarks, or annotations. Do NOT write floor counts, street names, or any text at all. All overlays will be added separately as vector graphics.
+
+DO NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
 
 PARCEL DIFFERENTIATION (CRITICAL):
 - The PARCEL (central zone with solid red-orange border) must be filled with light sandy beige bare earth texture — clearly different from the green grass outside.
@@ -4212,15 +4225,15 @@ PARCEL DIFFERENTIATION (CRITICAL):
 - The DASHED red-orange line inside = SETBACK ZONE. Must remain clearly visible.
 
 TEXTURE UPGRADES (apply on top of existing geometry):
-- EXISTING BUILDINGS (surrounding): Light warm gray concrete with subtle plaster texture — NOT pure white, NOT dark. Natural tonal variation. Strong realistic cast shadows on the ground. Ambient occlusion at bases.
+- EXISTING BUILDINGS (surrounding): Light warm gray concrete with subtle plaster texture — NOT pure white, NOT dark. Natural tonal variation. Strong realistic cast shadows on the ground. Ambient occlusion at bases. Buildings 1-3 floors max.
 - MASSING BUILDING (colored blue/orange): Keep the colored floor layers exactly as-is. Add subtle shadow and depth.
-- ROADS: Dark gray asphalt with subtle wear texture. Same width as existing.
+- ROADS: Dark gray asphalt with subtle wear texture. Keep EXACT same width and position as existing.
 - GRASS (outside parcel ONLY): Rich realistic green grass with varied shades. The parcel must NOT be green.
 - TREES: Add 15-20 realistic 3D trees with rounded dark green canopy and VISIBLE CAST SHADOWS. Scatter along roads and between buildings. Do NOT place inside parcel boundary.
 - SHADOWS: Every building and tree must cast clear realistic shadow. Same direction. Essential for depth.
 - LIGHTING: Natural neutral daylight — very slightly warm but NOT golden, NO bloom, NO haze. Sober architectural maquette lighting.
 
-Style: professional architectural maquette photograph — clean, sober, realistic. Light gray concrete buildings, green grass, visible shadows, clear parcel boundary.`;
+Style: professional architectural maquette photograph — clean, sober, realistic. Light gray concrete buildings, green grass, visible shadows, clear parcel boundary. NO text, NO labels, NO UI.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4275,7 +4288,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "65.0-REFERENCE-MATCH",
+      ok: true, cached: false, server_version: "65.2-NO-DOUBLE-OVERLAY",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4296,7 +4309,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v65.0-REFERENCE-MATCH on port ${PORT}`);
+  console.log(`BARLO v65.2-NO-DOUBLE-OVERLAY on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
