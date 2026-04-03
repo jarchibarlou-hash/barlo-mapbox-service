@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "64.1-WHITE-SOBER" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "65.0-REFERENCE-MATCH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3309,8 +3309,8 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   map.addControl = function() {};
 
   map.on('style.load', () => {
-    // v64.1: Lumière neutre — même angle qu'avant, couleur blanche (pas warm)
-    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.50, position: [1.15, 195, 40] });
+    // v65: Lumière neutre sobre — légèrement tiède sans bloom
+    map.setLight({ anchor: 'map', color: '#fffdf8', intensity: 0.52, position: [1.15, 195, 40] });
 
     const labelLayerId = undefined;
 
@@ -3319,13 +3319,20 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
-        'fill-extrusion-color': '#f5f5f0',
+        'fill-extrusion-color': [
+          'interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
+          0,  '#fafafa',
+          4,  '#f2f0ec',
+          10, '#e0ddd6',
+          20, '#c0bdb6',
+          40, '#908d88',
+        ],
         'fill-extrusion-height': [
           'let', 'h', ['coalesce', ['get', 'height'], 0],
           ['case',
-            ['>', ['var', 'h'], 2], ['min', ['*', ['var', 'h'], 1.0], 10],
+            ['>', ['var', 'h'], 2], ['*', ['var', 'h'], 1.2],
             ['match', ['%', ['to-number', ['id']], 7],
-              0, 3.5, 1, 3.5, 2, 6.5, 3, 6.5, 4, 9.5, 5, 9.5, 6, 3.5, 6.5
+              0, 4, 1, 4, 2, 7.5, 3, 7.5, 4, 11, 5, 14, 6, 4, 7.5
             ]
           ]
         ],
@@ -3448,15 +3455,16 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    // v64.1: Lumière neutre — même angle qu'avant, couleur blanche (pas warm)
-    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.50, position: [1.15, 195, 40] });
+    // v65: Lumière neutre sobre — légèrement tiède sans bloom
+    map.setLight({ anchor: 'map', color: '#fffdf8', intensity: 0.52, position: [1.15, 195, 40] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
-        'fill-extrusion-color': '#f5f5f0',
-        'fill-extrusion-height': ['case', ['has', 'height'], ['min', ['*', ['get', 'height'], 1.0], 10], 6],
-        'fill-extrusion-base': ['case', ['has', 'min_height'], ['get', 'min_height'], 0],
+        'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
+          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
+        'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
+        'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
     });
@@ -3910,7 +3918,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v64.1-WHITE-SOBER...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v65.0-REFERENCE-MATCH...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -3929,14 +3937,14 @@ PARCEL DIFFERENTIATION (CRITICAL):
 - The DASHED red-orange line inside = SETBACK ZONE (zone de recul, 5m from road side). Must remain clearly visible and distinct from the solid boundary.
 
 TEXTURE UPGRADES (apply on top of existing geometry):
-- BUILDINGS: Clean WHITE concrete/plaster — bright white (#f5f5f0), NOT gray, NOT cream. Subtle plaster texture. Strong realistic cast shadows on the ground from each building. Ambient occlusion at building bases.
+- BUILDINGS: Light warm gray concrete with subtle plaster texture — NOT pure white, NOT dark. Natural variation between lighter (#f2f0ec) and slightly darker (#e0ddd6) tones depending on height. Strong realistic cast shadows on the ground from each building. Ambient occlusion at building bases.
 - ROADS: Dark gray asphalt with subtle wear texture. Same width as existing.
 - GRASS (outside parcel ONLY): Rich realistic green grass with varied shades and natural texture. The parcel itself must NOT be green.
 - TREES: Add 15-20 realistic 3D trees with rounded dark green canopy and VISIBLE CAST SHADOWS on the ground. Scatter along roads and in open green spaces between buildings. Varied sizes (small to medium). Do NOT place trees inside the parcel boundary.
 - SHADOWS: Every building and every tree must cast a clear, realistic shadow on the ground. Shadows should all go in the same direction (consistent sun angle). This is essential for depth and realism.
-- LIGHTING: Natural daylight — neutral white, NO warm/golden tint, NO bloom, NO atmospheric haze. Clean and sober like an architectural maquette photo.
+- LIGHTING: Natural neutral daylight — very slightly warm but NOT golden, NO bloom, NO atmospheric haze. Clean and sober like an architectural maquette photo.
 
-Style: professional architectural maquette photograph — clean, sober, realistic. White buildings, green grass, visible shadows, clear parcel boundary.`;
+Style: professional architectural maquette photograph — clean, sober, realistic. Light gray concrete buildings, green grass, visible shadows, clear parcel boundary.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4185,7 +4193,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v64.1-WHITE-SOBER...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v65.0-REFERENCE-MATCH...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -4204,15 +4212,15 @@ PARCEL DIFFERENTIATION (CRITICAL):
 - The DASHED red-orange line inside = SETBACK ZONE. Must remain clearly visible.
 
 TEXTURE UPGRADES (apply on top of existing geometry):
-- EXISTING BUILDINGS (surrounding): Clean WHITE concrete/plaster — bright white (#f5f5f0), NOT gray. Subtle plaster texture. Strong realistic cast shadows on the ground. Ambient occlusion at bases.
+- EXISTING BUILDINGS (surrounding): Light warm gray concrete with subtle plaster texture — NOT pure white, NOT dark. Natural tonal variation. Strong realistic cast shadows on the ground. Ambient occlusion at bases.
 - MASSING BUILDING (colored blue/orange): Keep the colored floor layers exactly as-is. Add subtle shadow and depth.
 - ROADS: Dark gray asphalt with subtle wear texture. Same width as existing.
 - GRASS (outside parcel ONLY): Rich realistic green grass with varied shades. The parcel must NOT be green.
 - TREES: Add 15-20 realistic 3D trees with rounded dark green canopy and VISIBLE CAST SHADOWS. Scatter along roads and between buildings. Do NOT place inside parcel boundary.
 - SHADOWS: Every building and tree must cast clear realistic shadow. Same direction. Essential for depth.
-- LIGHTING: Natural daylight — neutral white, NO warm/golden tint, NO bloom, NO haze. Sober architectural maquette lighting.
+- LIGHTING: Natural neutral daylight — very slightly warm but NOT golden, NO bloom, NO haze. Sober architectural maquette lighting.
 
-Style: professional architectural maquette photograph — clean, sober, realistic. White buildings, green grass, visible shadows, clear parcel boundary.`;
+Style: professional architectural maquette photograph — clean, sober, realistic. Light gray concrete buildings, green grass, visible shadows, clear parcel boundary.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4267,7 +4275,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "64.1-WHITE-SOBER",
+      ok: true, cached: false, server_version: "65.0-REFERENCE-MATCH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4288,7 +4296,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v64.1-WHITE-SOBER on port ${PORT}`);
+  console.log(`BARLO v65.0-REFERENCE-MATCH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
