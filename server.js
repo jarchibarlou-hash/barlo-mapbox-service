@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "65.5-VIVID-GREEN-CRISP" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "66.0-FULL-RESET" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3243,18 +3243,18 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
       { "id": "background", "type": "background",
-        "paint": { "background-color": "#4CAF50" } },
+        "paint": { "background-color": "#6aad3a" } },
       { "id": "water", "type": "fill",
         "source": "composite", "source-layer": "water",
         "paint": { "fill-color": "#a8cce0" } },
       { "id": "landuse-park", "type": "fill",
         "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#43A047" } },
+        "paint": { "fill-color": "#5a9e2e" } },
       { "id": "landuse-urban", "type": "fill",
         "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#4CAF50" } },
+        "paint": { "fill-color": "#6aad3a" } },
       { "id": "road-case-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -3309,8 +3309,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   map.addControl = function() {};
 
   map.on('style.load', () => {
-    // v65: Lumière neutre sobre — légèrement tiède sans bloom
-    map.setLight({ anchor: 'map', color: '#fffdf8', intensity: 0.52, position: [1.15, 195, 40] });
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
 
     const labelLayerId = undefined;
 
@@ -3422,14 +3421,14 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#4CAF50" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#5a9848" } },
       { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#43A047" } },
+        "paint": { "fill-color": "#468538" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#4CAF50" } },
+        "paint": { "fill-color": "#5a9848" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
@@ -3455,8 +3454,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    // v65: Lumière neutre sobre — légèrement tiède sans bloom
-    map.setLight({ anchor: 'map', color: '#fffdf8', intensity: 0.52, position: [1.15, 195, 40] });
+    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -3922,7 +3920,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v65.5-VIVID-GREEN-CRISP...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v66.0-FULL-RESET...");
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
@@ -3934,24 +3932,22 @@ app.post("/generate", async (req, res) => {
 
 ABSOLUTE RULE: Preserve ALL existing geometry EXACTLY — every building footprint, volume, height, road position, and parcel boundary must stay PIXEL-PERFECT. Do NOT move, resize, reshape, add or remove ANY building or road. The Mapbox 3D geometry is sacred.
 
-DO NOT add ANY text, labels, numbers, legends, compass, UI elements, watermarks, or annotations. Do NOT write "3m", "5m", street names, or any text at all. All overlays will be added separately as vector graphics.
-
-DO NOT add any inset image, picture-in-picture, photo frame, secondary viewport, or any rectangular image element in ANY corner or edge of the rendering. The output must be ONE single clean architectural view filling the entire frame.
+DO NOT add ANY text, labels, numbers, legends, compass, UI elements, watermarks, annotations, inset images, picture-in-picture, or photo frames. Output must be ONE single clean architectural view filling the entire frame. All overlays will be added separately.
 
 PARCEL DIFFERENTIATION (CRITICAL):
 - The PARCEL (central zone with solid red-orange border) must be filled with light sandy beige bare earth texture — clearly different from the green grass outside.
 - The solid red-orange BOUNDARY LINE must remain thick, continuous, highly visible.
-- The DASHED red-orange line inside = SETBACK ZONE (zone de recul). Must remain clearly visible and distinct from the solid boundary.
+- The DASHED red-orange line inside = SETBACK ZONE (zone de recul, 5m from road side). Must remain clearly visible and distinct from the solid boundary.
 
 TEXTURE UPGRADES (apply on top of existing geometry):
-- BUILDINGS: Clean light gray concrete with sharp, crisp edges — like a professional architectural model/maquette. NO smudges, NO blur, NO weathering stains. Each building must have perfectly defined rectangular geometry with clean straight edges and flat surfaces. Subtle plaster texture only. Strong realistic cast shadows on the ground. Ambient occlusion at building bases.
-- ROADS: Dark gray asphalt with subtle wear texture. Keep EXACT same width and position as existing.
-- GRASS (outside parcel ONLY): VIVID bright green grass — saturated, lush, vibrant like a well-maintained lawn or architectural maquette model grass (#4CAF50 to #66BB6A range). Varied shades but always BRIGHT and vivid. The parcel itself must NOT be green.
-- TREES: Add 10-15 realistic trees with rounded dark green canopy and VISIBLE CAST SHADOWS on the ground. Scatter naturally along roads and in open green spaces between buildings. Varied sizes (small to medium). Do NOT place trees inside the parcel boundary.
+- BUILDINGS: Clean white concrete/plaster — bright white, subtle plaster texture. Strong realistic cast shadows on the ground from each building. Ambient occlusion at building bases.
+- ROADS: Dark gray asphalt with subtle wear texture. Same width as existing.
+- GRASS (outside parcel ONLY): Rich realistic green grass with varied shades and natural texture. The parcel itself must NOT be green.
+- TREES: Add 15-20 realistic 3D trees with rounded dark green canopy and VISIBLE CAST SHADOWS on the ground. Scatter along roads and in open green spaces between buildings. Varied sizes (small to medium). Do NOT place trees inside the parcel boundary.
 - SHADOWS: Every building and every tree must cast a clear, realistic shadow on the ground. Shadows should all go in the same direction (consistent sun angle). This is essential for depth and realism.
-- LIGHTING: Natural neutral daylight — very slightly warm but NOT golden, NO bloom, NO atmospheric haze. Clean and sober like an architectural maquette photo.
+- LIGHTING: Natural daylight with subtle warmth. NO bloom, NO atmospheric haze. Clean like an architectural maquette photo.
 
-Style: professional architectural maquette photograph — clean, sober, realistic. Clean crisp light gray buildings with sharp edges, vivid bright green grass, visible shadows, clear parcel boundary. NO text, NO labels, NO UI, NO inset images, NO smudges or blur on buildings.`;
+Style: professional architectural maquette photograph — clean, sober, realistic. White buildings, green grass, visible shadows, clear parcel boundary. NO text, NO UI, NO inset images.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4203,7 +4199,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v65.5-VIVID-GREEN-CRISP...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v66.0-FULL-RESET...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4217,7 +4213,7 @@ ABSOLUTE RULE: Preserve ALL existing geometry EXACTLY — every building footpri
 
 DO NOT add ANY text, labels, numbers, legends, compass, UI elements, watermarks, or annotations. Do NOT write floor counts, street names, or any text at all. All overlays will be added separately as vector graphics.
 
-DO NOT add any inset image, picture-in-picture, photo frame, secondary viewport, or any rectangular image element in ANY corner or edge of the rendering. The output must be ONE single clean architectural view filling the entire frame.
+DO NOT add ANY text, labels, numbers, legends, compass, UI elements, watermarks, annotations, inset images, picture-in-picture, or photo frames. Output must be ONE single clean architectural view filling the entire frame. All overlays will be added separately.
 
 PARCEL DIFFERENTIATION (CRITICAL):
 - The PARCEL (central zone with solid red-orange border) must be filled with light sandy beige bare earth texture — clearly different from the green grass outside.
@@ -4225,15 +4221,15 @@ PARCEL DIFFERENTIATION (CRITICAL):
 - The DASHED red-orange line inside = SETBACK ZONE. Must remain clearly visible.
 
 TEXTURE UPGRADES (apply on top of existing geometry):
-- EXISTING BUILDINGS (surrounding): Clean light gray concrete with sharp, crisp edges — like a professional architectural model. NO smudges, NO blur, NO weathering. Perfectly defined rectangular geometry with clean straight edges. Subtle plaster texture. Strong realistic cast shadows. Ambient occlusion at bases.
+- EXISTING BUILDINGS (surrounding): Clean white concrete/plaster — bright white, subtle plaster texture. Strong realistic cast shadows on the ground. Ambient occlusion at bases.
 - MASSING BUILDING (colored blue/orange): Keep the colored floor layers exactly as-is. Add subtle shadow and depth.
-- ROADS: Dark gray asphalt with subtle wear texture. Keep EXACT same width and position as existing.
-- GRASS (outside parcel ONLY): VIVID bright green grass — saturated, lush, vibrant (#4CAF50 to #66BB6A range). The parcel must NOT be green.
-- TREES: Add 10-15 realistic trees with rounded dark green canopy and VISIBLE CAST SHADOWS. Scatter naturally along roads and between buildings. Do NOT place inside parcel boundary.
+- ROADS: Dark gray asphalt with subtle wear texture. Same width as existing.
+- GRASS (outside parcel ONLY): Rich realistic green grass with varied shades. The parcel must NOT be green.
+- TREES: Add 15-20 realistic 3D trees with rounded dark green canopy and VISIBLE CAST SHADOWS. Scatter along roads and between buildings. Do NOT place inside parcel boundary.
 - SHADOWS: Every building and tree must cast clear realistic shadow. Same direction. Essential for depth.
-- LIGHTING: Natural neutral daylight — very slightly warm but NOT golden, NO bloom, NO haze. Sober architectural maquette lighting.
+- LIGHTING: Natural daylight with subtle warmth. NO bloom, NO haze. Sober architectural maquette lighting.
 
-Style: professional architectural maquette photograph — clean, sober, realistic. Clean crisp light gray buildings, vivid bright green grass, visible shadows, clear parcel boundary. NO text, NO labels, NO UI, NO inset images, NO smudges.`;
+Style: professional architectural maquette photograph — clean, sober, realistic. White buildings, green grass, visible shadows, clear parcel boundary. NO text, NO UI, NO inset images.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4288,7 +4284,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "65.5-VIVID-GREEN-CRISP",
+      ok: true, cached: false, server_version: "66.0-FULL-RESET",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4309,7 +4305,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v65.5-VIVID-GREEN-CRISP on port ${PORT}`);
+  console.log(`BARLO v66.0-FULL-RESET on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
