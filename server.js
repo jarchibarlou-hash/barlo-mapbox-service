@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "63.2-CLEAN-WHITE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "63.3-TEXTURED-REALISTIC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3914,33 +3914,26 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v63.2-CLEAN-WHITE...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v63.3-TEXTURED-REALISTIC...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `You are an expert architectural visualization renderer. Transform this 3D schematic urban massing image into a photorealistic architectural rendering while STRICTLY preserving 100% of the geometric integrity.
+        const polishPrompt = `Edit this architectural 3D massing image to make it look like a realistic urban planning rendering. Preserve ALL existing geometry exactly — every building footprint, volume, height, road, and parcel boundary must stay pixel-perfect. Do not invent, move, or remove any structure.
 
-HARD CONSTRAINTS (NON-NEGOTIABLE):
-- Do NOT modify building footprints, volumes, heights, parcel boundaries, or setback distances
-- No deformation, no smoothing, no reinterpretation of any structure
-- Preserve exact camera angle, perspective, framing, field of view — pixel-to-pixel alignment
-- Keep all roads, parcel layout, building positions — do not add or remove any structure
-- REMOVE all text labels (3m, 5m, street names, legend, compass) — they will be redrawn separately. Do NOT render any text or numbers.
+REMOVE all text labels (3m, 5m, street names) — they will be redrawn as overlay. Do NOT render any text or numbers.
 
-STYLE TRANSFER — apply these visual upgrades ONLY:
-1. BUILDINGS: Keep buildings WHITE or very light cream — clean white plaster/concrete. NOT dark, NOT gray, NOT brown. Bright white facades.
-2. ROADS: Keep main roads WIDE and clearly visible as gray asphalt. Do not narrow roads or cover them with vegetation.
-3. PARCEL SITE: The central parcel zone (bounded by red/orange dashed line) must be brown dry earth/bare soil — NOT green grass inside. Make the parcel boundary outline CLEARLY VISIBLE as a strong red/orange border.
-4. SURROUNDING AREAS: Realistic green grass texture outside the parcel.
-5. VEGETATION: Add only 8-10 scattered semi-realistic trees along roads — SPARSE, not dense forest. Keep it minimal and clean.
-6. LIGHTING: Soft realistic shadows beneath buildings. Subtle ambient occlusion. Clean bright daylight.
+Apply ONLY these realistic texture upgrades:
+- BUILDINGS: Light cream/white concrete with subtle plaster texture and micro-imperfections. Soft realistic shadows and ambient occlusion on all buildings. Slight height variation visible through shadow depth.
+- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width — clearly visible.
+- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. The red/orange parcel boundary must remain clearly visible.
+- GRASS (outside parcel): Realistic textured green grass — not flat color. Varied shades of green with natural look.
+- TREES: Add 12-15 semi-realistic 3D trees with rounded canopy and shadow, scattered naturally along roads and in open spaces. Varied sizes. Not too dense, not too sparse.
+- LIGHTING: Warm natural sunlight from consistent direction. Soft cast shadows from all buildings and trees. Subtle atmospheric haze in the distance.
 
-FAILURE CASES TO AVOID: Dark buildings, too many trees, narrow roads, text/label duplication, loss of parcel boundary visibility, over-stylization
-
-OUTPUT: Sober, clean, bright photorealistic render — like a professional architectural maquette. White buildings, visible roads, clear parcel limits.`;
+Style reference: sober professional architectural maquette photo — realistic textures but clean and readable, not artistic or dramatic.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4189,32 +4182,26 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v63.2-CLEAN-WHITE...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v63.3-TEXTURED-REALISTIC...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `You are an expert architectural visualization renderer. Transform this 3D massing model into a photorealistic rendering while STRICTLY preserving 100% of the geometric integrity.
+        const polishPrompt = `Edit this architectural 3D massing image to make it look like a realistic urban planning rendering. Preserve ALL existing geometry exactly — every building footprint, volume, height, road, and parcel boundary must stay pixel-perfect. Do not invent, move, or remove any structure. KEEP the colored floor layers (blue, orange) on the massing buildings exactly as-is.
 
-HARD CONSTRAINTS (NON-NEGOTIABLE):
-- Do NOT modify building footprints, volumes, heights, parcel boundaries, or any massing geometry
-- No deformation, no smoothing, no reinterpretation of any structure
-- Preserve exact camera angle, perspective, framing, field of view — pixel-to-pixel alignment
-- Keep all roads, parcel layout, building positions — do not add or remove any structure
-- KEEP the colored floor layers (blue, orange) on the massing buildings exactly as-is
-- REMOVE all text labels (floor counts, legend text, compass text) — they will be redrawn separately. Do NOT render any text or numbers.
+REMOVE all text labels (floor counts, legend text, compass text) — they will be redrawn as overlay. Do NOT render any text or numbers.
 
-STYLE TRANSFER — apply these visual upgrades ONLY:
-1. BUILDINGS: Keep buildings WHITE or very light cream with clean facades. The colored floor indicators (blue/orange) must remain visible. NOT dark buildings.
-2. ROADS: Keep main roads WIDE and clearly visible as gray asphalt. Do not cover with vegetation.
-3. PARCEL SITE: Brown dry earth/bare soil inside parcel — NOT green. Make parcel boundary CLEARLY VISIBLE as strong red/orange border.
-4. SURROUNDING: Realistic green grass outside parcel.
-5. VEGETATION: Only 8-10 scattered trees along roads — SPARSE, clean, minimal.
-6. LIGHTING: Soft shadows beneath buildings. Clean bright daylight.
+Apply ONLY these realistic texture upgrades:
+- BUILDINGS: Light cream/white concrete with subtle plaster texture. The colored floor indicators (blue/orange) must remain visible. Soft realistic shadows and ambient occlusion.
+- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width.
+- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. Red/orange parcel boundary must remain clearly visible.
+- GRASS (outside parcel): Realistic textured green grass — varied shades, natural look.
+- TREES: Add 12-15 semi-realistic 3D trees scattered naturally along roads. Varied sizes. Not too dense.
+- LIGHTING: Warm natural sunlight. Soft cast shadows from buildings and trees. Subtle atmospheric haze in distance.
 
-OUTPUT: Sober, clean, bright photorealistic render — like a professional architectural maquette. White buildings, visible roads, clear parcel limits.`;
+Style: sober professional architectural maquette photo — realistic textures but clean and readable.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4269,7 +4256,7 @@ OUTPUT: Sober, clean, bright photorealistic render — like a professional archi
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "63.2-CLEAN-WHITE",
+      ok: true, cached: false, server_version: "63.3-TEXTURED-REALISTIC",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4290,7 +4277,7 @@ OUTPUT: Sober, clean, bright photorealistic render — like a professional archi
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v63.2-CLEAN-WHITE on port ${PORT}`);
+  console.log(`BARLO v63.3-TEXTURED-REALISTIC on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
