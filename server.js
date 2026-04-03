@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "65.1-HEIGHTS-ROADS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "65.0-REFERENCE-MATCH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3259,22 +3259,22 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 18] } },
       { "id": "road-case-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
       { "id": "road-fill-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
+        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 16, 10, 18, 16] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } },
+        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 16, 6, 18, 10] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -3330,9 +3330,9 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-height': [
           'let', 'h', ['coalesce', ['get', 'height'], 0],
           ['case',
-            ['>', ['var', 'h'], 2], ['min', ['*', ['var', 'h'], 1.2], 9.5],
+            ['>', ['var', 'h'], 2], ['*', ['var', 'h'], 1.2],
             ['match', ['%', ['to-number', ['id']], 7],
-              0, 3.5, 1, 3.5, 2, 6, 3, 6, 4, 9, 5, 9, 6, 3.5, 6
+              0, 4, 1, 4, 2, 7.5, 3, 7.5, 4, 11, 5, 14, 6, 4, 7.5
             ]
           ]
         ],
@@ -3433,19 +3433,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 14] } },
+        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 16, 5, 18, 8] } },
+        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
+        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 3, 18, 7] } }
+        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3463,7 +3463,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
           0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
-        'fill-extrusion-height': ['case', ['has', 'height'], ['min', ['*', ['get', 'height'], 1.6], 9.5], 6],
+        'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
         'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
         'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
       },
@@ -3918,7 +3918,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v65.1-HEIGHTS-ROADS...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v65.0-REFERENCE-MATCH...");
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -4193,7 +4193,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v65.1-HEIGHTS-ROADS...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v65.0-REFERENCE-MATCH...`);
         const resizedCanvas = createCanvas(1024, 1024);
         resizedCanvas.getContext("2d").drawImage(await loadImage(png), 0, 0, W, H, 0, 0, 1024, 1024);
         const pngResized = resizedCanvas.toBuffer("image/png");
@@ -4275,7 +4275,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "65.1-HEIGHTS-ROADS",
+      ok: true, cached: false, server_version: "65.0-REFERENCE-MATCH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4296,7 +4296,7 @@ Style: professional architectural maquette photograph — clean, sober, realisti
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v65.1-HEIGHTS-ROADS on port ${PORT}`);
+  console.log(`BARLO v65.0-REFERENCE-MATCH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
