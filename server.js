@@ -3937,14 +3937,11 @@ app.post("/generate", async (req, res) => {
         const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible.
 Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road 7m with bitumen median strip, secondary roads 4m), brown bare soil on central parcel, realistic green grass outside. Add 10-12 small trees with rounded canopy along roads. Add warm sunlight with soft cast shadows from buildings and trees. No bloom, no artistic effects, no dramatic lighting. Clean sober architectural maquette style.`;
 
-        const parcelSeed = Math.abs(Math.round(center.lat * 1e6 + center.lon * 1e6)) % 2147483647;
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "gpt-4.1",
-            temperature: 0,
-            seed: parcelSeed,
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -3952,7 +3949,7 @@ Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road
             tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
           })
         });
-        console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status}, seed: ${parcelSeed} (${Date.now() - t0}ms)`);
+        console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
         const oaiJson = await oaiRes.json();
 
         if (oaiJson.error) {
@@ -4201,14 +4198,11 @@ app.post("/generate-massing", async (req, res) => {
         const polishPrompt = `Apply realistic textures to this 3D architectural massing rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible. Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
 Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road 7m with bitumen median strip, secondary roads 4m), brown bare soil on central parcel, realistic green grass outside. Add 8-10 small trees with rounded canopy along roads. Add warm sunlight with soft cast shadows from buildings and trees. No bloom, no artistic effects. Clean sober architectural maquette style.`;
 
-        const parcelSeed = Math.abs(Math.round(center.lat * 1e6 + center.lon * 1e6)) % 2147483647;
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "gpt-4.1",
-            temperature: 0,
-            seed: parcelSeed,
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -4216,7 +4210,7 @@ Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road
             tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
           })
         });
-        console.log(`[MASSING-POLISH] Responses API status: ${oaiRes.status}, seed: ${parcelSeed} (${Date.now() - t0}ms)`);
+        console.log(`[MASSING-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
         const oaiJson = await oaiRes.json();
 
         if (oaiJson.error) {
