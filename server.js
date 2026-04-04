@@ -3432,19 +3432,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 14] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#7a7060", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 16, 5, 18, 8] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#666666", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
+        "paint": { "line-color": "#555555", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#a09080", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 3, 18, 6] } }
+        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3482,12 +3482,12 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     const etageH = ${etageH};
     const totalLevels = ${massingParams.levels || Math.round(massingParams.total_height / etageH)};
     const commLevels = ${massingParams.commerce_levels};
-    const gap = 0.06;
+    const gap = 0.18;
     for (let f = 0; f < totalLevels; f++) {
       // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
       const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
       const top  = f === 0 ? rdcH : rdcH + f * etageH;
-      // Gap entre étages (trait de niveau) : uniquement ENTRE les étages, pas en bas ni en haut
+      // Gap entre étages (ligne noire fine sur façade) : uniquement ENTRE les étages
       const baseH = f > 0 ? base + gap / 2 : 0;
       const topH  = f < totalLevels - 1 ? top - gap / 2 : top;
       const isComm = f < commLevels;
@@ -3497,14 +3497,14 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
           'fill-extrusion-color': isComm ? '#e8a030' : '#8bb0d8',
           'fill-extrusion-height': topH,
           'fill-extrusion-base': baseH,
-          'fill-extrusion-opacity': isComm ? 0.90 : 0.72,
-          'fill-extrusion-vertical-gradient': true,
+          'fill-extrusion-opacity': isComm ? 0.92 : 0.78,
+          'fill-extrusion-vertical-gradient': false,
         },
       });
     }
     // ── Contour emprise au sol : bleu foncé ──
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
-      paint: { 'line-color': '#2c4a6e', 'line-width': 2.5, 'line-opacity': 0.9 } });
+      paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -3848,16 +3848,22 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   for (let f = 0; f < levels; f++) {
     const y = annBaseY + f * annStepY;
     const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-    // Petit trait horizontal
+    // Petit trait horizontal noir fin
     ctx.beginPath();
     ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
-    ctx.strokeStyle = "#2c4a6e"; ctx.lineWidth = 2*s; ctx.stroke();
-    // Label : "R+2 : 596 m²"
-    ctx.font = `bold ${12*s}px Arial`; ctx.fillStyle = "#2c4a6e"; ctx.textAlign = "left";
+    ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = 1.5*s; ctx.stroke();
+    // Label : "R+2 : 596 m²" — blanc avec contour noir
+    ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#000000"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    ctx.fillStyle = "#ffffff";
     ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
   }
-  // Total SDP en bas
-  ctx.font = `${12*s}px Arial`; ctx.fillStyle = "#555"; ctx.textAlign = "left";
+  // Total SDP en bas — blanc avec contour
+  ctx.font = `${12*s}px Arial`; ctx.textAlign = "left";
+  ctx.strokeStyle = "#000000"; ctx.lineWidth = 3*s;
+  ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
+  ctx.fillStyle = "#ffffff";
   ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
