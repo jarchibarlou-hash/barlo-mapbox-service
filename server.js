@@ -3935,10 +3935,9 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
         const polishPrompt = `Apply realistic textures to this 3D architectural site rendering.
-FORBIDDEN: Do NOT add any inset image, photo, picture-in-picture, frame, phone, screen, or secondary viewport ANYWHERE in the image. The entire image must be the 3D rendering only. Do NOT add any text or numbers.
-GEOMETRY: Keep ALL buildings, roads, and lines pixel-perfect. Do NOT move, add, or remove anything.
-PARCEL LINES: The red/orange solid parcel boundary and red/orange dashed setback lines must stay CRISP, SHARP, CLEAN — no bleeding, no glow, no smearing. Exact same color and thickness.
-TEXTURES: Light concrete on buildings, dark asphalt on roads, brown bare soil inside parcel, green grass outside. 6-8 small trees along roads only. Warm sunlight, soft shadows. No bloom, no artistic effects.`;
+FORBIDDEN: Do NOT add any inset image, photo, frame, phone, screen, or secondary viewport ANYWHERE. Do NOT add any text or numbers. Do NOT move, add, or remove ANY building, road, or line.
+PARCEL LINES: The red/orange solid parcel boundary and dashed setback lines must stay CRISP, SHARP, CLEAN — no bleeding, no glow, no smearing.
+TEXTURES: Light concrete/plaster on buildings, dark asphalt on roads, brown bare soil inside parcel. Vibrant bright green grass outside — lush and vivid, not dull or faded. 6-8 small trees with rounded canopy along roads. Strong visible cast shadows from every building and every tree — clear shadow direction, well-defined edges. Warm sunlight. No bloom, no artistic effects.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
