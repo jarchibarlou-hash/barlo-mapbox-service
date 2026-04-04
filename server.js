@@ -4189,8 +4189,9 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Keep exact geometry, camera angle, framing unchanged. No grain, no noise, no artistic filter — CLEAN CLEAR image.
-Keep colored floor layers (blue/orange) on central massing building with VISIBLE horizontal lines between each floor. Roads: BEIGE/sand tone, NOT dark, NOT black. Trees: 6-8 small trees distributed AWAY from the parcel — along roads and between distant buildings, NO trees directly around the central site. Buildings: white/cream plaster. Soft cast shadows from buildings. Keep red parcel lines sharp. Clean bright architectural maquette.`;
+        const polishPrompt = `STRICT: Keep EXACT geometry, camera angle, framing, building shapes, and floor count unchanged. ZERO invention, ZERO hallucination. Do not add or remove buildings. No grain, no noise — CLEAN CLEAR bright image.
+Central massing building: keep the colored floor layers (blue/orange) exactly as-is. Each floor must show a CLEAR THIN horizontal line separating it from the next — the number of lines must match the number of floors visible. Do NOT merge or add floors.
+Trees: small, semi-transparent (50% opacity feel), evenly distributed across the scene but NOT touching the central parcel. Roads: beige/sand tone. Buildings: white/cream. Soft shadows. Keep red parcel lines and all text annotations exactly as they are.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
