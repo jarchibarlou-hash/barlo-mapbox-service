@@ -3919,16 +3919,16 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. STRICT — no invention, no artistic effects, no bloom, no glow, no painterly style.
-GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT same camera position, framing, and composition — pixel-perfect geometry preservation.
-PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP, fully visible — no bleeding, no smearing, no fading.
-BUILDINGS — MOST IMPORTANT: ALL buildings must be BRIGHT WHITE / cream white (blanc cassé #F5F0E8). Smooth clean plaster/concrete finish. NEVER gray, NEVER brown, NEVER dark. Every single building in the scene must read as WHITE when viewed.
-SHADOWS — CRITICAL, MANDATORY: Paint DARK VISIBLE CAST SHADOWS on the ground from EVERY building and EVERY tree. Sun from top-left. Each shadow must be a dark gray shape (#555) clearly projected onto the grass, with sharp edges. Buildings without shadows = FAILURE. This is the #1 visual change needed.
-GRASS: VIVID bright green (#4CAF50 range) with natural variation — patches of lighter and darker vivid green. Must look LUSH and ALIVE, not dull or grayish-green. Strong saturated green.
-TREES: 10-12 small rounded-canopy trees distributed evenly across the scene — along roads, between buildings. Each tree casts its own shadow.
-ROADS: Dark gray asphalt, clearly distinct from grass. Subtle wear texture.
+        const polishPrompt = `Make this 3D site rendering look like a REALISTIC aerial photo. No artistic effects, no bloom, no glow, no painterly look, no illustration style. PHOTOREALISTIC result.
+GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, text. Do NOT shift, pan, crop, or reframe. Pixel-perfect geometry preservation.
+PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP, fully visible.
+MAIN ROAD: The wide main road (7m) must have DARK BLACK BITUMEN asphalt texture (#333), clearly paved, with a visible bitumen median strip. It must look like a real tarred African road. Secondary roads (4m) also dark asphalt but slightly lighter.
+BUILDINGS: ALL buildings BRIGHT WHITE / cream white (blanc cassé). Clean concrete/plaster. NEVER gray, NEVER dark.
+SHADOWS — MANDATORY: EVERY building and EVERY tree MUST cast a STRONG DARK SHADOW on the ground. Shadow color #444, sharp edges, consistent sun direction from top-left. The shadows must be clearly visible on the grass. NO building without a shadow.
+GRASS: VIVID green with REALISTIC texture — varied patches of light/dark green, natural ground texture like real tropical grass. NOT flat, NOT uniform. Lush and alive.
+TREES: 10-12 small rounded-canopy trees along roads and between buildings. Each with its own dark shadow on the ground.
 PARCEL GROUND: Brown/ochre bare soil inside parcel — NOT green.
-LIGHT: Bright warm natural sunlight. Clean, clear atmosphere. No moody tones, no fog, no haze.`;
+LIGHT: Strong warm African sunlight. Clear atmosphere, no haze.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
