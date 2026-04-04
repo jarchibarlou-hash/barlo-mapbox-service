@@ -3925,7 +3925,7 @@ PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHAR
 GRASS: Textured green grass with varied shades — patches of light and dark green, natural ground variation. NOT flat uniform color.
 TREES: 12-15 small rounded-canopy trees distributed EVENLY across the entire scene — along roads, between buildings, in open spaces. Balanced spacing, not clustered.
 SHADOWS: Strong well-defined cast shadows on the ground from EVERY building and EVERY tree. Clear shadow direction, sharp edges, visible on grass.
-ROADS: Dark gray asphalt with subtle wear texture. Clearly distinct from grass.
+ROADS: Main road must be DARK BLACK BITUMEN (#333) — NO grass, NO green on the road surface. Fully paved, dark asphalt, 7m wide. Secondary roads also dark gray asphalt. ALL roads must be clearly darker than grass with ZERO vegetation on them.
 BUILDINGS: OFF-WHITE / cream white (blanc cassé) concrete with subtle plaster texture. Buildings must stay LIGHT — NOT gray, NOT dark, NOT charcoal. Keep them bright and clean.
 PARCEL GROUND: Brown/ochre bare soil inside parcel — NOT green.
 LIGHT: Warm natural sunlight, soft ambient. No dramatic effects, no moody atmosphere, no dark tones.`;
