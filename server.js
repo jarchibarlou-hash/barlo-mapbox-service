@@ -3421,30 +3421,30 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#5a9848" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#7cb5d4" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#e0dad0" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#b8cdd8" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#468538" } },
+        "paint": { "fill-color": "#c8d0b8" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#5a9848" } },
+        "paint": { "fill-color": "#ddd8cc" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
+        "paint": { "line-color": "#a09890", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
+        "paint": { "line-color": "#b0a898", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#555555", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
+        "paint": { "line-color": "#c0b8ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } }
+        "paint": { "line-color": "#ccc4b8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3454,16 +3454,16 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.55, position: [1.15, 195, 40] });
+    map.setLight({ anchor: 'map', color: '#fff4e8', intensity: 0.45, position: [1.15, 195, 35] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#ffffff', 4, '#f5f3ef', 10, '#e8e4dc', 20, '#c8c4bc', 40, '#9a9690'],
+          0, '#f8f5f0', 4, '#f0ece6', 10, '#e4e0d8', 20, '#d0ccc4', 40, '#b8b4ac'],
         'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
         'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
-        'fill-extrusion-opacity': 1.0, 'fill-extrusion-vertical-gradient': true,
+        'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true,
       },
     });
     // v64: Parcelle — fond sable/beige + contour rouge-orangé épais
@@ -3494,10 +3494,10 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       map.addLayer({
         id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
         paint: {
-          'fill-extrusion-color': isComm ? '#e8a030' : '#8bb0d8',
+          'fill-extrusion-color': isComm ? '#d4b088' : '#a8bcc8',
           'fill-extrusion-height': topH,
           'fill-extrusion-base': baseH,
-          'fill-extrusion-opacity': isComm ? 0.92 : 0.78,
+          'fill-extrusion-opacity': isComm ? 0.88 : 0.82,
           'fill-extrusion-vertical-gradient': false,
         },
       });
@@ -4204,20 +4204,21 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Edit this architectural 3D massing image. STRICT RULES — ZERO TOLERANCE:
-1. Do NOT add, invent, move, resize, or remove ANY building, structure, road, or object. Every single pixel of geometry must stay EXACTLY where it is.
-2. Do NOT add trees, vehicles, people, furniture, or any object not already in the image.
-3. Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
-4. Do NOT render any text, labels, or numbers.
-5. The colored floor layers (blue/orange) on the central massing building must remain exactly as-is — same colors, same positions, same proportions.
-6. The red/orange parcel boundary lines must remain exactly as-is.
-ONLY apply these subtle texture improvements to EXISTING surfaces:
-- Existing white/gray buildings: add very subtle concrete plaster texture. Do NOT change their shape, size, or position.
-- Existing dark roads: add subtle asphalt texture. Do NOT change road width or position.
-- Central parcel ground: keep as brown earth/bare soil — NOT green.
-- Green areas outside parcel: add subtle grass texture variation.
-- Add soft natural sunlight and gentle shadows from existing buildings only.
-Style: clean professional architectural maquette — minimal, sober, no artistic effects.`;
+        const polishPrompt = `Edit this architectural 3D massing image into a soft, minimal, high-end architectural visualization. STRICT GEOMETRY LOCK:
+1. Do NOT add, invent, move, resize, or remove ANY building, structure, road, or object. Every pixel of geometry stays EXACTLY where it is.
+2. Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
+3. Do NOT render any text, labels, or numbers.
+4. The colored floor layers on the central massing building must remain exactly as-is — same colors, same positions, same proportions.
+5. The red/orange parcel boundary lines must remain exactly as-is.
+Apply ONLY these style refinements to EXISTING surfaces:
+- BUILDINGS: Soft matte white plaster / concrete finish. Subtle ambient occlusion at edges. Clean sharp edges.
+- ROADS: Soft warm gray tone — NOT dark black asphalt. Subtle matte texture, low contrast.
+- PARCEL GROUND: Soft beige/sand tone — NOT green.
+- ENVIRONMENT: Replace bright green with soft desaturated beige/cream landscape. Muted sage-green for vegetation areas.
+- Add 8-10 small sparse stylized round trees scattered naturally — small scale, soft green, subtle shadow.
+- LIGHTING: Soft diffuse warm sunlight. Low-contrast shadows. Subtle global illumination. Slight atmospheric haze/fog in distance for depth.
+- ATMOSPHERE: Desaturated, minimal, calm. Reduced contrast in distance.
+Style: soft minimal high-end architectural maquette photograph — warm white, beige, cream palette. NOT dramatic, NOT artistic.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
