@@ -3919,16 +3919,15 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. No artistic effects, no bloom, no glow, no painterly style. Clean architectural visualization.
-GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT shift, pan, crop, or reframe. Keep EXACT camera angle (58° pitch). Pixel-perfect preservation.
-PARCEL LINES: Red/orange solid boundary and dashed setback lines must stay CRISP and SHARP.
-BUILDINGS: WHITE / cream white (blanc cassé #F0EDE8) with subtle plaster texture. Must read as WHITE — NOT gray, NOT beige-dark, NOT concrete gray. Bright clean white buildings.
-ROADS: Main road = DARK BLACK BITUMEN (#333) 7m wide, clearly paved tarred road, must be visibly DARKER than everything else. Secondary roads = dark gray asphalt (#666). All roads clearly distinct from grass.
-SHADOWS: Every building and every tree MUST cast a CLEARLY VISIBLE dark shadow (#555) on the ground. Consistent sun direction. Shadows are essential — no building or tree without one.
-GRASS: VIVID bright green with realistic grass TEXTURE — varied shades of green, natural patches. Must look lush and alive. NOT flat, NOT dull gray-green. Saturated healthy tropical green.
-TREES: 10-12 SMALL trees with COMPACT thin rounded canopy — NOT bushy, NOT thick foliage. Small neat trees, not oversized. Each casts a visible shadow.
-PARCEL GROUND: Natural earth/ochre bare soil inside parcel.
-LIGHT: Warm natural sunlight, clear atmosphere.`;
+        const polishPrompt = `Realistic texture pass on this 3D site plan. ZERO geometry changes — do not move, add, remove, shift, crop, or reframe anything.
+1. BUILDINGS: Make every building WHITE (blanc cassé #F0EDE8). Clean plaster finish. NOT gray, NOT beige.
+2. SHADOWS: Add a dark cast shadow (#555) on the ground behind every building and every tree. Sun from top-left. Sharp edges.
+3. MAIN ROAD: Dark black bitumen (#2a2a2a), 7m wide, with a visible paved median strip. Must be the darkest element in the scene.
+4. SECONDARY ROADS: Dark gray asphalt (#555).
+5. GRASS: Vivid green (#4a9a30) with realistic mowed-lawn texture — light/dark patches, NOT flat uniform, NOT dull. Textured and alive.
+6. TREES: 10-12 small trees, thin compact canopy (NOT bushy, NOT thick). Each casts shadow.
+7. PARCEL: Keep red/orange boundary lines crisp. Brown bare soil inside.
+8. NO artistic effects, NO bloom, NO glow, NO fog, NO invention.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
