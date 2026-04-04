@@ -3934,10 +3934,16 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering.
-FORBIDDEN: Do NOT add any inset image, photo, frame, phone, screen, or secondary viewport ANYWHERE. Do NOT add any text or numbers. Do NOT move, add, or remove ANY building, road, or line.
-PARCEL LINES: The red/orange solid parcel boundary and dashed setback lines must stay CRISP, SHARP, CLEAN — no bleeding, no glow, no smearing.
-TEXTURES: Light concrete/plaster on buildings, dark asphalt on roads, brown bare soil inside parcel. Vibrant bright green grass outside — lush and vivid, not dull or faded. 6-8 small trees with rounded canopy along roads. Strong visible cast shadows from every building and every tree — clear shadow direction, well-defined edges. Warm sunlight. No bloom, no artistic effects.`;
+        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. STRICT — no invention, no artistic effects, no bloom, no glow.
+LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text.
+PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP — no bleeding, no smearing.
+GRASS: Textured green grass with varied shades — patches of light and dark green, natural ground variation. NOT flat uniform color.
+TREES: 12-15 small rounded-canopy trees distributed EVENLY across the entire scene — along roads, between buildings, in open spaces. Balanced spacing, not clustered.
+SHADOWS: Strong well-defined cast shadows on the ground from EVERY building and EVERY tree. Clear shadow direction, sharp edges, visible on grass.
+ROADS: Dark gray asphalt with subtle wear texture. Clearly distinct from grass.
+BUILDINGS: Light concrete/plaster texture, subtle surface variation.
+PARCEL GROUND: Brown/ochre bare soil inside parcel — NOT green.
+LIGHT: Warm natural sunlight, soft ambient. No dramatic effects.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
