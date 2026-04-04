@@ -3934,12 +3934,8 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply ONLY subtle realistic surface textures to this 3D architectural rendering. STRICT RULES:
-- Do NOT move, resize, add, or remove ANY building, road, or line. Every pixel of geometry must stay exactly where it is.
-- Do NOT add any inset image, frame, or secondary viewport.
-- Do NOT render any text or numbers.
-- Keep ALL red/orange parcel lines (solid and dashed) exactly as they are — visible, sharp, unaltered.
-Textures only: concrete on buildings, asphalt on roads, bare soil on central parcel, green grass outside, soft shadows, 10-12 small trees along roads.`;
+        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible.
+Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road 7m with bitumen median strip, secondary roads 4m), brown bare soil on central parcel, realistic green grass outside. Add 10-12 small trees with rounded canopy along roads. Add warm sunlight with soft cast shadows from buildings and trees. No bloom, no artistic effects, no dramatic lighting. Clean sober architectural maquette style.`;
 
         const parcelSeed = Math.abs(Math.round(center.lat * 1e6 + center.lon * 1e6)) % 2147483647;
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
@@ -4202,13 +4198,8 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply ONLY subtle realistic surface textures to this 3D architectural massing rendering. STRICT RULES:
-- Do NOT move, resize, add, or remove ANY building, road, or line. Every pixel of geometry must stay exactly where it is.
-- Do NOT add any inset image, frame, or secondary viewport.
-- Do NOT render any text or numbers.
-- Keep ALL red/orange parcel lines (solid and dashed) exactly as they are — visible, sharp, unaltered.
-- Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
-Textures only: soft concrete on buildings, subtle road texture, beige soil on parcel, soft grass outside, gentle shadows, 8 small round trees along roads. Soft minimal style.`;
+        const polishPrompt = `Apply realistic textures to this 3D architectural massing rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible. Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
+Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road 7m with bitumen median strip, secondary roads 4m), brown bare soil on central parcel, realistic green grass outside. Add 8-10 small trees with rounded canopy along roads. Add warm sunlight with soft cast shadows from buildings and trees. No bloom, no artistic effects. Clean sober architectural maquette style.`;
 
         const parcelSeed = Math.abs(Math.round(center.lat * 1e6 + center.lon * 1e6)) % 2147483647;
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
