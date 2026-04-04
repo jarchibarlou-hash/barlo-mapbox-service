@@ -3934,17 +3934,19 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Edit this architectural 3D massing image to make it look like a realistic urban planning rendering. Preserve ALL existing geometry exactly — every building footprint, volume, height, road, and parcel boundary must stay pixel-perfect. Do not invent, move, or remove any structure.
-REMOVE all text labels (3m, 5m, street names) — they will be redrawn as overlay. Do NOT render any text or numbers.
-Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport anywhere in the image.
-Apply ONLY these realistic texture upgrades:
-- BUILDINGS: Light cream/white concrete with subtle plaster texture and micro-imperfections. Soft realistic shadows and ambient occlusion on all buildings. Slight height variation visible through shadow depth.
-- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width — clearly visible.
-- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. The red/orange parcel boundary must remain clearly visible.
-- GRASS (outside parcel): Realistic textured green grass — not flat color. Varied shades of green with natural look.
-- TREES: Add 12-15 semi-realistic 3D trees with rounded canopy and shadow, scattered naturally along roads and in open spaces. Varied sizes. Not too dense, not too sparse.
-- LIGHTING: Warm natural sunlight from consistent direction. Soft cast shadows from all buildings and trees. Subtle atmospheric haze in the distance.
-Style reference: sober professional architectural maquette photo — realistic textures but clean and readable, not artistic or dramatic.`;
+        const polishPrompt = `Edit this architectural 3D massing image. STRICT RULES — ZERO TOLERANCE:
+1. Do NOT add, invent, move, resize, or remove ANY building, structure, road, or object. Every single pixel of geometry must stay EXACTLY where it is.
+2. Do NOT add trees, vehicles, people, furniture, or any object not already in the image.
+3. Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
+4. Do NOT render any text, labels, or numbers.
+5. The red/orange parcel boundary lines must remain exactly as-is.
+ONLY apply these subtle texture improvements to EXISTING surfaces:
+- Existing white/gray buildings: add very subtle concrete plaster texture. Do NOT change their shape, size, or position.
+- Existing dark roads: add subtle asphalt texture. Do NOT change road width or position.
+- Central parcel ground: keep as brown earth/bare soil — NOT green.
+- Green areas outside parcel: add subtle grass texture variation.
+- Add soft natural sunlight and gentle shadows from existing buildings only.
+Style: clean professional architectural maquette — minimal, sober, no artistic effects.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4204,17 +4206,20 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Edit this architectural 3D massing image to make it look like a realistic urban planning rendering. Preserve ALL existing geometry exactly — every building footprint, volume, height, road, and parcel boundary must stay pixel-perfect. Do not invent, move, or remove any structure. KEEP the colored floor layers (blue, orange) on the massing buildings exactly as-is.
-REMOVE all text labels (floor counts, legend text, compass text) — they will be redrawn as overlay. Do NOT render any text or numbers.
-Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport anywhere in the image.
-Apply ONLY these realistic texture upgrades:
-- BUILDINGS: Light cream/white concrete with subtle plaster texture. The colored floor indicators (blue/orange) must remain visible. Soft realistic shadows and ambient occlusion.
-- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width.
-- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. Red/orange parcel boundary must remain clearly visible.
-- GRASS (outside parcel): Realistic textured green grass — varied shades, natural look.
-- TREES: Add 12-15 semi-realistic 3D trees scattered naturally along roads. Varied sizes. Not too dense.
-- LIGHTING: Warm natural sunlight. Soft cast shadows from buildings and trees. Subtle atmospheric haze in distance.
-Style: sober professional architectural maquette photo — realistic textures but clean and readable.`;
+        const polishPrompt = `Edit this architectural 3D massing image. STRICT RULES — ZERO TOLERANCE:
+1. Do NOT add, invent, move, resize, or remove ANY building, structure, road, or object. Every single pixel of geometry must stay EXACTLY where it is.
+2. Do NOT add trees, vehicles, people, furniture, or any object not already in the image.
+3. Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
+4. Do NOT render any text, labels, or numbers.
+5. The colored floor layers (blue/orange) on the central massing building must remain exactly as-is — same colors, same positions, same proportions.
+6. The red/orange parcel boundary lines must remain exactly as-is.
+ONLY apply these subtle texture improvements to EXISTING surfaces:
+- Existing white/gray buildings: add very subtle concrete plaster texture. Do NOT change their shape, size, or position.
+- Existing dark roads: add subtle asphalt texture. Do NOT change road width or position.
+- Central parcel ground: keep as brown earth/bare soil — NOT green.
+- Green areas outside parcel: add subtle grass texture variation.
+- Add soft natural sunlight and gentle shadows from existing buildings only.
+Style: clean professional architectural maquette — minimal, sober, no artistic effects.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
