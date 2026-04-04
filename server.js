@@ -4189,8 +4189,8 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Subtle polish only. Keep EXACT geometry, camera, framing unchanged. Do NOT invent anything. Do NOT add or remove buildings.
-Add: visible cast shadows from every building on the ground. Roads stay beige/sand. A few small semi-transparent trees scattered in the background (not on the parcel). Keep the central massing building colors and floor lines exactly as-is. Clean bright image, no grain, no fog.`;
+        const polishPrompt = `Premium white architectural maquette look. Keep EXACT geometry, camera, framing unchanged. Do NOT invent or remove anything.
+Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cream. Ground: very light warm gray. Soft subtle shadows under buildings. Overall BRIGHT, CLEAN, WHITE premium feel — like a high-end architectural scale model photographed in a studio. Keep central massing building colors (blue/orange layers) exactly as-is. No grain, no fog, no dark tones.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
