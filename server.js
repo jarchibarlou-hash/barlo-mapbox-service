@@ -4189,8 +4189,8 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply realistic textures to this 3D architectural massing rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT shift, pan, crop, or reframe the image — keep the EXACT same camera position and framing. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible. Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
-Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road 7m with bitumen median strip, secondary roads 4m), brown bare soil on central parcel, realistic green grass outside. Add 8-10 small trees with rounded canopy along roads. Add warm sunlight with soft cast shadows from buildings and trees. No bloom, no artistic effects. Clean sober architectural maquette style.`;
+        const polishPrompt = `Keep exact geometry, camera angle, framing, and colored floor layers (blue/orange) on the central massing building unchanged. Do not move, add, or remove anything. No artistic effects.
+Add subtle realistic textures: white plaster on buildings, dark bitumen on main road, soft cast shadows from buildings and trees, 6-8 small trees with thin canopy. Keep red parcel lines sharp. Clean architectural maquette style.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
