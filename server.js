@@ -3346,13 +3346,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.55 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#c45030', 'line-width': 3.5, 'line-opacity': 0.95 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-opacity': 1.0 } }, '3d-buildings');
 
     // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#c45030', 'line-width': 3.5,
-               'line-dasharray': [6, 4], 'line-opacity': 0.95 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 5,
+               'line-dasharray': [6, 4], 'line-opacity': 1.0 } }, '3d-buildings');
 
     // v49: Flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
@@ -3471,11 +3471,11 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.50 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#c45030', 'line-width': 3.5, 'line-opacity': 0.95 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-opacity': 1.0 } }, '3d-buildings');
     // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#c45030', 'line-width': 3.5, 'line-dasharray': [6, 4], 'line-opacity': 0.95 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-dasharray': [6, 4], 'line-opacity': 1.0 } }, '3d-buildings');
     // ── MASSING : étages individuels, RDC=${rdcH}m, courants=${etageH}m, gaps entre niveaux ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
@@ -3944,6 +3944,7 @@ Apply ONLY these realistic texture upgrades:
 - GRASS (outside parcel): Realistic textured green grass — not flat color. Varied shades of green with natural look.
 - TREES: Add 12-15 semi-realistic 3D trees with rounded canopy and shadow, scattered naturally along roads and in open spaces. Varied sizes. Not too dense, not too sparse.
 - LIGHTING: Warm natural sunlight from consistent direction. Soft cast shadows from all buildings and trees. Subtle atmospheric haze in the distance.
+CRITICAL: The red/orange PARCEL BOUNDARY (solid line) and the red/orange SETBACK LIMIT (dashed line) must remain FULLY VISIBLE, SHARP, and UNALTERED — same color, same thickness, same opacity. Do NOT soften, blur, or cover these lines.
 Style reference: sober professional architectural maquette photo — realistic textures but clean and readable, not artistic or dramatic.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
