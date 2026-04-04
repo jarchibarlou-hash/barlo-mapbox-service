@@ -3919,16 +3919,16 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. STRICT — no invention, no artistic effects, no bloom, no glow.
-LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT same camera position, framing, and composition — the center of the image must stay the center.
-PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP — no bleeding, no smearing.
-GRASS: Textured green grass with varied shades — patches of light and dark green, natural ground variation. NOT flat uniform color.
-TREES: 12-15 small rounded-canopy trees distributed EVENLY across the entire scene — along roads, between buildings, in open spaces. Balanced spacing, not clustered.
-SHADOWS: Strong well-defined cast shadows on the ground from EVERY building and EVERY tree. Clear shadow direction, sharp edges, visible on grass.
-ROADS: Dark gray asphalt with subtle wear texture. Clearly distinct from grass.
-BUILDINGS: OFF-WHITE / cream white (blanc cassé) concrete with subtle plaster texture. Buildings must stay LIGHT — NOT gray, NOT dark, NOT charcoal. Keep them bright and clean.
+        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. STRICT — no invention, no artistic effects, no bloom, no glow, no painterly style.
+GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT same camera position, framing, and composition — pixel-perfect geometry preservation.
+PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP, fully visible — no bleeding, no smearing, no fading.
+BUILDINGS — MOST IMPORTANT: ALL buildings must be BRIGHT WHITE / cream white (blanc cassé #F5F0E8). Smooth clean plaster/concrete finish. NEVER gray, NEVER brown, NEVER dark. Every single building in the scene must read as WHITE when viewed.
+SHADOWS — SECOND PRIORITY: Every building and every tree must cast a STRONG, SHARP, well-defined shadow on the ground. Shadows must be clearly visible dark shapes on the grass. Sun direction consistent across the whole scene.
+GRASS: VIVID bright green (#4CAF50 range) with natural variation — patches of lighter and darker vivid green. Must look LUSH and ALIVE, not dull or grayish-green. Strong saturated green.
+TREES: 10-12 small rounded-canopy trees distributed evenly across the scene — along roads, between buildings. Each tree casts its own shadow.
+ROADS: Dark gray asphalt, clearly distinct from grass. Subtle wear texture.
 PARCEL GROUND: Brown/ochre bare soil inside parcel — NOT green.
-LIGHT: Warm natural sunlight, soft ambient. No dramatic effects, no moody atmosphere, no dark tones.`;
+LIGHT: Bright warm natural sunlight. Clean, clear atmosphere. No moody tones, no fog, no haze.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
