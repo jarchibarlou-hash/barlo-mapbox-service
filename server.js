@@ -3922,11 +3922,11 @@ app.post("/generate", async (req, res) => {
         const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. No artistic effects, no bloom, no glow, no painterly style. Clean architectural visualization.
 GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT shift, pan, crop, or reframe. Keep EXACT camera angle (58° pitch). Pixel-perfect preservation.
 PARCEL LINES: Red/orange solid boundary and dashed setback lines must stay CRISP and SHARP.
-BUILDINGS: Light gray-beige concrete (#d5d0c8) with subtle plaster texture. Slightly weathered matte finish. NOT pure white, NOT dark charcoal.
-ROADS: Dark gray bitumen asphalt on main road (clearly paved, dark). Secondary roads lighter gray. All roads distinct from grass.
+BUILDINGS: WHITE / cream white (blanc cassé #F0EDE8) with subtle plaster texture. Must read as WHITE — NOT gray, NOT beige-dark, NOT concrete gray. Bright clean white buildings.
+ROADS: Main road = DARK BLACK BITUMEN (#333) 7m wide, clearly paved tarred road, must be visibly DARKER than everything else. Secondary roads = dark gray asphalt (#666). All roads clearly distinct from grass.
 SHADOWS: Every building and every tree MUST cast a CLEARLY VISIBLE dark shadow (#555) on the ground. Consistent sun direction. Shadows are essential — no building or tree without one.
 GRASS: VIVID bright green with realistic grass TEXTURE — varied shades of green, natural patches. Must look lush and alive. NOT flat, NOT dull gray-green. Saturated healthy tropical green.
-TREES: 10-12 rounded-canopy trees visible along roads and between buildings. Green leafy canopy. Each tree casts a visible shadow.
+TREES: 10-12 SMALL trees with COMPACT thin rounded canopy — NOT bushy, NOT thick foliage. Small neat trees, not oversized. Each casts a visible shadow.
 PARCEL GROUND: Natural earth/ochre bare soil inside parcel.
 LIGHT: Warm natural sunlight, clear atmosphere.`;
 
