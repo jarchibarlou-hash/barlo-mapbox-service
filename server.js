@@ -3920,7 +3920,7 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
         const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. STRICT — no invention, no artistic effects, no bloom, no glow.
-LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text.
+LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT same camera position, framing, and composition — the center of the image must stay the center.
 PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP — no bleeding, no smearing.
 GRASS: Textured green grass with varied shades — patches of light and dark green, natural ground variation. NOT flat uniform color.
 TREES: 12-15 small rounded-canopy trees distributed EVENLY across the entire scene — along roads, between buildings, in open spaces. Balanced spacing, not clustered.
@@ -4188,7 +4188,7 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply realistic textures to this 3D architectural massing rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible. Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
+        const polishPrompt = `Apply realistic textures to this 3D architectural massing rendering. Keep ALL geometry pixel-perfect — do NOT move, add, or remove any building or road. Do NOT shift, pan, crop, or reframe the image — keep the EXACT same camera position and framing. Do NOT add inset images or text. Keep red/orange parcel lines sharp and visible. Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
 Apply: light concrete/plaster on buildings, dark asphalt on all roads (main road 7m with bitumen median strip, secondary roads 4m), brown bare soil on central parcel, realistic green grass outside. Add 8-10 small trees with rounded canopy along roads. Add warm sunlight with soft cast shadows from buildings and trees. No bloom, no artistic effects. Clean sober architectural maquette style.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
