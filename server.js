@@ -3923,7 +3923,7 @@ app.post("/generate", async (req, res) => {
 GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT same camera position, framing, and composition — pixel-perfect geometry preservation.
 PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP, fully visible — no bleeding, no smearing, no fading.
 BUILDINGS — MOST IMPORTANT: ALL buildings must be BRIGHT WHITE / cream white (blanc cassé #F5F0E8). Smooth clean plaster/concrete finish. NEVER gray, NEVER brown, NEVER dark. Every single building in the scene must read as WHITE when viewed.
-SHADOWS — SECOND PRIORITY: Every building and every tree must cast a STRONG, SHARP, well-defined shadow on the ground. Shadows must be clearly visible dark shapes on the grass. Sun direction consistent across the whole scene.
+SHADOWS — CRITICAL, MANDATORY: Paint DARK VISIBLE CAST SHADOWS on the ground from EVERY building and EVERY tree. Sun from top-left. Each shadow must be a dark gray shape (#555) clearly projected onto the grass, with sharp edges. Buildings without shadows = FAILURE. This is the #1 visual change needed.
 GRASS: VIVID bright green (#4CAF50 range) with natural variation — patches of lighter and darker vivid green. Must look LUSH and ALIVE, not dull or grayish-green. Strong saturated green.
 TREES: 10-12 small rounded-canopy trees distributed evenly across the scene — along roads, between buildings. Each tree casts its own shadow.
 ROADS: Dark gray asphalt, clearly distinct from grass. Subtle wear texture.
