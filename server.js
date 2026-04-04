@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "67.0-ORIGINAL-RESTORED" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "67.1-ROADS-SETBACK" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", (req, res) => {
   try {
@@ -3259,22 +3259,22 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 18] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
       { "id": "road-case-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
       { "id": "road-fill-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 5, 16, 10, 18, 16] } },
+        "paint": { "line-color": "#555555", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 16, 6, 18, 10] } },
+        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -3351,8 +3351,8 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#c45030', 'line-width': 2.5,
-               'line-dasharray': [6, 4], 'line-opacity': 0.85 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 3.5,
+               'line-dasharray': [6, 4], 'line-opacity': 0.95 } }, '3d-buildings');
 
     // v49: Flèche d'accès principal
     map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
@@ -3432,19 +3432,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 18, 10] } },
+        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 14] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a7d62", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 6] } },
+        "paint": { "line-color": "#7a7060", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2.5, 16, 5, 18, 8] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 2, 18, 8] } },
+        "paint": { "line-color": "#666666", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 12] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c4b494", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1, 18, 4] } }
+        "paint": { "line-color": "#a09080", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 3, 18, 6] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -3475,7 +3475,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#c45030', 'line-width': 2.5, 'line-dasharray': [6, 4], 'line-opacity': 0.85 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 3.5, 'line-dasharray': [6, 4], 'line-opacity': 0.95 } }, '3d-buildings');
     // ── MASSING : étages individuels, RDC=${rdcH}m, courants=${etageH}m, gaps entre niveaux ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
@@ -3920,7 +3920,7 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v67.0-ORIGINAL-RESTORED...");
+        console.log("[SLIDE4-POLISH] Starting AI polish v67.1-ROADS-SETBACK...");
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
@@ -4190,7 +4190,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v67.0-ORIGINAL-RESTORED...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v67.1-ROADS-SETBACK...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4263,7 +4263,7 @@ Style: sober professional architectural maquette photo — realistic textures bu
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "67.0-ORIGINAL-RESTORED",
+      ok: true, cached: false, server_version: "67.1-ROADS-SETBACK",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4284,7 +4284,7 @@ Style: sober professional architectural maquette photo — realistic textures bu
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v67.0-ORIGINAL-RESTORED on port ${PORT}`);
+  console.log(`BARLO v67.1-ROADS-SETBACK on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
