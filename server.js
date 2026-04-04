@@ -3934,24 +3934,21 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Edit this architectural 3D massing image to make it look like a realistic urban planning rendering. Preserve ALL existing geometry exactly — every building footprint, volume, height, road, and parcel boundary must stay pixel-perfect. Do not invent, move, or remove any structure.
-REMOVE all text labels (3m, 5m, street names) — they will be redrawn as overlay. Do NOT render any text or numbers.
-Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport anywhere in the image.
-Apply ONLY these realistic texture upgrades:
-- BUILDINGS: Light cream/white concrete with subtle plaster texture and micro-imperfections. Soft realistic shadows and ambient occlusion on all buildings. Slight height variation visible through shadow depth.
-- ROADS: Dark gray asphalt texture with realistic wear. Keep roads their existing width — clearly visible.
-- PARCEL SITE (central zone with red/orange dashed border): Brown earth/dry bare soil texture — NOT green. The red/orange parcel boundary must remain clearly visible.
-- GRASS (outside parcel): Realistic textured green grass — not flat color. Varied shades of green with natural look.
-- TREES: Add 12-15 semi-realistic 3D trees with rounded canopy and shadow, scattered naturally along roads and in open spaces. Varied sizes. Not too dense, not too sparse.
-- LIGHTING: Warm natural sunlight from consistent direction. Soft cast shadows from all buildings and trees. Subtle atmospheric haze in the distance.
-CRITICAL: The red/orange PARCEL BOUNDARY (solid line) and the red/orange SETBACK LIMIT (dashed line) must remain FULLY VISIBLE, SHARP, and UNALTERED — same color, same thickness, same opacity. Do NOT soften, blur, or cover these lines.
-Style reference: sober professional architectural maquette photo — realistic textures but clean and readable, not artistic or dramatic.`;
+        const polishPrompt = `Apply ONLY subtle realistic surface textures to this 3D architectural rendering. STRICT RULES:
+- Do NOT move, resize, add, or remove ANY building, road, or line. Every pixel of geometry must stay exactly where it is.
+- Do NOT add any inset image, frame, or secondary viewport.
+- Do NOT render any text or numbers.
+- Keep ALL red/orange parcel lines (solid and dashed) exactly as they are — visible, sharp, unaltered.
+Textures only: concrete on buildings, asphalt on roads, bare soil on central parcel, green grass outside, soft shadows, 10-12 small trees along roads.`;
 
+        const parcelSeed = Math.abs(Math.round(center.lat * 1e6 + center.lon * 1e6)) % 2147483647;
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "gpt-4.1",
+            temperature: 0,
+            seed: parcelSeed,
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -3959,7 +3956,7 @@ Style reference: sober professional architectural maquette photo — realistic t
             tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
           })
         });
-        console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
+        console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status}, seed: ${parcelSeed} (${Date.now() - t0}ms)`);
         const oaiJson = await oaiRes.json();
 
         if (oaiJson.error) {
@@ -4205,27 +4202,22 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Edit this architectural 3D massing image into a soft, minimal, high-end architectural visualization. STRICT GEOMETRY LOCK:
-1. Do NOT add, invent, move, resize, or remove ANY building, structure, road, or object. Every pixel of geometry stays EXACTLY where it is.
-2. Do NOT add any inset image, picture-in-picture, photo frame, or secondary viewport.
-3. Do NOT render any text, labels, or numbers.
-4. The colored floor layers on the central massing building must remain exactly as-is — same colors, same positions, same proportions.
-5. The red/orange parcel boundary lines must remain exactly as-is.
-Apply ONLY these style refinements to EXISTING surfaces:
-- BUILDINGS: Soft matte white plaster / concrete finish. Subtle ambient occlusion at edges. Clean sharp edges.
-- ROADS: Soft warm gray tone — NOT dark black asphalt. Subtle matte texture, low contrast.
-- PARCEL GROUND: Soft beige/sand tone — NOT green.
-- ENVIRONMENT: Replace bright green with soft desaturated beige/cream landscape. Muted sage-green for vegetation areas.
-- Add 8-10 small sparse stylized round trees scattered naturally — small scale, soft green, subtle shadow.
-- LIGHTING: Soft diffuse warm sunlight. Low-contrast shadows. Subtle global illumination. Slight atmospheric haze/fog in distance for depth.
-- ATMOSPHERE: Desaturated, minimal, calm. Reduced contrast in distance.
-Style: soft minimal high-end architectural maquette photograph — warm white, beige, cream palette. NOT dramatic, NOT artistic.`;
+        const polishPrompt = `Apply ONLY subtle realistic surface textures to this 3D architectural massing rendering. STRICT RULES:
+- Do NOT move, resize, add, or remove ANY building, road, or line. Every pixel of geometry must stay exactly where it is.
+- Do NOT add any inset image, frame, or secondary viewport.
+- Do NOT render any text or numbers.
+- Keep ALL red/orange parcel lines (solid and dashed) exactly as they are — visible, sharp, unaltered.
+- Keep the colored floor layers (blue/orange) on the central massing building exactly as-is.
+Textures only: soft concrete on buildings, subtle road texture, beige soil on parcel, soft grass outside, gentle shadows, 8 small round trees along roads. Soft minimal style.`;
 
+        const parcelSeed = Math.abs(Math.round(center.lat * 1e6 + center.lon * 1e6)) % 2147483647;
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
           headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "gpt-4.1",
+            temperature: 0,
+            seed: parcelSeed,
             input: [{ role: "user", content: [
               { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
               { type: "input_text", text: polishPrompt }
@@ -4233,7 +4225,7 @@ Style: soft minimal high-end architectural maquette photograph — warm white, b
             tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
           })
         });
-        console.log(`[MASSING-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
+        console.log(`[MASSING-POLISH] Responses API status: ${oaiRes.status}, seed: ${parcelSeed} (${Date.now() - t0}ms)`);
         const oaiJson = await oaiRes.json();
 
         if (oaiJson.error) {
