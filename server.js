@@ -3931,9 +3931,8 @@ app.post("/generate", async (req, res) => {
         // PARCEL GROUND: Brown/ochre bare soil inside parcel — NOT green.
         // LIGHT: Warm natural sunlight, soft ambient. No dramatic effects, no moody atmosphere, no dark tones.`;
 
-        // === OPTION C (ACTIVE — minimaliste) ===
-        const polishPrompt = `Keep exact geometry and camera angle. Do not move, add, or remove anything. No artistic effects.
-Buildings: WHITE cream plaster. Main road: dark black bitumen, no grass on road. Grass: textured green, varied shades. Cast shadows from every building and tree on ground. Keep red parcel lines sharp.`;
+        // === OPTION C (ACTIVE — minimaliste, haute stabilité) ===
+        const polishPrompt = `Keep exact geometry, camera angle, and framing unchanged. Add ONLY: 10 small thin-canopy trees (not bushy), dark cast shadows from all buildings and trees, dark bitumen texture on main road. Keep buildings white, grass green textured, red parcel lines sharp. No other changes.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
