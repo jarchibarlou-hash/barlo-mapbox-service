@@ -3836,19 +3836,19 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     // Petit trait horizontal noir fin
     ctx.beginPath();
     ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
-    ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = 1.5*s; ctx.stroke();
-    // Label : "R+2 : 596 m²" — blanc avec contour noir
+    ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
+    // Label : "R+2 : 596 m²" — NOIR avec contour blanc pour lisibilité
     ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
-    ctx.strokeStyle = "#000000"; ctx.lineWidth = 3*s;
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
     ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = "#000000";
     ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
   }
-  // Total SDP en bas — blanc avec contour
-  ctx.font = `${12*s}px Arial`; ctx.textAlign = "left";
-  ctx.strokeStyle = "#000000"; ctx.lineWidth = 3*s;
+  // Total SDP en bas — NOIR avec contour blanc
+  ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
   ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "#000000";
   ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
@@ -4189,8 +4189,8 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `VERY SUBTLE polish only. Do NOT change geometry, camera, framing, colors, or building shapes. Do NOT invent anything. Keep the image almost identical — just slightly refine textures.
-Keep everything as-is. Only add: very faint soft shadows under buildings, and a few small semi-transparent trees (20% opacity, barely visible) scattered randomly in the background. Nothing else changes.`;
+        const polishPrompt = `Subtle polish only. Keep EXACT geometry, camera, framing unchanged. Do NOT invent anything. Do NOT add or remove buildings.
+Add: visible cast shadows from every building on the ground. Roads stay beige/sand. A few small semi-transparent trees scattered in the background (not on the parcel). Keep the central massing building colors and floor lines exactly as-is. Clean bright image, no grain, no fog.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
