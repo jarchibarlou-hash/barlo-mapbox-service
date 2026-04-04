@@ -3919,16 +3919,16 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngResized.toString("base64");
         console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
-        const polishPrompt = `Apply subtle realistic textures to this 3D architectural maquette. Style: SOBER architectural model photo — NOT a video game, NOT an illustration, NOT artistic. No bloom, no glow, no dramatic lighting, no saturation boost.
-GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT camera angle (58° pitch). Pixel-perfect geometry preservation.
-PARCEL LINES: Red/orange solid boundary and dashed setback lines must stay CRISP and SHARP — no bleeding.
-BUILDINGS: Light gray-beige concrete (#d5d0c8) with visible subtle plaster/crépi texture. Slightly weathered, NOT pure white, NOT dark gray. Natural matte concrete look.
-ROADS: Gray asphalt with subtle wear texture. Main road clearly paved. Secondary roads slightly lighter gray. All roads clearly distinct from grass.
-SHADOWS: Soft but VISIBLE cast shadows from every building and tree onto the ground. Natural shadow direction, not too dark (#777), slightly diffused edges. Every building must have a shadow.
-GRASS: Natural green (#5a8a3a range) with TEXTURE variation — mixed olive-green, moss-green patches. NOT vivid/saturated, NOT flat uniform color. Realistic tropical grass with ground texture visible.
-TREES: 8-10 SMALL compact rounded-canopy trees, discreet, not oversized. Each casts a small soft shadow.
-PARCEL GROUND: Natural earth/ochre tone inside parcel — matte, not orange.
-LIGHT: Soft warm natural daylight. No dramatic atmosphere, no haze, no fog. Clean and sober.`;
+        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. No artistic effects, no bloom, no glow, no painterly style. Clean architectural visualization.
+GEOMETRY LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT shift, pan, crop, or reframe. Keep EXACT camera angle (58° pitch). Pixel-perfect preservation.
+PARCEL LINES: Red/orange solid boundary and dashed setback lines must stay CRISP and SHARP.
+BUILDINGS: Light gray-beige concrete (#d5d0c8) with subtle plaster texture. Slightly weathered matte finish. NOT pure white, NOT dark charcoal.
+ROADS: Dark gray bitumen asphalt on main road (clearly paved, dark). Secondary roads lighter gray. All roads distinct from grass.
+SHADOWS: Every building and every tree MUST cast a CLEARLY VISIBLE dark shadow (#555) on the ground. Consistent sun direction. Shadows are essential — no building or tree without one.
+GRASS: VIVID bright green with realistic grass TEXTURE — varied shades of green, natural patches. Must look lush and alive. NOT flat, NOT dull gray-green. Saturated healthy tropical green.
+TREES: 10-12 rounded-canopy trees visible along roads and between buildings. Green leafy canopy. Each tree casts a visible shadow.
+PARCEL GROUND: Natural earth/ochre bare soil inside parcel.
+LIGHT: Warm natural sunlight, clear atmosphere.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
