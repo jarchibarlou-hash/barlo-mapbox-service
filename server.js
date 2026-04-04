@@ -3354,22 +3354,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: { 'line-color': '#c45030', 'line-width': 5,
                'line-dasharray': [6, 4], 'line-opacity': 1.0 } }, '3d-buildings');
 
-    // v49: Flèche d'accès principal
-    map.addSource('access-line', { type: 'geojson', data: ${JSON.stringify(accessLineGeoJSON)} });
-    map.addLayer({ id: 'access-arrow-line', type: 'line', source: 'access-line',
-      paint: { 'line-color': '#1a6b3a', 'line-width': 3, 'line-opacity': 0.9 } });
-    map.addSource('access-point', { type: 'geojson', data: ${JSON.stringify(accessPointGeoJSON)} });
-    map.addLayer({ id: 'access-label', type: 'symbol', source: 'access-point',
-      layout: {
-        'text-field': 'Accès',
-        'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-        'text-size': 11, 'text-offset': [0, -1.2], 'text-anchor': 'bottom',
-        'icon-image': '', 'text-allow-overlap': true
-      },
-      paint: { 'text-color': '#1a6b3a', 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 1.5 }
-    });
-    map.addLayer({ id: 'access-dot', type: 'circle', source: 'access-point',
-      paint: { 'circle-radius': 5, 'circle-color': '#1a6b3a', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+    // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
 
   let rendered = false;
