@@ -1096,18 +1096,36 @@ function computeSmartScenarios({
   // ── 1. BUDGET : tension + rigidité + band ──
   const bt = parseBudgetTension(budget_tension);
   const fri = norm01(financial_rigidity_score);
-  // v57.20 FIX : recalcul automatique de budget_band depuis budget_range_raw
+  // v57.20 FIX : recalcul automatique de budget_band
   // Ne plus dépendre de la formule Google Sheets (écrasée par les Update Row)
-  // budget_range_raw = chaîne originale ex: "500 000 € – 1 M € (~328–656 M FCFA)"
+  // Stratégie multi-sources : texte brut OU nombre OU extraction chiffres
   const rawBudget = String(budget_range_raw || budget_range || "");
+  // Extraire le montant max depuis n'importe quel format texte
+  // "500 000 € – 1 M €" → detecte "1 M" → 1000000
+  // "328–656 M FCFA" → detecte "656 M" → 656000000 (FCFA)
+  // "500000" → 500000
+  let detectedMaxEUR = 0;
+  // Cherche "X M €" ou "X M" (millions EUR)
+  const mMatch = rawBudget.match(/(\d[\d\s.,]*)\s*M\s*€/i) || rawBudget.match(/(\d[\d\s.,]*)\s*M(?!\s*FCFA)/i);
+  if (mMatch) {
+    detectedMaxEUR = parseFloat(mMatch[1].replace(/[\s,]/g, '').replace(',', '.')) * 1000000;
+  }
+  // Cherche "X 000 €" (milliers EUR)
+  if (!detectedMaxEUR) {
+    const kMatch = rawBudget.match(/(\d[\d\s]*000)\s*€/);
+    if (kMatch) detectedMaxEUR = Number(kMatch[1].replace(/\s/g, ''));
+  }
+  // Fallback : budget_range numérique
+  if (!detectedMaxEUR && budget_range > 0) detectedMaxEUR = budget_range;
   if (!budget_band || String(budget_band).toUpperCase() === "LOW_BUDGET") {
-    if (/1\s*M|1\s*000\s*000|1000000/i.test(rawBudget) || budget_range >= 1000000) {
+    const oldBand = budget_band;
+    if (detectedMaxEUR >= 800000) {
       budget_band = "HIGH_BUDGET";
-    } else if (/500\s*000|500000/i.test(rawBudget) || budget_range >= 500000) {
+    } else if (detectedMaxEUR >= 300000) {
       budget_band = "MEDIUM_BUDGET";
     }
-    // sinon reste LOW_BUDGET (légitime)
-    console.log(`│ ⚠️ v57.20: budget_band recalculé depuis rawBudget="${rawBudget}" → ${budget_band}`);
+    // sinon reste LOW_BUDGET (légitime pour < 300k€)
+    console.log(`│ ⚠️ v57.20: budget_band ${oldBand} → ${budget_band} (détecté ${detectedMaxEUR}€ depuis "${rawBudget.substring(0, 60)}")`);
   }
   // budget_band amplifie/atténue la tension (FR + EN + variantes)
   const bandMod = {
@@ -2720,7 +2738,7 @@ function computeSmartScenarios({
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
   console.log(`└── end SCENARIO ENGINE v57.20 ──`);
-  return { A: r.A, B: r.B, C: r.C, meta, diagnostic };
+  return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
@@ -2772,7 +2790,7 @@ app.post("/compute-scenarios", (req, res) => {
     driver_intensity: p.driver_intensity || "MEDIUM",
     strategic_position: p.strategic_position || "",
   });
-  return res.json({ ok: true, scenarios });
+  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
 // Sélection automatique de la forme bâtie selon le contexte :
@@ -4101,9 +4119,10 @@ app.post("/generate-massing", async (req, res) => {
     levels = sc.levels;
     totalH = sc.height_m;
     commerceLevels = sc.commerce_levels;
+    has_pilotis = sc.has_pilotis || false;
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} (${sc.cos_compliance})`);
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
@@ -4179,8 +4198,12 @@ app.post("/generate-massing", async (req, res) => {
     const etageH = 3.0;                              // étages courants = 3m
     const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
     console.log(`[HEKTAR] levels=${levels} rdcH=${rdcH}m etageH=${etageH}m totalH=${realTotalH}m commerce=${commerceLevels}`);
+    // v57.20: passer has_pilotis au rendu pour décaler le bâtiment et dessiner les colonnes
+    const hasPilotisRender = String(has_pilotis || "").toLowerCase() === "true" || has_pilotis === true;
+    const pilotisH = hasPilotisRender ? 3.5 : 0; // PILOTIS_CONFIG.PILOTIS_HEIGHT_M
+    const totalHWithPilotis = realTotalH + pilotisH;
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: realTotalH, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels }, MAPBOX_TOKEN);
+      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
