@@ -1096,6 +1096,19 @@ function computeSmartScenarios({
   // ── 1. BUDGET : tension + rigidité + band ──
   const bt = parseBudgetTension(budget_tension);
   const fri = norm01(financial_rigidity_score);
+  // v57.20 FIX : recalcul automatique de budget_band depuis budget_range_raw
+  // Ne plus dépendre de la formule Google Sheets (écrasée par les Update Row)
+  // budget_range_raw = chaîne originale ex: "500 000 € – 1 M € (~328–656 M FCFA)"
+  const rawBudget = String(budget_range_raw || budget_range || "");
+  if (!budget_band || String(budget_band).toUpperCase() === "LOW_BUDGET") {
+    if (/1\s*M|1\s*000\s*000|1000000/i.test(rawBudget) || budget_range >= 1000000) {
+      budget_band = "HIGH_BUDGET";
+    } else if (/500\s*000|500000/i.test(rawBudget) || budget_range >= 500000) {
+      budget_band = "MEDIUM_BUDGET";
+    }
+    // sinon reste LOW_BUDGET (légitime)
+    console.log(`│ ⚠️ v57.20: budget_band recalculé depuis rawBudget="${rawBudget}" → ${budget_band}`);
+  }
   // budget_band amplifie/atténue la tension (FR + EN + variantes)
   const bandMod = {
     HIGH: 0.15, HIGH_BUDGET: 0.15, HAUT: 0.15, ELEVE: 0.15,
@@ -2745,6 +2758,7 @@ app.post("/compute-scenarios", (req, res) => {
     scenario_B_role: p.scenario_B_role || "",
     scenario_C_role: p.scenario_C_role || "",
     budget_range: Number(p.budget_range) || 0,
+    budget_range_raw: String(p.budget_range || ""),
     budget_band: p.budget_band || "",
     budget_tension: Number(p.budget_tension) || 0,
     standing_level: p.standing_level || "STANDARD",
@@ -4028,7 +4042,7 @@ app.post("/generate-massing", async (req, res) => {
     site_saturation_level, financial_rigidity_score,
     density_band, risk_adjusted, feasibility_posture,
     scenario_A_role, scenario_B_role, scenario_C_role,
-    budget_range, budget_band, budget_tension,
+    budget_range, budget_range_raw, budget_band, budget_tension,
     standing_level, rent_score, capacity_score,
     mix_score, phase_score, risk_score,
     density_pressure_factor, driver_intensity, strategic_position,
