@@ -1266,7 +1266,7 @@ function computeSmartScenarios({
       // on plafonne la réserve mais le diagnostic le signale.
       // ══════════════════════════════════════════════════════════════════════
       const parkingPerUnitEst = rules.parking_per_unit || 1;
-      const roleTargetFactorEst = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.80, PRUDENT: 0.55 })[role] || 0.80;
+      const roleTargetFactorEst = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
       const estUnitsForRole = Math.max(2, Math.round(target_units * roleTargetFactorEst));
       const estParkingSpots = Math.ceil(estUnitsForRole * parkingPerUnitEst);
       const estParkingM2 = estParkingSpots * PILOTIS_CONFIG.PARKING_SPOT_M2; // 25m²/place
@@ -1336,7 +1336,7 @@ function computeSmartScenarios({
       //       → fpProgramme × 0.65 = emprise minimale, max espace libre
       // Le terrain plafonne toujours (CES, enveloppe, retraits).
       // ══════════════════════════════════════════════════════════════════
-      const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.85, PRUDENT: 0.65 };
+      const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.75, PRUDENT: 0.55 };
       const roleFpFactor = ROLE_FP_FACTOR[role] || 1.0;
       fpRdc = Math.round(fpProgramme * roleFpFactor);
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
@@ -1369,7 +1369,7 @@ function computeSmartScenarios({
         // ── BUREAUX : plateaux proportionnels au CES effectif et rôle scénario ──
         // v57.6: Apply roleTargetFactor to ensure A >= B >= C in floor count
         const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.80, PRUDENT: 0.55 })[role] || 0.80;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
         const effectiveTargetBur = Math.max(1, Math.round(target_units * cesRatio * roleTargetFactor));
         floorsNeeded = Math.min(effectiveTargetBur, effectiveMaxFloors);
         // v57.13 : niveaux = conséquence programme, pas de floor min expert
@@ -1435,7 +1435,7 @@ function computeSmartScenarios({
         resiPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, resiPerFloor));
         // v57.6 : target résidentiel proportionnel au CES effectif × rôle
         const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.80, PRUDENT: 0.55 })[role] || 0.80;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
         const effectiveTargetResi = Math.max(1, Math.round((target_units - commerceUnits) * cesRatio * roleTargetFactor));
         floorsNeeded = 1 + Math.ceil(effectiveTargetResi / resiPerFloor);
         // v57.13 : niveaux = conséquence programme
@@ -1485,7 +1485,7 @@ function computeSmartScenarios({
         // - roleTargetFactor = ambition du scénario (A=max, B=standard, C=réduit)
         // Le nombre de logements est un RÉSULTAT, pas une cible fixe.
         const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.80, PRUDENT: 0.55 })[role] || 0.80;
+        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
         const effectiveTarget = Math.max(2, Math.round(target_units * cesRatio * roleTargetFactor));
         floorsNeeded = Math.ceil(effectiveTarget / unitsPerFloor);
         // v57.13 : niveaux = CONSÉQUENCE PURE du programme
