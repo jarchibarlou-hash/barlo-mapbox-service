@@ -998,7 +998,7 @@ function computeSmartScenarios({
   feasibility_posture = "BALANCED",
   scenario_A_role = "", scenario_B_role = "", scenario_C_role = "",
   // ── BUDGET & ATTENTES CLIENT (depuis PIPELINE) ──
-  budget_range = 0, budget_band = "", budget_tension = 0,
+  budget_range = 0, budget_range_raw = "", budget_band = "", budget_tension = 0,
   standing_level = "STANDARD",
   target_units = 0,
   rent_score = 0, capacity_score = 0, mix_score = 0, phase_score = 0, risk_score = 0,
