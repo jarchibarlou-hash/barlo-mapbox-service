@@ -1109,7 +1109,23 @@ function computeSmartScenarios({
   // "328–656 M FCFA" → detecte "656 M" → 656000000 (FCFA)
   // "500000" → 500000
   let detectedMaxEUR = 0;
-  // Cherche "X M €" ou "X M" (millions EUR)
+  let detectedMaxFCFA = 0;
+  // v57.21: Cherche FCFA d'abord (prioritaire car c'est la devise locale)
+  // "328–656 M FCFA" → 656000000 FCFA | "200 000 000 FCFA" → 200000000
+  const fcfaMMatch = rawBudget.match(/(\d[\d\s.,]*)\s*M\s*FCFA/i);
+  if (fcfaMMatch) {
+    detectedMaxFCFA = parseFloat(fcfaMMatch[1].replace(/[\s,]/g, '').replace(',', '.')) * 1000000;
+    // Si format "X–Y M FCFA", prendre le Y (dernier nombre avant M FCFA)
+    const allFcfaM = [...rawBudget.matchAll(/(\d[\d\s.,]*)\s*M\s*FCFA/gi)];
+    if (allFcfaM.length > 0) {
+      detectedMaxFCFA = Math.max(...allFcfaM.map(m => parseFloat(m[1].replace(/[\s,]/g, '').replace(',', '.')) * 1000000));
+    }
+  }
+  if (!detectedMaxFCFA) {
+    const fcfaPlain = rawBudget.match(/(\d[\d\s]*)\s*FCFA/i);
+    if (fcfaPlain) detectedMaxFCFA = Number(fcfaPlain[1].replace(/\s/g, ''));
+  }
+  // Cherche "X M €" ou "X M" (millions EUR, excluant FCFA)
   const mMatch = rawBudget.match(/(\d[\d\s.,]*)\s*M\s*€/i) || rawBudget.match(/(\d[\d\s.,]*)\s*M(?!\s*FCFA)/i);
   if (mMatch) {
     detectedMaxEUR = parseFloat(mMatch[1].replace(/[\s,]/g, '').replace(',', '.')) * 1000000;
@@ -1120,7 +1136,8 @@ function computeSmartScenarios({
     if (kMatch) detectedMaxEUR = Number(kMatch[1].replace(/\s/g, ''));
   }
   // Fallback : budget_range numérique
-  if (!detectedMaxEUR && budget_range > 0) detectedMaxEUR = budget_range;
+  if (!detectedMaxEUR && !detectedMaxFCFA && budget_range > 0) detectedMaxEUR = budget_range;
+  console.log(`│ v57.21 budget parse: raw="${rawBudget.substring(0,80)}" → EUR=${detectedMaxEUR} FCFA=${detectedMaxFCFA}`);
   if (!budget_band || String(budget_band).toUpperCase() === "LOW_BUDGET") {
     const oldBand = budget_band;
     if (detectedMaxEUR >= 800000) {
@@ -1219,11 +1236,31 @@ function computeSmartScenarios({
   // Initialize for effective CES (used in program-driven mode)
   let effectiveCESOutput = ces;
   // Extract budgetMax before the loop for use in diagnostic
+  // v57.21 FIX: budget_range arrive souvent en texte ("500 000 € – 1 M €")
+  // → Number() retourne NaN → budgetMax reste 0 → budget_fit = "N/A" systématique.
+  // Solution : utiliser detectedMaxEUR (parsé ligne 1111-1123) avec conversion EUR→FCFA.
   let budgetMax = 0;
   if (typeof budget_range === 'string' && budget_range.includes('-')) {
     budgetMax = Number(budget_range.split('-')[1]) || 0;
   } else {
     budgetMax = Number(budget_range) || 0;
+  }
+  // v57.21: fallback sur detectedMaxFCFA ou detectedMaxEUR si budgetMax reste 0
+  if (budgetMax === 0 && (detectedMaxFCFA > 0 || detectedMaxEUR > 0)) {
+    const EUR_TO_FCFA = 656;
+    if (detectedMaxFCFA > 0) {
+      // Budget déjà en FCFA → utiliser directement
+      budgetMax = Math.round(detectedMaxFCFA);
+    } else if (detectedMaxEUR > 0) {
+      // Budget en EUR → convertir en FCFA
+      if (detectedMaxEUR < 50000000) {
+        // Valeurs < 50M → probablement EUR (budget immo camerounais rarement < 50M FCFA)
+        budgetMax = Math.round(detectedMaxEUR * EUR_TO_FCFA);
+      } else {
+        budgetMax = Math.round(detectedMaxEUR);
+      }
+    }
+    console.log(`│ v57.21 FIX budget_fit: budgetMax était 0 → recalculé depuis ${detectedMaxFCFA > 0 ? 'FCFA=' + detectedMaxFCFA : 'EUR=' + detectedMaxEUR} → budgetMax=${budgetMax} FCFA`);
   }
   for (const label of ["A", "B", "C"]) {
     const role = SCENARIO_ROLE[label];
@@ -2532,6 +2569,23 @@ function computeSmartScenarios({
         recalcSdp(r.B); recalcSdp(r.C);
       }
     }
+  }
+  // v57.21 SAFETY NET: enforce A.fp_m2 >= B.fp_m2 >= C.fp_m2
+  // The core calculation should always produce this, but post-processing
+  // or edge cases might break it. This is the last line of defense.
+  if (r.A.fp_m2 < r.B.fp_m2) {
+    console.log(`│ ⚠️ v57.21: fp inversion A(${r.A.fp_m2}) < B(${r.B.fp_m2}) → fixing A=B`);
+    r.A.fp_m2 = r.B.fp_m2;
+    r.A.fp_rdc_m2 = Math.max(r.A.fp_rdc_m2 || 0, r.B.fp_rdc_m2 || 0);
+    r.A.fp_etages_m2 = Math.max(r.A.fp_etages_m2 || 0, r.B.fp_etages_m2 || 0);
+    recalcSdp(r.A);
+  }
+  if (r.B.fp_m2 < r.C.fp_m2) {
+    console.log(`│ ⚠️ v57.21: fp inversion B(${r.B.fp_m2}) < C(${r.C.fp_m2}) → fixing C=B*0.85`);
+    r.C.fp_m2 = Math.max(50, Math.round(r.B.fp_m2 * 0.85));
+    r.C.fp_rdc_m2 = Math.max(50, Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.85));
+    r.C.fp_etages_m2 = Math.max(50, Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.85));
+    recalcSdp(r.C);
   }
   // Recalc COS ratios after post-processing
   for (const lbl of ["A", "B", "C"]) {
