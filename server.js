@@ -1011,6 +1011,10 @@ function computeSmartScenarios({
   // v57.9 : orientation solaire & géographie
   country = "CAMEROUN", // pays du site (pour détecter zone climatique)
   parcel_orientation = "", // orientation principale de la parcelle (optionnel)
+  // v57.20 : disposition spatiale du programme (SPLIT commerce/logement)
+  layout_mode = "SUPERPOSE", // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
+  commerce_depth_m = 6,      // profondeur bande commerciale (défaut 6m, classique Afrique)
+  retrait_inter_volumes_m = 4, // distance entre les 2 volumes (passage véhicule/piéton)
 }) {
   // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
   // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
@@ -1229,6 +1233,8 @@ function computeSmartScenarios({
     let totalUnitsResult = 0;
     let hasPilotis = false;
     let pilotisLevels = 0;
+    // v57.20 SPLIT : volumes séparés (commerce + logement)
+    let splitLayout = null; // sera rempli si layout_mode === "SPLIT_AV_AR"
     let target_sdp_programme = 0; // ancre client : target_units × refSize / (1-circ)
     // v57.13 EXPERT RATIOS — lookup pour ce programme × zonage × scénario
     const scenarioKey = label; // A, B, C
@@ -1369,18 +1375,119 @@ function computeSmartScenarios({
       // ══════════════════════════════════════════════════════════════════
       const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.75, PRUDENT: 0.55 };
       const roleFpFactor = ROLE_FP_FACTOR[role] || 1.0;
+      // ══════════════════════════════════════════════════════════════════
+      // v57.20 SPLIT_AV_AR : COMMERCE DEVANT (clôture) + LOGEMENT DERRIÈRE
+      // ══════════════════════════════════════════════════════════════════
+      // Quand layout_mode = "SPLIT_AV_AR", le programme est éclaté en 2 volumes :
+      //   Volume 1 (AVANT) : bande de boutiques contre la clôture, 1 niveau
+      //     → largeur = largeur parcelle (envelope_w), profondeur = commerce_depth_m
+      //     → collé au retrait avant (ou retrait avant = 0 si clôture)
+      //   Volume 2 (ARRIÈRE) : logement en retrait, N niveaux
+      //     → profondeur dispo = profondeur parcelle - commerce_depth - retrait_inter
+      //     → largeur = largeur parcelle (avec retraits latéraux)
+      //     → le client veut le dégagement du terrain derrière
+      // Le CES total (vol1 + vol2) reste plafonné par la réglementation.
+      // ══════════════════════════════════════════════════════════════════
+      if (String(layout_mode).toUpperCase() === "SPLIT_AV_AR" && isMixte) {
+        const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
+        const parcWidth = envelope_w || Math.round(site_area / parcDepth);
+        // Volume 1 : COMMERCE (bande avant)
+        const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30); // max 30% de la profondeur
+        const commWidth = Math.round(parcWidth - rLateral * 2); // retraits latéraux
+        const fpCommerce = Math.round(commWidth * commDepth);
+        const levelsCommerce = 1;
+        const sdpCommerce = fpCommerce;
+        // Volume 2 : LOGEMENT (en retrait)
+        const interGap = Number(retrait_inter_volumes_m) || 4;
+        const logtDepthDispo = Math.round(parcDepth - rAvant - commDepth - interGap - rArriere);
+        const logtWidth = commWidth; // même largeur que la bande commerce
+        const fpLogt = Math.min(
+          Math.round(logtWidth * Math.min(logtDepthDispo, bodyDepth * 1.5)),
+          Math.round(fpProgramme * roleFpFactor), // capé par le plateau programme × rôle
+          fpMaxCes - fpCommerce, // CES restant après le commerce
+          fpMaxRetraits - fpCommerce
+        );
+        const fpLogtFinal = Math.max(fpMinViable, fpLogt);
+        // CES total = (commerce + logement) / terrain
+        const fpTotal = fpCommerce + fpLogtFinal;
+        const cesTotalPct = Math.round(fpTotal / site_area * 100);
+        // Nombre d'unités commerce (1 boutique par tranche de ~25-40m²)
+        const commerceUnitSize = 30; // taille moyenne boutique
+        const nbBoutiques = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
+        // Niveaux logement : depuis le programme résidentiel
+        const resiTarget = Math.max(1, target_units - nbBoutiques);
+        const resiRoleTarget = Math.max(1, Math.round(resiTarget * roleFpFactor));
+        const usefulLogt = Math.round(fpLogtFinal * (1 - circRatio));
+        const avgResiSize = refUnitSize; // T3 de référence
+        const resiPerFloor = Math.max(1, Math.min(maxPerFloor, Math.floor(usefulLogt / avgResiSize)));
+        let levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
+        levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
+        // COS check sur SDP totale
+        const sdpLogt = fpLogtFinal * levelsLogt;
+        const sdpTotal = sdpCommerce + sdpLogt;
+        while (levelsLogt > 2 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
+        const totalResiUnits = resiPerFloor * levelsLogt;
+        // Sol libre (espace dégagé derrière le logement)
+        const freeGroundSplit = Math.round(site_area - fpTotal);
+        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - Math.min(logtDepthDispo, bodyDepth * 1.5) - rArriere) : 0);
+        splitLayout = {
+          mode: "SPLIT_AV_AR",
+          volume_commerce: {
+            fp_m2: fpCommerce,
+            width_m: commWidth,
+            depth_m: Math.round(commDepth),
+            levels: levelsCommerce,
+            sdp_m2: sdpCommerce,
+            units: nbBoutiques,
+            position: "AVANT (contre clôture)",
+          },
+          volume_logement: {
+            fp_m2: fpLogtFinal,
+            width_m: logtWidth,
+            depth_m: Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5)),
+            levels: levelsLogt,
+            sdp_m2: fpLogtFinal * levelsLogt,
+            units: totalResiUnits,
+            position: `ARRIÈRE (retrait ${Math.round(commDepth + interGap)}m)`,
+          },
+          retrait_inter_m: interGap,
+          espace_arriere_m2: espaceArriere,
+          ces_total_pct: cesTotalPct,
+        };
+        // Valeurs principales = LOGEMENT (volume dominant pour le rendu 3D et les calculs)
+        fpRdc = fpLogtFinal;
+        fp = fpLogtFinal; // rendu 3D = volume logement
+        fpEtages = fpLogtFinal; // pas d'extension étages en split (volume compact)
+        levels = levelsLogt;
+        totalUnitsResult = nbBoutiques + totalResiUnits;
+        totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
+        unitMix = { COMMERCE: nbBoutiques };
+        // Mix résidentiel
+        const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalResiUnits) : { T3: totalResiUnits };
+        for (const [typ, count] of Object.entries(resiMix)) {
+          if (count > 0) unitMix[typ] = count;
+        }
+        unitMixDetail = `SPLIT: ${nbBoutiques} boutiques (${fpCommerce}m² RDC avant) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv arrière)`;
+        console.log(`│   🏪 v57.20 SPLIT_AV_AR ${role}:`);
+        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre clôture`);
+        console.log(`│     GAP: ${interGap}m (passage véhicule/piéton)`);
+        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5))}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
+        console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
+      } else {
+      // ── MODE SUPERPOSÉ (défaut) — logique existante ──
       fpRdc = Math.round(fpProgramme * roleFpFactor);
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
       fpRdc = Math.max(fpRdc, fpMinViable);
       fpRdc = Math.round(fpRdc);
-      const cesPctResult = Math.round(fpRdc / site_area * 100);
+      }
+      const cesPctResult = Math.round((splitLayout ? (splitLayout.volume_commerce.fp_m2 + fpRdc) : fpRdc) / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
       const reserveActive = fpMaxAfterReserves < fpProgramme;
-      console.log(`│   🏗️ v57.15 ${role}: fpProg=${fpProgramme} → fpRdc=${fpRdc}m² (CES=${cesPctResult}% ${cesVsExpert}) | cible_sdp=${target_sdp_programme}m²`);
-      console.log(`│   🅿️ réserve terrain: ${estParkingSpots} places × 25m² = ${estParkingM2}m² parking | free_ground_min=${Math.round(minFreeGroundForParking)}m² | fpMaxReserve=${fpMaxAfterReserves}m² ${reserveActive ? "⚡CONTRAINT" : "✓ok"}`);
-      // ÉTAGES : extension selon le rôle
-      const etageExt = ETAGE_EXTENSION_BY_ROLE[role];
+      if (!splitLayout) console.log(`│   🏗️ v57.15 ${role}: fpProg=${fpProgramme} → fpRdc=${fpRdc}m² (CES=${cesPctResult}% ${cesVsExpert}) | cible_sdp=${target_sdp_programme}m²`);
+      if (!splitLayout) console.log(`│   🅿️ réserve terrain: ${estParkingSpots} places × 25m² = ${estParkingM2}m² parking | free_ground_min=${Math.round(minFreeGroundForParking)}m² | fpMaxReserve=${fpMaxAfterReserves}m² ${reserveActive ? "⚡CONTRAINT" : "✓ok"}`);
+      // ÉTAGES : extension selon le rôle (seulement en mode SUPERPOSÉ)
+      const etageExt = splitLayout ? 1.0 : ETAGE_EXTENSION_BY_ROLE[role];
       const empriseEtageMax = empriseEffective * (nbMitoyens > 0 ? 1.10 : 1.0);
       if (etageExt === "ENVELOPE") {
         fpEtages = Math.round(Math.min(fpRdc * 1.15, envelope_area, effectiveMaxFp, empriseEtageMax * 1.05));
@@ -1744,6 +1851,9 @@ function computeSmartScenarios({
       levels, height_m: height,
       commerce_levels: commerceLevels,
       massing_mode: mode,
+      // v57.20 SPLIT layout (null si SUPERPOSÉ)
+      split_layout: splitLayout || null,
+      layout_mode: splitLayout ? splitLayout.mode : "SUPERPOSE",
       sdp_m2: sdp,
       cos_compliance: compliance,
       cos_ratio_pct: Math.round(cosRatio * 100),
@@ -2789,8 +2899,24 @@ app.post("/compute-scenarios", (req, res) => {
     density_pressure_factor: Number(p.density_pressure_factor) || 1,
     driver_intensity: p.driver_intensity || "MEDIUM",
     strategic_position: p.strategic_position || "",
+    // v57.20 : disposition spatiale
+    layout_mode: p.layout_mode || "SUPERPOSE",
+    commerce_depth_m: Number(p.commerce_depth_m) || 6,
+    retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
-  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band });
+  // v57.21: champs diagnostic pré-sérialisés pour Make.com (évite {object})
+  const diag = scenarios.diagnostic || {};
+  const preStringified = {
+    diagnostic_narrative: (diag.recommandation || {}).narrative || "",
+    comparatif_deltas_json: JSON.stringify(diag.comparatif || {}),
+    phasage_json: JSON.stringify(diag.strategie_phasage || {}),
+    orientation_solaire_json: JSON.stringify(diag.orientation_solaire || {}),
+    retraits_json: JSON.stringify(diag.retraits_reglementaires || {}),
+    scenario_A_json: JSON.stringify(scenarios.A || {}),
+    scenario_B_json: JSON.stringify(scenarios.B || {}),
+    scenario_C_json: JSON.stringify(scenarios.C || {}),
+  };
+  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, ...preStringified });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
 // Sélection automatique de la forme bâtie selon le contexte :
