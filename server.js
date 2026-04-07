@@ -2904,19 +2904,154 @@ app.post("/compute-scenarios", (req, res) => {
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
-  // v57.21: champs diagnostic pré-sérialisés pour Make.com (évite {object})
+  // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
-  const preStringified = {
+  const comp = diag.comparatif || {};
+  const deltas = comp.deltas || {};
+  const dBA = deltas.B_vs_A || {};
+  const dCA = deltas.C_vs_A || {};
+  const dCB = deltas.C_vs_B || {};
+  const phasage = diag.strategie_phasage || {};
+  const orient = diag.orientation_solaire || {};
+  const retr = diag.retraits_reglementaires || {};
+  const profil = diag.profil_client || {};
+  const siteDiag = diag.site || {};
+  const sA = scenarios.A || {};
+  const sB = scenarios.B || {};
+  const sC = scenarios.C || {};
+  const flat = {
+    // ── NARRATIVE ──
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
-    comparatif_deltas_json: JSON.stringify(diag.comparatif || {}),
-    phasage_json: JSON.stringify(diag.strategie_phasage || {}),
-    orientation_solaire_json: JSON.stringify(diag.orientation_solaire || {}),
-    retraits_json: JSON.stringify(diag.retraits_reglementaires || {}),
-    scenario_A_json: JSON.stringify(scenarios.A || {}),
-    scenario_B_json: JSON.stringify(scenarios.B || {}),
-    scenario_C_json: JSON.stringify(scenarios.C || {}),
+    rec_scenario: (diag.recommandation || {}).scenario || "",
+    rec_score: (diag.recommandation || {}).score || 0,
+    // ── COMPARATIF DELTAS (texte plat) ──
+    delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
+    delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
+    delta_BA_unites: `${dBA.delta_unites || 0} logements`,
+    delta_BA_valeur_marginale: `${dBA.valeur_marginale_fcfa_par_m2 ? Math.round(dBA.valeur_marginale_fcfa_par_m2 / 1000) : 0}k FCFA/m²`,
+    delta_BA_commentaire: dBA.commentaire || "",
+    delta_BA_conseil: dBA.conseil_marginale || "",
+    delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
+    delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
+    delta_CA_unites: `${dCA.delta_unites || 0} logements`,
+    delta_CA_commentaire: dCA.commentaire || "",
+    delta_CB_sdp: `${dCB.delta_sdp_m2 || 0} m² (${dCB.delta_sdp_pct || 0}%)`,
+    delta_CB_cout: `${dCB.delta_cout_fcfa ? Math.round(dCB.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCB.delta_cout_pct || 0}%)`,
+    delta_CB_unites: `${dCB.delta_unites || 0} logements`,
+    // ── PHASAGE (texte plat) ──
+    phasage_text: phasage.text || "",
+    phasage_duree_mois: String((phasage.structured || {}).duree_totale_mois || ""),
+    phasage_nb_phases: String((phasage.structured || {}).phases ? phasage.structured.phases.length : 1),
+    // ── ORIENTATION SOLAIRE (texte plat) ──
+    orient_zone: orient.zone_climatique || "",
+    orient_facade_optimale: orient.facade_optimale || "",
+    orient_facade_proteger: orient.facade_a_proteger || "",
+    orient_ventilation: orient.ventilation_traversante ? "OUI" : "NON",
+    orient_brise_soleil: orient.brise_soleil_ouest ? "OUI" : "NON",
+    orient_malus_pct: String(orient.malus_orientation_pct || 0),
+    orient_recommandation: orient.recommandation || "",
+    // ── RETRAITS (texte plat) ──
+    retrait_avant: `${retr.avant_m || 0}m`,
+    retrait_lateral: `${retr.lateral_m || 0}m`,
+    retrait_arriere: `${retr.arriere_m || 0}m`,
+    retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
+    retrait_emprise_constructible: `${retr.emprise_constructible_m2 || 0} m²`,
+    retrait_reduction_pct: `${retr.reduction_pct || 0}%`,
+    // ── SCENARIO A (champs plats) ──
+    A_fp: String(sA.fp_m2 || 0), A_fp_rdc: String(sA.fp_rdc_m2 || 0),
+    A_levels: String(sA.levels || 0), A_height: String(sA.height_m || 0),
+    A_sdp: String(sA.sdp_m2 || 0), A_units: String(sA.total_units || 0),
+    A_unit_mix: sA.unit_mix_detail || "", A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
+    A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    A_cost_bas: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M`,
+    A_cost_haut: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.haut / 1e6) : 0}M`,
+    A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
+    A_budget_fit: sA.budget_fit || "",
+    A_ces_pct: String(sA.ces_fill_pct || 0), A_cos_pct: String(sA.cos_ratio_pct || 0),
+    A_cos_compliance: sA.cos_compliance || "",
+    A_free_ground: `${sA.free_ground_m2 || 0} m²`,
+    A_parking_places: String((sA.parking_detail || {}).places_disponibles || 0),
+    A_parking_deficit: String((sA.parking_detail || {}).deficit || 0),
+    A_parking_source: (sA.parking_detail || {}).source || "",
+    A_duree_chantier: `${sA.duree_chantier_mois || 0} mois`,
+    A_score: String(sA.recommendation_score || 0),
+    A_hab_m2: String(sA.surface_habitable_m2 || sA.total_useful_m2 || 0),
+    A_efficacite: `${sA.ratio_efficacite_pct || 0}%`,
+    A_ventil_go: `${(sA.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sA.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
+    A_ventil_so: `${(sA.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sA.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
+    A_ventil_lt: `${(sA.cout_ventilation || {}).lots_techniques_fcfa ? Math.round(sA.cout_ventilation.lots_techniques_fcfa / 1e6) : 0}M`,
+    A_ventil_vrd: `${(sA.cout_ventilation || {}).vrd_fcfa ? Math.round(sA.cout_ventilation.vrd_fcfa / 1e6) : 0}M`,
+    A_ventil_hono: `${(sA.cout_ventilation || {}).honoraires_architecte ? Math.round(((sA.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa / 1e6) : 0}M`,
+    A_ventil_global: `${(sA.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sA.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
+    // ── SCENARIO B (champs plats) ──
+    B_fp: String(sB.fp_m2 || 0), B_fp_rdc: String(sB.fp_rdc_m2 || 0),
+    B_levels: String(sB.levels || 0), B_height: String(sB.height_m || 0),
+    B_sdp: String(sB.sdp_m2 || 0), B_units: String(sB.total_units || 0),
+    B_unit_mix: sB.unit_mix_detail || "", B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
+    B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    B_cost_bas: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M`,
+    B_cost_haut: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.haut / 1e6) : 0}M`,
+    B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
+    B_budget_fit: sB.budget_fit || "",
+    B_ces_pct: String(sB.ces_fill_pct || 0), B_cos_pct: String(sB.cos_ratio_pct || 0),
+    B_cos_compliance: sB.cos_compliance || "",
+    B_free_ground: `${sB.free_ground_m2 || 0} m²`,
+    B_parking_places: String((sB.parking_detail || {}).places_disponibles || 0),
+    B_parking_deficit: String((sB.parking_detail || {}).deficit || 0),
+    B_parking_source: (sB.parking_detail || {}).source || "",
+    B_duree_chantier: `${sB.duree_chantier_mois || 0} mois`,
+    B_score: String(sB.recommendation_score || 0),
+    B_hab_m2: String(sB.surface_habitable_m2 || sB.total_useful_m2 || 0),
+    B_efficacite: `${sB.ratio_efficacite_pct || 0}%`,
+    B_ventil_go: `${(sB.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sB.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
+    B_ventil_so: `${(sB.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sB.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
+    B_ventil_lt: `${(sB.cout_ventilation || {}).lots_techniques_fcfa ? Math.round(sB.cout_ventilation.lots_techniques_fcfa / 1e6) : 0}M`,
+    B_ventil_vrd: `${(sB.cout_ventilation || {}).vrd_fcfa ? Math.round(sB.cout_ventilation.vrd_fcfa / 1e6) : 0}M`,
+    B_ventil_global: `${(sB.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sB.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
+    // ── SCENARIO C (champs plats) ──
+    C_fp: String(sC.fp_m2 || 0), C_fp_rdc: String(sC.fp_rdc_m2 || 0),
+    C_levels: String(sC.levels || 0), C_height: String(sC.height_m || 0),
+    C_sdp: String(sC.sdp_m2 || 0), C_units: String(sC.total_units || 0),
+    C_unit_mix: sC.unit_mix_detail || "", C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
+    C_cost_total: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    C_cost_bas: `${sC.cout_fourchette ? Math.round(sC.cout_fourchette.bas / 1e6) : 0}M`,
+    C_cost_haut: `${sC.cout_fourchette ? Math.round(sC.cout_fourchette.haut / 1e6) : 0}M`,
+    C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
+    C_budget_fit: sC.budget_fit || "",
+    C_ces_pct: String(sC.ces_fill_pct || 0), C_cos_pct: String(sC.cos_ratio_pct || 0),
+    C_cos_compliance: sC.cos_compliance || "",
+    C_free_ground: `${sC.free_ground_m2 || 0} m²`,
+    C_parking_places: String((sC.parking_detail || {}).places_disponibles || 0),
+    C_parking_deficit: String((sC.parking_detail || {}).deficit || 0),
+    C_parking_source: (sC.parking_detail || {}).source || "",
+    C_duree_chantier: `${sC.duree_chantier_mois || 0} mois`,
+    C_score: String(sC.recommendation_score || 0),
+    C_hab_m2: String(sC.surface_habitable_m2 || sC.total_useful_m2 || 0),
+    C_efficacite: `${sC.ratio_efficacite_pct || 0}%`,
+    C_ventil_go: `${(sC.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sC.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
+    C_ventil_so: `${(sC.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sC.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
+    C_ventil_lt: `${(sC.cout_ventilation || {}).lots_techniques_fcfa ? Math.round(sC.cout_ventilation.lots_techniques_fcfa / 1e6) : 0}M`,
+    C_ventil_vrd: `${(sC.cout_ventilation || {}).vrd_fcfa ? Math.round(sC.cout_ventilation.vrd_fcfa / 1e6) : 0}M`,
+    C_ventil_global: `${(sC.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sC.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
+    // ── PROFIL CLIENT (echo) ──
+    profil_posture: profil.posture || "",
+    profil_budget_band: profil.budget_band || "",
+    profil_budget_max: `${profil.budget_max_fcfa ? Math.round(profil.budget_max_fcfa / 1e6) : 0}M FCFA`,
+    profil_standing: profil.standing || "",
+    profil_programme: profil.programme || "",
+    profil_cible_unites: String(profil.cible_unites || 0),
+    // ── SITE DIAG ──
+    site_ces_regl: `${siteDiag.ces_reglementaire_pct || 0}%`,
+    site_cos_regl: String(siteDiag.cos_reglementaire || 0),
+    site_hauteur_max: `${siteDiag.hauteur_max_m || 0}m`,
+    site_niveaux_max: String(siteDiag.niveaux_max || 0),
+    site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
+    site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
   };
-  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, ...preStringified });
+  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, ...flat });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
 // Sélection automatique de la forme bâtie selon le contexte :
