@@ -4390,6 +4390,7 @@ app.post("/generate-massing", async (req, res) => {
     levels = Number(levels_raw);
     totalH = Number(height_raw) || levels * floorH;
     commerceLevels = Number(commerce_raw);
+    has_pilotis = false;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
