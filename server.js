@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.6-ROADFIX" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.7-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3982,11 +3982,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': [
           'interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0,  '#fafafa',
-          4,  '#f2f0ec',
-          10, '#e0ddd6',
-          20, '#c0bdb6',
-          40, '#908d88',
+          0,  '#d8d4cc',
+          4,  '#ccc8c0',
+          10, '#beb8b0',
+          20, '#a8a4a0',
+          40, '#908c88',
         ],
         'fill-extrusion-height': [
           'let', 'h', ['coalesce', ['get', 'height'], 0],
@@ -4006,23 +4006,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       },
     }, labelLayerId);
 
-    // v70.5: ARBRES — végétation 3D sur les zones vertes (parcs, jardins)
-    // Utilise les POI "tree" et la couche natural_label pour placer des arbres
-    // Fallback : extrusion des zones vertes avec hauteur aléatoire pour simuler la canopée
-    map.addLayer({
-      id: 'trees-canopy', source: 'composite', 'source-layer': 'landuse',
-      filter: ['match', ['get', 'class'], ['park', 'grass', 'wood', 'scrub'], true, false],
-      type: 'fill-extrusion', minzoom: 14,
-      paint: {
-        'fill-extrusion-color': ['interpolate', ['linear'], ['zoom'],
-          14, '#4a8a28', 16, '#3d7a20', 18, '#357018'],
-        'fill-extrusion-height': ['match', ['%', ['to-number', ['id']], 5],
-          0, 6, 1, 8, 2, 5, 3, 9, 4, 7, 7],
-        'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.75,
-        'fill-extrusion-vertical-gradient': true,
-      },
-    });
+    // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
 
     // v70.5: Parcelle — fond SOUS les bâtiments, contour AU-DESSUS
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -4606,23 +4590,26 @@ app.post("/generate", async (req, res) => {
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes, b64: ${b64Input.length} chars`);
 
-        // === OPTION A (ACTIVE) — v68 MINIMAL POLISH ===
-        const polishPrompt = `Enhance this 3D architectural site rendering with MINIMAL changes. Preservation is the priority.
+        // === v70.7 — ARCHITECTURAL RENDER POLISH ===
+        const polishPrompt = `Transform this 3D architectural site plan into a photo-realistic architectural rendering.
 
-ABSOLUTE RULES:
-- Do NOT move, resize, add or remove ANY element (buildings, roads, parcels, lines, labels).
-- Do NOT shift camera, crop, reframe, or change composition.
-- Do NOT add text, frames, inset images, or watermarks.
-- Keep ALL red/orange parcel boundaries and dashed lines PIXEL-PERFECT — zero bleeding, zero smearing.
+GEOMETRY RULES (STRICT):
+- Keep ALL building footprints, positions, shapes, and sizes EXACTLY as shown.
+- Keep ALL roads in their exact positions and widths.
+- Keep the red/orange parcel boundary lines and dashed envelope lines PERFECTLY intact.
+- Keep the same camera angle, framing, and composition. Do NOT crop or shift.
+- Do NOT add text, watermarks, inset images, or UI elements.
 
-TEXTURE ONLY (subtle):
-- Roads: darken to asphalt gray (#444). No vegetation on road surfaces.
-- Grass areas: add subtle shade variation (not flat green). Keep existing tree positions.
-- Buildings: keep existing shapes, lighten to off-white/cream. Subtle concrete texture.
-- Parcel interior: brown/ochre bare soil.
-- Lighting: warm natural daylight, soft shadows. No dramatic effects.
+VISUAL ENHANCEMENT (MANDATORY):
+- TREES: Add realistic round-canopy trees (dark green, 3D spherical crowns) scattered in green areas between buildings. Vary sizes (small 3-4m, medium 5-6m, large 7-8m). Place them naturally — along roads, in yards, in open spaces. About 30-50 trees visible in the scene.
+- SHADOWS: Add realistic cast shadows from ALL buildings and trees. Sun from the upper-left (northwest). Shadows should fall on the ground, roads, and other surfaces. Soft penumbra edges.
+- BUILDINGS: Apply concrete/gray texture to all buildings. Slightly weathered, realistic. Not pure white — use light gray (#c8c4bc) with subtle variation. Keep the flat-roof architectural style.
+- ROADS: Dark asphalt gray (#3a3a3a), slightly textured. No vegetation on road surfaces.
+- GRASS: Rich green lawn texture with subtle shade variations. Not flat — show mowing patterns or slight color variation.
+- PARCEL: The highlighted parcel (beige/ochre area with red border) must remain clearly visible and prominent.
+- LIGHTING: Warm afternoon daylight. Natural ambient occlusion where buildings meet the ground.
 
-OUTPUT: Same resolution, same framing, same composition. Only textures improved.`;
+QUALITY: Photo-realistic architectural visualization quality. Clean, professional, suitable for a client presentation.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4886,7 +4873,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.6-ROADFIX...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.7-POLISH...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4950,7 +4937,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.6-ROADFIX",
+      ok: true, cached: false, server_version: "70.7-POLISH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4971,7 +4958,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.6-ROADFIX on port ${PORT}`);
+  console.log(`BARLO v70.7-POLISH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
