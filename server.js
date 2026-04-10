@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "68.2-OSM-FRONT-DETECT" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "68.3-OSM-RETRY-MIRRORS" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -139,72 +139,80 @@ function brng(p1, p2) {
     Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
-// ── v68.2: Détection route la plus proche via OSM Overpass ──
-// Priorise les routes principales (tertiary+) avant residential/service
+// ── v68.3: Détection route la plus proche via OSM Overpass ──
+// UNE seule requête large + 3 miroirs Overpass avec retry automatique
+const OVERPASS_ENDPOINTS = [
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
 async function findNearestRoadEdge(coords, cLat, cLon) {
   try {
     const radius = 150;
-    // Étape 1: chercher les routes PRINCIPALES d'abord
-    const mainQuery = `[out:json][timeout:5];way["highway"~"^(primary|secondary|tertiary|trunk)$"](around:${radius},${cLat},${cLon});out geom;`;
-    let roadSegs = await fetchOverpassRoadSegs(mainQuery);
-    let roadClass = "MAIN";
-    // Étape 2: si pas de route principale, chercher residential
-    if (roadSegs.length === 0) {
-      const resQuery = `[out:json][timeout:5];way["highway"~"^(residential|unclassified|living_street)$"](around:${radius},${cLat},${cLon});out geom;`;
-      roadSegs = await fetchOverpassRoadSegs(resQuery);
-      roadClass = "RESIDENTIAL";
-    }
-    // Étape 3: si toujours rien, inclure service
-    if (roadSegs.length === 0) {
-      const allQuery = `[out:json][timeout:5];way["highway"~"^(service|track|footway)$"](around:${radius},${cLat},${cLon});out geom;`;
-      roadSegs = await fetchOverpassRoadSegs(allQuery);
-      roadClass = "SERVICE";
-    }
-    if (roadSegs.length === 0) {
+    // UNE seule requête avec TOUTES les classes de routes, priorisées ensuite par poids
+    const query = `[out:json][timeout:3];way["highway"~"^(primary|secondary|tertiary|trunk|residential|unclassified|living_street|service)$"](around:${radius},${cLat},${cLon});out geom;`;
+    const data = await fetchOverpassWithRetry(query);
+    if (!data || !data.elements || data.elements.length === 0) {
       console.log("│ OSM: aucune route trouvée dans un rayon de 150m, fallback premier segment");
       return null;
     }
-    console.log(`│ OSM: ${roadSegs.length} segments de route (${roadClass}) trouvés`);
-    // Pour chaque arête du polygone, trouver la distance min à une route
-    let bestEdge = 0, bestDist = Infinity;
+    // Classer les routes par importance (poids: route principale > residential > service)
+    const ROAD_WEIGHT = { trunk: 5, primary: 5, secondary: 4, tertiary: 3, residential: 2, unclassified: 2, living_street: 2, service: 1 };
+    // Pour chaque arête du polygone, trouver la distance min à une route (pondérée)
+    let bestEdge = 0, bestScore = Infinity;
     for (let i = 0; i < coords.length; i++) {
       const j = (i + 1) % coords.length;
       const edgeMidLat = (coords[i].lat + coords[j].lat) / 2;
       const edgeMidLon = (coords[i].lon + coords[j].lon) / 2;
-      let minDist = Infinity;
-      for (const seg of roadSegs) {
-        const d = distPointToSegment(edgeMidLat, edgeMidLon, seg.p1.lat, seg.p1.lon, seg.p2.lat, seg.p2.lon);
-        if (d < minDist) minDist = d;
+      let minScore = Infinity, minDist = Infinity, bestRoadType = "?";
+      for (const way of data.elements) {
+        if (!way.geometry) continue;
+        const hw = way.tags && way.tags.highway || "service";
+        const weight = ROAD_WEIGHT[hw] || 1;
+        for (let k = 0; k < way.geometry.length - 1; k++) {
+          const d = distPointToSegment(edgeMidLat, edgeMidLon, way.geometry[k].lat, way.geometry[k].lon, way.geometry[k + 1].lat, way.geometry[k + 1].lon);
+          // Score = distance / poids (routes principales ont un score plus bas = priorité)
+          const score = d / weight;
+          if (score < minScore) { minScore = score; minDist = d; bestRoadType = hw; }
+        }
       }
-      console.log(`│ OSM: arête ${i} → dist min route = ${minDist.toFixed(1)}m`);
-      if (minDist < bestDist) { bestDist = minDist; bestEdge = i; }
+      console.log(`│ OSM: arête ${i} → dist=${minDist.toFixed(1)}m route=${bestRoadType} score=${minScore.toFixed(1)}`);
+      if (minScore < bestScore) { bestScore = minScore; bestEdge = i; }
     }
-    console.log(`│ OSM: ✓ front = arête ${bestEdge} (à ${bestDist.toFixed(1)}m de la route ${roadClass})`);
+    console.log(`│ OSM: ✓ front = arête ${bestEdge} (score=${bestScore.toFixed(1)})`);
     return bestEdge;
   } catch (err) {
     console.warn(`│ OSM Overpass error: ${err.message}, fallback premier segment`);
     return null;
   }
 }
-async function fetchOverpassRoadSegs(query) {
-  const resp = await fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `data=${encodeURIComponent(query)}`,
-    timeout: 8000,
-  });
-  if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`);
-  const data = await resp.json();
-  const segs = [];
-  if (data.elements) {
-    for (const way of data.elements) {
-      if (!way.geometry) continue;
-      for (let k = 0; k < way.geometry.length - 1; k++) {
-        segs.push({ p1: way.geometry[k], p2: way.geometry[k + 1] });
+async function fetchOverpassWithRetry(query) {
+  const body = `data=${encodeURIComponent(query)}`;
+  for (let attempt = 0; attempt < OVERPASS_ENDPOINTS.length; attempt++) {
+    const endpoint = OVERPASS_ENDPOINTS[attempt];
+    try {
+      console.log(`│ OSM: trying ${endpoint.split("//")[1].split("/")[0]} (attempt ${attempt + 1}/${OVERPASS_ENDPOINTS.length})`);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        console.warn(`│ OSM: ${endpoint.split("//")[1].split("/")[0]} → HTTP ${resp.status}`);
+        continue; // essayer le miroir suivant
       }
+      const data = await resp.json();
+      console.log(`│ OSM: ✓ réponse OK de ${endpoint.split("//")[1].split("/")[0]} (${(data.elements || []).length} ways)`);
+      return data;
+    } catch (e) {
+      console.warn(`│ OSM: ${endpoint.split("//")[1].split("/")[0]} → ${e.name === "AbortError" ? "TIMEOUT 3s" : e.message}`);
     }
   }
-  return segs;
+  console.warn("│ OSM: tous les miroirs ont échoué");
+  return null;
 }
 function distPointToSegment(pLat, pLon, aLat, aLon, bLat, bLon) {
   // Distance approximative (mètres) d'un point à un segment en coordonnées GPS
@@ -4682,7 +4690,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v68.2-OSM-FRONT-DETECT...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v68.3-OSM-RETRY-MIRRORS...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4746,7 +4754,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "68.2-OSM-FRONT-DETECT",
+      ok: true, cached: false, server_version: "68.3-OSM-RETRY-MIRRORS",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4767,7 +4775,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v68.2-OSM-FRONT-DETECT on port ${PORT}`);
+  console.log(`BARLO v68.3-OSM-RETRY-MIRRORS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
