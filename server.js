@@ -3243,7 +3243,7 @@ app.post("/compute-scenarios", (req, res) => {
     primary_driver: p.primary_driver || "MAX_CAPACITE",
     max_floors: Number(p.max_floors) || 99,
     max_height_m: Number(p.max_height_m) || 99,
-    program_main: p.program_main || "",
+    program_main: p.program_main || p.project_type || "",
     target_surface_m2: Number(p.target_surface_m2) || 0,
     site_saturation_level: p.site_saturation_level || "MEDIUM",
     financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
@@ -4764,6 +4764,9 @@ app.post("/generate-massing", async (req, res) => {
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
   const label = String(massing_label).toUpperCase();
+  // v71: Fallback — si program_main est vide, utiliser project_type (colonne Sheet "project_type")
+  const effectiveProgramMain = program_main || project_type || "";
+  console.log(`[MASSING] program_main="${program_main}" project_type="${project_type}" → effective="${effectiveProgramMain}"`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
@@ -4778,7 +4781,7 @@ app.post("/generate-massing", async (req, res) => {
       primary_driver: primary_driver || "MAX_CAPACITE",
       max_floors: Number(max_floors) || 99,
       max_height_m: Number(max_height_m) || 99,
-      program_main: program_main || "",
+      program_main: effectiveProgramMain,
       target_surface_m2: Number(target_surface_m2) || 0,
       target_units: Number(target_units) || 0,
       site_saturation_level: site_saturation_level || "MEDIUM",
@@ -4825,6 +4828,15 @@ app.post("/generate-massing", async (req, res) => {
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
   const habitationLevels = levels - commerceLevels;
+  // v71: LOG DIAGNOSTIC — ce que Make.com envoie réellement
+  console.log(`┌── MASSING DIAGNOSTIC v71 ──`);
+  console.log(`│ label=${label} compute_scenario=${compute_scenario}`);
+  console.log(`│ program_main="${program_main}" → commerce_levels=${commerceLevels}`);
+  console.log(`│ fp=${fp}m² levels=${levels} totalH=${totalH}m`);
+  console.log(`│ site_area=${site_area} envelope=${envW}×${envD}`);
+  console.log(`│ mix_score=${mix_score} rent_score=${rent_score} capacity_score=${capacity_score}`);
+  console.log(`│ scenario_role=${scenarioRole} accent=${accentColor}`);
+  console.log(`└── end MASSING DIAGNOSTIC ──`);
   const { w: mw, d: md, offset_x: ox, offset_y: oy } = computeMassingDimensions(fp, envW, envD);
   console.log(`fp_m2=${fp} → ${mw}m×${md}m offset[${ox.toFixed(1)},${oy.toFixed(1)}]`);
   const coords = polygon_points.split("|").map(pt => {
@@ -4869,7 +4881,7 @@ app.post("/generate-massing", async (req, res) => {
     primary_driver: primary_driver || "MAX_CAPACITE",
     levels,
     standing_level: standing_level || "STANDARD",
-    program_main: program_main || "",
+    program_main: effectiveProgramMain,
     site_saturation: site_saturation_level || "MEDIUM",
     project_type: project_type || "NEUF",
     existing_fp_m2: Number(existing_footprint_m2) || 0,
