@@ -12,12 +12,12 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "69.0-NOMINATIM-FALLBACK" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.0-FRONT-EDGE-FIX" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
     const { polygon_points, site_area, setback_front = 3, setback_side = 3, setback_back = 3,
-      fp_m2 = 1147, envelope_w = 24, envelope_d = 24 } = req.body;
+      fp_m2 = 1147, envelope_w = 24, envelope_d = 24, front_edge } = req.body;
     if (!polygon_points) return res.status(400).json({ error: "polygon_points requis" });
     const coords = polygon_points.split("|").map(pt => {
       const [lat, lon] = pt.trim().split(",").map(Number);
@@ -30,8 +30,10 @@ app.post("/diag-massing", async (req, res) => {
     const parcelM = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
     const parcelMinX = Math.min(...parcelM.map(p => p.x)), parcelMaxX = Math.max(...parcelM.map(p => p.x));
     const parcelMinY = Math.min(...parcelM.map(p => p.y)), parcelMaxY = Math.max(...parcelM.map(p => p.y));
-    // v68: Détection front via OSM
-    const frontEdgeIndex = await findNearestRoadEdge(coords, cLat, cLon);
+    // v70: front_edge en paramètre = override, sinon détection OSM
+    const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
+      ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
+      : await findNearestRoadEdge(coords, cLat, cLon);
     // Enveloppe
     const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
     const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -163,23 +165,25 @@ async function tryOverpass(coords, cLat, cLon) {
       return null;
     }
     const ROAD_WEIGHT = { trunk: 5, primary: 5, secondary: 4, tertiary: 3, residential: 2, unclassified: 2, living_street: 2, service: 1 };
+    const NAMED_BONUS = 3; // v70: routes nommées = presque toujours la route d'accès principale
     let bestEdge = 0, bestScore = Infinity;
     for (let i = 0; i < coords.length; i++) {
       const j = (i + 1) % coords.length;
       const edgeMidLat = (coords[i].lat + coords[j].lat) / 2;
       const edgeMidLon = (coords[i].lon + coords[j].lon) / 2;
-      let minScore = Infinity, minDist = Infinity, bestRoadType = "?";
+      let minScore = Infinity, minDist = Infinity, bestRoadType = "?", bestRoadName = "";
       for (const way of data.elements) {
         if (!way.geometry) continue;
         const hw = way.tags && way.tags.highway || "service";
-        const weight = ROAD_WEIGHT[hw] || 1;
+        const hasName = way.tags && way.tags.name;
+        const weight = (ROAD_WEIGHT[hw] || 1) * (hasName ? NAMED_BONUS : 1);
         for (let k = 0; k < way.geometry.length - 1; k++) {
           const d = distPointToSegment(edgeMidLat, edgeMidLon, way.geometry[k].lat, way.geometry[k].lon, way.geometry[k + 1].lat, way.geometry[k + 1].lon);
           const score = d / weight;
-          if (score < minScore) { minScore = score; minDist = d; bestRoadType = hw; }
+          if (score < minScore) { minScore = score; minDist = d; bestRoadType = hw; bestRoadName = hasName || ""; }
         }
       }
-      console.log(`│ OVERPASS: arête ${i} → dist=${minDist.toFixed(1)}m route=${bestRoadType} score=${minScore.toFixed(1)}`);
+      console.log(`│ OVERPASS: arête ${i} → dist=${minDist.toFixed(1)}m route=${bestRoadType}${bestRoadName ? ` "${bestRoadName}"` : " (anonyme)"} score=${minScore.toFixed(1)}`);
       if (minScore < bestScore) { bestScore = minScore; bestEdge = i; }
     }
     console.log(`│ OVERPASS: ✓ front = arête ${bestEdge} (score=${bestScore.toFixed(1)})`);
@@ -278,14 +282,12 @@ function distPointToSegment(pLat, pLon, aLat, aLon, bLat, bLon) {
   const ddx = px - closestX, ddy = py - closestY;
   return Math.sqrt(ddx * ddx + ddy * ddy);
 }
-async function computeAccessPoint(coords, cLat, cLon) {
-  // v68: Détection intelligente du côté "avant" via route OSM
+function computeAccessPoint(coords, cLat, cLon, frontEdgeIndex) {
+  // v70: Utiliser le frontEdgeIndex déjà calculé (plus de double appel OSM)
   let bestI = 0;
-  const osmEdge = await findNearestRoadEdge(coords, cLat, cLon);
-  if (osmEdge !== null) {
-    bestI = osmEdge;
+  if (frontEdgeIndex !== null && frontEdgeIndex !== undefined) {
+    bestI = frontEdgeIndex;
   } else {
-    // Fallback: premier segment du polygone (convention de dessin)
     bestI = 0;
     console.log("│ AccessPoint fallback: premier segment du polygone");
   }
@@ -310,13 +312,24 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
   // Si CW (windingSum < 0), on inverse le signe de l'offset pour aller vers l'intérieur
   const windingSign = windingSum >= 0 ? 1 : -1;
   console.log(`│ Envelope winding: ${windingSum >= 0 ? "CCW" : "CW"} (sign=${windingSign}) sum=${windingSum.toFixed(1)}`);
-  // v68: Utiliser frontEdgeIndex (détecté par OSM) au lieu de maxLat
+  // v69.1: Assignation directe des setbacks par INDEX d'arête (plus de bearing)
+  // front = arête frontEdgeIndex, back = opposée, sides = adjacentes
+  function getSetbackForEdge(edgeIdx) {
+    if (frontEdgeIndex !== undefined && frontEdgeIndex !== null && frontEdgeIndex < n) {
+      const diff = ((edgeIdx - frontEdgeIndex) % n + n) % n;
+      if (diff === 0) return front;                    // arête front (face route)
+      if (n === 4 && diff === 2) return back;          // arête opposée (fond)
+      if (n === 4 && (diff === 1 || diff === 3)) return side; // arêtes latérales
+      // Pour polygones > 4 côtés: front, back (opposé), reste = side
+      if (diff === Math.floor(n / 2)) return back;
+      return side;
+    }
+    // Fallback sans frontEdgeIndex: bearing-based (ancien comportement)
+    return null;
+  }
+  // Fallback bearing si pas de frontEdgeIndex
   let rb = 0;
-  if (frontEdgeIndex !== undefined && frontEdgeIndex !== null && frontEdgeIndex < n) {
-    rb = brng(coords[frontEdgeIndex], coords[(frontEdgeIndex + 1) % n]);
-    console.log(`│ Envelope front: edge=${frontEdgeIndex} (OSM) bearing=${rb.toFixed(0)}°`);
-  } else {
-    // Fallback: maxLat (ancien comportement)
+  if (frontEdgeIndex === undefined || frontEdgeIndex === null || frontEdgeIndex >= n) {
     let maxLat = -Infinity;
     for (let i = 0; i < n - 1; i++) {
       const ml = (coords[i].lat + coords[(i + 1) % n].lat) / 2;
@@ -324,10 +337,22 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
     }
     console.log(`│ Envelope front: maxLat fallback bearing=${rb.toFixed(0)}°`);
   }
-  function setSB(b) { let d = ((b - rb) + 360) % 360; if (d > 180) d = 360 - d; return d < 45 ? front : d < 135 ? side : back; }
+  function setSB(edgeIdx) {
+    const direct = getSetbackForEdge(edgeIdx);
+    if (direct !== null) return direct;
+    // Fallback bearing
+    const b = brng(coords[edgeIdx], coords[(edgeIdx + 1) % n]);
+    let d = ((b - rb) + 360) % 360; if (d > 180) d = 360 - d;
+    return d < 45 ? front : d < 135 ? side : back;
+  }
+  // Log des setbacks assignés
+  for (let i = 0; i < n; i++) {
+    const sb = setSB(i);
+    const role = sb === front ? "FRONT" : sb === back ? "BACK" : "SIDE";
+    console.log(`│ Envelope: arête ${i} → setback=${sb}m (${role})`);
+  }
   function offSeg(p1, p2, dist) {
     const dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.sqrt(dx * dx + dy * dy) + 0.001;
-    // windingSign garantit que l'offset va TOUJOURS vers l'intérieur
     const d = dist * windingSign;
     return { p1: { x: p1.x - dy / len * d, y: p1.y + dx / len * d }, p2: { x: p2.x - dy / len * d, y: p2.y + dx / len * d } };
   }
@@ -339,7 +364,7 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
     return { x: s1.p1.x + t * d1x, y: s1.p1.y + t * d1y };
   }
   const segs = [];
-  for (let i = 0; i < n; i++) segs.push(offSeg(pts[i], pts[(i + 1) % n], setSB(brng(coords[i], coords[(i + 1) % n]))));
+  for (let i = 0; i < n; i++) segs.push(offSeg(pts[i], pts[(i + 1) % n], setSB(i)));
   const envM = segs.map((_, i) => intersect(segs[(i + n - 1) % n], segs[i]));
   // ── v56.3 VALIDATION: vérifier que l'enveloppe est PLUS PETITE que la parcelle ──
   let envArea = 0, parcelArea = 0;
@@ -350,10 +375,23 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
   envArea = Math.abs(envArea) / 2;
   parcelArea = Math.abs(windingSum) / 2;
   console.log(`│ Envelope area=${envArea.toFixed(0)}m² vs Parcel area=${parcelArea.toFixed(0)}m² → ${envArea < parcelArea ? "OK (inside)" : "⚠ PROBLÈME (outside!)"}`);
-  return envM.map(m => ({
+  const result = envM.map(m => ({
     lat: cLat + m.y / R_EARTH * 180 / Math.PI,
     lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
   }));
+  // v70: Log GPS de chaque vertex d'enveloppe pour debug visuel
+  result.forEach((p, i) => console.log(`│ Envelope GPS V${i}: ${p.lat.toFixed(6)},${p.lon.toFixed(6)}`));
+  // Log des distances parcelle→enveloppe par arête
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const pMidX = (pts[i].x + pts[j].x) / 2, pMidY = (pts[i].y + pts[j].y) / 2;
+    const eMidX = (envM[i].x + envM[j].x) / 2, eMidY = (envM[i].y + envM[j].y) / 2;
+    const dist = Math.sqrt((pMidX - eMidX) ** 2 + (pMidY - eMidY) ** 2);
+    const sb = setSB(i);
+    const role = sb === front ? "FRONT" : sb === back ? "BACK" : "SIDE";
+    console.log(`│ Envelope edge ${i} (${role}): setback=${sb}m actual_dist=${dist.toFixed(2)}m`);
+  }
+  return result;
 }
 function computeZoom(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -3725,7 +3763,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   return result;
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
+function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -3736,7 +3774,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   };
 
   // v49: accès principal auto-détecté
-  const access = await computeAccessPoint(parcelCoords, center.lat, center.lon);
+  const access = computeAccessPoint(parcelCoords, center.lat, center.lon, frontEdgeIndex);
   const arrowLen = 8;
   const accEndLat = access.lat + (arrowLen / R_EARTH) * 180 / Math.PI * Math.cos(access.bearing * Math.PI / 180);
   const accEndLon = access.lon + (arrowLen / (R_EARTH * Math.cos(access.lat * Math.PI / 180))) * 180 / Math.PI * Math.sin(access.bearing * Math.PI / 180);
@@ -4405,6 +4443,7 @@ app.post("/generate", async (req, res) => {
     slide_name = "slide_4_axo",
     zoom: zoomOverride = null,
     style_ref_url = null,
+    front_edge,
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
@@ -4416,8 +4455,10 @@ app.post("/generate", async (req, res) => {
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
-  // v68: Détection front via OSM
-  const frontEdgeIndex = await findNearestRoadEdge(coords, cLat, cLon);
+  // v70: front_edge en paramètre = override, sinon détection OSM
+  const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
+    ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
+    : await findNearestRoadEdge(coords, cLat, cLon);
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   const bearing = computeBearing(coords, cLat, cLon);
@@ -4428,8 +4469,8 @@ app.post("/generate", async (req, res) => {
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
+    const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex);
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
@@ -4569,6 +4610,7 @@ app.post("/generate-massing", async (req, res) => {
     existing_footprint_m2, // emprise existante si parcelle déjà construite
     // ── v56.7 : orientation rue ──
     road_bearing,          // azimut de la route principale (degrés, depuis la Sheet)
+    front_edge,            // v70: override index arête front (0-3)
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -4646,8 +4688,10 @@ app.post("/generate-massing", async (req, res) => {
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
-  // v68: Détection front via OSM
-  const frontEdgeIndex = await findNearestRoadEdge(coords, cLat, cLon);
+  // v70: front_edge en paramètre = override, sinon détection OSM
+  const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
+    ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
+    : await findNearestRoadEdge(coords, cLat, cLon);
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
   // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
   const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -4707,7 +4751,7 @@ app.post("/generate-massing", async (req, res) => {
     const totalHWithPilotis = realTotalH + pilotisH;
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
       { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH }, MAPBOX_TOKEN);
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -4737,7 +4781,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v69.0-NOMINATIM-FALLBACK...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.0-FRONT-EDGE-FIX...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4801,7 +4845,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "69.0-NOMINATIM-FALLBACK",
+      ok: true, cached: false, server_version: "70.0-FRONT-EDGE-FIX",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4822,7 +4866,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v69.0-NOMINATIM-FALLBACK on port ${PORT}`);
+  console.log(`BARLO v70.0-FRONT-EDGE-FIX on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
