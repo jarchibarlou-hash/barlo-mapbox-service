@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.8-CONVENTION" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.10-MASSING" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2398,6 +2398,38 @@ function computeSmartScenarios({
       : s.fp_m2 * s.levels;
     s.height_m = Math.round(s.levels * floor_height * 10) / 10;
   };
+  // ══════════════════════════════════════════════════════════════════
+  // v70.10 ROBUST ANTI-COLLAPSE : post-loop B vs C differentiation
+  // If B and C have identical levels AND identical fp → FORCE differentiation
+  // ══════════════════════════════════════════════════════════════════
+  if (r.B && r.C) {
+    const bLev = r.B.levels, cLev = r.C.levels;
+    const bFp = Math.round(r.B.fp_m2), cFp = Math.round(r.C.fp_m2);
+    const bSdp = Math.round(r.B.sdp_m2), cSdp = Math.round(r.C.sdp_m2);
+    if (bLev === cLev && bFp === cFp) {
+      console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE: B(${bLev}niv,${bFp}m²) === C(${cLev}niv,${cFp}m²) → différenciation forcée`);
+      if (cLev >= 2) {
+        // Réduire C d'1 niveau
+        r.C.levels = cLev - 1;
+        recalcSdp(r.C);
+        console.log(`│   → C réduit à ${r.C.levels} niv, SDP=${r.C.sdp_m2}m²`);
+      } else {
+        // C déjà à 1 niveau → réduire emprise de 15%
+        r.C.fp_m2 = Math.round(cFp * 0.85);
+        r.C.fp_rdc_m2 = r.C.fp_m2;
+        r.C.fp_etages_m2 = r.C.fp_m2;
+        recalcSdp(r.C);
+        console.log(`│   → C emprise réduite à ${r.C.fp_m2}m², SDP=${r.C.sdp_m2}m²`);
+      }
+    } else if (bSdp === cSdp && bSdp > 0) {
+      console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE (SDP): B.sdp=${bSdp} === C.sdp=${cSdp} → C réduit`);
+      if (cLev >= 2) {
+        r.C.levels = cLev - 1;
+        recalcSdp(r.C);
+        console.log(`│   → C réduit à ${r.C.levels} niv, SDP=${r.C.sdp_m2}m²`);
+      }
+    }
+  }
   // ── v57.6 HELPERS FOR DIAGNOSTICS ──
   // Generate scenario description (1-2 sentences in French)
   function generateScenarioDescription(label, role, sc_data) {
@@ -4065,7 +4097,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  const rdcH = massingParams.rdc_height || (massingParams.commerce_levels > 0 ? 4.0 : 3.0);
+  const rdcH = massingParams.rdc_height || (massingParams.commerce_levels > 0 ? 3.5 : 3.0);  // v70.10
   const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
 <html>
@@ -4102,19 +4134,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#1a1a1a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100, 19, 120] } },
+        "paint": { "line-color": "#707070", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100, 19, 120] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56, 19, 72] } },
+        "paint": { "line-color": "#888888", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56, 19, 72] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#2a2a2a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92, 19, 112] } },
+        "paint": { "line-color": "#808080", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92, 19, 112] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48, 19, 64] } }
+        "paint": { "line-color": "#989898", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48, 19, 64] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -4152,7 +4184,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     const etageH = ${etageH};
     const totalLevels = ${massingParams.levels || Math.round(massingParams.total_height / etageH)};
     const commLevels = ${massingParams.commerce_levels};
-    const gap = 0.18;
+    const gap = 0.45;  // v70.10: gap plus large pour lignes fermes entre niveaux
     for (let f = 0; f < totalLevels; f++) {
       // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
       const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
@@ -4161,13 +4193,14 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       const baseH = f > 0 ? base + gap / 2 : 0;
       const topH  = f < totalLevels - 1 ? top - gap / 2 : top;
       const isComm = f < commLevels;
+      // v70.10: Commerce = ORANGE vif, Logement = BLEU net
       map.addLayer({
         id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
         paint: {
-          'fill-extrusion-color': isComm ? '#d4b088' : '#a8bcc8',
+          'fill-extrusion-color': isComm ? '#e07830' : '#3a7ac0',
           'fill-extrusion-height': topH,
           'fill-extrusion-base': baseH,
-          'fill-extrusion-opacity': isComm ? 0.88 : 0.82,
+          'fill-extrusion-opacity': 0.92,
           'fill-extrusion-vertical-gradient': false,
         },
       });
@@ -4486,7 +4519,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 
   // ── ANNOTATIONS ÉTAGES : traits + labels à droite du bâtiment (style référence) ──
   // Positionnées au centre-droit de l'image
-  const rdcH_m = commerce_levels > 0 ? 4.0 : 3.0;
+  const rdcH_m = commerce_levels > 0 ? 3.5 : 3.0;  // v70.10: commerce = 3.5m
   const etageH_m = 3.0;
   const realTotalH = rdcH_m + (levels - 1) * etageH_m;
   const sdpTotale = fp_m2 * levels;
@@ -4654,6 +4687,47 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
             const finalCanvas = createCanvas(W, H);
             const finalCtx = finalCanvas.getContext("2d");
             finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
+
+            // ═══════════════════════════════════════════════════════════════
+            // v70.9: Redessiner parcelle + enveloppe APRÈS AI polish
+            // L'AI altère/efface les lignes → on les redessine en canvas
+            // pour garantir des bords nets et géométriques.
+            // ═══════════════════════════════════════════════════════════════
+            if (parcelScreenPts && parcelScreenPts.length >= 3) {
+              finalCtx.save();
+              // Fond parcelle semi-transparent (beige/ocre)
+              finalCtx.beginPath();
+              finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+              for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+              finalCtx.closePath();
+              finalCtx.fillStyle = "rgba(200, 180, 140, 0.25)";
+              finalCtx.fill();
+
+              // Contour parcelle — rouge vif, épais, net
+              finalCtx.beginPath();
+              finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+              for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+              finalCtx.closePath();
+              finalCtx.strokeStyle = "#d04020";
+              finalCtx.lineWidth = 5;
+              finalCtx.lineJoin = "miter";
+              finalCtx.stroke();
+            }
+            if (envelopeScreenPts && envelopeScreenPts.length >= 3) {
+              // Enveloppe — tirets rouge, net
+              finalCtx.beginPath();
+              finalCtx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
+              for (let i = 1; i < envelopeScreenPts.length; i++) finalCtx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
+              finalCtx.closePath();
+              finalCtx.strokeStyle = "#d04020";
+              finalCtx.lineWidth = 3.5;
+              finalCtx.setLineDash([12, 6]);
+              finalCtx.lineJoin = "miter";
+              finalCtx.stroke();
+              finalCtx.setLineDash([]);
+              finalCtx.restore();
+            }
+
             drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
             drawSolarArc(finalCtx, W, H, { bearing });
             const finalPng = finalCanvas.toBuffer("image/png");
@@ -4846,7 +4920,7 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     // ── PIPELINE HEKTAR : capture HD x2 ──
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
-    const rdcH = commerceLevels > 0 ? 4.0 : 3.0;   // RDC commerce = 4m, sinon 3m
+    const rdcH = commerceLevels > 0 ? 3.5 : 3.0;   // v70.10: RDC commerce = 3.5m, sinon 3m
     const etageH = 3.0;                              // étages courants = 3m
     const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
     console.log(`[HEKTAR] levels=${levels} rdcH=${rdcH}m etageH=${etageH}m totalH=${realTotalH}m commerce=${commerceLevels}`);
@@ -4886,7 +4960,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.8-CONVENTION...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.10-MASSING...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4895,7 +4969,7 @@ app.post("/generate-massing", async (req, res) => {
         console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
 
         const polishPrompt = `Premium white architectural maquette look. Keep EXACT geometry, camera, framing unchanged. Do NOT invent or remove anything.
-Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cream. Ground: very light warm gray. Soft subtle shadows under buildings. Overall BRIGHT, CLEAN, WHITE premium feel — like a high-end architectural scale model photographed in a studio. Keep central massing building colors (blue/orange layers) exactly as-is. No grain, no fog, no dark tones.`;
+Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: MEDIUM GRAY (#888 to #999) clearly visible against white ground — roads must be distinctly darker than the white ground. Ground: very light warm gray (#e8e8e4). Soft subtle shadows under buildings. Overall BRIGHT, CLEAN, WHITE premium feel — like a high-end architectural scale model photographed in a studio. The central massing building has BRIGHT ORANGE layers (commerce/RDC) and BLUE layers (logement/étages) — keep these vivid colors exactly as-is, do NOT wash them out. The dark horizontal lines between floor levels must remain visible. Red parcel boundary lines must remain. No grain, no fog, no dark tones.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
@@ -4950,7 +5024,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.8-CONVENTION",
+      ok: true, cached: false, server_version: "70.10-MASSING",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4971,7 +5045,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.8-CONVENTION on port ${PORT}`);
+  console.log(`BARLO v70.10-MASSING on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
