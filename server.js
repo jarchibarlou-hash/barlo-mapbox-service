@@ -4726,44 +4726,7 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
               finalCtx.stroke();
               finalCtx.setLineDash([]);
 
-              // ═══════════════════════════════════════════════════════════════
-              // v70.10: ANNOTATIONS SETBACK — labels de retrait sur chaque arête
-              // Utilise parcelScreenPts + envelopeScreenPts pour positionner
-              // les labels "3m" / "5m" au milieu de chaque gap parcelle↔enveloppe
-              // ═══════════════════════════════════════════════════════════════
-              const sfr = Number(setback_front) || 5;
-              const ssd = Number(setback_side) || 3;
-              const sbk = Number(setback_back) || 3;
-              const feIdx = frontEdgeIndex || 0;
-              const nEdges = Math.min(parcelScreenPts.length, envelopeScreenPts.length);
-              for (let e = 0; e < nEdges; e++) {
-                const j = (e + 1) % parcelScreenPts.length;
-                const je = (e + 1) % envelopeScreenPts.length;
-                // Milieu de l'arête parcelle
-                const pmx = (parcelScreenPts[e].x + parcelScreenPts[j].x) / 2;
-                const pmy = (parcelScreenPts[e].y + parcelScreenPts[j].y) / 2;
-                // Milieu de l'arête enveloppe correspondante
-                const emx = (envelopeScreenPts[e].x + envelopeScreenPts[je].x) / 2;
-                const emy = (envelopeScreenPts[e].y + envelopeScreenPts[je].y) / 2;
-                // Position du label = milieu du gap
-                const lx = (pmx + emx) / 2;
-                const ly = (pmy + emy) / 2;
-                // Déterminer le retrait pour cette arête
-                let setbackVal;
-                if (e === feIdx) setbackVal = sfr;
-                else if (e === (feIdx + 2) % nEdges) setbackVal = sbk;
-                else setbackVal = ssd;
-                // Label blanc avec contour noir pour lisibilité
-                finalCtx.font = "bold 28px Arial";
-                finalCtx.textAlign = "center";
-                finalCtx.textBaseline = "middle";
-                finalCtx.strokeStyle = "#ffffff";
-                finalCtx.lineWidth = 5;
-                finalCtx.lineJoin = "round";
-                finalCtx.strokeText(setbackVal + "m", lx, ly);
-                finalCtx.fillStyle = "#333333";
-                finalCtx.fillText(setbackVal + "m", lx, ly);
-              }
+              // v70.10: Annotations setback DÉSACTIVÉES (à la demande)
               finalCtx.restore();
             }
 
