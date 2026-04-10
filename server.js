@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.1-NORTH-UP" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.2-NORTH-UP" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -1857,9 +1857,10 @@ function computeSmartScenarios({
         floorsNeeded = Math.ceil(effectiveTarget / unitsPerFloor);
         // v57.13 : niveaux = CONSÉQUENCE PURE du programme
         // Tous les scénarios : le nombre de niveaux découle du target effectif / unitsPerFloor
-        // Min 2 niveaux (un bâtiment collectif à 1 niveau n'a pas de sens architectural)
-        // Pas de floor min expert — le programme commande, le terrain plafonne.
-        floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
+        // Min niveaux : A/B=2 (collectif à 1 niv n'a pas de sens), C peut descendre à 1
+        // v70.2 FIX B=C : quand les deux sont au plancher (2 niv), C doit pouvoir descendre
+        const minFloors = (role === "PRUDENT") ? 1 : 2;
+        floorsNeeded = Math.max(minFloors, Math.min(floorsNeeded, effectiveMaxFloors));
         // COS check duale
         while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
         // v57.15: anti-paradoxe zonage — empêche compensation verticale excessive
@@ -1889,6 +1890,16 @@ function computeSmartScenarios({
         unitMix = mix;
       }
       levels = floorsNeeded;
+      // ══════════════════════════════════════════════════════════════════
+      // v70.2 ANTI-COLLAPSE : garantir A > B ≥ C en niveaux OU en emprise
+      // Quand B et C tombent au même plancher (fpMinViable + 2 niveaux),
+      // on réduit C d'1 niveau pour créer une différenciation visible.
+      // ══════════════════════════════════════════════════════════════════
+      if (!splitLayout && role === "PRUDENT" && levels >= 2 && fpRdc <= fpMinViable * 1.15) {
+        // C est au plancher d'emprise → réduire d'1 niveau pour différencier de B
+        levels = Math.max(1, levels - 1);
+        console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (emprise au plancher ${fpRdc}m² ≈ fpMin=${fpMinViable}m²)`);
+      }
       // ── PILOTIS ──
       const freeGround = envelope_area - fpRdc;
       const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnits || 1) * ((rules && rules.parking_per_unit) || 1)));
@@ -3850,12 +3861,12 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#555555", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#8a8a8a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -3998,19 +4009,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#a09890", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
+        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#b0a898", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#c0b8ae", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#ccc4b8", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } }
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -4311,30 +4322,50 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
 
-  // ── Labels reculs réglementaires (si disponibles) ──
-  if (setback_front || setback_side || setback_back) {
+  // ── v70.1: Labels reculs positionnés sur les VRAIS midpoints des arêtes ──
+  if ((setback_front || setback_side || setback_back) && p.parcelScreenPts && p.envelopeScreenPts && p.frontEdgeIndex !== undefined) {
+    const pPts = p.parcelScreenPts;
+    const ePts = p.envelopeScreenPts;
+    const fi = p.frontEdgeIndex;
+    const n = pPts.length;
     const sf = setback_front || 3, ss = setback_side || 3, sb2 = setback_back || 3;
-    // Dessiner les labels de reculs sur l'image (coins de la parcelle)
-    // Position approximative : centre-haut pour front, côtés pour side, centre-bas pour back
+    ctx.save();
+    ctx.font = "bold 18px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      // Midpoint entre parcelle et enveloppe pour cette arête
+      const pMidX = (pPts[i].x + pPts[j].x) / 2;
+      const pMidY = (pPts[i].y + pPts[j].y) / 2;
+      const eMidX = (ePts[i].x + ePts[j].x) / 2;
+      const eMidY = (ePts[i].y + ePts[j].y) / 2;
+      const labelX = (pMidX + eMidX) / 2;
+      const labelY = (pMidY + eMidY) / 2;
+      const diff = ((i - fi) % n + n) % n;
+      let sb, role;
+      if (diff === 0) { sb = sf; role = "FRONT"; }
+      else if (n === 4 && diff === 2) { sb = sb2; role = "BACK"; }
+      else { sb = ss; role = "SIDE"; }
+      const text = sb + "m";
+      ctx.strokeStyle = role === "FRONT" ? "#c45030" : "#666666";
+      ctx.lineWidth = role === "FRONT" ? 4 : 3;
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeText(text, labelX, labelY);
+      ctx.fillText(text, labelX, labelY);
+    }
+    ctx.restore();
+  } else if (setback_front || setback_side || setback_back) {
+    // Fallback: positions fixes si pas de coordonnées screen
+    const sf = setback_front || 3, ss = setback_side || 3, sb2 = setback_back || 3;
     const cx = W * 0.5, cy = H * 0.5;
     ctx.save();
-    ctx.font = "bold 16px Arial";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = "#c45030";
-    ctx.lineWidth = 3;
-    // Front (haut de la parcelle — vers la route)
-    ctx.strokeText(sf + "m", cx, cy - 80);
-    ctx.fillText(sf + "m", cx, cy - 80);
-    // Back (bas)
-    ctx.strokeText(sb2 + "m", cx, cy + 100);
-    ctx.fillText(sb2 + "m", cx, cy + 100);
-    // Side left
-    ctx.strokeText(ss + "m", cx - 120, cy + 10);
-    ctx.fillText(ss + "m", cx - 120, cy + 10);
-    // Side right
-    ctx.strokeText(ss + "m", cx + 120, cy + 10);
-    ctx.fillText(ss + "m", cx + 120, cy + 10);
+    ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#c45030"; ctx.lineWidth = 3;
+    ctx.strokeText(sf + "m", cx, cy - 80); ctx.fillText(sf + "m", cx, cy - 80);
+    ctx.strokeText(sb2 + "m", cx, cy + 100); ctx.fillText(sb2 + "m", cx, cy + 100);
+    ctx.strokeText(ss + "m", cx - 120, cy + 10); ctx.fillText(ss + "m", cx - 120, cy + 10);
+    ctx.strokeText(ss + "m", cx + 120, cy + 10); ctx.fillText(ss + "m", cx + 120, cy + 10);
     ctx.restore();
   }
 }
@@ -4484,7 +4515,23 @@ app.post("/generate", async (req, res) => {
     // pour éviter le dédoublement — tout sera dessiné APRÈS le polish
     const pngClean = canvas.toBuffer("image/png");
     // Version avec overlays (fallback si pas d'AI polish)
-    drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back) });
+    // v70.1: Projeter GPS → pixels screen pour positionner les labels sur les arêtes
+    const pitch = 58;
+    const scale = 256 * Math.pow(2, zoom) / (2 * Math.PI);
+    function gpsToScreen(lat, lon) {
+      // Mercator projection relative to center
+      const dx = (lon - cLat > 1000 ? lon : lon) - cLon; // lon diff in degrees
+      const dyMerc = Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) - Math.log(Math.tan(Math.PI / 4 + cLat * Math.PI / 360));
+      const px = dx * Math.PI / 180 * scale;
+      const py = -dyMerc * scale;
+      // Apply pitch perspective (simplified: scale Y by cos(pitch), offset toward bottom)
+      const pitchRad = pitch * Math.PI / 180;
+      const cosPitch = Math.cos(pitchRad);
+      return { x: W / 2 + px, y: H / 2 + py * cosPitch };
+    }
+    const parcelScreenPts = coords.map(c => gpsToScreen(c.lat, c.lon));
+    const envelopeScreenPts = envelopeCoords.map(c => gpsToScreen(c.lat, c.lon));
+    drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -4551,7 +4598,7 @@ OUTPUT: Same resolution, same framing, same composition. Only textures improved.
             const finalCanvas = createCanvas(W, H);
             const finalCtx = finalCanvas.getContext("2d");
             finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-            drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back) });
+            drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
             drawSolarArc(finalCtx, W, H, { bearing });
             const finalPng = finalCanvas.toBuffer("image/png");
             const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
@@ -4715,7 +4762,8 @@ app.post("/generate-massing", async (req, res) => {
   }
   envelopeAreaReal = Math.abs(envelopeAreaReal) / 2;
   console.log(`Envelope real area (shoelace): ${envelopeAreaReal.toFixed(1)}m²`);
-  const bearing = computeBearing(coords, cLat, cLon);
+  // v70.1: Massing TOUJOURS nord en haut (bearing=0) comme le slide 4
+  const bearing = 0;
   const zoom = computeZoomMassing(coords, cLat, cLon); // v56.5: zoom plus serré pour le massing
   console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
   const massingCoords = computeMassingPolygon(envelopeCoords, fp, envelopeAreaReal, {
@@ -4782,7 +4830,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.1-NORTH-UP...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.2-NORTH-UP...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4846,7 +4894,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.1-NORTH-UP",
+      ok: true, cached: false, server_version: "70.2-NORTH-UP",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4867,7 +4915,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.1-NORTH-UP on port ${PORT}`);
+  console.log(`BARLO v70.2-NORTH-UP on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
