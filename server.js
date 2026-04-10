@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.7-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.8-CONVENTION" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -281,16 +281,29 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       if (es.scoreNormal > bestScore) { bestScore = es.scoreNormal; bestEdge = es.idx; }
     }
     if (bestEdge >= 0 && bestScore > 0) {
+      // v70.8: Convention utilisateur — si l'arête 0 a un score proche du meilleur (≥70%),
+      // préférer arête 0 car l'utilisateur trace le polygone en commençant côté route.
+      const edge0Score = edgeScores.find(es => es.idx === 0)?.scoreNormal || 0;
+      if (bestEdge !== 0 && edge0Score > 0 && edge0Score >= bestScore * 0.70) {
+        console.log(`│ MAPBOX-TQ: arête 0 (score=${edge0Score.toFixed(1)}) proche de arête ${bestEdge} (score=${bestScore.toFixed(1)}) → PRÉFÉRENCE arête 0 (convention polygone)`);
+        bestEdge = 0;
+        bestScore = edge0Score;
+      }
       console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score_normal=${bestScore.toFixed(1)}) — route d'accès principale`);
       return bestEdge;
     }
 
-    // Pass 2 : fallback — accepter les ruelles (< 4m)
+    // Pass 2 : fallback — accepter les ruelles (< 4m), avec même préférence arête 0
     bestEdge = -1; bestScore = -Infinity;
     for (const es of edgeScores) {
       if (es.scoreAll > bestScore) { bestScore = es.scoreAll; bestEdge = es.idx; }
     }
     if (bestEdge >= 0) {
+      const edge0ScoreAll = edgeScores.find(es => es.idx === 0)?.scoreAll || 0;
+      if (bestEdge !== 0 && edge0ScoreAll > 0 && edge0ScoreAll >= bestScore * 0.70) {
+        console.log(`│ MAPBOX-TQ: arête 0 (all=${edge0ScoreAll.toFixed(1)}) proche → PRÉFÉRENCE arête 0`);
+        bestEdge = 0;
+      }
       console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score_all=${bestScore.toFixed(1)}) — fallback ruelle`);
       return bestEdge;
     }
@@ -4018,13 +4031,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: { 'fill-extrusion-color': '#c45030', 'fill-extrusion-height': 0.3,
                'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.0 } });
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-opacity': 1.0 } });
+      paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
 
-    // v70.4: Zone constructible (reculs)
+    // v70.8: Zone constructible (reculs) — tirets bien visibles
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#c45030', 'line-width': 5,
-               'line-dasharray': [6, 4], 'line-opacity': 1.0 } });
+      paint: { 'line-color': '#d04020', 'line-width': 4,
+               'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
 
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
@@ -4596,7 +4609,7 @@ app.post("/generate", async (req, res) => {
 GEOMETRY RULES (STRICT):
 - Keep ALL building footprints, positions, shapes, and sizes EXACTLY as shown.
 - Keep ALL roads in their exact positions and widths.
-- Keep the red/orange parcel boundary lines and dashed envelope lines PERFECTLY intact.
+- Keep the red/orange parcel boundary lines and dashed envelope lines PERFECTLY intact — sharp geometric edges, no bleeding, no smearing, no feathering. These are precision architectural zoning lines.
 - Keep the same camera angle, framing, and composition. Do NOT crop or shift.
 - Do NOT add text, watermarks, inset images, or UI elements.
 
@@ -4873,7 +4886,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.7-POLISH...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.8-CONVENTION...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4937,7 +4950,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.7-POLISH",
+      ok: true, cached: false, server_version: "70.8-CONVENTION",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4958,7 +4971,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.7-POLISH on port ${PORT}`);
+  console.log(`BARLO v70.8-CONVENTION on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
