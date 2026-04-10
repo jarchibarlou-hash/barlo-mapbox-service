@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.0-FRONT-EDGE-FIX" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.1-NORTH-UP" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4461,8 +4461,9 @@ app.post("/generate", async (req, res) => {
     : await findNearestRoadEdge(coords, cLat, cLon);
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
-  const bearing = computeBearing(coords, cLat, cLon);
-  console.log(`zoom=${zoom} bearing=${bearing}° pitch=58°`);
+  // v70.1: Slide 4 TOUJOURS orienté nord en haut (bearing=0) pour repérage facile
+  const bearing = 0;
+  console.log(`zoom=${zoom} bearing=${bearing}° (NORD EN HAUT) pitch=58°`);
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
@@ -4781,7 +4782,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.0-FRONT-EDGE-FIX...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.1-NORTH-UP...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4845,7 +4846,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.0-FRONT-EDGE-FIX",
+      ok: true, cached: false, server_version: "70.1-NORTH-UP",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4866,7 +4867,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.0-FRONT-EDGE-FIX on port ${PORT}`);
+  console.log(`BARLO v70.1-NORTH-UP on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
