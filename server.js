@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "68.3-OSM-RETRY-MIRRORS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "69.0-NOMINATIM-FALLBACK" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -139,25 +139,30 @@ function brng(p1, p2) {
     Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
-// ── v68.3: Détection route la plus proche via OSM Overpass ──
-// UNE seule requête large + 3 miroirs Overpass avec retry automatique
+// ── v69.0: Détection route — Overpass (2 miroirs) + Nominatim fallback ──
 const OVERPASS_ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
 ];
 async function findNearestRoadEdge(coords, cLat, cLon) {
+  // ── MÉTHODE 1: Overpass (détaillé, avec géométrie des routes) ──
+  const overpassResult = await tryOverpass(coords, cLat, cLon);
+  if (overpassResult !== null) return overpassResult;
+  // ── MÉTHODE 2: Nominatim reverse (léger, 1 seul appel) ──
+  const nominatimResult = await tryNominatim(coords, cLat, cLon);
+  if (nominatimResult !== null) return nominatimResult;
+  console.warn("│ ROAD-DETECT: Overpass ET Nominatim ont échoué, fallback premier segment");
+  return null;
+}
+async function tryOverpass(coords, cLat, cLon) {
   try {
-    const radius = 150;
-    // UNE seule requête avec TOUTES les classes de routes, priorisées ensuite par poids
-    const query = `[out:json][timeout:3];way["highway"~"^(primary|secondary|tertiary|trunk|residential|unclassified|living_street|service)$"](around:${radius},${cLat},${cLon});out geom;`;
+    const query = `[out:json][timeout:3];way["highway"~"^(primary|secondary|tertiary|trunk|residential|unclassified|living_street|service)$"](around:150,${cLat},${cLon});out geom;`;
     const data = await fetchOverpassWithRetry(query);
     if (!data || !data.elements || data.elements.length === 0) {
-      console.log("│ OSM: aucune route trouvée dans un rayon de 150m, fallback premier segment");
+      console.log("│ OVERPASS: aucune route trouvée");
       return null;
     }
-    // Classer les routes par importance (poids: route principale > residential > service)
     const ROAD_WEIGHT = { trunk: 5, primary: 5, secondary: 4, tertiary: 3, residential: 2, unclassified: 2, living_street: 2, service: 1 };
-    // Pour chaque arête du polygone, trouver la distance min à une route (pondérée)
     let bestEdge = 0, bestScore = Infinity;
     for (let i = 0; i < coords.length; i++) {
       const j = (i + 1) % coords.length;
@@ -170,18 +175,60 @@ async function findNearestRoadEdge(coords, cLat, cLon) {
         const weight = ROAD_WEIGHT[hw] || 1;
         for (let k = 0; k < way.geometry.length - 1; k++) {
           const d = distPointToSegment(edgeMidLat, edgeMidLon, way.geometry[k].lat, way.geometry[k].lon, way.geometry[k + 1].lat, way.geometry[k + 1].lon);
-          // Score = distance / poids (routes principales ont un score plus bas = priorité)
           const score = d / weight;
           if (score < minScore) { minScore = score; minDist = d; bestRoadType = hw; }
         }
       }
-      console.log(`│ OSM: arête ${i} → dist=${minDist.toFixed(1)}m route=${bestRoadType} score=${minScore.toFixed(1)}`);
+      console.log(`│ OVERPASS: arête ${i} → dist=${minDist.toFixed(1)}m route=${bestRoadType} score=${minScore.toFixed(1)}`);
       if (minScore < bestScore) { bestScore = minScore; bestEdge = i; }
     }
-    console.log(`│ OSM: ✓ front = arête ${bestEdge} (score=${bestScore.toFixed(1)})`);
+    console.log(`│ OVERPASS: ✓ front = arête ${bestEdge} (score=${bestScore.toFixed(1)})`);
     return bestEdge;
   } catch (err) {
-    console.warn(`│ OSM Overpass error: ${err.message}, fallback premier segment`);
+    console.warn(`│ OVERPASS: erreur ${err.message}`);
+    return null;
+  }
+}
+async function tryNominatim(coords, cLat, cLon) {
+  // Nominatim reverse à zoom=17 renvoie la route la plus proche du centroïde
+  // On compare ensuite chaque arête à ce point-route pour trouver le front
+  try {
+    console.log("│ NOMINATIM: tentative reverse geocoding...");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${cLat}&lon=${cLon}&zoom=17&addressdetails=0`;
+    const resp = await fetch(url, {
+      headers: { "User-Agent": "BARLO-RealEstate/1.0 (diagnostic tool)" },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) {
+      console.warn(`│ NOMINATIM: HTTP ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    if (!data || !data.lat || !data.lon) {
+      console.warn("│ NOMINATIM: pas de coordonnées dans la réponse");
+      return null;
+    }
+    const roadLat = parseFloat(data.lat);
+    const roadLon = parseFloat(data.lon);
+    const roadName = data.display_name || "?";
+    console.log(`│ NOMINATIM: route trouvée → "${roadName.substring(0, 60)}" à (${roadLat.toFixed(6)}, ${roadLon.toFixed(6)})`);
+    // Trouver quelle arête est la plus proche de ce point-route
+    let bestEdge = 0, bestDist = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+      const j = (i + 1) % coords.length;
+      const midLat = (coords[i].lat + coords[j].lat) / 2;
+      const midLon = (coords[i].lon + coords[j].lon) / 2;
+      const d = distPointToSegment(roadLat, roadLon, coords[i].lat, coords[i].lon, coords[j].lat, coords[j].lon);
+      console.log(`│ NOMINATIM: arête ${i} → dist au point-route = ${d.toFixed(1)}m`);
+      if (d < bestDist) { bestDist = d; bestEdge = i; }
+    }
+    console.log(`│ NOMINATIM: ✓ front = arête ${bestEdge} (à ${bestDist.toFixed(1)}m du point-route)`);
+    return bestEdge;
+  } catch (err) {
+    console.warn(`│ NOMINATIM: ${err.name === "AbortError" ? "TIMEOUT 4s" : err.message}`);
     return null;
   }
 }
@@ -190,7 +237,7 @@ async function fetchOverpassWithRetry(query) {
   for (let attempt = 0; attempt < OVERPASS_ENDPOINTS.length; attempt++) {
     const endpoint = OVERPASS_ENDPOINTS[attempt];
     try {
-      console.log(`│ OSM: trying ${endpoint.split("//")[1].split("/")[0]} (attempt ${attempt + 1}/${OVERPASS_ENDPOINTS.length})`);
+      console.log(`│ OVERPASS: trying ${endpoint.split("//")[1].split("/")[0]} (${attempt + 1}/${OVERPASS_ENDPOINTS.length})`);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 3000);
       const resp = await fetch(endpoint, {
@@ -201,17 +248,17 @@ async function fetchOverpassWithRetry(query) {
       });
       clearTimeout(timer);
       if (!resp.ok) {
-        console.warn(`│ OSM: ${endpoint.split("//")[1].split("/")[0]} → HTTP ${resp.status}`);
-        continue; // essayer le miroir suivant
+        console.warn(`│ OVERPASS: ${endpoint.split("//")[1].split("/")[0]} → HTTP ${resp.status}`);
+        continue;
       }
       const data = await resp.json();
-      console.log(`│ OSM: ✓ réponse OK de ${endpoint.split("//")[1].split("/")[0]} (${(data.elements || []).length} ways)`);
+      console.log(`│ OVERPASS: ✓ OK de ${endpoint.split("//")[1].split("/")[0]} (${(data.elements || []).length} ways)`);
       return data;
     } catch (e) {
-      console.warn(`│ OSM: ${endpoint.split("//")[1].split("/")[0]} → ${e.name === "AbortError" ? "TIMEOUT 3s" : e.message}`);
+      console.warn(`│ OVERPASS: ${endpoint.split("//")[1].split("/")[0]} → ${e.name === "AbortError" ? "TIMEOUT 3s" : e.message}`);
     }
   }
-  console.warn("│ OSM: tous les miroirs ont échoué");
+  console.warn("│ OVERPASS: tous les miroirs ont échoué");
   return null;
 }
 function distPointToSegment(pLat, pLon, aLat, aLon, bLat, bLon) {
@@ -4690,7 +4737,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v68.3-OSM-RETRY-MIRRORS...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v69.0-NOMINATIM-FALLBACK...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4754,7 +4801,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "68.3-OSM-RETRY-MIRRORS",
+      ok: true, cached: false, server_version: "69.0-NOMINATIM-FALLBACK",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4775,7 +4822,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v68.3-OSM-RETRY-MIRRORS on port ${PORT}`);
+  console.log(`BARLO v69.0-NOMINATIM-FALLBACK on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
