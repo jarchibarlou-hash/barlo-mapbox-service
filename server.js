@@ -4645,7 +4645,7 @@ GEOMETRY RULES (STRICT):
 - Do NOT add text, watermarks, inset images, or UI elements.
 
 VISUAL ENHANCEMENT (MANDATORY):
-- TREES: Add realistic round-canopy trees (dark green, 3D spherical crowns) scattered in green areas between buildings. Vary sizes (small 3-4m, medium 5-6m, large 7-8m). Place them naturally — along roads, in yards, in open spaces. About 30-50 trees visible in the scene.
+- TREES: Add small realistic round-canopy trees (dark green, 3D spherical crowns) scattered in green areas between buildings. Trees must be SMALL — canopy diameter 2-4m maximum, never bigger than a car. Do NOT make oversized trees that dwarf buildings. Place them naturally along roads and in yards. About 20-35 trees visible. No trees inside the beige parcel area.
 - SHADOWS: Add realistic cast shadows from ALL buildings and trees. Sun from the upper-left (northwest). Shadows should fall on the ground, roads, and other surfaces. Soft penumbra edges.
 - BUILDINGS: Apply concrete/gray texture to all buildings. Slightly weathered, realistic. Not pure white — use light gray (#c8c4bc) with subtle variation. Keep the flat-roof architectural style.
 - ROADS: Dark asphalt gray (#3a3a3a), slightly textured. No vegetation on road surfaces.
@@ -4691,42 +4691,9 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
             // L'AI altère/efface les lignes → on les redessine en canvas
             // pour garantir des bords nets et géométriques.
             // ═══════════════════════════════════════════════════════════════
-            if (parcelScreenPts && parcelScreenPts.length >= 3) {
-              finalCtx.save();
-              // v70.10: Fond parcelle BEIGE/SABLE OPAQUE — terrain vide, masque tout contenu AI
-              finalCtx.beginPath();
-              finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
-              for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
-              finalCtx.closePath();
-              finalCtx.fillStyle = "rgba(210, 192, 155, 0.72)";
-              finalCtx.fill();
-
-              // Contour parcelle — rouge vif, épais, net
-              finalCtx.beginPath();
-              finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
-              for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
-              finalCtx.closePath();
-              finalCtx.strokeStyle = "#c04020";
-              finalCtx.lineWidth = 5;
-              finalCtx.lineJoin = "miter";
-              finalCtx.stroke();
-            }
-            if (envelopeScreenPts && envelopeScreenPts.length >= 3) {
-              // Enveloppe — tirets rouge, net
-              finalCtx.beginPath();
-              finalCtx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
-              for (let i = 1; i < envelopeScreenPts.length; i++) finalCtx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
-              finalCtx.closePath();
-              finalCtx.strokeStyle = "#c04020";
-              finalCtx.lineWidth = 4;
-              finalCtx.setLineDash([14, 7]);
-              finalCtx.lineJoin = "miter";
-              finalCtx.stroke();
-              finalCtx.setLineDash([]);
-
-              // v70.10: Annotations setback DÉSACTIVÉES (à la demande)
-              finalCtx.restore();
-            }
+            // v70.10: PAS de re-dessin parcelle/enveloppe en canvas
+            // Mapbox les dessine déjà à la bonne échelle via fill-extrusion + line layers.
+            // Le re-dessin canvas créait un doublon à une échelle différente (projection GPS→px décalée).
 
             drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
             drawSolarArc(finalCtx, W, H, { bearing });
