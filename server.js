@@ -2528,15 +2528,12 @@ function computeSmartScenarios({
       if (r.C.levels === r.B.levels) r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.90);
       recalcSdp(r.C);
     }
-    // Enforce: A.total_units >= B.total_units >= C.total_units
-    // If B > A, cap B to A's level
-    if (r.B.total_units > r.A.total_units) {
-      r.B.total_units = r.A.total_units;
-    }
-    // If C > B, cap C to B's level
-    if (r.C.total_units > r.B.total_units) {
-      r.C.total_units = r.B.total_units;
-    }
+    // v5.4 FIX: Ne PAS capper total_units entre scénarios.
+    // B peut avoir PLUS de logements que A si les logements sont plus compacts (UNIT_SIZES plus petits).
+    // La hiérarchie A >= B >= C s'applique aux NIVEAUX et à la SDP, pas au nombre de logements.
+    // L'ancien code écrasait B.total_units = A.total_units SANS recalculer unit_mix_detail,
+    // surf_hab et m2_par_logt, ce qui créait une incohérence (unit_mix=10 mais total_units=8).
+    // Supprimé — le nombre de logements est un RÉSULTAT du dimensionnement, pas une contrainte.
     // SDP check (original logic preserved)
     if (r.A.sdp_m2 < r.B.sdp_m2) {
       r.A.levels = Math.max(r.A.levels, r.B.levels);
