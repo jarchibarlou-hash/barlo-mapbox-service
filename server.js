@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.3-TILEQUERY" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.4-ROADS" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3895,22 +3895,22 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
+        "paint": { "line-color": "#2a2a2a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 14, 16, 28, 17, 40, 18, 52] } },
       { "id": "road-case-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
+        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 14, 17, 20, 18, 28] } },
       { "id": "road-fill-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 24, 17, 36, 18, 48] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } },
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 10, 17, 16, 18, 24] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -3949,7 +3949,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
     const labelLayerId = undefined;
 
-    // v64.1: BÂTIMENTS 3D — BLANCS, hauteurs 1-3 étages (3-10m), ombres nettes
+    // v70.4: BÂTIMENTS 3D — posés au sol (base=0), hauteurs réalistes
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -3965,30 +3965,38 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-height': [
           'let', 'h', ['coalesce', ['get', 'height'], 0],
           ['case',
-            ['>', ['var', 'h'], 2], ['*', ['var', 'h'], 1.2],
+            ['>', ['var', 'h'], 2], ['var', 'h'],
             ['match', ['%', ['to-number', ['id']], 7],
-              0, 4, 1, 4, 2, 7.5, 3, 7.5, 4, 11, 5, 14, 6, 4, 7.5
+              0, 4, 1, 4, 2, 7, 3, 7, 4, 10, 5, 13, 6, 4, 7
             ]
           ]
         ],
-        'fill-extrusion-base': 0,
+        'fill-extrusion-base': ['case',
+          ['has', 'min_height'], 0,
+          0
+        ],
         'fill-extrusion-opacity': 1.0,
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
 
-    // v64: Parcelle — fond sable/beige clair bien visible + contour rouge-orangé épais
+    // v70.4: Parcelle — fond SOUS les bâtiments, contour AU-DESSUS
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.55 } }, '3d-buildings');
+    // Contour parcelle et enveloppe : fill-extrusion à hauteur 0.3m pour qu'ils
+    // soient visibles SUR le sol (pas cachés sous les bâtiments 3D)
+    map.addLayer({ id: 'parcel-outline-3d', type: 'fill-extrusion', source: 'parcel',
+      paint: { 'fill-extrusion-color': '#c45030', 'fill-extrusion-height': 0.3,
+               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.0 } });
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-opacity': 1.0 } }, '3d-buildings');
+      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-opacity': 1.0 } });
 
-    // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
+    // v70.4: Zone constructible (reculs)
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#c45030', 'line-width': 5,
-               'line-dasharray': [6, 4], 'line-opacity': 1.0 } }, '3d-buildings');
+               'line-dasharray': [6, 4], 'line-opacity': 1.0 } });
 
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
@@ -4053,19 +4061,19 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 7, 16, 14, 18, 22] } },
+        "paint": { "line-color": "#2a2a2a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 14, 16, 28, 17, 40, 18, 52, 19, 60] } },
       { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 8, 18, 13] } },
+        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 14, 17, 20, 18, 28, 19, 36] } },
       { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 6, 16, 12, 18, 20] } },
+        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 24, 17, 36, 18, 48, 19, 56] } },
       { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 3, 16, 7, 18, 11] } }
+        "paint": { "line-color": "#5a5a5a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 4, 16, 10, 17, 16, 18, 24, 19, 32] } }
     ]
   };
   const map = new mapboxgl.Map({
@@ -4082,8 +4090,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       paint: {
         'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
           0, '#f8f5f0', 4, '#f0ece6', 10, '#e4e0d8', 20, '#d0ccc4', 40, '#b8b4ac'],
-        'fill-extrusion-height': ['case', ['has', 'height'], ['*', ['get', 'height'], 1.6], 8],
-        'fill-extrusion-base': ['case', ['has', 'min_height'], ['*', ['get', 'min_height'], 1.6], 0],
+        'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
+        'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true,
       },
     });
@@ -4874,7 +4882,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.3-TILEQUERY...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.4-ROADS...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4938,7 +4946,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.3-TILEQUERY",
+      ok: true, cached: false, server_version: "70.4-ROADS",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4959,7 +4967,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.3-TILEQUERY on port ${PORT}`);
+  console.log(`BARLO v70.4-ROADS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
