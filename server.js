@@ -4381,25 +4381,28 @@ app.post("/generate", async (req, res) => {
     // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v67.1-ROADS-SETBACK...");
-        const resizedCanvas = createCanvas(1024, 1024);
-        // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
-        resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, 1280, 1280, 0, 0, 1024, 1024);
-        const pngResized = resizedCanvas.toBuffer("image/png");
-        const b64Input = pngResized.toString("base64");
-        console.log(`[SLIDE4-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
+        console.log("[SLIDE4-POLISH] Starting AI polish v68.0-MINIMAL...");
+        // v68: Envoyer en pleine résolution (1280×1280) pour éviter le flou du downscale
+        const b64Input = pngClean.toString("base64");
+        console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes, b64: ${b64Input.length} chars`);
 
-        // === OPTION A (ACTIVE) ===
-        const polishPrompt = `Apply realistic textures to this 3D architectural site rendering. STRICT — no invention, no artistic effects, no bloom, no glow.
-LOCK: Do NOT move, add, or remove ANY building, road, or line. Do NOT add inset images, frames, or text. Do NOT shift, pan, crop, or reframe the image. Keep the EXACT same camera position, framing, and composition — the center of the image must stay the center.
-PARCEL: Red/orange solid boundary and dashed setback lines must stay CRISP, SHARP — no bleeding, no smearing.
-GRASS: Textured green grass with varied shades — patches of light and dark green, natural ground variation. NOT flat uniform color.
-TREES: 12-15 small rounded-canopy trees distributed EVENLY across the entire scene — along roads, between buildings, in open spaces. Balanced spacing, not clustered.
-SHADOWS: Strong well-defined cast shadows on the ground from EVERY building and EVERY tree. Clear shadow direction, sharp edges, visible on grass.
-ROADS: Main road must be DARK BLACK BITUMEN (#333) — NO grass, NO green on the road surface. Fully paved, dark asphalt, 7m wide. Secondary roads also dark gray asphalt. ALL roads must be clearly darker than grass with ZERO vegetation on them.
-BUILDINGS: OFF-WHITE / cream white (blanc cassé) concrete with subtle plaster texture. Buildings must stay LIGHT — NOT gray, NOT dark, NOT charcoal. Keep them bright and clean.
-PARCEL GROUND: Brown/ochre bare soil inside parcel — NOT green.
-LIGHT: Warm natural sunlight, soft ambient. No dramatic effects, no moody atmosphere, no dark tones.`;
+        // === OPTION A (ACTIVE) — v68 MINIMAL POLISH ===
+        const polishPrompt = `Enhance this 3D architectural site rendering with MINIMAL changes. Preservation is the priority.
+
+ABSOLUTE RULES:
+- Do NOT move, resize, add or remove ANY element (buildings, roads, parcels, lines, labels).
+- Do NOT shift camera, crop, reframe, or change composition.
+- Do NOT add text, frames, inset images, or watermarks.
+- Keep ALL red/orange parcel boundaries and dashed lines PIXEL-PERFECT — zero bleeding, zero smearing.
+
+TEXTURE ONLY (subtle):
+- Roads: darken to asphalt gray (#444). No vegetation on road surfaces.
+- Grass areas: add subtle shade variation (not flat green). Keep existing tree positions.
+- Buildings: keep existing shapes, lighten to off-white/cream. Subtle concrete texture.
+- Parcel interior: brown/ochre bare soil.
+- Lighting: warm natural daylight, soft shadows. No dramatic effects.
+
+OUTPUT: Same resolution, same framing, same composition. Only textures improved.`;
 
         const oaiRes = await fetch("https://api.openai.com/v1/responses", {
           method: "POST",
