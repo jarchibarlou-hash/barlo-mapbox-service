@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.10-MASSING" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "71.0-STABLE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4095,7 +4095,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  const rdcH = massingParams.rdc_height || (massingParams.commerce_levels > 0 ? 3.5 : 3.0);  // v70.10
+  const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
 <html>
@@ -4121,14 +4121,14 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
-      { "id": "background", "type": "background", "paint": { "background-color": "#e0dad0" } },
-      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#b8cdd8" } },
+      { "id": "background", "type": "background", "paint": { "background-color": "#eae8e4" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c4d4de" } },
       { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#c8d0b8" } },
+        "paint": { "fill-color": "#dddcd6" } },
       { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#ddd8cc" } },
+        "paint": { "fill-color": "#e4e2de" } },
       { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
@@ -4154,35 +4154,36 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setLight({ anchor: 'map', color: '#fff4e8', intensity: 0.45, position: [1.15, 195, 35] });
+    // v71: Lumière douce pour ombres subtiles
+    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
       paint: {
-        'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0, '#f8f5f0', 4, '#f0ece6', 10, '#e4e0d8', 20, '#d0ccc4', 40, '#b8b4ac'],
+        // v71: Bâtiments blancs/crème — style maquette propre
+        'fill-extrusion-color': '#f0ede8',
         'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.95, 'fill-extrusion-vertical-gradient': true,
+        'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    // v64: Parcelle — fond sable/beige + contour rouge-orangé épais
+    // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.50 } }, '3d-buildings');
+      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.60 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-opacity': 1.0 } }, '3d-buildings');
-    // v64: Zone constructible (reculs) — tirets rouge-orangé bien distincts
+      paint: { 'line-color': '#c04020', 'line-width': 5, 'line-opacity': 1.0 } });
+    // v71: Zone constructible (reculs) — tirets rouge au-dessus des bâtiments
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
-      paint: { 'line-color': '#c45030', 'line-width': 5, 'line-dasharray': [6, 4], 'line-opacity': 1.0 } }, '3d-buildings');
+      paint: { 'line-color': '#c04020', 'line-width': 4, 'line-dasharray': [6, 4], 'line-opacity': 1.0 } });
     // ── MASSING : étages individuels, RDC=${rdcH}m, courants=${etageH}m, gaps entre niveaux ──
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
     const etageH = ${etageH};
     const totalLevels = ${massingParams.levels || Math.round(massingParams.total_height / etageH)};
     const commLevels = ${massingParams.commerce_levels};
-    const gap = 0.45;  // v70.10: gap plus large pour lignes fermes entre niveaux
+    const gap = 0.30;  // v71: gap net entre niveaux (ligne noire visible)
     for (let f = 0; f < totalLevels; f++) {
       // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
       const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
@@ -4517,7 +4518,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 
   // ── ANNOTATIONS ÉTAGES : traits + labels à droite du bâtiment (style référence) ──
   // Positionnées au centre-droit de l'image
-  const rdcH_m = commerce_levels > 0 ? 3.5 : 3.0;  // v70.10: commerce = 3.5m
+  const rdcH_m = 3.0;  // v71: tous les niveaux = 3m
   const etageH_m = 3.0;
   const realTotalH = rdcH_m + (levels - 1) * etageH_m;
   const sdpTotale = fp_m2 * levels;
@@ -4887,7 +4888,7 @@ app.post("/generate-massing", async (req, res) => {
     const page = await browser.newPage();
     // ── PIPELINE HEKTAR : capture HD x2 ──
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
-    const rdcH = commerceLevels > 0 ? 3.5 : 3.0;   // v70.10: RDC commerce = 3.5m, sinon 3m
+    const rdcH = 3.0;   // v71: RDC toujours 3m (commerce et logement même hauteur)
     const etageH = 3.0;                              // étages courants = 3m
     const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
     console.log(`[HEKTAR] levels=${levels} rdcH=${rdcH}m etageH=${etageH}m totalH=${realTotalH}m commerce=${commerceLevels}`);
@@ -4924,74 +4925,12 @@ app.post("/generate-massing", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
-    // ── v61.9: Massing polish — CLEAN SMOOTH ──
-    if (OPENAI_API_KEY) {
-      try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.10-MASSING...`);
-        const resizedCanvas = createCanvas(1024, 1024);
-        // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
-        resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
-        const pngResized = resizedCanvas.toBuffer("image/png");
-        const b64Input = pngResized.toString("base64");
-        console.log(`[MASSING-POLISH] Resized: ${pngResized.length} bytes, b64: ${b64Input.length} chars`);
-
-        const polishPrompt = `Premium white architectural maquette look. Keep EXACT geometry, camera, framing unchanged. Do NOT invent or remove anything.
-Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: MEDIUM GRAY (#888 to #999) clearly visible against white ground — roads must be distinctly darker than the white ground. Ground: very light warm gray (#e8e8e4). Soft subtle shadows under buildings. Overall BRIGHT, CLEAN, WHITE premium feel — like a high-end architectural scale model photographed in a studio. The central massing building has BRIGHT ORANGE layers (commerce/RDC) and BLUE layers (logement/étages) — keep these vivid colors exactly as-is, do NOT wash them out. The dark horizontal lines between floor levels must remain visible. Red parcel boundary lines must remain. No grain, no fog, no dark tones.`;
-
-        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4.1",
-            input: [{ role: "user", content: [
-              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-              { type: "input_text", text: polishPrompt }
-            ]}],
-            tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-          })
-        });
-        console.log(`[MASSING-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
-        const oaiJson = await oaiRes.json();
-
-        if (oaiJson.error) {
-          console.error(`[MASSING-POLISH] API error: ${JSON.stringify(oaiJson.error)}`);
-        } else {
-          let polishedB64 = null;
-          if (oaiJson.output) {
-            for (const item of oaiJson.output) {
-              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-            }
-          }
-          if (polishedB64) {
-            console.log(`[MASSING-POLISH] SUCCESS (${polishedB64.length} chars, ${Date.now() - t0}ms)`);
-            const enhBuf = Buffer.from(polishedB64, "base64");
-            const fCanvas = createCanvas(W, H);
-            fCanvas.getContext("2d").drawImage(await loadImage(enhBuf), 0, 0, W, H);
-            drawMassingOverlays(fCanvas.getContext("2d"), W, H, {
-              site_area: Number(site_area), bearing, label,
-              levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
-              total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
-              typology: massingCoords._typology,
-            });
-            const finalPng = fCanvas.toBuffer("image/png");
-            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
-            if (!ue2) {
-              const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-              enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
-              console.log(`✓ [MASSING-POLISH] Enhanced OK: ${enhancedUrl} (${Date.now() - t0}ms)`);
-            } else {
-              console.error(`[MASSING-POLISH] Upload error: ${JSON.stringify(ue2)}`);
-            }
-          } else {
-            console.warn(`[MASSING-POLISH] No image in response: ${JSON.stringify(oaiJson).substring(0, 300)}`);
-          }
-        }
-      } catch (oaiErr) { console.error("[MASSING-POLISH] Exception:", oaiErr.message); }
-    } else {
-      console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
-    }
+    // v71: PAS de AI polish pour les massing — rendu 100% déterministe via Mapbox
+    // L'AI polish créait des rendus incohérents entre A, B et C (couleurs, textures, artefacts différents).
+    // Le style Mapbox maquette blanche + overlays canvas = résultat propre, stable, identique à chaque run.
+    console.log(`[MASSING] v71: No AI polish — deterministic Mapbox rendering (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "70.10-MASSING",
+      ok: true, cached: false, server_version: "71.0-STABLE",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -5012,7 +4951,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: MEDIUM GRAY (#
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.10-MASSING on port ${PORT}`);
+  console.log(`BARLO v71.0-STABLE on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
