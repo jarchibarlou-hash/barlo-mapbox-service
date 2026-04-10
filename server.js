@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "71.0-STABLE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "71.1-STABLE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4764,9 +4764,12 @@ app.post("/generate-massing", async (req, res) => {
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
   const label = String(massing_label).toUpperCase();
-  // v71: Fallback — si program_main est vide, utiliser project_type (colonne Sheet "project_type")
-  const effectiveProgramMain = program_main || project_type || "";
-  console.log(`[MASSING] program_main="${program_main}" project_type="${project_type}" → effective="${effectiveProgramMain}"`);
+  // v71.1: Fallback ROBUSTE — chercher "mixte" dans TOUS les champs possibles
+  // Make.com peut envoyer le type de projet sous n'importe quel nom de champ
+  const bodyStr = JSON.stringify(req.body).toLowerCase();
+  const bodyHasMixte = /mixte|mixed/i.test(bodyStr);
+  const effectiveProgramMain = program_main || project_type || (bodyHasMixte ? "USAGE_MIXTE" : "");
+  console.log(`[MASSING v71.1] program_main="${program_main}" project_type="${project_type}" bodyHasMixte=${bodyHasMixte} → effective="${effectiveProgramMain}"`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
@@ -4942,7 +4945,7 @@ app.post("/generate-massing", async (req, res) => {
     // Le style Mapbox maquette blanche + overlays canvas = résultat propre, stable, identique à chaque run.
     console.log(`[MASSING] v71: No AI polish — deterministic Mapbox rendering (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "71.0-STABLE",
+      ok: true, cached: false, server_version: "71.1-STABLE",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4963,7 +4966,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v71.0-STABLE on port ${PORT}`);
+  console.log(`BARLO v71.1-STABLE on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
