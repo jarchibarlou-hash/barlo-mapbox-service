@@ -4053,15 +4053,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
 
-    // v70.5: Parcelle — fond SOUS les bâtiments, contour AU-DESSUS
+    // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.55 } }, '3d-buildings');
-    // Contour parcelle et enveloppe : fill-extrusion à hauteur 0.3m pour qu'ils
-    // soient visibles SUR le sol (pas cachés sous les bâtiments 3D)
-    map.addLayer({ id: 'parcel-outline-3d', type: 'fill-extrusion', source: 'parcel',
-      paint: { 'fill-extrusion-color': '#c45030', 'fill-extrusion-height': 0.3,
-               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.0 } });
+    // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
+    map.addLayer({ id: 'parcel-fill-3d', type: 'fill-extrusion', source: 'parcel',
+      paint: { 'fill-extrusion-color': '#d4c8a0', 'fill-extrusion-height': 0.15,
+               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.85 } });
+    // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
 
@@ -4652,7 +4650,7 @@ VISUAL ENHANCEMENT (MANDATORY):
 - BUILDINGS: Apply concrete/gray texture to all buildings. Slightly weathered, realistic. Not pure white — use light gray (#c8c4bc) with subtle variation. Keep the flat-roof architectural style.
 - ROADS: Dark asphalt gray (#3a3a3a), slightly textured. No vegetation on road surfaces.
 - GRASS: Rich green lawn texture with subtle shade variations. Not flat — show mowing patterns or slight color variation.
-- PARCEL: The highlighted parcel area (beige/ochre/sand colored ground with red border) must remain clearly BEIGE/SAND — do NOT turn it green. The parcel ground is intentionally a different color from the surrounding grass to show the building plot. Keep this warm sandy/beige color visible and prominent.
+- PARCEL: The highlighted parcel area (beige/ochre/sand colored ground with red border) must be a CLEAN, FLAT, EMPTY plot of beige/sand ground. Do NOT place any buildings, structures, objects, vegetation, or details INSIDE the parcel. The parcel interior must be ONLY flat beige/sand ground with the red boundary line and dashed envelope line visible. No trees, no grass, no buildings inside — just clean empty sand/beige terrain.
 - LIGHTING: Warm afternoon daylight. Natural ambient occlusion where buildings meet the ground.
 
 QUALITY: Photo-realistic architectural visualization quality. Clean, professional, suitable for a client presentation.`;
@@ -4695,12 +4693,12 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
             // ═══════════════════════════════════════════════════════════════
             if (parcelScreenPts && parcelScreenPts.length >= 3) {
               finalCtx.save();
-              // v70.10: Fond parcelle BEIGE/SABLE OPAQUE — comme l'exemple de référence
+              // v70.10: Fond parcelle BEIGE/SABLE OPAQUE — terrain vide, masque tout contenu AI
               finalCtx.beginPath();
               finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
               for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
               finalCtx.closePath();
-              finalCtx.fillStyle = "rgba(212, 196, 160, 0.52)";
+              finalCtx.fillStyle = "rgba(210, 192, 155, 0.72)";
               finalCtx.fill();
 
               // Contour parcelle — rouge vif, épais, net
