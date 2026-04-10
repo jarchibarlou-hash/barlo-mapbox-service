@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.5-TREES" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "70.6-ROADFIX" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -231,42 +231,67 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
 
     const results = await Promise.all(tqPromises);
 
-    // Scorer chaque arête : la meilleure route trouvée (poids × proximité)
-    let bestEdge = -1, bestScore = -Infinity;
+    // ══════════════════════════════════════════════════════════════════
+    // v70.6 SCORING — 2 passes :
+    //   Pass 1 : routes à 4-50m (distance normale d'accès)
+    //   Pass 2 : si rien en pass 1, accepter < 4m (ruelle)
+    //
+    // Pourquoi ? Les routes à < 4m du bord de parcelle sont souvent
+    // des ruelles/passages mitoyens, PAS la route principale d'accès.
+    // La vraie route d'accès est typiquement à 5-20m (largeur de la
+    // rue + trottoir + retrait clôture).
+    // ══════════════════════════════════════════════════════════════════
+    const MIN_ROAD_DIST = 4; // mètres — en dessous = ruelle/mur mitoyen
+
+    // Collecter les scores pour chaque arête
+    const edgeScores = [];
     for (const r of results) {
       if (r.error) {
         console.log(`│ MAPBOX-TQ: arête ${r.edgeIdx} → ERREUR ${r.error}`);
+        edgeScores.push({ idx: r.edgeIdx, scoreNormal: 0, scoreAll: 0, bestClass: "?", bestDist: 999, bestDistAll: 999 });
         continue;
       }
       if (r.roads.length === 0) {
         console.log(`│ MAPBOX-TQ: arête ${r.edgeIdx} → aucune route dans 50m`);
+        edgeScores.push({ idx: r.edgeIdx, scoreNormal: 0, scoreAll: 0, bestClass: "?", bestDist: 999, bestDistAll: 999 });
         continue;
       }
-      // Trouver la meilleure route pour cette arête
-      let edgeBestScore = 0;
-      let edgeBestClass = "?";
-      let edgeBestDist = 999;
+      let scoreNormal = 0, scoreAll = 0;
+      let bestClassNormal = "?", bestDistNormal = 999;
+      let bestClassAll = "?", bestDistAll = 999;
       for (const feat of r.roads) {
         const cls = feat.properties.class || "service";
         const weight = ROAD_CLASS_WEIGHT[cls] || 1;
         const dist = feat.properties.tilequery?.distance || 50;
-        // Score = poids de la route / distance (plus c'est gros et proche, mieux c'est)
-        const score = weight * 100 / Math.max(1, dist);
-        if (score > edgeBestScore) {
-          edgeBestScore = score;
-          edgeBestClass = cls;
-          edgeBestDist = dist;
-        }
+        const sc = weight * 100 / Math.max(1, dist);
+        // Score ALL (incluant ruelles)
+        if (sc > scoreAll) { scoreAll = sc; bestClassAll = cls; bestDistAll = dist; }
+        // Score NORMAL (exclut ruelles < 4m)
+        if (dist >= MIN_ROAD_DIST && sc > scoreNormal) { scoreNormal = sc; bestClassNormal = cls; bestDistNormal = dist; }
       }
-      console.log(`│ MAPBOX-TQ: arête ${r.edgeIdx} → ${r.roads.length} routes, best=${edgeBestClass} à ${edgeBestDist.toFixed(1)}m (score=${edgeBestScore.toFixed(1)})`);
-      if (edgeBestScore > bestScore) {
-        bestScore = edgeBestScore;
-        bestEdge = r.edgeIdx;
-      }
+      const bestClass = scoreNormal > 0 ? bestClassNormal : bestClassAll;
+      const bestDist = scoreNormal > 0 ? bestDistNormal : bestDistAll;
+      console.log(`│ MAPBOX-TQ: arête ${r.edgeIdx} → ${r.roads.length} routes, best=${bestClass} à ${bestDist.toFixed(1)}m (score_normal=${scoreNormal.toFixed(1)} score_all=${scoreAll.toFixed(1)}${bestDistAll < MIN_ROAD_DIST ? " ⚠ruelle@" + bestDistAll.toFixed(1) + "m" : ""})`);
+      edgeScores.push({ idx: r.edgeIdx, scoreNormal, scoreAll, bestClass, bestDist: bestDistNormal, bestDistAll });
     }
 
+    // Pass 1 : chercher la meilleure arête avec des routes à distance normale (≥4m)
+    let bestEdge = -1, bestScore = -Infinity;
+    for (const es of edgeScores) {
+      if (es.scoreNormal > bestScore) { bestScore = es.scoreNormal; bestEdge = es.idx; }
+    }
+    if (bestEdge >= 0 && bestScore > 0) {
+      console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score_normal=${bestScore.toFixed(1)}) — route d'accès principale`);
+      return bestEdge;
+    }
+
+    // Pass 2 : fallback — accepter les ruelles (< 4m)
+    bestEdge = -1; bestScore = -Infinity;
+    for (const es of edgeScores) {
+      if (es.scoreAll > bestScore) { bestScore = es.scoreAll; bestEdge = es.idx; }
+    }
     if (bestEdge >= 0) {
-      console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score=${bestScore.toFixed(1)})`);
+      console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score_all=${bestScore.toFixed(1)}) — fallback ruelle`);
       return bestEdge;
     }
     console.warn("│ MAPBOX-TQ: aucune route trouvée pour aucune arête");
@@ -4861,7 +4886,7 @@ app.post("/generate-massing", async (req, res) => {
     // ── v61.9: Massing polish — CLEAN SMOOTH ──
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] Starting AI polish v70.5-TREES...`);
+        console.log(`[MASSING-POLISH] Starting AI polish v70.6-ROADFIX...`);
         const resizedCanvas = createCanvas(1024, 1024);
         // v65.2: Envoyer l'image SANS overlays au polish AI (pngClean, pas png)
         resizedCanvas.getContext("2d").drawImage(await loadImage(pngClean), 0, 0, W, H, 0, 0, 1024, 1024);
@@ -4925,7 +4950,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
       console.warn("[POLISH] Skipped — no OPENAI_API_KEY");
     }
     return res.json({
-      ok: true, cached: false, server_version: "70.5-TREES",
+      ok: true, cached: false, server_version: "70.6-ROADFIX",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
@@ -4946,7 +4971,7 @@ Make all surrounding buildings BRIGHT WHITE clean plaster. Roads: light beige/cr
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v70.5-TREES on port ${PORT}`);
+  console.log(`BARLO v70.6-ROADFIX on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
