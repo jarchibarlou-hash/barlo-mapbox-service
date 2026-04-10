@@ -12,9 +12,9 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "67.1-ROADS-SETBACK" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "68.0-OSM-FRONT-DETECT" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
-app.post("/diag-massing", (req, res) => {
+app.post("/diag-massing", async (req, res) => {
   try {
     const { polygon_points, site_area, setback_front = 3, setback_side = 3, setback_back = 3,
       fp_m2 = 1147, envelope_w = 24, envelope_d = 24 } = req.body;
@@ -30,8 +30,10 @@ app.post("/diag-massing", (req, res) => {
     const parcelM = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
     const parcelMinX = Math.min(...parcelM.map(p => p.x)), parcelMaxX = Math.max(...parcelM.map(p => p.x));
     const parcelMinY = Math.min(...parcelM.map(p => p.y)), parcelMaxY = Math.max(...parcelM.map(p => p.y));
+    // v68: Détection front via OSM
+    const frontEdgeIndex = await findNearestRoadEdge(coords, cLat, cLon);
     // Enveloppe
-    const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
+    const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
     const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
     const envMinX = Math.min(...envM.map(p => p.x)), envMaxX = Math.max(...envM.map(p => p.x));
     const envMinY = Math.min(...envM.map(p => p.y)), envMaxY = Math.max(...envM.map(p => p.y));
@@ -137,22 +139,90 @@ function brng(p1, p2) {
     Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
-function computeAccessPoint(coords, cLat, cLon) {
-  // Le côté "avant" = le côté dont le milieu a la plus haute latitude (face route)
-  let bestMidLat = -Infinity, bestI = 0;
-  for (let i = 0; i < coords.length; i++) {
-    const j = (i + 1) % coords.length;
-    const midLat = (coords[i].lat + coords[j].lat) / 2;
-    if (midLat > bestMidLat) { bestMidLat = midLat; bestI = i; }
+// ── v68: Détection route la plus proche via OSM Overpass ──
+async function findNearestRoadEdge(coords, cLat, cLon) {
+  try {
+    const radius = 150; // chercher les routes dans un rayon de 150m
+    const query = `[out:json][timeout:5];way["highway"~"^(primary|secondary|tertiary|residential|unclassified|living_street|service)$"](around:${radius},${cLat},${cLon});out geom;`;
+    const resp = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `data=${encodeURIComponent(query)}`,
+      timeout: 8000,
+    });
+    if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (!data.elements || data.elements.length === 0) {
+      console.log("│ OSM: aucune route trouvée dans un rayon de 150m, fallback premier segment");
+      return null;
+    }
+    // Collecter tous les segments de route
+    const roadSegs = [];
+    for (const way of data.elements) {
+      if (!way.geometry) continue;
+      for (let k = 0; k < way.geometry.length - 1; k++) {
+        roadSegs.push({ p1: way.geometry[k], p2: way.geometry[k + 1] });
+      }
+    }
+    if (roadSegs.length === 0) return null;
+    // Pour chaque arête du polygone, trouver la distance min à une route
+    let bestEdge = 0, bestDist = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+      const j = (i + 1) % coords.length;
+      const edgeMidLat = (coords[i].lat + coords[j].lat) / 2;
+      const edgeMidLon = (coords[i].lon + coords[j].lon) / 2;
+      // Distance min de ce milieu d'arête à tous les segments de route
+      let minDist = Infinity;
+      for (const seg of roadSegs) {
+        const d = distPointToSegment(edgeMidLat, edgeMidLon, seg.p1.lat, seg.p1.lon, seg.p2.lat, seg.p2.lon);
+        if (d < minDist) minDist = d;
+      }
+      if (minDist < bestDist) { bestDist = minDist; bestEdge = i; }
+    }
+    console.log(`│ OSM: route la plus proche à ${bestDist.toFixed(1)}m de l'arête ${bestEdge}`);
+    return bestEdge;
+  } catch (err) {
+    console.warn(`│ OSM Overpass error: ${err.message}, fallback premier segment`);
+    return null;
+  }
+}
+function distPointToSegment(pLat, pLon, aLat, aLon, bLat, bLon) {
+  // Distance approximative (mètres) d'un point à un segment en coordonnées GPS
+  const R = 6371000;
+  const toRad = Math.PI / 180;
+  const px = (pLon - aLon) * toRad * R * Math.cos(aLat * toRad);
+  const py = (pLat - aLat) * toRad * R;
+  const ax = 0, ay = 0;
+  const bx = (bLon - aLon) * toRad * R * Math.cos(aLat * toRad);
+  const by = (bLat - aLat) * toRad * R;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  const closestX = ax + t * dx, closestY = ay + t * dy;
+  const ddx = px - closestX, ddy = py - closestY;
+  return Math.sqrt(ddx * ddx + ddy * ddy);
+}
+async function computeAccessPoint(coords, cLat, cLon) {
+  // v68: Détection intelligente du côté "avant" via route OSM
+  let bestI = 0;
+  const osmEdge = await findNearestRoadEdge(coords, cLat, cLon);
+  if (osmEdge !== null) {
+    bestI = osmEdge;
+  } else {
+    // Fallback: premier segment du polygone (convention de dessin)
+    bestI = 0;
+    console.log("│ AccessPoint fallback: premier segment du polygone");
   }
   const j = (bestI + 1) % coords.length;
   const midLat = (coords[bestI].lat + coords[j].lat) / 2;
   const midLon = (coords[bestI].lon + coords[j].lon) / 2;
   const edgeBrng = brng(coords[bestI], coords[j]);
   const outBrng = (edgeBrng + 90) % 360;
+  console.log(`│ AccessPoint: edge=${bestI} midLat=${midLat.toFixed(6)} bearing=${outBrng.toFixed(0)}°`);
   return { lat: midLat, lon: midLon, bearing: outBrng };
 }
-function computeEnvelope(coords, cLat, cLon, front, side, back) {
+function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const n = pts.length;
   // ── v56.3 FIX: Détecter le sens de rotation (CW vs CCW) ──
@@ -165,10 +235,19 @@ function computeEnvelope(coords, cLat, cLon, front, side, back) {
   // Si CW (windingSum < 0), on inverse le signe de l'offset pour aller vers l'intérieur
   const windingSign = windingSum >= 0 ? 1 : -1;
   console.log(`│ Envelope winding: ${windingSum >= 0 ? "CCW" : "CW"} (sign=${windingSign}) sum=${windingSum.toFixed(1)}`);
-  let maxLat = -Infinity, rb = 0;
-  for (let i = 0; i < n - 1; i++) {
-    const ml = (coords[i].lat + coords[(i + 1) % n].lat) / 2;
-    if (ml > maxLat) { maxLat = ml; rb = brng(coords[i], coords[(i + 1) % n]); }
+  // v68: Utiliser frontEdgeIndex (détecté par OSM) au lieu de maxLat
+  let rb = 0;
+  if (frontEdgeIndex !== undefined && frontEdgeIndex !== null && frontEdgeIndex < n) {
+    rb = brng(coords[frontEdgeIndex], coords[(frontEdgeIndex + 1) % n]);
+    console.log(`│ Envelope front: edge=${frontEdgeIndex} (OSM) bearing=${rb.toFixed(0)}°`);
+  } else {
+    // Fallback: maxLat (ancien comportement)
+    let maxLat = -Infinity;
+    for (let i = 0; i < n - 1; i++) {
+      const ml = (coords[i].lat + coords[(i + 1) % n].lat) / 2;
+      if (ml > maxLat) { maxLat = ml; rb = brng(coords[i], coords[(i + 1) % n]); }
+    }
+    console.log(`│ Envelope front: maxLat fallback bearing=${rb.toFixed(0)}°`);
   }
   function setSB(b) { let d = ((b - rb) + 360) % 360; if (d > 180) d = 360 - d; return d < 45 ? front : d < 135 ? side : back; }
   function offSeg(p1, p2, dist) {
@@ -453,10 +532,10 @@ const HONORAIRES_TRANCHES_FCFA = [
 ];
 // Frais annexes : permis de construire, assurances, études techniques
 const FRAIS_ANNEXES_PCT = {
-  permis_construire: 0.015,        // ~1.5% du coût construction
-  assurance_dommage_ouvrage: 0.02, // ~2% (obligatoire)
-  etudes_techniques: 0.025,        // BET structure, fluides, géotechnique (~2.5%)
-  divers_imprevus: 0.03,           // aléas administratifs, raccordements (~3%)
+  permis_construire: 0.01,         // 1% — permis de construire (Cameroun)
+  assurance_dommage_ouvrage: 0.005, // 0.5% — assurance (non obligatoire au Cameroun)
+  etudes_techniques: 0.0025,       // 0.25% — études de sol / géotechnique
+  divers_imprevus: 0.0025,         // 0.25% — frais démarches permis et administratif
 };
 // Calcul honoraires dégressifs (retourne { bas, median, haut })
 function calcHonorairesDegressifs(coutConstruction) {
@@ -1339,7 +1418,7 @@ function computeSmartScenarios({
       // Si la contrainte est trop forte (>55% de l'enveloppe réservée),
       // on plafonne la réserve mais le diagnostic le signale.
       // ══════════════════════════════════════════════════════════════════════
-      const parkingPerUnitEst = rules.parking_per_unit || 1;
+      const parkingPerUnitEst = (rules && rules.parking_per_unit) || 1;
       const roleTargetFactorEst = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
       const estUnitsForRole = Math.max(2, Math.round(target_units * roleTargetFactorEst));
       const estParkingSpots = Math.ceil(estUnitsForRole * parkingPerUnitEst);
@@ -1699,7 +1778,7 @@ function computeSmartScenarios({
       levels = floorsNeeded;
       // ── PILOTIS ──
       const freeGround = envelope_area - fpRdc;
-      const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnits || 1) * (rules.parking_per_unit || 1)));
+      const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnits || 1) * ((rules && rules.parking_per_unit) || 1)));
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
       const pilotisRule = rules.requires_pilotis;
@@ -1837,7 +1916,7 @@ function computeSmartScenarios({
     const parkingEst = hasPilotis ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
     // ── v57.13 PARKING DÉTAILLÉ + ESPACE DÉGAGÉ (corrigé) ──
     // Parking basé sur les places REQUISES (réglementation), pas sur tout l'espace théorique
-    const parkingPerUnit = rules.parking_per_unit || 1;
+    const parkingPerUnit = (rules && rules.parking_per_unit) || 1;
     const parkingRequired = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil((totalUnitsResult || 1) * parkingPerUnit));
     const parkingSource = hasPilotis ? "PILOTIS" : "SURFACE";
     // Sol libre TOTAL = site_area - emprise RDC (inclut retraits, cour, jardin, parking)
@@ -3571,7 +3650,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   return result;
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
+async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -3582,7 +3661,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   };
 
   // v49: accès principal auto-détecté
-  const access = computeAccessPoint(parcelCoords, center.lat, center.lon);
+  const access = await computeAccessPoint(parcelCoords, center.lat, center.lon);
   const arrowLen = 8;
   const accEndLat = access.lat + (arrowLen / R_EARTH) * 180 / Math.PI * Math.cos(access.bearing * Math.PI / 180);
   const accEndLon = access.lon + (arrowLen / (R_EARTH * Math.cos(access.lat * Math.PI / 180))) * 180 / Math.PI * Math.sin(access.bearing * Math.PI / 180);
@@ -4262,7 +4341,9 @@ app.post("/generate", async (req, res) => {
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
-  const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
+  // v68: Détection front via OSM
+  const frontEdgeIndex = await findNearestRoadEdge(coords, cLat, cLon);
+  const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   const bearing = computeBearing(coords, cLat, cLon);
   console.log(`zoom=${zoom} bearing=${bearing}° pitch=58°`);
@@ -4272,7 +4353,7 @@ app.post("/generate", async (req, res) => {
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
+    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 30000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 28000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -4487,7 +4568,9 @@ app.post("/generate-massing", async (req, res) => {
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
   const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
-  const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back));
+  // v68: Détection front via OSM
+  const frontEdgeIndex = await findNearestRoadEdge(coords, cLat, cLon);
+  const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
   // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
   const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const envMinX = Math.min(...envPtsDbg.map(p => p.x)), envMaxX = Math.max(...envPtsDbg.map(p => p.x));
