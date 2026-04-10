@@ -4652,7 +4652,7 @@ VISUAL ENHANCEMENT (MANDATORY):
 - BUILDINGS: Apply concrete/gray texture to all buildings. Slightly weathered, realistic. Not pure white — use light gray (#c8c4bc) with subtle variation. Keep the flat-roof architectural style.
 - ROADS: Dark asphalt gray (#3a3a3a), slightly textured. No vegetation on road surfaces.
 - GRASS: Rich green lawn texture with subtle shade variations. Not flat — show mowing patterns or slight color variation.
-- PARCEL: The highlighted parcel (beige/ochre area with red border) must remain clearly visible and prominent.
+- PARCEL: The highlighted parcel area (beige/ochre/sand colored ground with red border) must remain clearly BEIGE/SAND — do NOT turn it green. The parcel ground is intentionally a different color from the surrounding grass to show the building plot. Keep this warm sandy/beige color visible and prominent.
 - LIGHTING: Warm afternoon daylight. Natural ambient occlusion where buildings meet the ground.
 
 QUALITY: Photo-realistic architectural visualization quality. Clean, professional, suitable for a client presentation.`;
@@ -4695,12 +4695,12 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
             // ═══════════════════════════════════════════════════════════════
             if (parcelScreenPts && parcelScreenPts.length >= 3) {
               finalCtx.save();
-              // Fond parcelle semi-transparent (beige/ocre)
+              // v70.10: Fond parcelle BEIGE/SABLE OPAQUE — comme l'exemple de référence
               finalCtx.beginPath();
               finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
               for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
               finalCtx.closePath();
-              finalCtx.fillStyle = "rgba(200, 180, 140, 0.25)";
+              finalCtx.fillStyle = "rgba(212, 196, 160, 0.52)";
               finalCtx.fill();
 
               // Contour parcelle — rouge vif, épais, net
@@ -4708,7 +4708,7 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
               finalCtx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
               for (let i = 1; i < parcelScreenPts.length; i++) finalCtx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
               finalCtx.closePath();
-              finalCtx.strokeStyle = "#d04020";
+              finalCtx.strokeStyle = "#c04020";
               finalCtx.lineWidth = 5;
               finalCtx.lineJoin = "miter";
               finalCtx.stroke();
@@ -4719,12 +4719,51 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
               finalCtx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
               for (let i = 1; i < envelopeScreenPts.length; i++) finalCtx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
               finalCtx.closePath();
-              finalCtx.strokeStyle = "#d04020";
-              finalCtx.lineWidth = 3.5;
-              finalCtx.setLineDash([12, 6]);
+              finalCtx.strokeStyle = "#c04020";
+              finalCtx.lineWidth = 4;
+              finalCtx.setLineDash([14, 7]);
               finalCtx.lineJoin = "miter";
               finalCtx.stroke();
               finalCtx.setLineDash([]);
+
+              // ═══════════════════════════════════════════════════════════════
+              // v70.10: ANNOTATIONS SETBACK — labels de retrait sur chaque arête
+              // Utilise parcelScreenPts + envelopeScreenPts pour positionner
+              // les labels "3m" / "5m" au milieu de chaque gap parcelle↔enveloppe
+              // ═══════════════════════════════════════════════════════════════
+              const sfr = Number(setback_front) || 5;
+              const ssd = Number(setback_side) || 3;
+              const sbk = Number(setback_back) || 3;
+              const feIdx = frontEdgeIndex || 0;
+              const nEdges = Math.min(parcelScreenPts.length, envelopeScreenPts.length);
+              for (let e = 0; e < nEdges; e++) {
+                const j = (e + 1) % parcelScreenPts.length;
+                const je = (e + 1) % envelopeScreenPts.length;
+                // Milieu de l'arête parcelle
+                const pmx = (parcelScreenPts[e].x + parcelScreenPts[j].x) / 2;
+                const pmy = (parcelScreenPts[e].y + parcelScreenPts[j].y) / 2;
+                // Milieu de l'arête enveloppe correspondante
+                const emx = (envelopeScreenPts[e].x + envelopeScreenPts[je].x) / 2;
+                const emy = (envelopeScreenPts[e].y + envelopeScreenPts[je].y) / 2;
+                // Position du label = milieu du gap
+                const lx = (pmx + emx) / 2;
+                const ly = (pmy + emy) / 2;
+                // Déterminer le retrait pour cette arête
+                let setbackVal;
+                if (e === feIdx) setbackVal = sfr;
+                else if (e === (feIdx + 2) % nEdges) setbackVal = sbk;
+                else setbackVal = ssd;
+                // Label blanc avec contour noir pour lisibilité
+                finalCtx.font = "bold 28px Arial";
+                finalCtx.textAlign = "center";
+                finalCtx.textBaseline = "middle";
+                finalCtx.strokeStyle = "#ffffff";
+                finalCtx.lineWidth = 5;
+                finalCtx.lineJoin = "round";
+                finalCtx.strokeText(setbackVal + "m", lx, ly);
+                finalCtx.fillStyle = "#333333";
+                finalCtx.fillText(setbackVal + "m", lx, ly);
+              }
               finalCtx.restore();
             }
 
