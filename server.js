@@ -4784,31 +4784,39 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.4: ULTRA-MINIMAL polish prompt — less transformation = less blur
+        // v72.5: Full architectural polish — textured render like reference image
+        // Key: ask for material/texture work BUT protect geometry + keep sharp
         const polishPrompt = `STRICT EDIT ONLY.
 
-PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
-Do NOT modify, move, add, or remove ANY element.
-Do NOT change building shapes, positions, sizes, count, or colors.
-Do NOT change tree positions, sizes, or count.
-Do NOT change road network, parcel boundary lines (red/orange), or dashed envelope lines.
-Do NOT reinterpret, redesign, or restyle the scene.
+PRESERVE EXACT GEOMETRY — do NOT modify any of the following:
+- Building footprints, positions, shapes, sizes, count
+- Road positions, widths, network
+- Parcel boundary lines (red/orange) and dashed envelope lines — keep them clearly visible
+- Tree positions, sizes, and count (trees are already placed)
+- Green areas and vegetation layout
+- Camera angle, perspective, framing, composition
+- Spatial relationships between all elements
+
+NO REINTERPRETATION. NO CAMERA CHANGE. NO STRUCTURAL MODIFICATION.
+Do NOT add, remove, move, or resize ANY element.
 Do NOT add text, watermarks, inset images, or UI elements.
-NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
 
-Apply ONLY these subtle non-structural adjustments:
-- Very slight tonal harmonization (uniform warm balance)
-- Minimal contrast improvement for visual clarity
-- Subtle soft shadows under buildings and trees (sun from upper-left)
-- Gentle ambient occlusion where buildings meet the ground
-- Enhance existing surface detail: bring out concrete/material texture that is already present on buildings — do NOT paint new texture, just sharpen and reveal what exists
-- Warm natural daylight feel (subtle, do not color-shift the whole image)
-- KEEP IMAGE SHARP — do not soften or blur any edges. Output must be at least as crisp as input.
+ALLOWED architectural polish:
+- Apply realistic concrete/plaster texture on all building surfaces (walls and roofs) — matte light gray concrete finish
+- Transform flat green ground into realistic grass texture with natural color variation
+- Transform flat roads into realistic asphalt/laterite texture
+- Refined soft shadows cast by buildings and trees (sun from upper-left, warm afternoon light)
+- Ambient occlusion where buildings meet the ground
+- Warm afternoon daylight color grading — golden hour feel
+- Professional architectural visualization finish — like a high-end urban planning render
+- Trees should look like realistic vegetation (keep their positions but improve their appearance)
 
-The parcel area (beige/sand ground with red border) must remain CLEAN, FLAT, EMPTY.
+IMPORTANT: The output image must be SHARP and HIGH DETAIL. Do not soften, blur, or lose edge definition. Every building edge, every parcel line, every tree must remain crisp.
+
+The parcel area (beige/sand ground with red/orange border) must remain CLEAN, FLAT, EMPTY — sand/beige tone. Keep the red parcel border and dashed envelope lines clearly visible.
 Do NOT place anything inside the parcel that is not already there.
 
-QUALITY: Premium architectural clarity. Keep all existing detail. Stability > beauty.`;
+QUALITY: Premium architectural presentation render. Sharp, detailed, realistic materials.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
