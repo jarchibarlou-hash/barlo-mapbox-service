@@ -4314,40 +4314,23 @@ function applyColorRemap(ctx, W, H) {
   }
   ctx.putImageData(imgData, 0, 0);
 }
-// ─── v72.1 EDGE-BASED DRIFT DETECTION ─────────────────────────────────────────
-// Instead of comparing raw pixel colors (which AI polish intentionally changes),
-// we extract EDGES (Sobel-like gradient magnitude) from both images and compare
-// edge maps. Edges capture geometry — building outlines, parcel lines, road borders —
-// without being sensitive to tonal/contrast changes (which is exactly what polish does).
-// This eliminates false positives from legitimate color enhancement.
-function extractEdgeMap(imageData, W, H) {
-  const d = imageData.data;
-  const edges = new Float32Array(W * H);
-  // Convert to grayscale luminance, then compute Sobel gradient magnitude
-  const gray = new Float32Array(W * H);
-  for (let i = 0; i < W * H; i++) {
-    const idx = i * 4;
-    gray[i] = 0.299 * d[idx] + 0.587 * d[idx+1] + 0.114 * d[idx+2];
-  }
-  // Sobel kernels applied at each interior pixel
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const idx = y * W + x;
-      // Gx = [-1 0 +1; -2 0 +2; -1 0 +1]
-      const gx = -gray[(y-1)*W+(x-1)] + gray[(y-1)*W+(x+1)]
-               - 2*gray[y*W+(x-1)]     + 2*gray[y*W+(x+1)]
-               - gray[(y+1)*W+(x-1)]   + gray[(y+1)*W+(x+1)];
-      // Gy = [-1 -2 -1; 0 0 0; +1 +2 +1]
-      const gy = -gray[(y-1)*W+(x-1)] - 2*gray[(y-1)*W+x] - gray[(y-1)*W+(x+1)]
-               + gray[(y+1)*W+(x-1)]  + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)];
-      edges[idx] = Math.sqrt(gx * gx + gy * gy);
-    }
-  }
-  return edges;
-}
-// v72.1: Compare edge maps between clean and polished images
-// Edge pixels that disappear or appear indicate geometry drift.
-// Tonal changes don't create/remove edges → no false positives.
+// ─── v72.3 BLOCK-GRID DRIFT DETECTION ─────────────────────────────────────────
+// Lessons from production (v72.1 and v72.2 both failed):
+//   - Pixel-level edge comparison doesn't work: AI polish transforms everything
+//   - Even strong Sobel edges shift when textures/shadows are added
+//
+// NEW APPROACH: Compare the MACRO LAYOUT using a coarse grid.
+//   1. Divide both images into blocks (e.g. 32×32 grid = 1024 blocks on 1280px)
+//   2. For each block, compute average brightness (grayscale)
+//   3. Classify each block: BRIGHT (building/roof), DARK (road/shadow), MID (grass/ground)
+//   4. Compare classification maps — if the same blocks are bright/dark/mid, structure is intact
+//
+// This is robust because:
+//   - Polish changes colors/textures → brightness shifts within a class are OK
+//   - A BUILDING MOVING would change block classifications (bright block becomes mid)
+//   - A new phantom building would flip a mid/dark block to bright
+//   - Tonal harmonization doesn't flip classifications
+//
 async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H) {
   const cleanImg = await loadImage(cleanPngBuf);
   const polishedImg = await loadImage(polishedPngBuf);
@@ -4357,52 +4340,60 @@ async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H) {
   const polishedCanvas = createCanvas(W, H);
   const polishedCtx = polishedCanvas.getContext("2d");
   polishedCtx.drawImage(polishedImg, 0, 0, W, H);
-  const cleanEdges = extractEdgeMap(cleanCtx.getImageData(0, 0, W, H), W, H);
-  const polishedEdges = extractEdgeMap(polishedCtx.getImageData(0, 0, W, H), W, H);
-  // Threshold for "significant edge" — filters noise
-  const EDGE_THRESHOLD = 30;
-  // Threshold for drift between edge maps — how much edge magnitude can differ
-  const DIFF_THRESHOLD = 40;
-  // Overall drift threshold — % of edge pixels that shifted
-  const DRIFT_THRESHOLD = 0.05; // 5% edge drift = reject
-  let totalEdgePixels = 0;
-  let driftedEdgePixels = 0;
-  let newEdgePixels = 0;     // edges that appeared (hallucinations)
-  let lostEdgePixels = 0;    // edges that disappeared (erased geometry)
-  for (let i = 0; i < W * H; i++) {
-    const ce = cleanEdges[i];
-    const pe = polishedEdges[i];
-    const hasCleanEdge = ce > EDGE_THRESHOLD;
-    const hasPolishedEdge = pe > EDGE_THRESHOLD;
-    if (hasCleanEdge || hasPolishedEdge) {
-      totalEdgePixels++;
-      if (hasCleanEdge && !hasPolishedEdge) {
-        // Edge disappeared — geometry was erased or softened
-        lostEdgePixels++;
-        driftedEdgePixels++;
-      } else if (!hasCleanEdge && hasPolishedEdge) {
-        // New edge appeared — possible hallucination or added object
-        newEdgePixels++;
-        driftedEdgePixels++;
-      } else if (hasCleanEdge && hasPolishedEdge && Math.abs(ce - pe) > DIFF_THRESHOLD) {
-        // Edge exists in both but magnitude shifted significantly
-        driftedEdgePixels++;
+  const cleanData = cleanCtx.getImageData(0, 0, W, H).data;
+  const polishedData = polishedCtx.getImageData(0, 0, W, H).data;
+  // Grid parameters
+  const BLOCK = 40; // 40px blocks → 32×32 grid on 1280px image
+  const cols = Math.floor(W / BLOCK);
+  const rows = Math.floor(H / BLOCK);
+  // Compute average brightness per block for both images
+  function blockBrightness(data, bx, by) {
+    let sum = 0, count = 0;
+    for (let y = by * BLOCK; y < Math.min((by + 1) * BLOCK, H); y++) {
+      for (let x = bx * BLOCK; x < Math.min((bx + 1) * BLOCK, W); x++) {
+        const idx = (y * W + x) * 4;
+        sum += 0.299 * data[idx] + 0.587 * data[idx+1] + 0.114 * data[idx+2];
+        count++;
       }
     }
+    return sum / count;
   }
-  const driftScore = totalEdgePixels > 0 ? driftedEdgePixels / totalEdgePixels : 0;
-  const passed = driftScore < DRIFT_THRESHOLD;
+  // Classify block: 0=DARK (<80), 1=MID (80-170), 2=BRIGHT (>170)
+  function classify(brightness) {
+    if (brightness < 80) return 0;
+    if (brightness > 170) return 2;
+    return 1;
+  }
+  let totalBlocks = 0;
+  let classShifts = 0;     // blocks that changed classification (structural drift)
+  let bigBrightnessShifts = 0; // blocks with >60 brightness change (extreme)
+  for (let by = 0; by < rows; by++) {
+    for (let bx = 0; bx < cols; bx++) {
+      totalBlocks++;
+      const cb = blockBrightness(cleanData, bx, by);
+      const pb = blockBrightness(polishedData, bx, by);
+      const cc = classify(cb);
+      const pc = classify(pb);
+      if (cc !== pc) classShifts++;
+      if (Math.abs(cb - pb) > 60) bigBrightnessShifts++;
+    }
+  }
+  const classShiftRatio = totalBlocks > 0 ? classShifts / totalBlocks : 0;
+  // DRIFT_THRESHOLD: if more than 25% of blocks change classification → reject
+  // This is generous — polish can shift brightness a lot without flipping classes
+  // Only real structural changes (moved building, erased road) flip 25%+ of blocks
+  const DRIFT_THRESHOLD = 0.25;
+  const passed = classShiftRatio < DRIFT_THRESHOLD;
   return {
-    driftScore: +driftScore.toFixed(4),
+    driftScore: +classShiftRatio.toFixed(4),
     passed,
-    totalEdgePixels,
-    driftedEdgePixels,
-    newEdgePixels,
-    lostEdgePixels,
+    totalBlocks,
+    classShifts,
+    bigBrightnessShifts,
     threshold: DRIFT_THRESHOLD,
     details: !passed
-      ? `DRIFT DETECTED: ${(driftScore * 100).toFixed(1)}% edge drift (threshold ${DRIFT_THRESHOLD * 100}%) — new=${newEdgePixels} lost=${lostEdgePixels}`
-      : `OK: ${(driftScore * 100).toFixed(2)}% edge drift — stable`,
+      ? `DRIFT: ${(classShiftRatio * 100).toFixed(1)}% blocks shifted class (${classShifts}/${totalBlocks}, threshold ${DRIFT_THRESHOLD * 100}%)`
+      : `OK: ${(classShiftRatio * 100).toFixed(1)}% blocks shifted (${classShifts}/${totalBlocks}) — macro structure preserved`,
   };
 }
 // ─── v72 DETERMINISTIC TREES — seeded PRNG, improved canopy, shadow casting ──
