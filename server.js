@@ -4396,6 +4396,32 @@ async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H) {
       : `OK: ${(classShiftRatio * 100).toFixed(1)}% blocks shifted (${classShifts}/${totalBlocks}) — macro structure preserved`,
   };
 }
+// ─── v72.4 POST-POLISH SHARPENING — counteract AI softness ──────────────────
+// Applies a 3×3 unsharp-mask kernel on the canvas pixels.
+// amount=0.35 is tuned for typical OpenAI edit output — enough to restore
+// crisp edges without introducing halo artifacts.
+function applySharpen(ctx, W, H, amount = 0.35) {
+  const imageData = ctx.getImageData(0, 0, W, H);
+  const src = new Uint8ClampedArray(imageData.data); // copy of original
+  const dst = imageData.data;
+  const a = amount;
+  const center = 1 + 4 * a;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const val = center * src[i + c]
+          - a * src[((y - 1) * W + x) * 4 + c]
+          - a * src[((y + 1) * W + x) * 4 + c]
+          - a * src[(y * W + (x - 1)) * 4 + c]
+          - a * src[(y * W + (x + 1)) * 4 + c];
+        dst[i + c] = val < 0 ? 0 : val > 255 ? 255 : (val + 0.5) | 0;
+      }
+      dst[i + 3] = src[i + 3]; // alpha unchanged
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
 // ─── v72 DETERMINISTIC TREES — seeded PRNG, improved canopy, shadow casting ──
 // Seed is derived from pixel coordinates → identical output on every run
 function seedRandom(seed) {
@@ -4758,35 +4784,31 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
+        // v72.4: ULTRA-MINIMAL polish prompt — less transformation = less blur
         const polishPrompt = `STRICT EDIT ONLY.
 
-PRESERVE EXACT GEOMETRY — do NOT modify any of the following:
-- Building footprints, positions, shapes, sizes, count
-- Road positions, widths, network
-- Parcel boundary lines (red/orange) and dashed envelope lines
-- Tree positions, sizes, and count (trees are already placed)
-- Green areas and vegetation layout
-- Camera angle, perspective, framing, composition
-- Spatial relationships between all elements
-
-NO REINTERPRETATION. NO CAMERA CHANGE. NO STRUCTURAL MODIFICATION.
-Do NOT add, remove, move, or resize ANY element.
+PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
+Do NOT modify, move, add, or remove ANY element.
+Do NOT change building shapes, positions, sizes, count, or colors.
+Do NOT change tree positions, sizes, or count.
+Do NOT change road network, parcel boundary lines (red/orange), or dashed envelope lines.
+Do NOT reinterpret, redesign, or restyle the scene.
 Do NOT add text, watermarks, inset images, or UI elements.
+NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
 
-ALLOWED non-structural polish ONLY:
-- Slight tonal harmonization across the scene
-- Subtle contrast improvement for architectural clarity
-- Refined soft shadows from buildings and trees (sun from upper-left)
-- Light ambient occlusion where buildings meet the ground
-- Cleaner visual edges and improved sharpness
-- Subtle concrete texture on building surfaces (keep existing gray tones)
-- Warm afternoon daylight color grading
-- Professional architectural visualization finish
+Apply ONLY these subtle non-structural adjustments:
+- Very slight tonal harmonization (uniform warm balance)
+- Minimal contrast improvement for visual clarity
+- Subtle soft shadows under buildings and trees (sun from upper-left)
+- Gentle ambient occlusion where buildings meet the ground
+- Enhance existing surface detail: bring out concrete/material texture that is already present on buildings — do NOT paint new texture, just sharpen and reveal what exists
+- Warm natural daylight feel (subtle, do not color-shift the whole image)
+- KEEP IMAGE SHARP — do not soften or blur any edges. Output must be at least as crisp as input.
 
 The parcel area (beige/sand ground with red border) must remain CLEAN, FLAT, EMPTY.
 Do NOT place anything inside the parcel that is not already there.
 
-QUALITY: Premium architectural presentation. Stability > beauty.`;
+QUALITY: Premium architectural clarity. Keep all existing detail. Stability > beauty.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
@@ -4841,6 +4863,9 @@ QUALITY: Premium architectural presentation. Stability > beauty.`;
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(bestVariation.buf), 0, 0, W, H);
+          // v72.4: Post-polish sharpening to counteract AI softness
+          applySharpen(finalCtx, W, H, 0.35);
+          console.log(`[SLIDE4-POLISH] v72.4: Sharpening applied (amount=0.35)`);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
@@ -5093,24 +5118,32 @@ app.post("/generate-massing", async (req, res) => {
       try {
         console.log(`[MASSING-POLISH] v72.1: Starting multi-render (${MASSING_VARIATIONS} variations) for ${label}...`);
         const b64Input = pngClean.toString("base64");
+        // v72.4: Stronger color preservation for floor coding
         const massingPolishPrompt = `STRICT EDIT ONLY.
 
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
 Do NOT modify, move, add, or remove ANY element.
-Do NOT change building shapes, positions, sizes, count, or colors.
-Do NOT change floor separations, orange/blue color coding, or any structural feature.
+Do NOT change building shapes, positions, sizes, count.
 Do NOT reinterpret, redesign, or restyle the scene.
 NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
 
+CRITICAL COLOR PRESERVATION:
+- The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
+- These colors MUST remain vivid and clearly distinguishable after polish.
+- Do NOT wash out, desaturate, or unify the floor colors.
+- Do NOT turn orange or blue floors into beige, gray, or white.
+- The color difference between floor types is essential information — preserve it exactly.
+
 Apply ONLY these subtle non-structural adjustments:
-- Very slight tonal harmonization (uniform warm balance)
+- Very slight tonal harmonization (uniform warm balance) — but KEEP floor colors intact
 - Minimal contrast improvement for visual clarity
 - Subtle soft shadows under the building volume
 - Gentle ambient occlusion at ground contact
 - Clean, professional finish
+- KEEP IMAGE SHARP — do not soften or blur any edges
 
 Do NOT change the maquette/model aesthetic — keep the clean architectural model look.
-This is a white architectural maquette with colored floors. Keep it that way.
+This is a white architectural maquette with colored floor bands. Keep it that way.
 
 CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in tone and style.`;
 
@@ -5160,6 +5193,9 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(await loadImage(bestVariation.buf), 0, 0, W, H);
+          // v72.4: Post-polish sharpening (lighter for massing — already at 2x resolution)
+          applySharpen(finalCtx, W, H, 0.25);
+          console.log(`[MASSING-POLISH] ${label} v72.4: Sharpening applied (amount=0.25)`);
           drawMassingOverlays(finalCtx, W, H, {
             site_area: Number(site_area), bearing, label,
             levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
