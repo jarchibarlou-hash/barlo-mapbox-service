@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "71.1-STABLE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.0-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -157,7 +157,6 @@ const ROAD_CLASS_WEIGHT = {
   motorway: 6, trunk: 6, primary: 5, secondary: 4, tertiary: 3,
   street: 2, residential: 2, service: 1, path: 0, pedestrian: 0, track: 0,
 };
-
 async function findNearestRoadEdge(coords, cLat, cLon) {
   // ── MÉTHODE 1: Mapbox Tilequery — requête multi-points le long des arêtes ──
   const mapboxResult = await tryMapboxTilequery(coords, cLat, cLon);
@@ -168,7 +167,6 @@ async function findNearestRoadEdge(coords, cLat, cLon) {
   console.warn("│ ROAD-DETECT: Mapbox ET Nominatim ont échoué, fallback premier segment");
   return null;
 }
-
 async function tryMapboxTilequery(coords, cLat, cLon) {
   if (!MAPBOX_TOKEN) {
     console.warn("│ MAPBOX-TQ: pas de token, skip");
@@ -177,16 +175,13 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
   try {
     const n = coords.length;
     console.log(`│ MAPBOX-TQ: analyse ${n} arêtes via Tilequery...`);
-
     // Pour chaque arête : calculer un point-sonde 8m à l'extérieur du midpoint
     // (dans la direction de la normale sortante)
     const probeResults = [];
-
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
       const midLat = (coords[i].lat + coords[j].lat) / 2;
       const midLon = (coords[i].lon + coords[j].lon) / 2;
-
       // Normale sortante (perpendiculaire à l'arête, vers l'extérieur)
       const edgeDx = (coords[j].lon - coords[i].lon) * Math.cos(midLat * Math.PI / 180);
       const edgeDy = coords[j].lat - coords[i].lat;
@@ -205,10 +200,8 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       const probeOffsetDeg = 8 / 111000; // ~8m en degrés
       const probeLat = midLat + ny * probeOffsetDeg;
       const probeLon = midLon + nx * probeOffsetDeg / Math.cos(midLat * Math.PI / 180);
-
       probeResults.push({ edgeIdx: i, probeLat, probeLon, midLat, midLon });
     }
-
     // Lancer les requêtes Tilequery en parallèle (max 4 arêtes, on les fait toutes)
     const tqPromises = probeResults.map(async (probe) => {
       const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${probe.probeLon},${probe.probeLat}.json?radius=50&limit=10&layers=road&access_token=${MAPBOX_TOKEN}`;
@@ -228,9 +221,7 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
         return { ...probe, roads: [], error: e.name === "AbortError" ? "TIMEOUT" : e.message };
       }
     });
-
     const results = await Promise.all(tqPromises);
-
     // ══════════════════════════════════════════════════════════════════
     // v70.6 SCORING — 2 passes :
     //   Pass 1 : routes à 4-50m (distance normale d'accès)
@@ -242,7 +233,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
     // rue + trottoir + retrait clôture).
     // ══════════════════════════════════════════════════════════════════
     const MIN_ROAD_DIST = 4; // mètres — en dessous = ruelle/mur mitoyen
-
     // Collecter les scores pour chaque arête
     const edgeScores = [];
     for (const r of results) {
@@ -274,7 +264,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       console.log(`│ MAPBOX-TQ: arête ${r.edgeIdx} → ${r.roads.length} routes, best=${bestClass} à ${bestDist.toFixed(1)}m (score_normal=${scoreNormal.toFixed(1)} score_all=${scoreAll.toFixed(1)}${bestDistAll < MIN_ROAD_DIST ? " ⚠ruelle@" + bestDistAll.toFixed(1) + "m" : ""})`);
       edgeScores.push({ idx: r.edgeIdx, scoreNormal, scoreAll, bestClass, bestDist: bestDistNormal, bestDistAll });
     }
-
     // Pass 1 : chercher la meilleure arête avec des routes à distance normale (≥4m)
     let bestEdge = -1, bestScore = -Infinity;
     for (const es of edgeScores) {
@@ -292,7 +281,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score_normal=${bestScore.toFixed(1)}) — route d'accès principale`);
       return bestEdge;
     }
-
     // Pass 2 : fallback — accepter les ruelles (< 4m), avec même préférence arête 0
     bestEdge = -1; bestScore = -Infinity;
     for (const es of edgeScores) {
@@ -314,7 +302,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
     return null;
   }
 }
-
 async function tryNominatim(coords, cLat, cLon) {
   try {
     console.log("│ NOMINATIM: tentative reverse geocoding (fallback)...");
@@ -3897,7 +3884,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
-
   // v49: accès principal auto-détecté
   const access = computeAccessPoint(parcelCoords, center.lat, center.lon, frontEdgeIndex);
   const arrowLen = 8;
@@ -3911,7 +3897,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     type: "Feature", properties: { label: "Accès" },
     geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
   };
-
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
   return `<!DOCTYPE html>
 <html>
@@ -3933,7 +3918,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
-
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4006,20 +3990,16 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       }
     ]
   };
-
   const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
-
   map.on('style.load', () => {
     // v70.5: Lumière directionnelle forte pour ombres marquées
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.70, position: [1.5, 210, 30] });
-
     const labelLayerId = undefined;
-
     // v70.5: BÂTIMENTS 3D — posés au sol (base=0), hauteurs réalistes
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
@@ -4050,9 +4030,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
-
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
@@ -4062,16 +4040,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
-
     // v70.8: Zone constructible (reculs) — tirets bien visibles
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#d04020', 'line-width': 4,
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
-
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
-
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
   setTimeout(() => { window.__MAP_READY = true; }, 12000);
@@ -4339,23 +4314,127 @@ function applyColorRemap(ctx, W, H) {
   }
   ctx.putImageData(imgData, 0, 0);
 }
-// Helper: draw trees along road edges on green-background maps
+// ─── v72.1 EDGE-BASED DRIFT DETECTION ─────────────────────────────────────────
+// Instead of comparing raw pixel colors (which AI polish intentionally changes),
+// we extract EDGES (Sobel-like gradient magnitude) from both images and compare
+// edge maps. Edges capture geometry — building outlines, parcel lines, road borders —
+// without being sensitive to tonal/contrast changes (which is exactly what polish does).
+// This eliminates false positives from legitimate color enhancement.
+function extractEdgeMap(imageData, W, H) {
+  const d = imageData.data;
+  const edges = new Float32Array(W * H);
+  // Convert to grayscale luminance, then compute Sobel gradient magnitude
+  const gray = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const idx = i * 4;
+    gray[i] = 0.299 * d[idx] + 0.587 * d[idx+1] + 0.114 * d[idx+2];
+  }
+  // Sobel kernels applied at each interior pixel
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const idx = y * W + x;
+      // Gx = [-1 0 +1; -2 0 +2; -1 0 +1]
+      const gx = -gray[(y-1)*W+(x-1)] + gray[(y-1)*W+(x+1)]
+               - 2*gray[y*W+(x-1)]     + 2*gray[y*W+(x+1)]
+               - gray[(y+1)*W+(x-1)]   + gray[(y+1)*W+(x+1)];
+      // Gy = [-1 -2 -1; 0 0 0; +1 +2 +1]
+      const gy = -gray[(y-1)*W+(x-1)] - 2*gray[(y-1)*W+x] - gray[(y-1)*W+(x+1)]
+               + gray[(y+1)*W+(x-1)]  + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)];
+      edges[idx] = Math.sqrt(gx * gx + gy * gy);
+    }
+  }
+  return edges;
+}
+// v72.1: Compare edge maps between clean and polished images
+// Edge pixels that disappear or appear indicate geometry drift.
+// Tonal changes don't create/remove edges → no false positives.
+async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H) {
+  const cleanImg = await loadImage(cleanPngBuf);
+  const polishedImg = await loadImage(polishedPngBuf);
+  const cleanCanvas = createCanvas(W, H);
+  const cleanCtx = cleanCanvas.getContext("2d");
+  cleanCtx.drawImage(cleanImg, 0, 0, W, H);
+  const polishedCanvas = createCanvas(W, H);
+  const polishedCtx = polishedCanvas.getContext("2d");
+  polishedCtx.drawImage(polishedImg, 0, 0, W, H);
+  const cleanEdges = extractEdgeMap(cleanCtx.getImageData(0, 0, W, H), W, H);
+  const polishedEdges = extractEdgeMap(polishedCtx.getImageData(0, 0, W, H), W, H);
+  // Threshold for "significant edge" — filters noise
+  const EDGE_THRESHOLD = 30;
+  // Threshold for drift between edge maps — how much edge magnitude can differ
+  const DIFF_THRESHOLD = 40;
+  // Overall drift threshold — % of edge pixels that shifted
+  const DRIFT_THRESHOLD = 0.05; // 5% edge drift = reject
+  let totalEdgePixels = 0;
+  let driftedEdgePixels = 0;
+  let newEdgePixels = 0;     // edges that appeared (hallucinations)
+  let lostEdgePixels = 0;    // edges that disappeared (erased geometry)
+  for (let i = 0; i < W * H; i++) {
+    const ce = cleanEdges[i];
+    const pe = polishedEdges[i];
+    const hasCleanEdge = ce > EDGE_THRESHOLD;
+    const hasPolishedEdge = pe > EDGE_THRESHOLD;
+    if (hasCleanEdge || hasPolishedEdge) {
+      totalEdgePixels++;
+      if (hasCleanEdge && !hasPolishedEdge) {
+        // Edge disappeared — geometry was erased or softened
+        lostEdgePixels++;
+        driftedEdgePixels++;
+      } else if (!hasCleanEdge && hasPolishedEdge) {
+        // New edge appeared — possible hallucination or added object
+        newEdgePixels++;
+        driftedEdgePixels++;
+      } else if (hasCleanEdge && hasPolishedEdge && Math.abs(ce - pe) > DIFF_THRESHOLD) {
+        // Edge exists in both but magnitude shifted significantly
+        driftedEdgePixels++;
+      }
+    }
+  }
+  const driftScore = totalEdgePixels > 0 ? driftedEdgePixels / totalEdgePixels : 0;
+  const passed = driftScore < DRIFT_THRESHOLD;
+  return {
+    driftScore: +driftScore.toFixed(4),
+    passed,
+    totalEdgePixels,
+    driftedEdgePixels,
+    newEdgePixels,
+    lostEdgePixels,
+    threshold: DRIFT_THRESHOLD,
+    details: !passed
+      ? `DRIFT DETECTED: ${(driftScore * 100).toFixed(1)}% edge drift (threshold ${DRIFT_THRESHOLD * 100}%) — new=${newEdgePixels} lost=${lostEdgePixels}`
+      : `OK: ${(driftScore * 100).toFixed(2)}% edge drift — stable`,
+  };
+}
+// ─── v72 DETERMINISTIC TREES — seeded PRNG, improved canopy, shadow casting ──
+// Seed is derived from pixel coordinates → identical output on every run
+function seedRandom(seed) {
+  // Simple mulberry32 PRNG — deterministic from integer seed
+  let t = (seed >>> 0) + 0x6D2B79F5;
+  return function() {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 function drawTrees(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
   const treePositions = [];
-  const step = 32;
+  const step = 28; // v72: tighter grid for more tree candidates
+  const minTreeDist = 22; // minimum distance between tree centers
+  // v72: seeded PRNG based on image dimensions (deterministic)
+  const rng = seedRandom(W * 10000 + H);
   for (let y = step; y < H - step; y += step) {
     for (let x = step; x < W - step; x += step) {
       const idx = (y * W + x) * 4;
       const r = d[idx], g = d[idx+1], b = d[idx+2];
-      // Is this a green grass pixel? (Mapbox green background ~#5a9848 = R90,G152,B72)
+      // Is this a green grass pixel? (after applyColorRemap: ~R75,G145,B60)
       const isGrass = (g > 80 && g > r * 1.2 && g > b * 1.4 && r < 150);
       if (!isGrass) continue;
-      // Check road nearby (sandy ~#c4b494 = R196,G180,B148 or border ~#8a7d62)
+      // Check road nearby (sandy after remap: ~R195,G180,B145)
       let nearRoad = false;
-      for (let dy = -18; dy <= 18; dy += 6) {
-        for (let dx = -18; dx <= 18; dx += 6) {
+      for (let dy = -20; dy <= 20; dy += 6) {
+        for (let dx = -20; dx <= 20; dx += 6) {
           const nx = x + dx, ny = y + dy;
           if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
           const ni = (ny * W + nx) * 4;
@@ -4368,34 +4447,79 @@ function drawTrees(ctx, W, H) {
       }
       // Not on/near building (white/bright areas)
       let nearBuilding = false;
-      for (let dy = -24; dy <= 4; dy += 6) {
-        for (let dx = -12; dx <= 12; dx += 6) {
-          const nx = x + dx, ny = Math.max(0, Math.min(H-1, y + dy));
+      for (let dy = -28; dy <= 4; dy += 6) {
+        for (let dx = -14; dx <= 14; dx += 6) {
+          const nx = Math.max(0, Math.min(W-1, x + dx));
+          const ny = Math.max(0, Math.min(H-1, y + dy));
           const ni = (ny * W + nx) * 4;
           if (d[ni] > 200 && d[ni+1] > 200 && d[ni+2] > 190) { nearBuilding = true; break; }
         }
         if (nearBuilding) break;
       }
-      if (nearRoad && !nearBuilding && ((x * 7 + y * 13) % 5) < 2) {
-        treePositions.push({ x, y });
+      // Not on parcel area (reddish boundary zone)
+      let onParcel = false;
+      const pr = d[idx], pg = d[idx+1], pb = d[idx+2];
+      // Beige/sand parcel interior or red boundary
+      if ((pr > 180 && pg > 150 && pb > 100 && pr > pg && pr - pb > 40) || (pr > 180 && pg < 140 && pb < 140)) {
+        onParcel = true;
+      }
+      // v72: seeded selection — use PRNG instead of modulo hash for better distribution
+      const selectChance = rng();
+      if (nearRoad && !nearBuilding && !onParcel && selectChance < 0.35) {
+        // Check min distance from existing trees
+        let tooClose = false;
+        for (const existing of treePositions) {
+          const dx2 = x - existing.x, dy2 = y - existing.y;
+          if (dx2 * dx2 + dy2 * dy2 < minTreeDist * minTreeDist) { tooClose = true; break; }
+        }
+        if (!tooClose) {
+          // v72: slight jitter from PRNG for natural look (but deterministic)
+          const jx = Math.round((rng() - 0.5) * 8);
+          const jy = Math.round((rng() - 0.5) * 8);
+          treePositions.push({ x: x + jx, y: y + jy });
+        }
+      }
+      // v72: also place trees in open green areas (not just near roads)
+      if (!nearRoad && !nearBuilding && !onParcel && isGrass && selectChance > 0.85 && selectChance < 0.92) {
+        let tooClose = false;
+        for (const existing of treePositions) {
+          const dx2 = x - existing.x, dy2 = y - existing.y;
+          if (dx2 * dx2 + dy2 * dy2 < (minTreeDist * 1.5) * (minTreeDist * 1.5)) { tooClose = true; break; }
+        }
+        if (!tooClose) {
+          treePositions.push({ x: x + Math.round((rng() - 0.5) * 6), y: y + Math.round((rng() - 0.5) * 6) });
+        }
       }
     }
   }
+  console.log(`[TREES] v72: ${treePositions.length} deterministic trees placed (seeded PRNG)`);
+  // v72: Sort by Y for correct overlap (back-to-front painter's order)
+  treePositions.sort((a, b) => a.y - b.y);
   for (const t of treePositions) {
-    const radius = 10 + ((t.x * 3 + t.y * 7) % 6);
-    // Shadow
+    // v72: seeded radius per tree — deterministic
+    const tRng = seedRandom(t.x * 1000 + t.y);
+    const radius = 9 + Math.round(tRng() * 7); // 9-16px range
+    // Shadow (offset toward bottom-right — sun from upper-left)
     ctx.beginPath();
-    ctx.arc(t.x + 2, t.y + 3, radius, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(20,50,15,0.35)";
+    ctx.arc(t.x + 3, t.y + 4, radius + 1, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(15,40,10,0.30)";
     ctx.fill();
-    // Canopy
+    // Canopy — multi-layer gradient for 3D spherical look
     ctx.beginPath();
     ctx.arc(t.x, t.y, radius, 0, Math.PI * 2);
-    const grad = ctx.createRadialGradient(t.x - 3, t.y - 3, 1, t.x, t.y, radius);
-    grad.addColorStop(0, "#5aad42");
-    grad.addColorStop(0.5, "#3d8a2e");
-    grad.addColorStop(1, "#2d6e22");
+    const grad = ctx.createRadialGradient(t.x - radius * 0.25, t.y - radius * 0.25, 1, t.x, t.y, radius);
+    // v72: slightly varied greens per tree for natural look (seeded)
+    const gVar = Math.round(tRng() * 20) - 10;
+    grad.addColorStop(0, `rgb(${90 + gVar},${175 + gVar},${66 + gVar})`);
+    grad.addColorStop(0.45, `rgb(${61 + gVar},${138 + gVar},${46 + gVar})`);
+    grad.addColorStop(0.8, `rgb(${45 + gVar},${110 + gVar},${34 + gVar})`);
+    grad.addColorStop(1, `rgb(${35 + gVar},${85 + gVar},${28 + gVar})`);
     ctx.fillStyle = grad;
+    ctx.fill();
+    // v72: subtle highlight spot for 3D depth
+    ctx.beginPath();
+    ctx.arc(t.x - radius * 0.2, t.y - radius * 0.2, radius * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(140,210,100,0.15)";
     ctx.fill();
   }
 }
@@ -4446,7 +4570,6 @@ function drawLegendCompass(ctx, W, H, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-
   // v70.5: Annotations setback DÉSACTIVÉES (supprimées à la demande)
   if (false) {
     ctx.strokeText(ss + "m", cx - 120, cy + 10); ctx.fillText(ss + "m", cx - 120, cy + 10);
@@ -4500,7 +4623,6 @@ function drawSolarArc(ctx, W, H, p) {
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology }) {
   const s = W / 1280;
-
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
   ctx.translate(W - 60*s, H - 60*s);
@@ -4515,7 +4637,6 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.fillStyle = "#bbb"; ctx.fillText("O", -22*s, 4*s);
   ctx.fillStyle = "#bbb"; ctx.fillText("E", 22*s, 4*s);
   ctx.restore();
-
   // ── ANNOTATIONS ÉTAGES : traits + labels à droite du bâtiment (style référence) ──
   // Positionnées au centre-droit de l'image
   const rdcH_m = 3.0;  // v71: tous les niveaux = 3m
@@ -4596,8 +4717,18 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
-    // v65.2: N'ajouter NI légende NI labels NI boussole AVANT le polish AI
-    // pour éviter le dédoublement — tout sera dessiné APRÈS le polish
+    // ═══════════════════════════════════════════════════════════════════════
+    // v72 DETERMINISTIC PIPELINE — all structural rendering BEFORE AI polish
+    // Step 1: Color remap (Mapbox beige → green grass + sandy roads)
+    // Step 2: Deterministic trees (seeded PRNG, identical every run)
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log(`[SLIDE4] v72: Applying deterministic color remap...`);
+    applyColorRemap(ctx, W, H);
+    console.log(`[SLIDE4] v72: Drawing deterministic trees...`);
+    drawTrees(ctx, W, H);
+    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
+    // v72: pngClean = fully deterministic image (colors + trees + no UI overlays)
+    // This is the FROZEN base sent to AI polish — and also the fallback if drift detected
     const pngClean = canvas.toBuffer("image/png");
     // Version avec overlays (fallback si pas d'AI polish)
     // v70.1: Projeter GPS → pixels screen pour positionner les labels sur les arêtes
@@ -4627,90 +4758,110 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
+    // ═══════════════════════════════════════════════════════════════════════════
+    // v72.1: MULTI-RENDER AI POLISH — generate 3 variations, pick best by drift score
+    // ═══════════════════════════════════════════════════════════════════════════
+    const SLIDE4_VARIATIONS = 2;
     if (OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v68.0-MINIMAL...");
-        // v68: Envoyer en pleine résolution (1280×1280) pour éviter le flou du downscale
+        console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
-        console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes, b64: ${b64Input.length} chars`);
+        console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
+        const polishPrompt = `STRICT EDIT ONLY.
 
-        // === v70.7 — ARCHITECTURAL RENDER POLISH ===
-        const polishPrompt = `Transform this 3D architectural site plan into a photo-realistic architectural rendering.
+PRESERVE EXACT GEOMETRY — do NOT modify any of the following:
+- Building footprints, positions, shapes, sizes, count
+- Road positions, widths, network
+- Parcel boundary lines (red/orange) and dashed envelope lines
+- Tree positions, sizes, and count (trees are already placed)
+- Green areas and vegetation layout
+- Camera angle, perspective, framing, composition
+- Spatial relationships between all elements
 
-GEOMETRY RULES (STRICT):
-- Keep ALL building footprints, positions, shapes, and sizes EXACTLY as shown.
-- Keep ALL roads in their exact positions and widths.
-- Keep the red/orange parcel boundary lines and dashed envelope lines PERFECTLY intact — sharp geometric edges, no bleeding, no smearing, no feathering. These are precision architectural zoning lines.
-- Keep the same camera angle, framing, and composition. Do NOT crop or shift.
-- Do NOT add text, watermarks, inset images, or UI elements.
+NO REINTERPRETATION. NO CAMERA CHANGE. NO STRUCTURAL MODIFICATION.
+Do NOT add, remove, move, or resize ANY element.
+Do NOT add text, watermarks, inset images, or UI elements.
 
-VISUAL ENHANCEMENT (MANDATORY):
-- TREES: Add small realistic round-canopy trees (dark green, 3D spherical crowns) scattered in green areas between buildings. Trees must be SMALL — canopy diameter 2-4m maximum, never bigger than a car. Do NOT make oversized trees that dwarf buildings. Place them naturally along roads and in yards. About 20-35 trees visible. No trees inside the beige parcel area.
-- SHADOWS: Add realistic cast shadows from ALL buildings and trees. Sun from the upper-left (northwest). Shadows should fall on the ground, roads, and other surfaces. Soft penumbra edges.
-- BUILDINGS: Apply concrete/gray texture to all buildings. Slightly weathered, realistic. Not pure white — use light gray (#c8c4bc) with subtle variation. Keep the flat-roof architectural style.
-- ROADS: Dark asphalt gray (#3a3a3a), slightly textured. No vegetation on road surfaces.
-- GRASS: Rich green lawn texture with subtle shade variations. Not flat — show mowing patterns or slight color variation.
-- PARCEL: The highlighted parcel area (beige/ochre/sand colored ground with red border) must be a CLEAN, FLAT, EMPTY plot of beige/sand ground. Do NOT place any buildings, structures, objects, vegetation, or details INSIDE the parcel. The parcel interior must be ONLY flat beige/sand ground with the red boundary line and dashed envelope line visible. No trees, no grass, no buildings inside — just clean empty sand/beige terrain.
-- LIGHTING: Warm afternoon daylight. Natural ambient occlusion where buildings meet the ground.
+ALLOWED non-structural polish ONLY:
+- Slight tonal harmonization across the scene
+- Subtle contrast improvement for architectural clarity
+- Refined soft shadows from buildings and trees (sun from upper-left)
+- Light ambient occlusion where buildings meet the ground
+- Cleaner visual edges and improved sharpness
+- Subtle concrete texture on building surfaces (keep existing gray tones)
+- Warm afternoon daylight color grading
+- Professional architectural visualization finish
 
-QUALITY: Photo-realistic architectural visualization quality. Clean, professional, suitable for a client presentation.`;
+The parcel area (beige/sand ground with red border) must remain CLEAN, FLAT, EMPTY.
+Do NOT place anything inside the parcel that is not already there.
 
-        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4.1",
-            input: [{ role: "user", content: [
-              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-              { type: "input_text", text: polishPrompt }
-            ]}],
-            tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-          })
-        });
-        console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
-        const oaiJson = await oaiRes.json();
-
-        if (oaiJson.error) {
-          console.error(`[SLIDE4-POLISH] API error: ${JSON.stringify(oaiJson.error)}`);
-        } else {
+QUALITY: Premium architectural presentation. Stability > beauty.`;
+        // v72.1: Launch all variations in parallel
+        const polishRequests = [];
+        for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
+          polishRequests.push(
+            fetch("https://api.openai.com/v1/responses", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gpt-4.1",
+                input: [{ role: "user", content: [
+                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                  { type: "input_text", text: polishPrompt }
+                ]}],
+                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
+              })
+            }).then(r => r.json()).catch(err => ({ error: err.message }))
+          );
+        }
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched in parallel (${Date.now() - t0}ms)`);
+        const polishResults = await Promise.all(polishRequests);
+        // v72.1: Score each variation with edge-based drift detection, pick best
+        let bestVariation = null;
+        let bestDriftScore = 1.0; // lower is better
+        const variationLog = [];
+        for (let v = 0; v < polishResults.length; v++) {
+          const oaiJson = polishResults[v];
+          if (oaiJson.error) {
+            variationLog.push(`  v${v+1}: API error — ${JSON.stringify(oaiJson.error).substring(0, 100)}`);
+            continue;
+          }
           let polishedB64 = null;
           if (oaiJson.output) {
             for (const item of oaiJson.output) {
               if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
             }
           }
-          if (polishedB64) {
-            console.log(`[SLIDE4-POLISH] SUCCESS (${polishedB64.length} chars, ${Date.now() - t0}ms)`);
-            const enhancedMapBuf = Buffer.from(polishedB64, "base64");
-            const finalCanvas = createCanvas(W, H);
-            const finalCtx = finalCanvas.getContext("2d");
-            finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-
-            // ═══════════════════════════════════════════════════════════════
-            // v70.9: Redessiner parcelle + enveloppe APRÈS AI polish
-            // L'AI altère/efface les lignes → on les redessine en canvas
-            // pour garantir des bords nets et géométriques.
-            // ═══════════════════════════════════════════════════════════════
-            // v70.10: PAS de re-dessin parcelle/enveloppe en canvas
-            // Mapbox les dessine déjà à la bonne échelle via fill-extrusion + line layers.
-            // Le re-dessin canvas créait un doublon à une échelle différente (projection GPS→px décalée).
-
-            drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
-            drawSolarArc(finalCtx, W, H, { bearing });
-            const finalPng = finalCanvas.toBuffer("image/png");
-            const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
-            if (!ue2) {
-              const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-              enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
-              console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
-            } else {
-              console.warn("[SLIDE4-POLISH] Upload error:", ue2.message);
-            }
-          } else {
-            console.warn("[SLIDE4-POLISH] No image in response:", JSON.stringify(oaiJson).substring(0, 300));
+          if (!polishedB64) {
+            variationLog.push(`  v${v+1}: no image returned`);
+            continue;
           }
+          const enhancedBuf = Buffer.from(polishedB64, "base64");
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
+          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓ PASS" : "✗ FAIL"} (new=${drift.newEdgePixels} lost=${drift.lostEdgePixels})`);
+          if (drift.passed && drift.driftScore < bestDriftScore) {
+            bestDriftScore = drift.driftScore;
+            bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
+          }
+        }
+        console.log(`[SLIDE4-POLISH] Multi-render results (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
+        if (bestVariation) {
+          console.log(`[SLIDE4-POLISH] ✓ Best: v${bestVariation.index} (drift=${(bestVariation.drift.driftScore * 100).toFixed(2)}%)`);
+          const finalCanvas = createCanvas(W, H);
+          const finalCtx = finalCanvas.getContext("2d");
+          finalCtx.drawImage(await loadImage(bestVariation.buf), 0, 0, W, H);
+          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
+          drawSolarArc(finalCtx, W, H, { bearing });
+          const finalPng = finalCanvas.toBuffer("image/png");
+          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
+          if (!ue2) {
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
+            console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          }
+        } else {
+          console.warn(`⚠ [SLIDE4-DRIFT] ALL ${SLIDE4_VARIATIONS} variations rejected — using deterministic fallback`);
         }
       } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
     } else {
@@ -4940,13 +5091,111 @@ app.post("/generate-massing", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
-    // v71: PAS de AI polish pour les massing — rendu 100% déterministe via Mapbox
-    // L'AI polish créait des rendus incohérents entre A, B et C (couleurs, textures, artefacts différents).
-    // Le style Mapbox maquette blanche + overlays canvas = résultat propre, stable, identique à chaque run.
-    console.log(`[MASSING] v71: No AI polish — deterministic Mapbox rendering (${Date.now() - t0}ms)`);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // v72.1: MULTI-RENDER MASSING POLISH — 3 variations, best by drift score
+    // v71 disabled polish due to A/B/C inconsistency.
+    // v72.1: ultra-minimal prompt + multi-render + edge-based drift = safe re-enable
+    // ═══════════════════════════════════════════════════════════════════════════
+    const MASSING_VARIATIONS = 2;
+    let polishApplied = false;
+    if (OPENAI_API_KEY) {
+      try {
+        console.log(`[MASSING-POLISH] v72.1: Starting multi-render (${MASSING_VARIATIONS} variations) for ${label}...`);
+        const b64Input = pngClean.toString("base64");
+        const massingPolishPrompt = `STRICT EDIT ONLY.
+
+PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
+Do NOT modify, move, add, or remove ANY element.
+Do NOT change building shapes, positions, sizes, count, or colors.
+Do NOT change floor separations, orange/blue color coding, or any structural feature.
+Do NOT reinterpret, redesign, or restyle the scene.
+NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
+
+Apply ONLY these subtle non-structural adjustments:
+- Very slight tonal harmonization (uniform warm balance)
+- Minimal contrast improvement for visual clarity
+- Subtle soft shadows under the building volume
+- Gentle ambient occlusion at ground contact
+- Clean, professional finish
+
+Do NOT change the maquette/model aesthetic — keep the clean architectural model look.
+This is a white architectural maquette with colored floors. Keep it that way.
+
+CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in tone and style.`;
+
+        // v72.1: Launch all variations in parallel
+        const polishRequests = [];
+        for (let v = 0; v < MASSING_VARIATIONS; v++) {
+          polishRequests.push(
+            fetch("https://api.openai.com/v1/responses", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gpt-4.1",
+                input: [{ role: "user", content: [
+                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                  { type: "input_text", text: massingPolishPrompt }
+                ]}],
+                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
+              })
+            }).then(r => r.json()).catch(err => ({ error: err.message }))
+          );
+        }
+        const polishResults = await Promise.all(polishRequests);
+        let bestVariation = null;
+        let bestDriftScore = 1.0;
+        const variationLog = [];
+        for (let v = 0; v < polishResults.length; v++) {
+          const oaiJson = polishResults[v];
+          if (oaiJson.error) { variationLog.push(`  v${v+1}: error`); continue; }
+          let polishedB64 = null;
+          if (oaiJson.output) {
+            for (const item of oaiJson.output) {
+              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+            }
+          }
+          if (!polishedB64) { variationLog.push(`  v${v+1}: no image`); continue; }
+          const enhancedBuf = Buffer.from(polishedB64, "base64");
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
+          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓" : "✗"}`);
+          if (drift.passed && drift.driftScore < bestDriftScore) {
+            bestDriftScore = drift.driftScore;
+            bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
+          }
+        }
+        console.log(`[MASSING-POLISH] ${label} multi-render (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
+        if (bestVariation) {
+          console.log(`[MASSING-POLISH] ${label} ✓ Best: v${bestVariation.index} (drift=${(bestVariation.drift.driftScore * 100).toFixed(2)}%)`);
+          const finalCanvas = createCanvas(W, H);
+          const finalCtx = finalCanvas.getContext("2d");
+          finalCtx.drawImage(await loadImage(bestVariation.buf), 0, 0, W, H);
+          drawMassingOverlays(finalCtx, W, H, {
+            site_area: Number(site_area), bearing, label,
+            levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
+            total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
+            typology: massingCoords._typology,
+          });
+          const finalPng = finalCtx.canvas.toBuffer("image/png");
+          const enhancedPath = `${folder}/${slideName}_enhanced.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
+          if (!ue2) {
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
+            polishApplied = true;
+            console.log(`✓ [MASSING-POLISH] ${label} enhanced uploaded (${Date.now() - t0}ms)`);
+          }
+        } else {
+          console.warn(`⚠ [MASSING-DRIFT] ${label}: ALL ${MASSING_VARIATIONS} variations rejected — deterministic fallback`);
+        }
+      } catch (polishErr) {
+        console.error(`[MASSING-POLISH] ${label} exception:`, polishErr.message);
+      }
+    }
+    console.log(`[MASSING] v72.1: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "71.1-STABLE",
+      ok: true, cached: false, server_version: "72.0-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
+      polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
       actual_envelope_w: actualEnvW.toFixed(1), actual_envelope_d: actualEnvD.toFixed(1),
@@ -4966,7 +5215,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v71.1-STABLE on port ${PORT}`);
+  console.log(`BARLO v72.0-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
