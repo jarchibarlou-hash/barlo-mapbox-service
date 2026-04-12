@@ -2015,7 +2015,9 @@ function computeSmartScenarios({
         unitMixDetail = details.join(" + ");
         unitMix = mix;
       }
-      levels = floorsNeeded;
+      // v72.31: En SPLIT, les niveaux sont déjà calculés dans le SPLIT branch (levelsLogt)
+      // NE PAS écraser avec floorsNeeded qui vient de la logique SUPERPOSÉ
+      if (!splitLayout) levels = floorsNeeded;
       // ══════════════════════════════════════════════════════════════════
       // v70.2 ANTI-COLLAPSE : garantir A > B ≥ C en niveaux OU en emprise
       // Quand B et C tombent au même plancher (fpMinViable + 2 niveaux),
@@ -2063,7 +2065,8 @@ function computeSmartScenarios({
       console.log(`│   sol libre=${Math.round(freeGround)}m² parking=${parkingSpotsNeeded} places`);
       if (hasPilotis) console.log(`│   ⚡ PILOTIS activé`);
       if (hasRdcCommerce) console.log(`│   🏪 RDC Commerce (h=${rdcHeightM}m)`);
-      totalUnitsResult = totalUnits || 0;
+      // v72.31: En SPLIT, totalUnitsResult déjà calculé dans le SPLIT branch
+      if (!splitLayout) totalUnitsResult = totalUnits || 0;
     } else {
       // ════════════════════════════════════════════════════════════════════════
       // MODE REGULATION-DRIVEN (FALLBACK) : fp dérivé du CES × ratio
@@ -5593,7 +5596,10 @@ app.post("/generate-massing", async (req, res) => {
   // v72.23: SPLIT SYNTHÉTIQUE en mode CLASSIQUE — si le body demande un SPLIT mais qu'on est
   // en mode CLASSIQUE (splitLayout est null car pas de moteur SMART), on construit un splitLayout
   // synthétique à partir des valeurs classiques pour que le rendu 3D montre 2 volumes séparés
-  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0) {
+  // v72.31: SEULEMENT en mode CLASSIQUE. Quand le moteur SMART choisit SUPERPOSÉ (ex: PRUDENT),
+  // on RESPECTE cette décision — pas de splitLayout synthétique qui écraserait le choix du moteur.
+  const isSmartMode = !!(compute_scenario || !fp_m2_raw || !levels_raw);
+  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && !isSmartMode) {
     const commDepthEstimate = Number(commerce_depth_m) || 6;
     const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
     const logtFpEstimate = fp;  // emprise logement = fp original
