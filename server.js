@@ -1686,7 +1686,22 @@ function computeSmartScenarios({
       //     → le client veut le dégagement du terrain derrière
       // Le CES total (vol1 + vol2) reste plafonné par la réglementation.
       // ══════════════════════════════════════════════════════════════════
-      if (String(layout_mode).toUpperCase() === "SPLIT_AV_AR" && isMixte) {
+      // v72.22: PRUDENT INTELLIGENCE — le scénario PRUDENT peut refuser le SPLIT
+      // si la parcelle est trop petite (profondeur logement < 8m ou parcelle < 20m de profondeur)
+      // → dans ce cas, un volume unique SUPERPOSÉ est plus prudent
+      const _splitRequested = String(layout_mode).toUpperCase() === "SPLIT_AV_AR" && isMixte;
+      let _splitViable = true;
+      if (_splitRequested) {
+        const _parcD = envelope_d || Math.round(site_area / (envelope_w || 20));
+        const _commD = Math.min(Number(commerce_depth_m) || 6, _parcD * 0.30);
+        const _gapD = Number(retrait_inter_volumes_m) || 4;
+        const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
+        _splitViable = _logtD >= 8 && _parcD >= 20;
+        if (role === "PRUDENT" && !_splitViable) {
+          console.log(`│   ⚠️ v72.22 PRUDENT: SPLIT_AV_AR demandé mais non viable (logt_depth=${Math.round(_logtD)}m, parcDepth=${_parcD}m) → SUPERPOSÉ forcé`);
+        }
+      }
+      if (_splitRequested && (role !== "PRUDENT" || _splitViable)) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
         // Volume 1 : COMMERCE (bande avant)
@@ -5185,6 +5200,10 @@ app.post("/generate-massing", async (req, res) => {
     // ── v56.7 : orientation rue ──
     road_bearing,          // azimut de la route principale (degrés, depuis la Sheet)
     front_edge,            // v70: override index arête front (0-3)
+    // ── v72.22 : disposition spatiale commerce/logement ──
+    layout_mode,           // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
+    commerce_depth_m,      // profondeur bande commerciale (défaut 6m)
+    retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -5235,6 +5254,10 @@ app.post("/generate-massing", async (req, res) => {
       density_pressure_factor: Number(density_pressure_factor) || 1,
       driver_intensity: driver_intensity || "MEDIUM",
       strategic_position: strategic_position || "",
+      // v72.22: disposition spatiale commerce/logement
+      layout_mode: layout_mode || "SUPERPOSE",
+      commerce_depth_m: Number(commerce_depth_m) || 6,
+      retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
     });
     const sc = scenarios[label] || scenarios.A;
     fp = sc.fp_m2;
