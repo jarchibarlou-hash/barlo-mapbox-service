@@ -4363,19 +4363,37 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     });
     map.addLayer({ id: 'commerce-footprint', type: 'line', source: 'commerce-volume',
       paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
-    // v72.28: Logement sur PILOTIS en SPLIT — le RDC est un pilotis ouvert (transparent)
-    // Les niveaux habitables commencent au-dessus du pilotis (à rdcH de hauteur)
+    // v72.28: Logement sur PILOTIS en SPLIT — 4 poteaux aux coins + niveaux habitables au-dessus
     const logtLevels = ${massingParams.split_layout ? massingParams.split_layout.volume_logement.levels : massingParams.levels};
     const pilotisH = rdcH; // pilotis = hauteur d'un RDC (3m)
-    // Pilotis : extrusion très transparente pour montrer les colonnes
+    // v72.28: 4 POTEAUX PILOTIS aux coins du logement (petits carrés extrudés)
+    const massingRing = ${JSON.stringify(massingGeoJSON)}.geometry.coordinates[0];
+    const colSize = 0.000004; // ~0.45m en GPS (petit carré de poteau)
+    const pilotisFeatures = [];
+    // Prendre les 4 premiers points du polygon (coins du logement)
+    for (let c = 0; c < Math.min(massingRing.length - 1, 4); c++) {
+      const cx = massingRing[c][0], cy = massingRing[c][1];
+      pilotisFeatures.push({
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "Polygon",
+          coordinates: [[ [cx - colSize, cy - colSize], [cx + colSize, cy - colSize],
+                          [cx + colSize, cy + colSize], [cx - colSize, cy + colSize],
+                          [cx - colSize, cy - colSize] ]]
+        }
+      });
+    }
+    const pilotisGeoJSON = { type: "FeatureCollection", features: pilotisFeatures };
+    map.addSource('pilotis-cols', { type: 'geojson', data: pilotisGeoJSON });
     map.addLayer({
-      id: 'pilotis-volume', type: 'fill-extrusion', source: 'massing',
+      id: 'pilotis-columns', type: 'fill-extrusion', source: 'pilotis-cols',
       paint: {
-        'fill-extrusion-color': '#d0cec8',
+        'fill-extrusion-color': '#c8c4bc',
         'fill-extrusion-height': pilotisH - gap / 2,
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.25,
-        'fill-extrusion-vertical-gradient': false,
+        'fill-extrusion-opacity': 0.95,
+        'fill-extrusion-vertical-gradient': true,
       },
     });
     // Niveaux habitables logement — commencent AU-DESSUS du pilotis
@@ -5405,7 +5423,25 @@ app.post("/generate-massing", async (req, res) => {
   const envW = Number(envelope_w);
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
-  const label = String(massing_label).toUpperCase();
+  // v72.28: DÉTECTION ROBUSTE DU LABEL (A/B/C)
+  // Make.com peut ne pas envoyer massing_label → fallback sur slide_name
+  let label = String(massing_label || "").toUpperCase().trim();
+  if (!["A", "B", "C"].includes(label)) {
+    // Fallback 1: extraire du slide_name (ex: "slide_6_massing_B" → "B")
+    const slideStr = String(slide_name || "").toUpperCase();
+    const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s-]*([ABC])\b/i) || slideStr.match(/[_\s-]([ABC])$/);
+    if (slideMatch) {
+      label = slideMatch[1].toUpperCase();
+    } else {
+      // Fallback 2: chercher dans les clés/valeurs du body
+      const bodyStr = JSON.stringify(req.body).toUpperCase();
+      if (/SCENARIO[_\s"]*C|LABEL[_\s":]*"?C"?|PRUDENT/i.test(bodyStr)) label = "C";
+      else if (/SCENARIO[_\s"]*B|LABEL[_\s":]*"?B"?|EQUILIBRE/i.test(bodyStr)) label = "B";
+      else label = "A";
+    }
+    console.log(`[v72.28] massing_label absent/invalide → détecté "${label}" depuis slide_name="${slide_name}"`);
+  }
+  console.log(`[v72.28] LABEL FINAL: "${label}" (massing_label_raw="${massing_label}", slide_name="${slide_name}")`);
   // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
@@ -5478,6 +5514,13 @@ app.post("/generate-massing", async (req, res) => {
       retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
     });
     const sc = scenarios[label] || scenarios.A;
+    // v72.28: LOG les 3 scénarios pour vérifier la différenciation
+    console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
+    for (const k of ["A", "B", "C"]) {
+      const s = scenarios[k];
+      if (s) console.log(`[v72.28] ${k}: fp=${s.fp_m2}m² levels=${s.levels} split=${s.split_layout ? s.split_layout.volume_logement.levels + "niv_logt" : "none"} pilotis=${s.has_pilotis}`);
+    }
+    console.log(`[v72.28] USING: label="${label}" → fp=${sc.fp_m2}m² levels=${sc.levels}`);
     fp = sc.fp_m2;
     levels = sc.levels;
     totalH = sc.height_m;
