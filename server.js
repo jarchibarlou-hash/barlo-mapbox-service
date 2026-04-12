@@ -5593,13 +5593,11 @@ app.post("/generate-massing", async (req, res) => {
     levels = commerceLevels + 1;
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
   }
-  // v72.23: SPLIT SYNTHÉTIQUE en mode CLASSIQUE — si le body demande un SPLIT mais qu'on est
-  // en mode CLASSIQUE (splitLayout est null car pas de moteur SMART), on construit un splitLayout
-  // synthétique à partir des valeurs classiques pour que le rendu 3D montre 2 volumes séparés
-  // v72.31: SEULEMENT en mode CLASSIQUE. Quand le moteur SMART choisit SUPERPOSÉ (ex: PRUDENT),
-  // on RESPECTE cette décision — pas de splitLayout synthétique qui écraserait le choix du moteur.
-  const isSmartMode = !!(compute_scenario || !fp_m2_raw || !levels_raw);
-  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && !isSmartMode) {
+  // v72.23: SPLIT SYNTHÉTIQUE — si le body demande un SPLIT mais splitLayout est null,
+  // on construit un splitLayout synthétique pour que le rendu 3D montre 2 volumes séparés.
+  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact (volume unique).
+  // A et B gardent le SPLIT avec commerce en front + logement sur pilotis derrière.
+  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && label !== "C") {
     const commDepthEstimate = Number(commerce_depth_m) || 6;
     const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
     const logtFpEstimate = fp;  // emprise logement = fp original
