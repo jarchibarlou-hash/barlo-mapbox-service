@@ -3933,38 +3933,38 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
       { "id": "background", "type": "background",
-        "paint": { "background-color": "#6aad3a" } },
+        "paint": { "background-color": "#4a8c2a" } },
       { "id": "water", "type": "fill",
         "source": "composite", "source-layer": "water",
-        "paint": { "fill-color": "#a8cce0" } },
+        "paint": { "fill-color": "#a0c8dd" } },
       { "id": "landuse-park", "type": "fill",
         "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#5a9e2e" } },
+        "paint": { "fill-color": "#3d7a22" } },
       { "id": "landuse-urban", "type": "fill",
         "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#6aad3a" } },
+        "paint": { "fill-color": "#4a8c2a" } },
       { "id": "road-case-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#1a1a1a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100] } },
+        "paint": { "line-color": "#5c5c5c", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100] } },
       { "id": "road-case-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56] } },
+        "paint": { "line-color": "#6a6a6a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56] } },
       { "id": "road-fill-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#2a2a2a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92] } },
+        "paint": { "line-color": "#707070", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48] } },
+        "paint": { "line-color": "#808080", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -4269,32 +4269,40 @@ function drawOverlays(ctx, W, H, BH, p) {
 }
 // ─── COLOR REMAP — remplace les teintes beige Mapbox par vert/sable architectural ──
 function applyColorRemap(ctx, W, H) {
+  // v72.21: Mapbox "Hektar Pro" already has green grass (#6aad3a) and dark roads.
+  // NO ground→grass or road→sandy remap needed — that was for the old beige style.
+  // This function now ONLY whitens building rooftops for a premium concrete look.
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
-  const dist = (r, g, b, tr, tg, tb) => Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb);
 
   // ─── STEP 1: Build rooftop mask ──────────────────────────────────────────
   // In 3D axonometric view, building rooftops have darker building-side pixels
   // directly below them. Ground does NOT have this brightness drop.
-  // Scan each light pixel: if a significantly darker pixel exists 2-15px below → rooftop.
   const roofMask = new Uint8Array(W * H);
   for (let y = 0; y < H - 15; y++) {
     for (let x = 0; x < W; x++) {
       const idx = (y * W + x) * 4;
       const r = d[idx], g = d[idx + 1], b = d[idx + 2];
       const brightness = (r + g + b) / 3;
-      if (brightness < 150 || brightness > 248) continue; // only mid-to-bright pixels
-      // Check 2-15 pixels below for building wall (brightness drop > 35)
+      // Building rooftops in Mapbox Hektar Pro: #d8d4cc to #908c88 → brightness 140-215
+      // Green grass #6aad3a → brightness ~112. Skip grass and very dark/bright pixels.
+      if (brightness < 130 || brightness > 240) continue;
+      // Skip green pixels (grass) — g channel dominant
+      if (g > r + 20 && g > b + 30) continue;
+      // Skip reddish pixels (parcel zone)
+      if (r > 180 && g < 140 && b < 140) continue;
+      // Check 2-15 pixels below for building wall (brightness drop > 30)
       for (let dy = 2; dy <= 15; dy++) {
         const by = y + dy;
         if (by >= H) break;
         const bi = (by * W + x) * 4;
         const bBright = (d[bi] + d[bi + 1] + d[bi + 2]) / 3;
-        if (brightness - bBright > 35) {
-          // Also check the dark pixel isn't a road edge — road edges are warm, walls are cool/gray
+        if (brightness - bBright > 30) {
+          // Verify the dark pixel is a building wall (neutral gray, not green grass)
           const wr = d[bi], wg = d[bi + 1], wb = d[bi + 2];
-          const isBuildingWall = bBright < 160 && Math.abs(wr - wg) < 25 && Math.abs(wg - wb) < 25;
-          if (isBuildingWall) {
+          const isWall = Math.abs(wr - wg) < 30 && Math.abs(wg - wb) < 30;
+          const isGrass = wg > wr + 15 && wg > wb + 20;
+          if (isWall && !isGrass) {
             roofMask[y * W + x] = 1;
             break;
           }
@@ -4302,71 +4310,38 @@ function applyColorRemap(ctx, W, H) {
       }
     }
   }
-  // Expand rooftop mask slightly upward (rooftop extends above edge pixels)
+  // Expand rooftop mask upward + laterally for full coverage
   const roofMask2 = new Uint8Array(roofMask);
-  for (let y = 2; y < H; y++) {
-    for (let x = 0; x < W; x++) {
+  for (let y = 3; y < H; y++) {
+    for (let x = 1; x < W - 1; x++) {
       if (roofMask[y * W + x]) {
-        for (let dy = 1; dy <= 3; dy++) {
+        for (let dy = 1; dy <= 4; dy++) {
           if (y - dy >= 0) roofMask2[(y - dy) * W + x] = 1;
         }
+        // Slight lateral expansion for edge coverage
+        roofMask2[y * W + x - 1] = 1;
+        roofMask2[y * W + x + 1] = 1;
       }
     }
   }
 
-  // ─── STEP 2: Color remap (ground→grass, road→sandy) ─────────────────────
-  for (let i = 0; i < d.length; i += 4) {
-    const px = (i / 4) % W;
-    const py = Math.floor((i / 4) / W);
-    const r = d[i], g = d[i + 1], b = d[i + 2];
-    const brightness = (r + g + b) / 3;
-    // Skip rooftop pixels (detected in step 1)
-    if (roofMask2[py * W + px]) continue;
-    // Skip very bright pixels (already white buildings)
-    if (r > 235 && g > 235 && b > 230) continue;
-    // Skip dark pixels (shadows, edges)
-    if (brightness < 120) continue;
-    // Skip reddish/pinkish pixels (parcel zone)
-    if (r > 180 && g < 140 && b < 140) continue;
-    // Skip blueish pixels (envelope lines, water)
-    if (b > r + 20 && b > g + 10) continue;
-    // Road detection
-    const isRoad = dist(r, g, b, 234, 228, 212) < 30 || dist(r, g, b, 204, 196, 174) < 30 ||
-                   (r > 180 && g > 170 && b > 140 && b < 190 && r - b > 30 && r - b < 70 && g - b > 20);
-    if (isRoad) {
-      const factor = brightness / 220;
-      d[i]   = Math.min(255, Math.round(195 * factor));
-      d[i + 1] = Math.min(255, Math.round(180 * factor));
-      d[i + 2] = Math.min(255, Math.round(145 * factor));
-      continue;
-    }
-    // Ground detection: beige/warm tones
-    const isGround = dist(r, g, b, 242, 240, 236) < 25 || dist(r, g, b, 224, 221, 212) < 25 ||
-                     dist(r, g, b, 235, 232, 226) < 25 ||
-                     (r > 190 && g > 190 && b > 180 && Math.abs(r - g) < 15 && r - b < 30 && r - b > -5);
-    if (isGround) {
-      const factor = brightness / 240;
-      const variation = ((i / 4) % 7) * 2 - 6;
-      d[i]   = Math.min(255, Math.round((75 + variation) * factor));
-      d[i + 1] = Math.min(255, Math.round((145 + variation) * factor));
-      d[i + 2] = Math.min(255, Math.round((60 + variation) * factor));
-    }
-  }
-
-  // ─── STEP 3: Building whitening — whiten rooftop pixels to light concrete ─
+  // ─── STEP 2: Building whitening — rooftop pixels → warm white concrete ───
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      if (!roofMask2[y * W + x]) continue; // only process rooftop pixels
+      if (!roofMask2[y * W + x]) continue;
       const i = (y * W + x) * 4;
       const r = d[i], g = d[i + 1], b = d[i + 2];
       const brightness = (r + g + b) / 3;
-      if (brightness > 245 || brightness < 80) continue; // skip extremes
-      if (r > 180 && g < 120 && b < 120) continue; // skip parcel red
-      // Remap to warm white concrete
-      const lum = brightness / 200;
-      d[i]     = Math.min(255, Math.round(238 * lum));
-      d[i + 1] = Math.min(255, Math.round(234 * lum));
-      d[i + 2] = Math.min(255, Math.round(225 * lum));
+      if (brightness > 245 || brightness < 70) continue;
+      // Skip green pixels that leaked into mask
+      if (g > r + 15 && g > b + 25) continue;
+      // Skip parcel red
+      if (r > 180 && g < 130 && b < 130) continue;
+      // Remap to warm white concrete — preserve luminosity
+      const lum = Math.min(1.3, brightness / 185);
+      d[i]     = Math.min(255, Math.round(240 * lum));
+      d[i + 1] = Math.min(255, Math.round(237 * lum));
+      d[i + 2] = Math.min(255, Math.round(230 * lum));
     }
   }
   ctx.putImageData(imgData, 0, 0);
