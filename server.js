@@ -5213,14 +5213,27 @@ app.post("/generate-massing", async (req, res) => {
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
   const label = String(massing_label).toUpperCase();
-  // v72.22: Fallback ULTRA-ROBUSTE — chercher "mixte" dans TOUS les champs possibles
-  // Make.com peut envoyer le type de projet sous n'importe quel nom de champ
-  // Si layout_mode = SPLIT_AV_AR → c'est FORCÉMENT mixte (commerce + logement séparés)
+  // v72.23: DÉTECTION ULTRA-AGRESSIVE programme mixte + disposition SPLIT
+  // Make.com envoie les infos du form/sheet sous des noms de champs variables.
+  // On scanne le body ENTIER pour détecter :
+  // 1) Programme mixte (commerce + logement)
+  // 2) Disposition SPLIT (commerce devant, logement en retrait)
   const bodyStr = JSON.stringify(req.body).toLowerCase();
-  const bodyHasMixte = /mixte|mixed/i.test(bodyStr);
-  const splitImpliesMixte = /split_av_ar/i.test(String(layout_mode || ""));
-  const effectiveProgramMain = program_main || project_type || (bodyHasMixte || splitImpliesMixte ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v71.1] program_main="${program_main}" project_type="${project_type}" bodyHasMixte=${bodyHasMixte} → effective="${effectiveProgramMain}"`);
+  // Détection mixte : toute mention de mixte, commerce, boutique, etc.
+  const bodyHasMixte = /mixte|mixed|commerce|boutique|magasin/i.test(bodyStr);
+  // Détection SPLIT : toute mention de séparation commerce/logement
+  const bodyHasSplit = /split|dissoci|sépar|devant.*retrait|retrait.*devant|avant.*arri[eè]re|commerce.*devant|logement.*retrait|logement.*arri/i.test(bodyStr);
+  // layout_mode explicite OU détecté du body
+  const effectiveLayoutMode = layout_mode
+    || (bodyHasSplit ? "SPLIT_AV_AR" : "SUPERPOSE");
+  const splitImpliesMixte = effectiveLayoutMode === "SPLIT_AV_AR";
+  // Programme : si mixte détecté dans le body ou layout SPLIT → USAGE_MIXTE
+  const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitImpliesMixte) ? "USAGE_MIXTE" : "");
+  console.log(`[MASSING v72.23] program_main="${program_main}" project_type="${project_type}"`);
+  console.log(`[MASSING v72.23] bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit}`);
+  console.log(`[MASSING v72.23] layout_mode_raw="${layout_mode}" → effectiveLayoutMode="${effectiveLayoutMode}"`);
+  console.log(`[MASSING v72.23] effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.23] body_sample=${bodyStr.slice(0, 500)}`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
@@ -5259,7 +5272,7 @@ app.post("/generate-massing", async (req, res) => {
       driver_intensity: driver_intensity || "MEDIUM",
       strategic_position: strategic_position || "",
       // v72.22: disposition spatiale commerce/logement
-      layout_mode: layout_mode || "SUPERPOSE",
+      layout_mode: effectiveLayoutMode,
       commerce_depth_m: Number(commerce_depth_m) || 6,
       retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
     });
@@ -5294,10 +5307,54 @@ app.post("/generate-massing", async (req, res) => {
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels}`);
   }
+  // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
+  // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
+  if (commerceLevels === 0 && (bodyHasMixte || splitImpliesMixte)) {
+    commerceLevels = 1;
+    console.log(`[OVERRIDE] commerceLevels=0 mais body contient mixte/split → FORCÉ à 1 (commerce RDC ORANGE)`);
+  }
+  // v72.22: Si mixte et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
+  if (commerceLevels > 0 && levels <= commerceLevels) {
+    const oldLevels = levels;
+    levels = commerceLevels + 1;
+    console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
+  }
+  // v72.23: SPLIT SYNTHÉTIQUE en mode CLASSIQUE — si le body demande un SPLIT mais qu'on est
+  // en mode CLASSIQUE (splitLayout est null car pas de moteur SMART), on construit un splitLayout
+  // synthétique à partir des valeurs classiques pour que le rendu 3D montre 2 volumes séparés
+  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0) {
+    const commDepthEstimate = Number(commerce_depth_m) || 6;
+    const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
+    const logtFpEstimate = fp;  // emprise logement = fp original
+    const logtLevels = levels - commerceLevels; // niveaux logement = total - commerce
+    splitLayout = {
+      mode: "SPLIT_AV_AR",
+      volume_commerce: {
+        fp_m2: commFpEstimate,
+        width_m: Math.round(envW * 0.8),
+        depth_m: commDepthEstimate,
+        levels: commerceLevels,
+        sdp_m2: commFpEstimate * commerceLevels,
+        units: Math.max(1, Math.floor(commFpEstimate / 30)),
+        position: "AVANT (contre clôture)",
+      },
+      volume_logement: {
+        fp_m2: logtFpEstimate,
+        width_m: Math.round(envW * 0.8),
+        depth_m: Math.round(envD * 0.5),
+        levels: Math.max(1, logtLevels),
+        sdp_m2: logtFpEstimate * Math.max(1, logtLevels),
+        units: 0,
+        position: "ARRIÈRE",
+      },
+      retrait_inter_m: Number(retrait_inter_volumes_m) || 4,
+    };
+    console.log(`[CLASSIC→SPLIT] splitLayout synthétique construit: commerce=${commFpEstimate}m²×${commerceLevels}niv + logement=${logtFpEstimate}m²×${Math.max(1, logtLevels)}niv`);
+  }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
   const habitationLevels = levels - commerceLevels;
-  // v72.22: LOG DIAGNOSTIC COMPLET — traçabilité moteur → 3D
+  // v72.23: LOG DIAGNOSTIC COMPLET — traçabilité moteur → 3D
   console.log(`┌── MASSING DIAGNOSTIC v72.22 ──`);
   console.log(`│ Scénario: ${label} (${compute_scenario ? "SMART" : "CLASSIQUE"})`);
   console.log(`│ program_main="${program_main}" effectiveProgramMain="${effectiveProgramMain}"`);
@@ -5443,11 +5500,36 @@ app.post("/generate-massing", async (req, res) => {
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
       { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH, split_layout: splitLayout, commerce_coords: commerceCoords }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 25000 });
+    // v72.22: Attendre un peu plus pour que les tuiles soient bien peintes
+    await new Promise(r => setTimeout(r, 1500));
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
-    const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+    let screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+    // v72.22: TONE CHECK — vérifier que le fond est bien beige (pas gris/blanc = Mapbox default light)
+    // On sample un pixel de coin (hors bâtiment massing) — si trop froid (R≈G≈B > 230), c'est le style light par défaut
+    const toneImg = await loadImage(screenshotBuf);
+    const toneW = toneImg.width, toneH = toneImg.height;
+    const toneCanvas = createCanvas(toneW, toneH);
+    const toneCtx = toneCanvas.getContext("2d");
+    toneCtx.drawImage(toneImg, 0, 0, toneW, toneH);
+    // Sample 50 pixels en haut à gauche (zone de fond sans bâtiment)
+    const cornerData = toneCtx.getImageData(50, 50, 10, 5).data;
+    let coldPixels = 0, totalChecked = 0;
+    for (let i = 0; i < cornerData.length; i += 4) {
+      const r = cornerData[i], g = cornerData[i+1], b = cornerData[i+2];
+      totalChecked++;
+      // Si R≈G≈B et luminosité > 230 → fond blanc/gris froid (style light par défaut)
+      if (r > 225 && g > 225 && b > 225 && Math.abs(r - g) < 8 && Math.abs(g - b) < 8) coldPixels++;
+    }
+    const coldRatio = coldPixels / Math.max(1, totalChecked);
+    if (coldRatio > 0.5) {
+      console.log(`[HEKTAR] ⚠️ TONE CHECK: fond trop froid (${Math.round(coldRatio*100)}% cold pixels) — retry screenshot après délai...`);
+      await new Promise(r => setTimeout(r, 3000));
+      screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+      console.log(`[HEKTAR] Retry screenshot: ${screenshotBuf.length} bytes`);
+    }
     await page.close();
-    console.log(`[HEKTAR] Screenshot: ${screenshotBuf.length} bytes`);
+    console.log(`[HEKTAR] Screenshot: ${screenshotBuf.length} bytes (coldRatio=${Math.round(coldRatio*100)}%)`);
     // Canvas overlay à la résolution native du screenshot (2560×2560)
     const img = await loadImage(screenshotBuf);
     const W = img.width, H = img.height;  // sera 2560×2560
