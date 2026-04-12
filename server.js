@@ -5346,21 +5346,31 @@ app.post("/generate-massing", async (req, res) => {
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
   const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
+  // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
+  // ── Détection MIXTE ──
   const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
-  // ── Détection SPLIT : UNIQUEMENT si layout_mode est explicitement SPLIT_AV_AR
-  // OU si une valeur de champ mentionne clairement la séparation ──
+  // ── Détection SPLIT ──
+  // Signal 1: layout_mode explicitement SPLIT_AV_AR
+  const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
+  // Signal 2: une valeur du body mentionne clairement la séparation
   const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
-  const effectiveLayoutMode = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR"
-    ? "SPLIT_AV_AR"
-    : (bodyHasSplit ? "SPLIT_AV_AR" : "SUPERPOSE");
+  // Signal 3: commerce_depth_m est envoyé avec une valeur > 0 → c'est forcément du SPLIT
+  const hasCommerceDepth = Number(commerce_depth_m) > 0;
+  // ── Résolution ──
+  const effectiveLayoutMode = (layoutModeIsSplit || bodyHasSplit || hasCommerceDepth)
+    ? "SPLIT_AV_AR" : "SUPERPOSE";
   const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
   // ── Programme effectif ──
   const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v72.24] program_main="${program_main}" project_type="${project_type}"`);
-  console.log(`[MASSING v72.24] bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit}`);
-  console.log(`[MASSING v72.24] layout_mode_raw="${layout_mode}" → effectiveLayoutMode="${effectiveLayoutMode}"`);
-  console.log(`[MASSING v72.24] effectiveProgramMain="${effectiveProgramMain}"`);
-  console.log(`[MASSING v72.24] field_values_sample="${fieldValues.slice(0, 400)}"`);
+  console.log(`[MASSING v72.25] ┌── DÉTECTION MIXTE/SPLIT ──`);
+  console.log(`[MASSING v72.25] │ program_main="${program_main}" project_type="${project_type}"`);
+  console.log(`[MASSING v72.25] │ layout_mode_raw="${layout_mode}" commerce_depth_m="${commerce_depth_m}" retrait="${retrait_inter_volumes_m}"`);
+  console.log(`[MASSING v72.25] │ bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit} splitActive=${splitActive}`);
+  console.log(`[MASSING v72.25] │ effectiveLayoutMode="${effectiveLayoutMode}" effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.25] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
+  console.log(`[MASSING v72.25] │ field_values_sample="${fieldValues.slice(0, 500)}"`);
+  console.log(`[MASSING v72.25] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
