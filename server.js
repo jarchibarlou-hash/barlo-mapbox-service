@@ -4007,11 +4007,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': [
           'interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0,  '#c2c0bc',
-          4,  '#b8b6b2',
-          10, '#adaba7',
-          20, '#a09e9a',
-          40, '#8e8c88',
+          0,  '#e8e6e2',
+          4,  '#e0deda',
+          10, '#d5d3cf',
+          20, '#cac8c4',
+          40, '#bab8b4',
         ],
         'fill-extrusion-height': [
           'let', 'h', ['coalesce', ['get', 'height'], 0],
@@ -4337,11 +4337,11 @@ function applyColorRemap(ctx, W, H) {
       if (g > r + 15 && g > b + 25) continue;
       // Skip parcel red
       if (r > 180 && g < 130 && b < 130) continue;
-      // Remap to cool concrete gray — preserve luminosity
-      const lum = Math.min(1.2, brightness / 190);
-      d[i]     = Math.min(255, Math.round(200 * lum));
-      d[i + 1] = Math.min(255, Math.round(198 * lum));
-      d[i + 2] = Math.min(255, Math.round(194 * lum));
+      // Remap to warm white — preserve luminosity
+      const lum = Math.min(1.3, brightness / 180);
+      d[i]     = Math.min(255, Math.round(242 * lum));
+      d[i + 1] = Math.min(255, Math.round(240 * lum));
+      d[i + 2] = Math.min(255, Math.round(235 * lum));
     }
   }
   ctx.putImageData(imgData, 0, 0);
@@ -4707,48 +4707,7 @@ function drawLegendCompass(ctx, W, H, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-  // ─── SETBACK LABELS (3m / 5m) on parcel edges ────────────────────────────
-  const { parcelScreenPts, envelopeScreenPts, frontEdgeIndex, setback_front: sf, setback_side: ss, setback_back: sb2 } = p;
-  if (parcelScreenPts && envelopeScreenPts && parcelScreenPts.length >= 3) {
-    const n = parcelScreenPts.length;
-    // Compute setback distance label for each edge
-    // frontEdgeIndex = front edge, opposite = back, others = side
-    const backIndex = (frontEdgeIndex + Math.floor(n / 2)) % n;
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      // Midpoint of parcel edge
-      const mx = (parcelScreenPts[i].x + parcelScreenPts[j].x) / 2;
-      const my = (parcelScreenPts[i].y + parcelScreenPts[j].y) / 2;
-      // Midpoint of corresponding envelope edge
-      const emx = (envelopeScreenPts[i].x + envelopeScreenPts[j].x) / 2;
-      const emy = (envelopeScreenPts[i].y + envelopeScreenPts[j].y) / 2;
-      // Label position = between parcel and envelope midpoints
-      const lx = (mx + emx) / 2;
-      const ly = (my + emy) / 2;
-      // Determine setback value
-      let setbackVal;
-      if (i === frontEdgeIndex) setbackVal = sf;
-      else if (i === backIndex) setbackVal = sb2;
-      else setbackVal = ss;
-      const label = setbackVal + "m";
-      // Draw label with white background pill
-      ctx.save();
-      ctx.font = "bold 13px Arial";
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = "rgba(255,255,255,0.88)";
-      ctx.beginPath();
-      ctx.roundRect(lx - tw / 2 - 6, ly - 9, tw + 12, 20, 4);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(196,80,48,0.5)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = "#c45030";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, lx, ly + 1);
-      ctx.restore();
-    }
-  }
+  // v72.22: Setback labels DISABLED per user request
 }
 // ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
 function drawSolarArc(ctx, W, H, p) {
@@ -4959,7 +4918,7 @@ app.post("/generate", async (req, res) => {
           "Apply ONLY these specific enhancements:",
           "1. Replace the simple green sphere trees with realistic architectural maquette-style trees (same positions, same sizes, natural leafy canopy).",
           "2. Add subtle realistic shadows under buildings (soft, natural afternoon light from the south).",
-          "3. Give the concrete gray buildings a subtle matte concrete texture (keep them gray, do not change their color to white or beige).",
+          "3. Give the white/light buildings a subtle clean matte concrete texture (keep them white/light, do not darken them).",
           "4. Enhance the green grass ground with subtle natural grass texture (keep the same green tone).",
           "5. Refine road surfaces with subtle asphalt texture.",
           "6. Overall warm afternoon lighting with gentle ambient occlusion.",
