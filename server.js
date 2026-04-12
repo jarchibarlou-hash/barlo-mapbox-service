@@ -1743,22 +1743,28 @@ function computeSmartScenarios({
         const usefulLogt = Math.round(fpLogtFinal * (1 - circRatio));
         const avgResiSize = refUnitSize;
         const resiPerFloor = Math.max(1, Math.min(maxPerFloor, Math.floor(usefulLogt / avgResiSize)));
-        // v72.27: Niveaux directement liés au rôle
-        // INTENSIFICATION: max floors, EQUILIBRE: -1 étage, PRUDENT: -2 étages (min 1)
+        // v72.28: Niveaux FORCÉMENT DIFFÉRENTS par rôle
+        // INTENSIFICATION: max floors (R+2 min), EQUILIBRE: max-1 (R+1 min), PRUDENT: 1 seul (RDC)
+        // En SPLIT, "levels" = niveaux de LOGEMENT (commerce est séparé)
         let levelsLogt;
+        const baseCalc = Math.max(1, Math.ceil(resiRoleTarget / resiPerFloor));
         if (role === "INTENSIFICATION") {
-          levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
+          levelsLogt = Math.max(3, baseCalc);               // R+2 minimum
           levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
+          if (levelsLogt < 3 && effectiveMaxFloors >= 3) levelsLogt = 3;
+          if (levelsLogt < 2) levelsLogt = 2;               // au moins R+1
         } else if (role === "EQUILIBRE") {
-          levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
+          levelsLogt = Math.max(2, baseCalc);               // R+1 minimum
           levelsLogt = Math.min(levelsLogt, Math.max(2, effectiveMaxFloors - 1));
         } else { // PRUDENT
-          levelsLogt = Math.max(1, Math.ceil(resiRoleTarget / resiPerFloor));
-          levelsLogt = Math.min(levelsLogt, Math.max(1, effectiveMaxFloors - 2));
+          levelsLogt = 1;                                    // RDC uniquement
         }
         // COS check
         while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
         const totalResiUnits = resiPerFloor * levelsLogt;
+        // v72.28: PILOTIS OBLIGATOIRE en SPLIT — logement sur pilotis, habitable à partir de R+1
+        hasPilotis = true;
+        pilotisLevels = 1;
         // Sol libre
         const freeGroundSplit = Math.round(site_area - fpTotal);
         const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - logtDepthUsed - rArriere) : 0);
@@ -1780,7 +1786,8 @@ function computeSmartScenarios({
             levels: levelsLogt,
             sdp_m2: fpLogtFinal * levelsLogt,
             units: totalResiUnits,
-            position: `ARRIÈRE (retrait ${Math.round(commDepth + interGap)}m)`,
+            position: `ARRIÈRE sur pilotis (retrait ${Math.round(commDepth + interGap)}m)`,
+            has_pilotis: true,
           },
           retrait_inter_m: interGap,
           espace_arriere_m2: espaceArriere,
@@ -4356,12 +4363,26 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     });
     map.addLayer({ id: 'commerce-footprint', type: 'line', source: 'commerce-volume',
       paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
-    // Logement : N niveaux BLEU en arrière (massingCoords = logement polygon)
+    // v72.28: Logement sur PILOTIS en SPLIT — le RDC est un pilotis ouvert (transparent)
+    // Les niveaux habitables commencent au-dessus du pilotis (à rdcH de hauteur)
     const logtLevels = ${massingParams.split_layout ? massingParams.split_layout.volume_logement.levels : massingParams.levels};
+    const pilotisH = rdcH; // pilotis = hauteur d'un RDC (3m)
+    // Pilotis : extrusion très transparente pour montrer les colonnes
+    map.addLayer({
+      id: 'pilotis-volume', type: 'fill-extrusion', source: 'massing',
+      paint: {
+        'fill-extrusion-color': '#d0cec8',
+        'fill-extrusion-height': pilotisH - gap / 2,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.25,
+        'fill-extrusion-vertical-gradient': false,
+      },
+    });
+    // Niveaux habitables logement — commencent AU-DESSUS du pilotis
     for (let f = 0; f < logtLevels; f++) {
-      const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
-      const top  = f === 0 ? rdcH : rdcH + f * etageH;
-      const baseH = f > 0 ? base + gap / 2 : 0;
+      const base = pilotisH + f * etageH;
+      const top  = pilotisH + (f + 1) * etageH;
+      const baseH = base + gap / 2;
       const topH  = f < logtLevels - 1 ? top - gap / 2 : top;
       map.addLayer({
         id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
@@ -4991,61 +5012,73 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   const rdcH_m = 3.0;
   const etageH_m = 3.0;
   const lineLen = 14 * s;
-  // v72.22: SPLIT_AV_AR — annotations séparées pour commerce et logement
+  // v72.28: SPLIT_AV_AR — annotations LOGEMENT en haut, COMMERCE en dessous (même colonne droite)
   if (split_layout && split_layout.mode === "SPLIT_AV_AR") {
     const vc = split_layout.volume_commerce;
     const vl = split_layout.volume_logement;
-    // ── COMMERCE annotations (volume avant, à gauche) ──
-    const commAnnX = W * 0.15;
-    const commBaseY = H * 0.62;
-    const commStepY = -32 * s;
-    for (let f = 0; f < vc.levels; f++) {
-      const y = commBaseY + f * commStepY;
-      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-      ctx.beginPath();
-      ctx.moveTo(commAnnX, y); ctx.lineTo(commAnnX + lineLen, y);
-      ctx.strokeStyle = "#e07830"; ctx.lineWidth = 2*s; ctx.stroke();
-      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
-      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`${floorLabel} : ${vc.fp_m2} m²`, commAnnX + lineLen + 6*s, y + 4*s);
-      ctx.fillStyle = "#e07830";
-      ctx.fillText(`${floorLabel} : ${vc.fp_m2} m²`, commAnnX + lineLen + 6*s, y + 4*s);
-    }
-    // Label "Commerce" sous les annotations
-    ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
-    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Commerce: ${vc.sdp_m2} m² SDP`, commAnnX, commBaseY + 24*s);
-    ctx.fillStyle = "#e07830";
-    ctx.fillText(`Commerce: ${vc.sdp_m2} m² SDP`, commAnnX, commBaseY + 24*s);
-    // ── LOGEMENT annotations (volume arrière, à droite) ──
-    const logtAnnX = W * 0.62;
-    const logtBaseY = H * 0.58;
-    const logtStepY = -32 * s;
+    const annX = W * 0.62;
+    const stepY = -32 * s;
+    // ── LOGEMENT annotations (en haut, BLEU) — niveaux habitables sur pilotis ──
+    const logtBaseY = H * 0.52;
     for (let f = 0; f < vl.levels; f++) {
-      const y = logtBaseY + f * logtStepY;
-      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      const y = logtBaseY + f * stepY;
+      // v72.28: En SPLIT avec pilotis, le logement commence à R+1
+      const floorLabel = `R+${f + 1}`;
       ctx.beginPath();
-      ctx.moveTo(logtAnnX, y); ctx.lineTo(logtAnnX + lineLen, y);
+      ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
       ctx.strokeStyle = "#3a7ac0"; ctx.lineWidth = 2*s; ctx.stroke();
       ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`${floorLabel} : ${vl.fp_m2} m²`, logtAnnX + lineLen + 6*s, y + 4*s);
+      ctx.strokeText(`${floorLabel} : ${vl.fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
       ctx.fillStyle = "#3a7ac0";
-      ctx.fillText(`${floorLabel} : ${vl.fp_m2} m²`, logtAnnX + lineLen + 6*s, y + 4*s);
+      ctx.fillText(`${floorLabel} : ${vl.fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
     }
-    // Label "Logement" sous les annotations
+    // Pilotis annotation
+    const pilotisY = logtBaseY + 24*s;
+    ctx.beginPath();
+    ctx.moveTo(annX, pilotisY); ctx.lineTo(annX + lineLen, pilotisY);
+    ctx.strokeStyle = "#b0aea8"; ctx.lineWidth = 2*s; ctx.stroke();
+    ctx.font = `${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    ctx.fillStyle = "#888";
+    ctx.fillText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    // Label "Logement" sous les niveaux
+    const logtLabelY = pilotisY + 22*s;
     ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Logement: ${vl.sdp_m2} m² SDP`, logtAnnX, logtBaseY + 24*s);
+    ctx.strokeText(`Logement: ${vl.sdp_m2} m² SDP`, annX, logtLabelY);
     ctx.fillStyle = "#3a7ac0";
-    ctx.fillText(`Logement: ${vl.sdp_m2} m² SDP`, logtAnnX, logtBaseY + 24*s);
+    ctx.fillText(`Logement: ${vl.sdp_m2} m² SDP`, annX, logtLabelY);
+    // ── COMMERCE annotations (en dessous du logement, ORANGE) ──
+    const commBaseY = logtLabelY + 28*s;
+    for (let f = 0; f < vc.levels; f++) {
+      const y = commBaseY + f * 24*s;
+      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      ctx.beginPath();
+      ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
+      ctx.strokeStyle = "#e07830"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${vc.fp_m2} m² (commerce)`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#e07830";
+      ctx.fillText(`${floorLabel} : ${vc.fp_m2} m² (commerce)`, annX + lineLen + 6*s, y + 4*s);
+    }
+    // Label "Commerce" sous
+    const commLabelY = commBaseY + vc.levels * 24*s + 4*s;
+    ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
+    ctx.fillStyle = "#e07830";
+    ctx.fillText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
     // Total SDP en bas — NOIR avec contour blanc
     const totalSDP = (vc.sdp_m2 || 0) + (vl.sdp_m2 || 0);
-    ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "center";
+    const totalY = commLabelY + 24*s;
+    ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, W * 0.5, H * 0.68);
+    ctx.strokeText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, W * 0.5, H * 0.68);
+    ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
   } else {
     // ══ MODE SUPERPOSÉ : annotations classiques ══
     const realTotalH = rdcH_m + (levels - 1) * etageH_m;
@@ -5481,8 +5514,9 @@ app.post("/generate-massing", async (req, res) => {
     commerceLevels = 1;
     console.log(`[OVERRIDE] commerceLevels=0 mais body contient mixte/split → FORCÉ à 1 (commerce RDC ORANGE)`);
   }
-  // v72.22: Si mixte et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
-  if (commerceLevels > 0 && levels <= commerceLevels) {
+  // v72.28: Si mixte SUPERPOSÉ et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
+  // En SPLIT, les levels = logement seulement (commerce est un volume séparé) → PAS de override
+  if (commerceLevels > 0 && levels <= commerceLevels && !splitLayout) {
     const oldLevels = levels;
     levels = commerceLevels + 1;
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
@@ -5605,15 +5639,16 @@ app.post("/generate-massing", async (req, res) => {
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
     const rdcH = 3.0;   // v71: RDC toujours 3m (commerce et logement même hauteur)
     const etageH = 3.0;                              // étages courants = 3m
-    const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
-    // v72.26: SPLIT 3D — commerce construit depuis l'ENVELOPPE, logement = massingCoords
-    // v72.26: SPLIT 3D — commerce = rectangle construit depuis l'ENVELOPPE (devant)
-    //                     logement = massingCoords existant (déjà positionné en retrait)
+    // v72.28: SPLIT 3D — commerce construit depuis l'ENVELOPPE, logement = massingCoords
     let commerceCoords = null;
     if (splitLayout && commerceLevels > 0) {
       commerceCoords = buildCommercePolygon(envelopeCoords, splitLayout, Number(road_bearing) || null);
     }
     const useSplit3D = commerceCoords !== null;
+    // v72.28: En SPLIT, la hauteur totale du logement = pilotis (3m) + levels × etageH
+    const realTotalH = useSplit3D
+      ? rdcH + levels * etageH    // pilotis (rdcH) + N niveaux habitables au-dessus
+      : rdcH + (levels - 1) * etageH; // mode normal : RDC + (N-1) étages
     console.log(`┌── MASSING 3D RENDER v72.26 — ${useSplit3D ? "SPLIT_AV_AR" : "SUPERPOSÉ"} ──`);
     console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC ORANGE + ${levels - commerceLevels} logement BLEU)`);
     console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
@@ -5625,9 +5660,9 @@ app.post("/generate-massing", async (req, res) => {
       console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (#e07830), f>=${commerceLevels} → BLEU (#3a7ac0)`);
     }
     console.log(`└── FIN DIAGNOSTIC 3D ──`);
-    // v57.20: passer has_pilotis au rendu pour décaler le bâtiment et dessiner les colonnes
+    // v72.28: En SPLIT, pilotis déjà inclus dans realTotalH — pas de double ajout
     const hasPilotisRender = String(has_pilotis || "").toLowerCase() === "true" || has_pilotis === true;
-    const pilotisH = hasPilotisRender ? 3.5 : 0;
+    const pilotisH = (hasPilotisRender && !useSplit3D) ? 3.5 : 0; // SPLIT gère pilotis dans realTotalH
     const totalHWithPilotis = realTotalH + pilotisH;
     // v72.26: En mode SPLIT, massingCoords = logement (en retrait), commerceCoords = devant (depuis enveloppe)
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
