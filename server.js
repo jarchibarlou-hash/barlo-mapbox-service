@@ -4271,65 +4271,102 @@ function drawOverlays(ctx, W, H, BH, p) {
 function applyColorRemap(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
-  // Color distance helper
   const dist = (r, g, b, tr, tg, tb) => Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb);
-  // Target ground colors (Mapbox beige tones → green grass)
-  // background #f2f0ec (242,240,236), parks #e0ddd4 (224,221,212), urban #ebe8e2 (235,232,226)
-  // Target road colors (Mapbox tan → sandy beige)
-  // road-fill #eae4d4 (234,228,212), road-case #ccc4ae (204,196,174)
+
+  // ─── STEP 1: Build rooftop mask ──────────────────────────────────────────
+  // In 3D axonometric view, building rooftops have darker building-side pixels
+  // directly below them. Ground does NOT have this brightness drop.
+  // Scan each light pixel: if a significantly darker pixel exists 2-15px below → rooftop.
+  const roofMask = new Uint8Array(W * H);
+  for (let y = 0; y < H - 15; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = (y * W + x) * 4;
+      const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+      const brightness = (r + g + b) / 3;
+      if (brightness < 150 || brightness > 248) continue; // only mid-to-bright pixels
+      // Check 2-15 pixels below for building wall (brightness drop > 35)
+      for (let dy = 2; dy <= 15; dy++) {
+        const by = y + dy;
+        if (by >= H) break;
+        const bi = (by * W + x) * 4;
+        const bBright = (d[bi] + d[bi + 1] + d[bi + 2]) / 3;
+        if (brightness - bBright > 35) {
+          // Also check the dark pixel isn't a road edge — road edges are warm, walls are cool/gray
+          const wr = d[bi], wg = d[bi + 1], wb = d[bi + 2];
+          const isBuildingWall = bBright < 160 && Math.abs(wr - wg) < 25 && Math.abs(wg - wb) < 25;
+          if (isBuildingWall) {
+            roofMask[y * W + x] = 1;
+            break;
+          }
+        }
+      }
+    }
+  }
+  // Expand rooftop mask slightly upward (rooftop extends above edge pixels)
+  const roofMask2 = new Uint8Array(roofMask);
+  for (let y = 2; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (roofMask[y * W + x]) {
+        for (let dy = 1; dy <= 3; dy++) {
+          if (y - dy >= 0) roofMask2[(y - dy) * W + x] = 1;
+        }
+      }
+    }
+  }
+
+  // ─── STEP 2: Color remap (ground→grass, road→sandy) ─────────────────────
   for (let i = 0; i < d.length; i += 4) {
-    const r = d[i], g = d[i+1], b = d[i+2];
-    // Skip mostly white/bright pixels (buildings, rooftops) — R>235 AND G>235 AND B>230
-    if (r > 235 && g > 235 && b > 230) continue;
-    // Skip dark pixels (shadows, edges) — brightness < 120
+    const px = (i / 4) % W;
+    const py = Math.floor((i / 4) / W);
+    const r = d[i], g = d[i + 1], b = d[i + 2];
     const brightness = (r + g + b) / 3;
+    // Skip rooftop pixels (detected in step 1)
+    if (roofMask2[py * W + px]) continue;
+    // Skip very bright pixels (already white buildings)
+    if (r > 235 && g > 235 && b > 230) continue;
+    // Skip dark pixels (shadows, edges)
     if (brightness < 120) continue;
     // Skip reddish/pinkish pixels (parcel zone)
     if (r > 180 && g < 140 && b < 140) continue;
     // Skip blueish pixels (envelope lines, water)
     if (b > r + 20 && b > g + 10) continue;
-    // Road detection: tan/warm gray tones where R > G > B with specific ranges
+    // Road detection
     const isRoad = dist(r, g, b, 234, 228, 212) < 30 || dist(r, g, b, 204, 196, 174) < 30 ||
                    (r > 180 && g > 170 && b > 140 && b < 190 && r - b > 30 && r - b < 70 && g - b > 20);
     if (isRoad) {
-      // Sandy beige road
       const factor = brightness / 220;
-      d[i]   = Math.min(255, Math.round(195 * factor));  // R
-      d[i+1] = Math.min(255, Math.round(180 * factor));  // G
-      d[i+2] = Math.min(255, Math.round(145 * factor));  // B
+      d[i]   = Math.min(255, Math.round(195 * factor));
+      d[i + 1] = Math.min(255, Math.round(180 * factor));
+      d[i + 2] = Math.min(255, Math.round(145 * factor));
       continue;
     }
-    // Ground detection: beige/warm gray tones (background, parks, urban landuse)
+    // Ground detection: beige/warm tones
     const isGround = dist(r, g, b, 242, 240, 236) < 25 || dist(r, g, b, 224, 221, 212) < 25 ||
                      dist(r, g, b, 235, 232, 226) < 25 ||
                      (r > 190 && g > 190 && b > 180 && Math.abs(r - g) < 15 && r - b < 30 && r - b > -5);
     if (isGround) {
-      // Green grass — slight variation based on original brightness for natural look
       const factor = brightness / 240;
-      const variation = ((i / 4) % 7) * 2 - 6; // subtle per-pixel noise
-      d[i]   = Math.min(255, Math.round((75 + variation) * factor));   // R
-      d[i+1] = Math.min(255, Math.round((145 + variation) * factor));  // G
-      d[i+2] = Math.min(255, Math.round((60 + variation) * factor));   // B
+      const variation = ((i / 4) % 7) * 2 - 6;
+      d[i]   = Math.min(255, Math.round((75 + variation) * factor));
+      d[i + 1] = Math.min(255, Math.round((145 + variation) * factor));
+      d[i + 2] = Math.min(255, Math.round((60 + variation) * factor));
     }
   }
-  // v72.17: Building whitening — remap dark/green roof tones to light concrete
-  // After ground→grass and road→sandy, remaining mid-tone pixels are likely buildings
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i], g = d[i+1], b = d[i+2];
-    const brightness = (r + g + b) / 3;
-    // Skip already-processed: grass green, sandy roads, very bright, very dark, parcel red
-    if (g > 120 && r < 100 && b < 90) continue;       // grass
-    if (r > 180 && g > 160 && b > 130 && b < 170 && r - b > 20) continue; // sandy road
-    if (brightness > 235 || brightness < 50) continue; // very bright or very dark
-    if (r > 180 && g < 120 && b < 120) continue;       // parcel red
-    if (b > r + 15) continue;                           // blue tones
-    // Building candidate: mid-brightness (100-235), grayish or greenish-gray
-    if (brightness >= 100 && brightness <= 235) {
-      // Remap to light concrete: preserve luminosity, shift to warm white
+
+  // ─── STEP 3: Building whitening — whiten rooftop pixels to light concrete ─
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!roofMask2[y * W + x]) continue; // only process rooftop pixels
+      const i = (y * W + x) * 4;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      const brightness = (r + g + b) / 3;
+      if (brightness > 245 || brightness < 80) continue; // skip extremes
+      if (r > 180 && g < 120 && b < 120) continue; // skip parcel red
+      // Remap to warm white concrete
       const lum = brightness / 200;
-      d[i]   = Math.min(255, Math.round(235 * lum)); // R
-      d[i+1] = Math.min(255, Math.round(230 * lum)); // G
-      d[i+2] = Math.min(255, Math.round(220 * lum)); // B
+      d[i]     = Math.min(255, Math.round(238 * lum));
+      d[i + 1] = Math.min(255, Math.round(234 * lum));
+      d[i + 2] = Math.min(255, Math.round(225 * lum));
     }
   }
   ctx.putImageData(imgData, 0, 0);
@@ -4881,16 +4918,35 @@ app.post("/generate", async (req, res) => {
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
     // ═══════════════════════════════════════════════════════════════════════════
-    // v72.1: MULTI-RENDER AI POLISH — generate 3 variations, pick best by drift score
+    // v72.20: HYBRID AI POLISH — strict stability protocol
+    // Strategy: AI polishes ONLY the base texture (no overlays visible to AI)
+    //           → strict drift scoring (25%) → redraw overlays on top
+    //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
-    const SLIDE4_VARIATIONS = 2;
-    const SLIDE4_AI_POLISH_ENABLED = false; // v72.17: AI polish disabled — using deterministic-only pipeline
+    const SLIDE4_VARIATIONS = 3;
+    const SLIDE4_AI_POLISH_ENABLED = true;
+    const SLIDE4_DRIFT_THRESHOLD = 0.25; // strict 25% — reject anything that changes too much
     if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
       try {
-        console.log(`[SLIDE4-POLISH] Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
+        console.log(`[SLIDE4-POLISH] v72.20: Hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%`);
         const b64Input = pngClean.toString("base64");
-        console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        const polishPrompt = `Add subtle soft shadows under the buildings and slightly improve tree realism. Keep everything else exactly the same — same camera angle, same colors, same layout, same parcel lines. Do not change the image dimensions.`;
+        console.log(`[SLIDE4-POLISH] Input: ${pngClean.length} bytes (base texture only — no legend/parcel overlays)`);
+        // ── ULTRA-STRICT POLISH PROMPT ──────────────────────────────────────
+        // Only tonal/contrast enhancement. ZERO structural changes.
+        const polishPrompt = [
+          "STRICT EDIT ONLY. This is an architectural 3D axonometric site plan.",
+          "PRESERVE EXACT geometry, EXACT building shapes, EXACT building positions, EXACT camera angle, EXACT composition, EXACT spatial relationships.",
+          "Do NOT redesign, reinterpret, or restyle the scene.",
+          "Do NOT modify: buildings, roads, vegetation positions, layout, perspective, colors of buildings or grass.",
+          "Do NOT add any objects, people, vehicles, text, labels, or watermarks.",
+          "Do NOT change image dimensions or framing.",
+          "Apply ONLY these subtle non-structural improvements:",
+          "- Slight tonal harmonization for a warmer afternoon feel",
+          "- Subtle contrast refinement (not dramatic)",
+          "- Slightly softer shadows under buildings",
+          "- Cleaner visual clarity on edges",
+          "The result must look 95% identical to the input. Minimal change only."
+        ].join(" ");
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
           polishRequests.push(
@@ -4908,16 +4964,16 @@ app.post("/generate", async (req, res) => {
             }).then(r => r.json()).catch(err => ({ error: err.message }))
           );
         }
-        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched (${Date.now() - t0}ms)`);
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched in parallel (${Date.now() - t0}ms)`);
         const polishResults = await Promise.all(polishRequests);
-        // v72.1: Score each variation with edge-based drift detection, pick best
+        // ── DRIFT SCORING — pick best under threshold ───────────────────────
         let bestVariation = null;
-        let bestDriftScore = 1.0; // lower is better
+        let bestDriftScore = 1.0;
         const variationLog = [];
         for (let v = 0; v < polishResults.length; v++) {
           const oaiJson = polishResults[v];
           if (oaiJson.error) {
-            variationLog.push(`  v${v+1}: API error — ${JSON.stringify(oaiJson.error).substring(0, 100)}`);
+            variationLog.push(`  v${v+1}: API error — ${JSON.stringify(oaiJson.error).substring(0, 120)}`);
             continue;
           }
           let polishedB64 = null;
@@ -4931,30 +4987,27 @@ app.post("/generate", async (req, res) => {
             continue;
           }
           const enhancedBuf = Buffer.from(polishedB64, "base64");
-          // v72.6: For slide 4 heavy polish, drift check is informational only
-          // Heavy texture transformation (concrete, grass, shadows) legitimately changes 60-75% of blocks
-          // We pick the variation with LOWEST drift (best structural preservation) but never reject
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.85);
-          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% (shifted=${drift.classShifts}/${drift.totalBlocks})`);
-          if (drift.driftScore < bestDriftScore) {
+          // v72.20: Strict drift check — threshold 25%
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, SLIDE4_DRIFT_THRESHOLD);
+          const pct = (drift.driftScore * 100).toFixed(1);
+          const pass = drift.driftScore < SLIDE4_DRIFT_THRESHOLD ? "PASS" : "FAIL";
+          variationLog.push(`  v${v+1}: drift=${pct}% (${drift.classShifts}/${drift.totalBlocks} blocks) → ${pass}`);
+          // Only consider variations that PASS the threshold
+          if (drift.driftScore < SLIDE4_DRIFT_THRESHOLD && drift.driftScore < bestDriftScore) {
             bestDriftScore = drift.driftScore;
             bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
           }
         }
-        console.log(`[SLIDE4-POLISH] Multi-render results (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
+        console.log(`[SLIDE4-POLISH] v72.20 Multi-render results (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
         if (bestVariation) {
-          // v72.6: Always use best variation — heavy polish legitimately transforms brightness
-          console.log(`[SLIDE4-POLISH] ✓ Using v${bestVariation.index} (drift=${(bestVariation.drift.driftScore * 100).toFixed(2)}% — accepted for heavy texture polish)`);
+          console.log(`[SLIDE4-POLISH] ✓ ACCEPTED v${bestVariation.index} (drift=${(bestDriftScore * 100).toFixed(1)}% < ${SLIDE4_DRIFT_THRESHOLD * 100}% threshold)`);
           const polishedImg = await loadImage(bestVariation.buf);
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
-          // v72.13: Black bar detection — if AI shifted the image, crop the valid region
-          // Draw polished image first, then scan for black bars
           finalCtx.drawImage(polishedImg, 0, 0, W, H);
+          // Black bar detection — crop if AI shifted content
           const scanData = finalCtx.getImageData(0, 0, W, H).data;
-          // Detect black columns on left/right and rows on top/bottom
           let leftBlack = 0, rightBlack = 0, topBlack = 0, bottomBlack = 0;
-          // Left
           for (let x = 0; x < W / 4; x++) {
             let isBlack = true;
             for (let y = 0; y < H; y += 10) {
@@ -4963,7 +5016,6 @@ app.post("/generate", async (req, res) => {
             }
             if (isBlack) leftBlack = x + 1; else break;
           }
-          // Right
           for (let x = W - 1; x > W * 3 / 4; x--) {
             let isBlack = true;
             for (let y = 0; y < H; y += 10) {
@@ -4972,7 +5024,6 @@ app.post("/generate", async (req, res) => {
             }
             if (isBlack) rightBlack = W - x; else break;
           }
-          // Top
           for (let y = 0; y < H / 4; y++) {
             let isBlack = true;
             for (let x = 0; x < W; x += 10) {
@@ -4981,7 +5032,6 @@ app.post("/generate", async (req, res) => {
             }
             if (isBlack) topBlack = y + 1; else break;
           }
-          // Bottom
           for (let y = H - 1; y > H * 3 / 4; y--) {
             let isBlack = true;
             for (let x = 0; x < W; x += 10) {
@@ -4991,16 +5041,15 @@ app.post("/generate", async (req, res) => {
             if (isBlack) bottomBlack = H - y; else break;
           }
           if (leftBlack > 2 || rightBlack > 2 || topBlack > 2 || bottomBlack > 2) {
-            console.log(`[SLIDE4-POLISH] v72.13: Black bars detected L=${leftBlack} R=${rightBlack} T=${topBlack} B=${bottomBlack} — cropping and stretching`);
-            // Redraw: take the non-black region and stretch it to fill the canvas
+            console.log(`[SLIDE4-POLISH] Black bars L=${leftBlack} R=${rightBlack} T=${topBlack} B=${bottomBlack} — cropping`);
             const srcX = leftBlack, srcY = topBlack;
             const srcW = W - leftBlack - rightBlack, srcH = H - topBlack - bottomBlack;
             finalCtx.clearRect(0, 0, W, H);
             finalCtx.drawImage(polishedImg, srcX, srcY, srcW, srcH, 0, 0, W, H);
           }
-          // v72.4: Post-polish sharpening to counteract AI softness
-          applySharpen(finalCtx, W, H, 0.35);
-          console.log(`[SLIDE4-POLISH] v72.4: Sharpening applied (amount=0.35)`);
+          // Post-polish sharpening to counteract AI softness
+          applySharpen(finalCtx, W, H, 0.30);
+          // ── REDRAW OVERLAYS on polished image (AI never saw these) ─────────
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
@@ -5012,11 +5061,15 @@ app.post("/generate", async (req, res) => {
             console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
           }
         } else {
-          console.warn(`⚠ [SLIDE4-DRIFT] No valid API response — using deterministic fallback`);
+          console.log(`⚠ [SLIDE4-POLISH] ALL ${SLIDE4_VARIATIONS} variations FAILED drift check (>${SLIDE4_DRIFT_THRESHOLD * 100}%) — using deterministic fallback`);
+          // Fallback: deterministic render is already in 'png' with overlays — no action needed
         }
-      } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
+      } catch (oaiErr) {
+        console.error("[SLIDE4-POLISH] Exception:", oaiErr.message);
+        console.log("[SLIDE4-POLISH] Fallback to deterministic render (already uploaded)");
+      }
     } else {
-      console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — skipping");
+      if (!OPENAI_API_KEY) console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — using deterministic render");
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
