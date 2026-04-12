@@ -1686,9 +1686,13 @@ function computeSmartScenarios({
       //     → le client veut le dégagement du terrain derrière
       // Le CES total (vol1 + vol2) reste plafonné par la réglementation.
       // ══════════════════════════════════════════════════════════════════
-      // v72.22: PRUDENT INTELLIGENCE — le scénario PRUDENT peut refuser le SPLIT
-      // si la parcelle est trop petite (profondeur logement < 8m ou parcelle < 20m de profondeur)
-      // → dans ce cas, un volume unique SUPERPOSÉ est plus prudent
+      // v72.30: INTELLIGENCE DE DISPOSITION PAR RÔLE
+      // SPLIT_AV_AR → 2 volumes séparés (commerce devant + logement sur pilotis derrière)
+      //   ✅ INTENSIFICATION : SPLIT + pilotis + max étages (maximise la SDP)
+      //   ✅ EQUILIBRE : SPLIT + pilotis + étages modérés (compromis espace/densité)
+      //   ❌ PRUDENT : SUPERPOSÉ compact (commerce RDC + logement empilé au-dessus)
+      //      → Plus économique, plus simple à construire, CES réduit, 1 seul volume
+      // Cette logique est STRATÉGIQUE : le PRUDENT choisit la compacité, pas juste moins d'étages.
       const _splitRequested = String(layout_mode).toUpperCase() === "SPLIT_AV_AR" && isMixte;
       let _splitViable = true;
       if (_splitRequested) {
@@ -1697,11 +1701,13 @@ function computeSmartScenarios({
         const _gapD = Number(retrait_inter_volumes_m) || 4;
         const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
         _splitViable = _logtD >= 8 && _parcD >= 20;
-        if (role === "PRUDENT" && !_splitViable) {
-          console.log(`│   ⚠️ v72.22 PRUDENT: SPLIT_AV_AR demandé mais non viable (logt_depth=${Math.round(_logtD)}m, parcDepth=${_parcD}m) → SUPERPOSÉ forcé`);
-        }
       }
-      if (_splitRequested && (role !== "PRUDENT" || _splitViable)) {
+      // v72.30: PRUDENT → TOUJOURS SUPERPOSÉ (choix stratégique de compacité)
+      const useSplitForRole = _splitRequested && role !== "PRUDENT" && _splitViable;
+      if (role === "PRUDENT" && _splitRequested) {
+        console.log(`│   🏗️ v72.30 PRUDENT: SPLIT demandé → SUPERPOSÉ COMPACT (choix stratégique: volume unique, commerce RDC + logement dessus)`);
+      }
+      if (useSplitForRole) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
         // Volume 1 : COMMERCE (bande avant) — identique pour les 3 scénarios
