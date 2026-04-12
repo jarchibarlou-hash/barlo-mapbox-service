@@ -4312,6 +4312,71 @@ function applyColorRemap(ctx, W, H) {
       d[i+2] = Math.min(255, Math.round((60 + variation) * factor));   // B
     }
   }
+  // v72.17: Building whitening — remap dark/green roof tones to light concrete
+  // After ground→grass and road→sandy, remaining mid-tone pixels are likely buildings
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i+1], b = d[i+2];
+    const brightness = (r + g + b) / 3;
+    // Skip already-processed: grass green, sandy roads, very bright, very dark, parcel red
+    if (g > 120 && r < 100 && b < 90) continue;       // grass
+    if (r > 180 && g > 160 && b > 130 && b < 170 && r - b > 20) continue; // sandy road
+    if (brightness > 235 || brightness < 50) continue; // very bright or very dark
+    if (r > 180 && g < 120 && b < 120) continue;       // parcel red
+    if (b > r + 15) continue;                           // blue tones
+    // Building candidate: mid-brightness (100-235), grayish or greenish-gray
+    if (brightness >= 100 && brightness <= 235) {
+      // Remap to light concrete: preserve luminosity, shift to warm white
+      const lum = brightness / 200;
+      d[i]   = Math.min(255, Math.round(235 * lum)); // R
+      d[i+1] = Math.min(255, Math.round(230 * lum)); // G
+      d[i+2] = Math.min(255, Math.round(220 * lum)); // B
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+// ─── v72.17 DETERMINISTIC SHADOWS — sun from upper-left ─────────────────────
+// Scans each grass pixel and checks if building pixels exist ~15px toward upper-left
+// If yes → darken the grass to simulate shadow projection
+function applyDeterministicShadows(ctx, W, H) {
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const d = imgData.data;
+  const SHADOW_DIST = 18; // pixels to check for building occlusion
+  const SHADOW_DARKEN = 0.7; // shadow intensity (0.7 = 30% darker)
+  for (let y = SHADOW_DIST; y < H; y++) {
+    for (let x = SHADOW_DIST; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const r = d[i], g = d[i+1], b = d[i+2];
+      // Only shadow on grass pixels (green: R<110, G>100, B<90)
+      if (!(r < 110 && g > 100 && b < 90)) continue;
+      // Check if there's a building pixel ~SHADOW_DIST pixels to the upper-left
+      let hasBuildingAbove = false;
+      for (let s = 8; s <= SHADOW_DIST; s += 5) {
+        const si = ((y - s) * W + (x - Math.floor(s * 0.6))) * 4;
+        if (si < 0 || si >= d.length) continue;
+        const sr = d[si], sg = d[si+1], sb = d[si+2];
+        const sBright = (sr + sg + sb) / 3;
+        // Building: bright (>180), not grass-green
+        if (sBright > 180 && sg < sr + 30) { hasBuildingAbove = true; break; }
+      }
+      if (hasBuildingAbove) {
+        d[i]   = Math.round(r * SHADOW_DARKEN);
+        d[i+1] = Math.round(g * SHADOW_DARKEN);
+        d[i+2] = Math.round(b * SHADOW_DARKEN);
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+// ─── v72.17 WARM COLOR GRADING — subtle warm tone shift ─────────────────────
+function applyWarmGrading(ctx, W, H) {
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // Slight warm shift: +3R, +1G, -2B
+    d[i]   = Math.min(255, d[i] + 3);
+    d[i+1] = Math.min(255, d[i+1] + 1);
+    d[i+2] = Math.max(0, d[i+2] - 2);
+  }
   ctx.putImageData(imgData, 0, 0);
 }
 // ─── v72.3 BLOCK-GRID DRIFT DETECTION ─────────────────────────────────────────
@@ -4780,6 +4845,12 @@ app.post("/generate", async (req, res) => {
     applyColorRemap(ctx, W, H);
     console.log(`[SLIDE4] v72: Drawing deterministic trees...`);
     drawTrees(ctx, W, H);
+    console.log(`[SLIDE4] v72: Applying deterministic shadows...`);
+    applyDeterministicShadows(ctx, W, H);
+    console.log(`[SLIDE4] v72: Applying warm color grading...`);
+    applyWarmGrading(ctx, W, H);
+    console.log(`[SLIDE4] v72: Applying light sharpening...`);
+    applySharpen(ctx, W, H, 0.25);
     console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
     // pngClean = Mapbox screenshot + color remap + trees — NO extra canvas drawings
     // Mapbox already draws the parcel + envelope in the HTML — don't duplicate
@@ -4813,7 +4884,8 @@ app.post("/generate", async (req, res) => {
     // v72.1: MULTI-RENDER AI POLISH — generate 3 variations, pick best by drift score
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2;
-    if (OPENAI_API_KEY) {
+    const SLIDE4_AI_POLISH_ENABLED = false; // v72.17: AI polish disabled — using deterministic-only pipeline
+    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
       try {
         console.log(`[SLIDE4-POLISH] Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
