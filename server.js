@@ -4822,9 +4822,9 @@ app.post("/generate", async (req, res) => {
         const polishPrompt = `Enhance this 3D architectural axonometric view: add subtle concrete texture on buildings, make grass more natural, improve tree realism, add soft shadows. Keep exact same camera angle and layout. Keep the orange parcel boundary and dashed setback lines visible.`;
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
-          // Build multipart form data for /v1/images/edits (Node 18+ native FormData)
+          // Use the form-data package (already required at top) for multipart upload
           const form = new FormData();
-          form.append("image", new Blob([pngClean], { type: "image/png" }), "input.png");
+          form.append("image", pngClean, { filename: "input.png", contentType: "image/png" });
           form.append("prompt", polishPrompt);
           form.append("model", "gpt-image-1");
           form.append("size", "1024x1024");
@@ -4832,7 +4832,7 @@ app.post("/generate", async (req, res) => {
           polishRequests.push(
             fetch("https://api.openai.com/v1/images/edits", {
               method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() },
               body: form,
             }).then(r => r.json()).catch(err => ({ error: err.message }))
           );
