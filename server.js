@@ -4818,19 +4818,14 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.12: Exact user spec — white/beige buildings, trees 10% more realistic, no artistic effect
-        const polishPrompt = `STRICT EDIT ONLY. Same camera, same angle, same composition. Do not move anything.
-
-Buildings must be white or light beige — clean, smooth surfaces. No dark tones, no brown, no weathering.
-Trees: make them slightly more realistic (just 10% improvement) — keep their exact positions and sizes.
-Grass: keep bright green, clean.
-Roads: keep as-is.
-Soft shadows under buildings. Bright natural light.
-
-Keep the parcel zone (orange/red border with dashed setback lines) exactly as it is — visible and clean.
-
-No artistic effects. No film grain. No dark mood. No noise. Clean and premium. Fill entire canvas, no black borders.`;
-        // v72.1: Launch all variations in parallel
+        // v72.15: Reference-matched prompt + corrected API params
+        const polishPrompt = `Make this 3D urban view look like a premium architectural visualization.
+Buildings: light concrete/beige material, clean surfaces.
+Grass: natural green, realistic.
+Trees: realistic organic shapes, keep exact positions.
+Light: warm natural afternoon sun, soft building shadows.
+Keep same camera angle and full image dimensions. Keep the parcel zone (orange border, dashed lines) visible.`;
+        // v72.15: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
           polishRequests.push(
@@ -4843,7 +4838,7 @@ No artistic effects. No film grain. No dark mood. No noise. Clean and premium. F
                   { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
                   { type: "input_text", text: polishPrompt }
                 ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
+                tools: [{ type: "image_generation", quality: "high", input_fidelity: "high" }]
               })
             }).then(r => r.json()).catch(err => ({ error: err.message }))
           );
