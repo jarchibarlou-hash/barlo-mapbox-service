@@ -4786,27 +4786,58 @@ app.post("/generate", async (req, res) => {
     applyColorRemap(ctx, W, H);
     console.log(`[SLIDE4] v72: Drawing deterministic trees...`);
     drawTrees(ctx, W, H);
-    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
-    // v72: pngClean = fully deterministic image (colors + trees + no UI overlays)
-    // This is the FROZEN base sent to AI polish — and also the fallback if drift detected
-    const pngClean = canvas.toBuffer("image/png");
-    // Version avec overlays (fallback si pas d'AI polish)
-    // v70.1: Projeter GPS → pixels screen pour positionner les labels sur les arêtes
+    // v72.8: Compute screen coordinates early — needed for parcel overlay BEFORE pngClean
     const pitch = 58;
     const scale = 256 * Math.pow(2, zoom) / (2 * Math.PI);
     function gpsToScreen(lat, lon) {
-      // Mercator projection relative to center
-      const dx = (lon - cLat > 1000 ? lon : lon) - cLon; // lon diff in degrees
+      const dx = (lon - cLat > 1000 ? lon : lon) - cLon;
       const dyMerc = Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) - Math.log(Math.tan(Math.PI / 4 + cLat * Math.PI / 360));
       const px = dx * Math.PI / 180 * scale;
       const py = -dyMerc * scale;
-      // Apply pitch perspective (simplified: scale Y by cos(pitch), offset toward bottom)
       const pitchRad = pitch * Math.PI / 180;
       const cosPitch = Math.cos(pitchRad);
       return { x: W / 2 + px, y: H / 2 + py * cosPitch };
     }
     const parcelScreenPts = coords.map(c => gpsToScreen(c.lat, c.lon));
     const envelopeScreenPts = envelopeCoords.map(c => gpsToScreen(c.lat, c.lon));
+    // v72.8: Draw THICK parcel + setback lines into the deterministic image
+    // These get baked into pngClean so the AI receives them prominently
+    if (parcelScreenPts.length >= 3) {
+      ctx.save();
+      // Parcel fill — semi-transparent sand to reinforce the zone
+      ctx.beginPath();
+      ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+      for (let i = 1; i < parcelScreenPts.length; i++) ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(230, 200, 155, 0.45)";
+      ctx.fill();
+      // Parcel border — thick solid red/orange
+      ctx.beginPath();
+      ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+      for (let i = 1; i < parcelScreenPts.length; i++) ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = "#DC4A1A";
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+      // Envelope/setback — thick dashed red
+      if (envelopeScreenPts && envelopeScreenPts.length >= 3) {
+        ctx.beginPath();
+        ctx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
+        for (let i = 1; i < envelopeScreenPts.length; i++) ctx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
+        ctx.closePath();
+        ctx.strokeStyle = "#C83C1E";
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([10, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+      console.log(`[SLIDE4] v72.8: Parcel + setback lines drawn (thick, baked into pngClean)`);
+    }
+    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
+    // v72: pngClean = fully deterministic image (colors + trees + parcel lines, no UI overlays)
+    // This is the FROZEN base sent to AI polish — and also the fallback if drift detected
+    const pngClean = canvas.toBuffer("image/png");
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
@@ -4827,28 +4858,14 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.8: Clean premium architectural render — bright, sharp, no artistic effects
-        const polishPrompt = `STRICT EDIT ONLY.
+        // v72.9: SHORT prompt — less text = less AI interpretation = more stability
+        const polishPrompt = `Enhance this architectural 3D axonometric view. Keep the exact same camera angle and composition. Do not move or change any element.
 
-PRESERVE THE EXACT SAME IMAGE — same camera angle, same perspective, same framing, same composition. Do not shift, rotate, crop, or reframe anything. Every element must stay at its exact screen position. The output must have the same dimensions and fill the entire canvas with no black borders.
+Add: clean concrete texture on buildings, realistic grass, soft shadows, bright natural light.
 
-DO NOT move, add, remove, or resize any building, road, tree, or object.
+Keep the red/orange parcel boundary lines and dashed setback lines clearly visible. Keep the sand-colored parcel zone clean and empty.
 
-VISUAL ENHANCEMENT ONLY:
-- Buildings: clean light gray concrete finish — smooth, bright, professional. No dirt, no noise, no weathering.
-- Ground/grass: bright vivid green — clean and well-maintained, not dark or muddy.
-- Roads: clean gray asphalt, clearly separated from grass.
-- Light: bright midday sunlight, well-lit scene. No dark mood, no golden hour, no dramatic shadows.
-- Shadows: soft and subtle under buildings only. Keep the scene bright overall.
-- Trees: clean green vegetation at their exact positions.
-
-STYLE: Clean, bright, minimal, premium architectural visualization. Like a professional urban planning presentation. NO artistic effects, NO film grain, NO noise, NO dark mood, NO vignetting.
-
-PARCEL ZONE (beige/sand rectangle with red/orange border near center):
-- Must remain clearly visible: sand/beige ground, sharp red border lines, visible dashed setback lines.
-- No grass or vegetation inside the parcel zone.
-
-OUTPUT: Sharp, crisp, bright, clean. Fill entire canvas — no black bars or borders.`;
+Style: bright, clean, sharp, premium architectural render. No dark mood, no artistic effects. Fill the entire image — no black borders.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
