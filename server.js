@@ -4827,35 +4827,28 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.7: Balanced polish — enhance materials WITHOUT regenerating the scene
-        // Key insight: "transform X into Y" causes regeneration → camera shift
-        // Instead: "enhance the existing X" keeps the edit in-place
-        const polishPrompt = `STRICT EDIT ONLY — ENHANCE, DO NOT REGENERATE.
+        // v72.8: Clean premium architectural render — bright, sharp, no artistic effects
+        const polishPrompt = `STRICT EDIT ONLY.
 
-THIS IS A FIXED-CAMERA AXONOMETRIC VIEW. The camera is positioned at exactly 58° pitch, facing north, looking down at an urban neighbourhood.
+PRESERVE THE EXACT SAME IMAGE — same camera angle, same perspective, same framing, same composition. Do not shift, rotate, crop, or reframe anything. Every element must stay at its exact screen position. The output must have the same dimensions and fill the entire canvas with no black borders.
 
-ABSOLUTE RULES — VIOLATION OF ANY = FAILURE:
-1. DO NOT CHANGE THE CAMERA ANGLE, POSITION, OR PERSPECTIVE — not even slightly
-2. DO NOT MOVE, ADD, REMOVE, OR RESIZE any building, road, tree, or element
-3. Every pixel must stay in approximately the same screen position
-4. The output must be a direct visual enhancement of the input — same framing, same layout
+DO NOT move, add, remove, or resize any building, road, tree, or object.
 
-WHAT TO ENHANCE (in-place, no repositioning):
-- Improve building surfaces: add subtle concrete/plaster material feel to existing building faces
-- Improve ground: enhance the green areas with richer grass tones and subtle texture
-- Improve roads: give existing roads a subtle asphalt/laterite texture
-- Add soft shadows from buildings and trees (sun from upper-left)
-- Add gentle ambient occlusion where buildings meet the ground
-- Apply warm natural daylight colour grading
-- Improve tree appearance while keeping them at their exact current positions and sizes
+VISUAL ENHANCEMENT ONLY:
+- Buildings: clean light gray concrete finish — smooth, bright, professional. No dirt, no noise, no weathering.
+- Ground/grass: bright vivid green — clean and well-maintained, not dark or muddy.
+- Roads: clean gray asphalt, clearly separated from grass.
+- Light: bright midday sunlight, well-lit scene. No dark mood, no golden hour, no dramatic shadows.
+- Shadows: soft and subtle under buildings only. Keep the scene bright overall.
+- Trees: clean green vegetation at their exact positions.
 
-PARCEL ZONE (the beige/sand rectangle with red/orange border in the center):
-- Keep the parcel zone CLEARLY VISIBLE — sand/beige colour, clean and flat
-- The red/orange parcel border lines must remain SHARP and PROMINENT
-- The inner dashed setback lines must remain visible
-- Do NOT cover the parcel area with grass or any vegetation
+STYLE: Clean, bright, minimal, premium architectural visualization. Like a professional urban planning presentation. NO artistic effects, NO film grain, NO noise, NO dark mood, NO vignetting.
 
-OUTPUT QUALITY: Sharp, high detail, every edge crisp. Professional architectural visualization.`;
+PARCEL ZONE (beige/sand rectangle with red/orange border near center):
+- Must remain clearly visible: sand/beige ground, sharp red border lines, visible dashed setback lines.
+- No grass or vegetation inside the parcel zone.
+
+OUTPUT: Sharp, crisp, bright, clean. Fill entire canvas — no black bars or borders.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
