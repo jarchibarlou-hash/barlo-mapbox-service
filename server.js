@@ -3889,7 +3889,136 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   console.log(`└── end computeMassingPolygon v56 ──`);
   result._typology = typology;
   result._reason = reason;
+  // v72.25: Exporter les infos de repère local pour le SPLIT (découpe commerce/logement)
+  result._frontDir = { sUx, sUy, nUx, nUy }; // direction rue (s) et profondeur site (n)
+  result._centerLatLon = { lat: eLat, lon: eLon };
   return result;
+}
+// ─── SPLIT COMMERCE/LOGEMENT : découpe du massingCoords en 2 polygons ────────
+// v72.25: Le polygon massing est DÉJÀ visible sur la carte (positionné par computeMassingPolygon).
+// On le découpe en 2 bandes : AVANT (commerce, orange) et ARRIÈRE (logement, bleu).
+// Approche : projeter les vertices du massing dans le repère local (u = rue, v = profondeur),
+// trouver le bord le plus proche de la rue, et couper à commerce_depth_m depuis ce bord.
+function splitMassingForCommerce(massingCoords, splitLayout, roadBearing) {
+  if (!splitLayout || !massingCoords || massingCoords.length < 3) return null;
+  const commDepth = splitLayout.volume_commerce.depth_m || 6;
+  const interGap = splitLayout.retrait_inter_m || 4;
+  console.log(`┌── splitMassingForCommerce v72.25 ──`);
+  console.log(`│ commDepth=${commDepth}m  interGap=${interGap}m  vertices=${massingCoords.length}`);
+  // Centroïde du massing
+  const cLat = massingCoords.reduce((s, p) => s + p.lat, 0) / massingCoords.length;
+  const cLon = massingCoords.reduce((s, p) => s + p.lon, 0) / massingCoords.length;
+  // Convertir en mètres
+  const mPts = massingCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  // Trouver le bord "façade rue" (même logique que computeMassingPolygon)
+  let frontIdx = 0;
+  if (roadBearing != null && !isNaN(roadBearing)) {
+    const rb = ((roadBearing % 360) + 360) % 360;
+    let bestScore = 999;
+    for (let i = 0; i < mPts.length; i++) {
+      const j = (i + 1) % mPts.length;
+      const dx = mPts[j].x - mPts[i].x, dy = mPts[j].y - mPts[i].y;
+      const edgeLen = Math.sqrt(dx * dx + dy * dy);
+      if (edgeLen < 1) continue;
+      const edgeBearing = ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360;
+      let diff = Math.abs(edgeBearing - rb) % 360;
+      if (diff > 180) diff = 360 - diff;
+      if (diff > 90) diff = 180 - diff;
+      const score = diff - edgeLen * 0.02;
+      if (score < bestScore) { bestScore = score; frontIdx = i; }
+    }
+  } else {
+    let maxLen = 0;
+    for (let i = 0; i < mPts.length; i++) {
+      const j = (i + 1) % mPts.length;
+      const dx = mPts[j].x - mPts[i].x, dy = mPts[j].y - mPts[i].y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len > maxLen) { maxLen = len; frontIdx = i; }
+    }
+  }
+  const fi = frontIdx, fj = (fi + 1) % mPts.length;
+  const sDx = mPts[fj].x - mPts[fi].x, sDy = mPts[fj].y - mPts[fi].y;
+  const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
+  const sUx = sDx / sLen, sUy = sDy / sLen; // direction rue
+  let nUx = -sUy, nUy = sUx; // direction vers l'intérieur
+  // Vérifier que "into site" pointe vers le centroïde (et non l'inverse)
+  const midFX = (mPts[fi].x + mPts[fj].x) / 2, midFY = (mPts[fi].y + mPts[fj].y) / 2;
+  if (nUx * (0 - midFX) + nUy * (0 - midFY) < 0) { nUx = -nUx; nUy = -nUy; }
+  // Projeter dans le repère local (u = le long de la rue, v = profondeur)
+  const localPts = mPts.map(p => ({
+    u: p.x * sUx + p.y * sUy,
+    v: p.x * nUx + p.y * nUy,
+  }));
+  const minV = Math.min(...localPts.map(p => p.v));
+  const maxV = Math.max(...localPts.map(p => p.v));
+  const totalDepth = maxV - minV;
+  console.log(`│ Front edge: [${fi}→${fj}]  totalDepth=${totalDepth.toFixed(1)}m`);
+  // Ligne de coupe commerce : à commDepth depuis le bord avant (minV)
+  const cutV_comm = minV + commDepth;
+  // Ligne de coupe logement : après le gap inter-volumes
+  const cutV_logt = cutV_comm + interGap;
+  console.log(`│ cutV_comm=${cutV_comm.toFixed(1)}  cutV_logt=${cutV_logt.toFixed(1)}  maxV=${maxV.toFixed(1)}`);
+  // Si le massing est trop petit pour le split, forcer SUPERPOSÉ
+  if (totalDepth < commDepth + interGap + 4) {
+    console.log(`│ ⚠️ Massing trop peu profond (${totalDepth.toFixed(1)}m) pour SPLIT — fallback SUPERPOSÉ`);
+    console.log(`└── end splitMassingForCommerce (FALLBACK) ──`);
+    return null;
+  }
+  // Découper le polygon en 2 bandes horizontales (dans le repère local)
+  // Commerce : [minV, cutV_comm]
+  // Logement : [cutV_logt, maxV]
+  function clipBand(localPts, vMin, vMax) {
+    // Sutherland–Hodgman simplifié pour 2 cuts horizontaux (v = vMin et v = vMax)
+    let pts = [...localPts];
+    // Clip par v >= vMin
+    pts = clipHalfPlane(pts, (p) => p.v - vMin);
+    // Clip par v <= vMax
+    pts = clipHalfPlane(pts, (p) => vMax - p.v);
+    return pts;
+  }
+  function clipHalfPlane(polygon, distFn) {
+    if (polygon.length < 3) return polygon;
+    const out = [];
+    for (let i = 0; i < polygon.length; i++) {
+      const curr = polygon[i];
+      const next = polygon[(i + 1) % polygon.length];
+      const dCurr = distFn(curr), dNext = distFn(next);
+      if (dCurr >= 0) out.push(curr);
+      if ((dCurr >= 0) !== (dNext >= 0)) {
+        // Intersection
+        const t = dCurr / (dCurr - dNext);
+        out.push({
+          u: curr.u + t * (next.u - curr.u),
+          v: curr.v + t * (next.v - curr.v),
+        });
+      }
+    }
+    return out;
+  }
+  const commLocal = clipBand(localPts, minV, cutV_comm);
+  const logtLocal = clipBand(localPts, cutV_logt, maxV);
+  if (commLocal.length < 3 || logtLocal.length < 3) {
+    console.log(`│ ⚠️ Clip resulted in degenerate polygon (comm=${commLocal.length}pts, logt=${logtLocal.length}pts) → fallback`);
+    console.log(`└── end splitMassingForCommerce (FALLBACK) ──`);
+    return null;
+  }
+  // Convertir local → mètres → GPS
+  function localToGPS(localPt) {
+    const mx = localPt.u * sUx + localPt.v * nUx;
+    const my = localPt.u * sUy + localPt.v * nUy;
+    return {
+      lat: cLat + my / R_EARTH * 180 / Math.PI,
+      lon: cLon + mx / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
+    };
+  }
+  const commerceGPS = commLocal.map(localToGPS);
+  const logementGPS = logtLocal.map(localToGPS);
+  console.log(`│ Commerce polygon: ${commerceGPS.length} vertices (band ${minV.toFixed(1)}→${cutV_comm.toFixed(1)})`);
+  commerceGPS.forEach((c, i) => console.log(`│   C[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+  console.log(`│ Logement polygon: ${logementGPS.length} vertices (band ${cutV_logt.toFixed(1)}→${maxV.toFixed(1)})`);
+  logementGPS.forEach((c, i) => console.log(`│   L[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+  console.log(`└── end splitMassingForCommerce v72.25 ──`);
+  return { commerce: commerceGPS, logement: logementGPS };
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex) {
@@ -5213,27 +5342,25 @@ app.post("/generate-massing", async (req, res) => {
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
   const label = String(massing_label).toUpperCase();
-  // v72.23: DÉTECTION ULTRA-AGRESSIVE programme mixte + disposition SPLIT
-  // Make.com envoie les infos du form/sheet sous des noms de champs variables.
-  // On scanne le body ENTIER pour détecter :
-  // 1) Programme mixte (commerce + logement)
-  // 2) Disposition SPLIT (commerce devant, logement en retrait)
-  const bodyStr = JSON.stringify(req.body).toLowerCase();
-  // Détection mixte : toute mention de mixte, commerce, boutique, etc.
-  const bodyHasMixte = /mixte|mixed|commerce|boutique|magasin/i.test(bodyStr);
-  // Détection SPLIT : toute mention de séparation commerce/logement
-  const bodyHasSplit = /split|dissoci|sépar|devant.*retrait|retrait.*devant|avant.*arri[eè]re|commerce.*devant|logement.*retrait|logement.*arri/i.test(bodyStr);
-  // layout_mode explicite OU détecté du body
-  const effectiveLayoutMode = layout_mode
-    || (bodyHasSplit ? "SPLIT_AV_AR" : "SUPERPOSE");
-  const splitImpliesMixte = effectiveLayoutMode === "SPLIT_AV_AR";
-  // Programme : si mixte détecté dans le body ou layout SPLIT → USAGE_MIXTE
-  const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitImpliesMixte) ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v72.23] program_main="${program_main}" project_type="${project_type}"`);
-  console.log(`[MASSING v72.23] bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit}`);
-  console.log(`[MASSING v72.23] layout_mode_raw="${layout_mode}" → effectiveLayoutMode="${effectiveLayoutMode}"`);
-  console.log(`[MASSING v72.23] effectiveProgramMain="${effectiveProgramMain}"`);
-  console.log(`[MASSING v72.23] body_sample=${bodyStr.slice(0, 500)}`);
+  // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
+  // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
+  // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
+  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
+  // ── Détection SPLIT : UNIQUEMENT si layout_mode est explicitement SPLIT_AV_AR
+  // OU si une valeur de champ mentionne clairement la séparation ──
+  const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
+  const effectiveLayoutMode = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR"
+    ? "SPLIT_AV_AR"
+    : (bodyHasSplit ? "SPLIT_AV_AR" : "SUPERPOSE");
+  const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
+  // ── Programme effectif ──
+  const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
+  console.log(`[MASSING v72.24] program_main="${program_main}" project_type="${project_type}"`);
+  console.log(`[MASSING v72.24] bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit}`);
+  console.log(`[MASSING v72.24] layout_mode_raw="${layout_mode}" → effectiveLayoutMode="${effectiveLayoutMode}"`);
+  console.log(`[MASSING v72.24] effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.24] field_values_sample="${fieldValues.slice(0, 400)}"`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
@@ -5296,9 +5423,9 @@ app.post("/generate-massing", async (req, res) => {
     const rawComm = Number(commerce_raw);
     if (rawComm > 0) {
       commerceLevels = rawComm;
-    } else if (/mixte|mixed/i.test(effectiveProgramMain) || splitImpliesMixte) {
+    } else if (/mixte|mixed/i.test(effectiveProgramMain) || splitActive) {
       commerceLevels = 1; // commerce toujours au RDC
-      console.log(`[CLASSIC] commerce_raw vide mais effectiveProgram="${effectiveProgramMain}" split=${splitImpliesMixte} → commerce_levels=1 (RDC)`);
+      console.log(`[CLASSIC] commerce_raw vide mais effectiveProgram="${effectiveProgramMain}" split=${splitActive} → commerce_levels=1 (RDC)`);
     } else {
       commerceLevels = 0;
     }
@@ -5309,7 +5436,7 @@ app.post("/generate-massing", async (req, res) => {
   }
   // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
   // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
-  if (commerceLevels === 0 && (bodyHasMixte || splitImpliesMixte)) {
+  if (commerceLevels === 0 && (bodyHasMixte || splitActive)) {
     commerceLevels = 1;
     console.log(`[OVERRIDE] commerceLevels=0 mais body contient mixte/split → FORCÉ à 1 (commerce RDC ORANGE)`);
   }
@@ -5431,74 +5558,40 @@ app.post("/generate-massing", async (req, res) => {
     const rdcH = 3.0;   // v71: RDC toujours 3m (commerce et logement même hauteur)
     const etageH = 3.0;                              // étages courants = 3m
     const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
-    // v72.22: SPLIT layout — calculer le polygone commerce si split_layout existe
+    // v72.25: SPLIT 3D — découpe du massingCoords en 2 polygons (commerce avant + logement arrière)
+    // La fonction splitMassingForCommerce travaille sur le massingCoords DÉJÀ VISIBLE sur la carte
+    // → les 2 polygons résultants sont garantis visibles (mêmes coordonnées GPS, même repère).
+    let splitPolygons = null;
     let commerceCoords = null;
-    if (splitLayout && splitLayout.mode === "SPLIT_AV_AR") {
-      // Commerce = bande en avant de la parcelle (côté front_edge)
-      // On utilise l'enveloppe et on prend la bande avant de profondeur commerce_depth
-      const vc = splitLayout.volume_commerce;
-      const vl = splitLayout.volume_logement;
-      const interGap = splitLayout.retrait_inter_m || 4;
-      // Calculer le polygone commerce : bande en avant de l'enveloppe
-      const fei = frontEdgeIndex !== undefined ? frontEdgeIndex : 0;
-      const n = envelopeCoords.length;
-      // Front edge = segment [fei, fei+1], on prend la bande à commerce_depth_m de profondeur
-      const i0 = fei % n;
-      const i1 = (fei + 1) % n;
-      const i2 = (fei + 2) % n;
-      const i3 = (fei + 3) % n;
-      // Direction "vers l'intérieur" = de l'arête front vers le centre
-      const frontMidLat = (envelopeCoords[i0].lat + envelopeCoords[i1].lat) / 2;
-      const frontMidLon = (envelopeCoords[i0].lon + envelopeCoords[i1].lon) / 2;
-      const backMidLat = (envelopeCoords[i2].lat + envelopeCoords[i3].lat) / 2;
-      const backMidLon = (envelopeCoords[i2].lon + envelopeCoords[i3].lon) / 2;
-      // Depth fraction: commerce_depth / total_depth
-      const totalDepthM = Math.sqrt(Math.pow((backMidLat - frontMidLat) * 111320, 2) + Math.pow((backMidLon - frontMidLon) * 111320 * Math.cos(cLat * Math.PI / 180), 2));
-      const commFrac = Math.min(0.35, (vc.depth_m || 6) / Math.max(1, totalDepthM));
-      const gapFrac = Math.min(0.15, interGap / Math.max(1, totalDepthM));
-      // Commerce polygon: front edge + inset by commFrac
-      commerceCoords = [
-        envelopeCoords[i0],
-        envelopeCoords[i1],
-        { lat: envelopeCoords[i1].lat + (envelopeCoords[i2].lat - envelopeCoords[i1].lat) * commFrac,
-          lon: envelopeCoords[i1].lon + (envelopeCoords[i2].lon - envelopeCoords[i1].lon) * commFrac },
-        { lat: envelopeCoords[i0].lat + (envelopeCoords[i3].lat - envelopeCoords[i0].lat) * commFrac,
-          lon: envelopeCoords[i0].lon + (envelopeCoords[i3].lon - envelopeCoords[i0].lon) * commFrac },
-      ];
-      // Logement polygon: offset from commerce by (commFrac + gapFrac)
-      const logtStartFrac = commFrac + gapFrac;
-      const massingCoordsOverride = [
-        { lat: envelopeCoords[i0].lat + (envelopeCoords[i3].lat - envelopeCoords[i0].lat) * logtStartFrac,
-          lon: envelopeCoords[i0].lon + (envelopeCoords[i3].lon - envelopeCoords[i0].lon) * logtStartFrac },
-        { lat: envelopeCoords[i1].lat + (envelopeCoords[i2].lat - envelopeCoords[i1].lat) * logtStartFrac,
-          lon: envelopeCoords[i1].lon + (envelopeCoords[i2].lon - envelopeCoords[i1].lon) * logtStartFrac },
-        envelopeCoords[i2],
-        envelopeCoords[i3],
-      ];
-      // Override massingCoords with logement polygon
-      massingCoords.length = 0;
-      massingCoordsOverride.forEach(c => massingCoords.push(c));
-      if (massingCoords._typology) massingCoords._typology = "SPLIT_AV_AR";
-      console.log(`┌── MASSING 3D RENDER v72.22 — SPLIT_AV_AR ──`);
-      console.log(`│ Scénario ${label}: COMMERCE DEVANT + LOGEMENT DERRIÈRE`);
-      console.log(`│ Vol.Commerce: ${vc.fp_m2}m² × ${vc.levels}niv = ${vc.sdp_m2}m² SDP (ORANGE)`);
-      console.log(`│ Vol.Logement: ${vl.fp_m2}m² × ${vl.levels}niv = ${vl.sdp_m2}m² SDP (BLEU)`);
-      console.log(`│ Gap: ${interGap}m | commFrac=${(commFrac*100).toFixed(0)}% gapFrac=${(gapFrac*100).toFixed(0)}%`);
-      console.log(`└── FIN DIAGNOSTIC 3D SPLIT ──`);
-    } else {
-      console.log(`┌── MASSING 3D RENDER v72.22 — SUPERPOSÉ ──`);
-      console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC + ${levels - commerceLevels} logement)`);
-      console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
-      console.log(`│ Emprise: ${Math.round(fp)}m² × ${levels} niveaux = ${Math.round(fp * levels)}m² SDP`);
-      console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (commerce), f>=${commerceLevels} → BLEU (logement)`);
-      console.log(`└── FIN DIAGNOSTIC 3D ──`);
+    let logementCoords = null;
+    if (splitLayout && commerceLevels > 0) {
+      splitPolygons = splitMassingForCommerce(massingCoords, splitLayout, Number(road_bearing) || null);
     }
+    const useSplit3D = splitPolygons !== null;
+    if (useSplit3D) {
+      commerceCoords = splitPolygons.commerce;
+      logementCoords = splitPolygons.logement;
+    }
+    console.log(`┌── MASSING 3D RENDER v72.25 — ${useSplit3D ? "SPLIT_AV_AR" : "SUPERPOSÉ"} ──`);
+    console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC ORANGE + ${levels - commerceLevels} logement BLEU)`);
+    console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
+    console.log(`│ Emprise: ${Math.round(fp)}m² × ${levels} niveaux = ${Math.round(fp * levels)}m² SDP`);
+    if (useSplit3D) {
+      console.log(`│ SPLIT 3D ACTIF: commerce=${commerceCoords.length}pts (orange), logement=${logementCoords.length}pts (bleu)`);
+      console.log(`│ Commerce: 1 niveau ORANGE devant | Logement: ${splitLayout.volume_logement.levels} niveaux BLEU derrière`);
+    } else {
+      console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (#e07830), f>=${commerceLevels} → BLEU (#3a7ac0)`);
+    }
+    console.log(`└── FIN DIAGNOSTIC 3D ──`);
     // v57.20: passer has_pilotis au rendu pour décaler le bâtiment et dessiner les colonnes
     const hasPilotisRender = String(has_pilotis || "").toLowerCase() === "true" || has_pilotis === true;
     const pilotisH = hasPilotisRender ? 3.5 : 0;
     const totalHWithPilotis = realTotalH + pilotisH;
-    const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH, split_layout: splitLayout, commerce_coords: commerceCoords }, MAPBOX_TOKEN);
+    const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
+      useSplit3D ? logementCoords : massingCoords,
+      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH,
+        split_layout: useSplit3D ? splitLayout : null,
+        commerce_coords: useSplit3D ? commerceCoords : null }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 25000 });
     // v72.22: Attendre un peu plus pour que les tuiles soient bien peintes
