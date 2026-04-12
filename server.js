@@ -4630,42 +4630,6 @@ function drawLegendCompass(ctx, W, H, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-  // v72.12: Setback labels on each envelope edge — show 3m/5m cotes
-  const ePts = p.envelopeScreenPts;
-  const pPts = p.parcelScreenPts;
-  const feIdx = p.frontEdgeIndex;
-  if (ePts && ePts.length >= 3 && pPts && pPts.length >= 3) {
-    ctx.save();
-    ctx.font = "bold 13px Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const n = ePts.length;
-    for (let i = 0; i < n; i++) {
-      // Determine setback value for this edge
-      const diff = ((i - (feIdx || 0)) % n + n) % n;
-      let sb;
-      if (diff === 0) sb = setback_front;
-      else if (n === 4 && diff === 2) sb = setback_back;
-      else sb = setback_side;
-      // Midpoint of envelope edge
-      const j = (i + 1) % n;
-      const mx = (ePts[i].x + ePts[j].x) / 2;
-      const my = (ePts[i].y + ePts[j].y) / 2;
-      // Midpoint of corresponding parcel edge
-      const pmx = (pPts[i].x + pPts[j].x) / 2;
-      const pmy = (pPts[i].y + pPts[j].y) / 2;
-      // Place label between parcel edge and envelope edge
-      const lx = (mx + pmx) / 2;
-      const ly = (my + pmy) / 2;
-      // White outline for readability
-      ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = 3;
-      ctx.strokeText(sb + "m", lx, ly);
-      ctx.fillStyle = "#c45030";
-      ctx.fillText(sb + "m", lx, ly);
-    }
-    ctx.restore();
-  }
 }
 // ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
 function drawSolarArc(ctx, W, H, p) {
@@ -4921,9 +4885,59 @@ No artistic effects. No film grain. No dark mood. No noise. Clean and premium. F
         if (bestVariation) {
           // v72.6: Always use best variation — heavy polish legitimately transforms brightness
           console.log(`[SLIDE4-POLISH] ✓ Using v${bestVariation.index} (drift=${(bestVariation.drift.driftScore * 100).toFixed(2)}% — accepted for heavy texture polish)`);
+          const polishedImg = await loadImage(bestVariation.buf);
           const finalCanvas = createCanvas(W, H);
           const finalCtx = finalCanvas.getContext("2d");
-          finalCtx.drawImage(await loadImage(bestVariation.buf), 0, 0, W, H);
+          // v72.13: Black bar detection — if AI shifted the image, crop the valid region
+          // Draw polished image first, then scan for black bars
+          finalCtx.drawImage(polishedImg, 0, 0, W, H);
+          const scanData = finalCtx.getImageData(0, 0, W, H).data;
+          // Detect black columns on left/right and rows on top/bottom
+          let leftBlack = 0, rightBlack = 0, topBlack = 0, bottomBlack = 0;
+          // Left
+          for (let x = 0; x < W / 4; x++) {
+            let isBlack = true;
+            for (let y = 0; y < H; y += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) leftBlack = x + 1; else break;
+          }
+          // Right
+          for (let x = W - 1; x > W * 3 / 4; x--) {
+            let isBlack = true;
+            for (let y = 0; y < H; y += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) rightBlack = W - x; else break;
+          }
+          // Top
+          for (let y = 0; y < H / 4; y++) {
+            let isBlack = true;
+            for (let x = 0; x < W; x += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) topBlack = y + 1; else break;
+          }
+          // Bottom
+          for (let y = H - 1; y > H * 3 / 4; y--) {
+            let isBlack = true;
+            for (let x = 0; x < W; x += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) bottomBlack = H - y; else break;
+          }
+          if (leftBlack > 2 || rightBlack > 2 || topBlack > 2 || bottomBlack > 2) {
+            console.log(`[SLIDE4-POLISH] v72.13: Black bars detected L=${leftBlack} R=${rightBlack} T=${topBlack} B=${bottomBlack} — cropping and stretching`);
+            // Redraw: take the non-black region and stretch it to fill the canvas
+            const srcX = leftBlack, srcY = topBlack;
+            const srcW = W - leftBlack - rightBlack, srcH = H - topBlack - bottomBlack;
+            finalCtx.clearRect(0, 0, W, H);
+            finalCtx.drawImage(polishedImg, srcX, srcY, srcW, srcH, 0, 0, W, H);
+          }
           // v72.4: Post-polish sharpening to counteract AI softness
           applySharpen(finalCtx, W, H, 0.35);
           console.log(`[SLIDE4-POLISH] v72.4: Sharpening applied (amount=0.35)`);
