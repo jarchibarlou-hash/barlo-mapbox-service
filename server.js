@@ -4858,14 +4858,19 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.9: SHORT prompt — less text = less AI interpretation = more stability
-        const polishPrompt = `Enhance this architectural 3D axonometric view. Keep the exact same camera angle and composition. Do not move or change any element.
+        // v72.10: Clean 3D model aesthetic — smooth, no grain, no artistic effects
+        const polishPrompt = `Polish this 3D urban planning model view. Same camera, same angle, same composition. Do not move anything.
 
-Add: clean concrete texture on buildings, realistic grass, soft shadows, bright natural light.
+Buildings: smooth light gray concrete, clean and flat. No grain, no dirt, no weathering.
+Grass: clean bright green, smooth and uniform.
+Roads: smooth gray.
+Light: bright even daylight, soft shadows only.
 
-Keep the red/orange parcel boundary lines and dashed setback lines clearly visible. Keep the sand-colored parcel zone clean and empty.
+This must look like a clean 3D architectural model — NOT a photograph. No film grain, no noise, no artistic filter, no dark mood. Smooth, clean, bright, professional.
 
-Style: bright, clean, sharp, premium architectural render. No dark mood, no artistic effects. Fill the entire image — no black borders.`;
+The orange/red parcel boundary and dashed setback lines in the center must stay sharp and visible. The sand-colored parcel area must stay clean and empty.
+
+Fill the entire canvas. No black borders.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
