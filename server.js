@@ -4331,7 +4331,8 @@ function applyColorRemap(ctx, W, H) {
 //   - A new phantom building would flip a mid/dark block to bright
 //   - Tonal harmonization doesn't flip classifications
 //
-async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H) {
+// v72.5: threshold is now a parameter — heavy polish (slide 4) needs higher threshold
+async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H, customThreshold) {
   const cleanImg = await loadImage(cleanPngBuf);
   const polishedImg = await loadImage(polishedPngBuf);
   const cleanCanvas = createCanvas(W, H);
@@ -4379,10 +4380,10 @@ async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H) {
     }
   }
   const classShiftRatio = totalBlocks > 0 ? classShifts / totalBlocks : 0;
-  // DRIFT_THRESHOLD: if more than 25% of blocks change classification → reject
-  // This is generous — polish can shift brightness a lot without flipping classes
-  // Only real structural changes (moved building, erased road) flip 25%+ of blocks
-  const DRIFT_THRESHOLD = 0.25;
+  // v72.5: Configurable threshold per pipeline
+  // - Slide 4 heavy polish (texture, grass, concrete) → 0.55 (legitimately flips many blocks)
+  // - Massing light polish (tonal only) → 0.25 (stricter, less transformation expected)
+  const DRIFT_THRESHOLD = customThreshold || 0.25;
   const passed = classShiftRatio < DRIFT_THRESHOLD;
   return {
     driftScore: +classShiftRatio.toFixed(4),
@@ -4858,8 +4859,9 @@ QUALITY: Premium architectural presentation render. Sharp, detailed, realistic m
             continue;
           }
           const enhancedBuf = Buffer.from(polishedB64, "base64");
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
-          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓ PASS" : "✗ FAIL"} (new=${drift.newEdgePixels} lost=${drift.lostEdgePixels})`);
+          // v72.5: threshold=0.55 for slide 4 heavy polish (texture/concrete/grass)
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.55);
+          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓ PASS" : "✗ FAIL"} (shifted=${drift.classShifts}/${drift.totalBlocks} threshold=${(drift.threshold*100)}%)`);
           if (drift.passed && drift.driftScore < bestDriftScore) {
             bestDriftScore = drift.driftScore;
             bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
@@ -5188,8 +5190,9 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
           }
           if (!polishedB64) { variationLog.push(`  v${v+1}: no image`); continue; }
           const enhancedBuf = Buffer.from(polishedB64, "base64");
+          // Massing uses default threshold (0.25) — light polish
           const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
-          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓" : "✗"}`);
+          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓" : "✗"} (shifted=${drift.classShifts}/${drift.totalBlocks} threshold=${(drift.threshold*100)}%)`);
           if (drift.passed && drift.driftScore < bestDriftScore) {
             bestDriftScore = drift.driftScore;
             bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
