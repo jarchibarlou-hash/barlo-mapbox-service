@@ -4423,6 +4423,48 @@ function applySharpen(ctx, W, H, amount = 0.35) {
   }
   ctx.putImageData(imageData, 0, 0);
 }
+// ─── v72.6 PARCEL ZONE OVERLAY — redrawn AFTER AI polish to guarantee visibility ───
+// The AI polish tends to cover parcel boundaries with grass/texture.
+// This function redraws the parcel fill, parcel border, and envelope dashed lines
+// deterministically on top of the polished image. 100% safe per Supervisor protocol.
+function drawParcelZone(ctx, W, H, parcelScreenPts, envelopeScreenPts) {
+  if (!parcelScreenPts || parcelScreenPts.length < 3) return;
+  // 1. Semi-transparent fill inside parcel — sand/beige to "clear" the grass invasion
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+  for (let i = 1; i < parcelScreenPts.length; i++) {
+    ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "rgba(222, 197, 155, 0.55)"; // sand/beige, semi-transparent
+  ctx.fill();
+  // 2. Parcel boundary — solid red/orange, thick
+  ctx.beginPath();
+  ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+  for (let i = 1; i < parcelScreenPts.length; i++) {
+    ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(220, 80, 30, 0.9)";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // 3. Envelope (setback zone) — dashed red, thinner
+  if (envelopeScreenPts && envelopeScreenPts.length >= 3) {
+    ctx.beginPath();
+    ctx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
+    for (let i = 1; i < envelopeScreenPts.length; i++) {
+      ctx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = "rgba(200, 60, 30, 0.8)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
 // ─── v72 DETERMINISTIC TREES — seeded PRNG, improved canopy, shadow casting ──
 // Seed is derived from pixel coordinates → identical output on every run
 function seedRandom(seed) {
@@ -4814,7 +4856,13 @@ ALLOWED architectural polish:
 
 IMPORTANT: The output image must be SHARP and HIGH DETAIL. Do not soften, blur, or lose edge definition. Every building edge, every parcel line, every tree must remain crisp.
 
-The parcel area (beige/sand ground with red/orange border) must remain CLEAN, FLAT, EMPTY — sand/beige tone. Keep the red parcel border and dashed envelope lines clearly visible.
+CRITICAL — PARCEL ZONE PROTECTION:
+The image contains a rectangular parcel zone marked by a solid red/orange border line and an inner dashed red setback line. This zone is the MOST IMPORTANT element in the image.
+- The parcel zone (beige/sand ground inside the red border) must remain CLEAN, FLAT, EMPTY — keep its sand/beige color.
+- Do NOT grow grass, vegetation, or texture INTO the parcel zone. Grass stops at the parcel border.
+- The red/orange parcel boundary lines must remain THICK, VISIBLE, and CLEARLY DISTINGUISHABLE from the surroundings.
+- The inner dashed setback envelope lines must remain clearly visible.
+- Do NOT soften, fade, or cover these boundary lines with grass or shadows.
 Do NOT place anything inside the parcel that is not already there.
 
 QUALITY: Premium architectural presentation render. Sharp, detailed, realistic materials.`;
@@ -4879,6 +4927,9 @@ QUALITY: Premium architectural presentation render. Sharp, detailed, realistic m
           // v72.4: Post-polish sharpening to counteract AI softness
           applySharpen(finalCtx, W, H, 0.35);
           console.log(`[SLIDE4-POLISH] v72.4: Sharpening applied (amount=0.35)`);
+          // v72.6: Redraw parcel zone OVER polished image — AI tends to cover it with grass
+          drawParcelZone(finalCtx, W, H, parcelScreenPts, envelopeScreenPts);
+          console.log(`[SLIDE4-POLISH] v72.6: Parcel zone redrawn over polish`);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
