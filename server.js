@@ -4827,45 +4827,35 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.5: Full architectural polish — textured render like reference image
-        // Key: ask for material/texture work BUT protect geometry + keep sharp
-        const polishPrompt = `STRICT EDIT ONLY.
+        // v72.7: Balanced polish — enhance materials WITHOUT regenerating the scene
+        // Key insight: "transform X into Y" causes regeneration → camera shift
+        // Instead: "enhance the existing X" keeps the edit in-place
+        const polishPrompt = `STRICT EDIT ONLY — ENHANCE, DO NOT REGENERATE.
 
-PRESERVE EXACT GEOMETRY — do NOT modify any of the following:
-- Building footprints, positions, shapes, sizes, count
-- Road positions, widths, network
-- Parcel boundary lines (red/orange) and dashed envelope lines — keep them clearly visible
-- Tree positions, sizes, and count (trees are already placed)
-- Green areas and vegetation layout
-- Camera angle, perspective, framing, composition
-- Spatial relationships between all elements
+THIS IS A FIXED-CAMERA AXONOMETRIC VIEW. The camera is positioned at exactly 58° pitch, facing north, looking down at an urban neighbourhood.
 
-NO REINTERPRETATION. NO CAMERA CHANGE. NO STRUCTURAL MODIFICATION.
-Do NOT add, remove, move, or resize ANY element.
-Do NOT add text, watermarks, inset images, or UI elements.
+ABSOLUTE RULES — VIOLATION OF ANY = FAILURE:
+1. DO NOT CHANGE THE CAMERA ANGLE, POSITION, OR PERSPECTIVE — not even slightly
+2. DO NOT MOVE, ADD, REMOVE, OR RESIZE any building, road, tree, or element
+3. Every pixel must stay in approximately the same screen position
+4. The output must be a direct visual enhancement of the input — same framing, same layout
 
-ALLOWED architectural polish:
-- Apply realistic concrete/plaster texture on all building surfaces (walls and roofs) — matte light gray concrete finish
-- Transform flat green ground into realistic grass texture with natural color variation
-- Transform flat roads into realistic asphalt/laterite texture
-- Refined soft shadows cast by buildings and trees (sun from upper-left, warm afternoon light)
-- Ambient occlusion where buildings meet the ground
-- Warm afternoon daylight color grading — golden hour feel
-- Professional architectural visualization finish — like a high-end urban planning render
-- Trees should look like realistic vegetation (keep their positions but improve their appearance)
+WHAT TO ENHANCE (in-place, no repositioning):
+- Improve building surfaces: add subtle concrete/plaster material feel to existing building faces
+- Improve ground: enhance the green areas with richer grass tones and subtle texture
+- Improve roads: give existing roads a subtle asphalt/laterite texture
+- Add soft shadows from buildings and trees (sun from upper-left)
+- Add gentle ambient occlusion where buildings meet the ground
+- Apply warm natural daylight colour grading
+- Improve tree appearance while keeping them at their exact current positions and sizes
 
-IMPORTANT: The output image must be SHARP and HIGH DETAIL. Do not soften, blur, or lose edge definition. Every building edge, every parcel line, every tree must remain crisp.
+PARCEL ZONE (the beige/sand rectangle with red/orange border in the center):
+- Keep the parcel zone CLEARLY VISIBLE — sand/beige colour, clean and flat
+- The red/orange parcel border lines must remain SHARP and PROMINENT
+- The inner dashed setback lines must remain visible
+- Do NOT cover the parcel area with grass or any vegetation
 
-CRITICAL — PARCEL ZONE PROTECTION:
-The image contains a rectangular parcel zone marked by a solid red/orange border line and an inner dashed red setback line. This zone is the MOST IMPORTANT element in the image.
-- The parcel zone (beige/sand ground inside the red border) must remain CLEAN, FLAT, EMPTY — keep its sand/beige color.
-- Do NOT grow grass, vegetation, or texture INTO the parcel zone. Grass stops at the parcel border.
-- The red/orange parcel boundary lines must remain THICK, VISIBLE, and CLEARLY DISTINGUISHABLE from the surroundings.
-- The inner dashed setback envelope lines must remain clearly visible.
-- Do NOT soften, fade, or cover these boundary lines with grass or shadows.
-Do NOT place anything inside the parcel that is not already there.
-
-QUALITY: Premium architectural presentation render. Sharp, detailed, realistic materials.`;
+OUTPUT QUALITY: Sharp, high detail, every edge crisp. Professional architectural visualization.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
@@ -4927,9 +4917,6 @@ QUALITY: Premium architectural presentation render. Sharp, detailed, realistic m
           // v72.4: Post-polish sharpening to counteract AI softness
           applySharpen(finalCtx, W, H, 0.35);
           console.log(`[SLIDE4-POLISH] v72.4: Sharpening applied (amount=0.35)`);
-          // v72.6: Redraw parcel zone OVER polished image — AI tends to cover it with grass
-          drawParcelZone(finalCtx, W, H, parcelScreenPts, envelopeScreenPts);
-          console.log(`[SLIDE4-POLISH] v72.6: Parcel zone redrawn over polish`);
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
