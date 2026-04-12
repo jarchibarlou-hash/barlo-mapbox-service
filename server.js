@@ -1704,45 +1704,64 @@ function computeSmartScenarios({
       if (_splitRequested && (role !== "PRUDENT" || _splitViable)) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
-        // Volume 1 : COMMERCE (bande avant)
-        const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30); // max 30% de la profondeur
-        const commWidth = Math.round(parcWidth - rLateral * 2); // retraits latéraux
+        // Volume 1 : COMMERCE (bande avant) — identique pour les 3 scénarios
+        const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30);
+        const commWidth = Math.round(parcWidth - rLateral * 2);
         const fpCommerce = Math.round(commWidth * commDepth);
         const levelsCommerce = 1;
         const sdpCommerce = fpCommerce;
-        // Volume 2 : LOGEMENT (en retrait)
+        // Volume 2 : LOGEMENT (en retrait) — v72.27: DIFFÉRENCIÉ PAR RÔLE
         const interGap = Number(retrait_inter_volumes_m) || 4;
         const logtDepthDispo = Math.round(parcDepth - rAvant - commDepth - interGap - rArriere);
-        const logtWidth = commWidth; // même largeur que la bande commerce
+        // v72.27: Le RÔLE affecte la largeur ET la profondeur du logement
+        // INTENSIFICATION: utilise toute la largeur disponible
+        // EQUILIBRE: 80% de la largeur → emprise plus compacte
+        // PRUDENT: 65% de la largeur → emprise réduite
+        const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.80 : 0.65;
+        const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
+        const logtWidth = Math.round(commWidth * roleWidthFactor);
+        const logtDepthUsed = Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5) * roleDepthFactor);
+        const fpLogtRaw = Math.round(logtWidth * logtDepthUsed);
         const fpLogt = Math.min(
-          Math.round(logtWidth * Math.min(logtDepthDispo, bodyDepth * 1.5)),
-          Math.round(fpProgramme * roleFpFactor), // capé par le plateau programme × rôle
-          fpMaxCes - fpCommerce, // CES restant après le commerce
+          fpLogtRaw,
+          Math.round(fpProgramme * roleFpFactor),
+          fpMaxCes - fpCommerce,
           fpMaxRetraits - fpCommerce
         );
-        const fpLogtFinal = Math.max(fpMinViable, fpLogt);
-        // CES total = (commerce + logement) / terrain
+        // v72.27: fpMinViable réduit par le rôle pour que PRUDENT soit vraiment plus petit
+        const splitMinViable = role === "INTENSIFICATION" ? fpMinViable : Math.round(fpMinViable * (role === "EQUILIBRE" ? 0.80 : 0.60));
+        const fpLogtFinal = Math.max(splitMinViable, fpLogt);
+        // CES total
         const fpTotal = fpCommerce + fpLogtFinal;
         const cesTotalPct = Math.round(fpTotal / site_area * 100);
-        // Nombre d'unités commerce (1 boutique par tranche de ~25-40m²)
-        const commerceUnitSize = 30; // taille moyenne boutique
+        // Boutiques
+        const commerceUnitSize = 30;
         const nbBoutiques = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
-        // Niveaux logement : depuis le programme résidentiel
+        // Niveaux logement — v72.27: DIFFÉRENCIÉ PAR RÔLE
         const resiTarget = Math.max(1, target_units - nbBoutiques);
         const resiRoleTarget = Math.max(1, Math.round(resiTarget * roleFpFactor));
         const usefulLogt = Math.round(fpLogtFinal * (1 - circRatio));
-        const avgResiSize = refUnitSize; // T3 de référence
+        const avgResiSize = refUnitSize;
         const resiPerFloor = Math.max(1, Math.min(maxPerFloor, Math.floor(usefulLogt / avgResiSize)));
-        let levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
-        levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
-        // COS check sur SDP totale
-        const sdpLogt = fpLogtFinal * levelsLogt;
-        const sdpTotal = sdpCommerce + sdpLogt;
-        while (levelsLogt > 2 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
+        // v72.27: Niveaux directement liés au rôle
+        // INTENSIFICATION: max floors, EQUILIBRE: -1 étage, PRUDENT: -2 étages (min 1)
+        let levelsLogt;
+        if (role === "INTENSIFICATION") {
+          levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
+          levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
+        } else if (role === "EQUILIBRE") {
+          levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
+          levelsLogt = Math.min(levelsLogt, Math.max(2, effectiveMaxFloors - 1));
+        } else { // PRUDENT
+          levelsLogt = Math.max(1, Math.ceil(resiRoleTarget / resiPerFloor));
+          levelsLogt = Math.min(levelsLogt, Math.max(1, effectiveMaxFloors - 2));
+        }
+        // COS check
+        while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
         const totalResiUnits = resiPerFloor * levelsLogt;
-        // Sol libre (espace dégagé derrière le logement)
+        // Sol libre
         const freeGroundSplit = Math.round(site_area - fpTotal);
-        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - Math.min(logtDepthDispo, bodyDepth * 1.5) - rArriere) : 0);
+        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - logtDepthUsed - rArriere) : 0);
         splitLayout = {
           mode: "SPLIT_AV_AR",
           volume_commerce: {
@@ -1752,12 +1771,12 @@ function computeSmartScenarios({
             levels: levelsCommerce,
             sdp_m2: sdpCommerce,
             units: nbBoutiques,
-            position: "AVANT (contre clôture)",
+            position: "AVANT (contre limite séparative)",
           },
           volume_logement: {
             fp_m2: fpLogtFinal,
             width_m: logtWidth,
-            depth_m: Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5)),
+            depth_m: logtDepthUsed,
             levels: levelsLogt,
             sdp_m2: fpLogtFinal * levelsLogt,
             units: totalResiUnits,
@@ -1767,24 +1786,23 @@ function computeSmartScenarios({
           espace_arriere_m2: espaceArriere,
           ces_total_pct: cesTotalPct,
         };
-        // Valeurs principales = LOGEMENT (volume dominant pour le rendu 3D et les calculs)
+        // Valeurs principales = LOGEMENT
         fpRdc = fpLogtFinal;
-        fp = fpLogtFinal; // rendu 3D = volume logement
-        fpEtages = fpLogtFinal; // pas d'extension étages en split (volume compact)
+        fp = fpLogtFinal;
+        fpEtages = fpLogtFinal;
         levels = levelsLogt;
         totalUnitsResult = nbBoutiques + totalResiUnits;
         totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
         unitMix = { COMMERCE: nbBoutiques };
-        // Mix résidentiel
         const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalResiUnits) : { T3: totalResiUnits };
         for (const [typ, count] of Object.entries(resiMix)) {
           if (count > 0) unitMix[typ] = count;
         }
         unitMixDetail = `SPLIT: ${nbBoutiques} boutiques (${fpCommerce}m² RDC avant) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv arrière)`;
-        console.log(`│   🏪 v57.20 SPLIT_AV_AR ${role}:`);
-        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre clôture`);
+        console.log(`│   🏪 v72.27 SPLIT_AV_AR ${role} (roleWidthFactor=${roleWidthFactor}, roleDepthFactor=${roleDepthFactor}):`);
+        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre limite séparative`);
         console.log(`│     GAP: ${interGap}m (passage véhicule/piéton)`);
-        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5))}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
+        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
         console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
       } else {
       // ── MODE SUPERPOSÉ (défaut) — logique existante ──
@@ -3682,8 +3700,8 @@ function envelopeDepthAtU(uTarget, envLocal) {
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2,
-    road_bearing: roadBearingInput, scenario_role } = context;
-  console.log(`┌── computeMassingPolygon v56.7 (ROAD_BEARING + RÔLE + SOLAR) ──`);
+    road_bearing: roadBearingInput, scenario_role, split_context } = context;
+  console.log(`┌── computeMassingPolygon v72.27 (ROAD_BEARING + RÔLE + SOLAR + SPLIT) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
   // ── 1. Centroïde et conversion mètres ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -3776,21 +3794,49 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // Pas de cross-section, pas de containment check, pas de shrink loop.
   // Garanti de fonctionner pour toute enveloppe convexe.
   const margin = 2.0; // marge constructive (l'enveloppe est déjà en retrait de la parcelle)
-  const maxW = Math.max(8, availW - 2 * margin);
-  const maxD = Math.max(8, availD - 2 * margin);
+  let maxW = Math.max(8, availW - 2 * margin);
+  let maxD = Math.max(8, availD - 2 * margin);
+  // v72.27: En mode SPLIT, réduire maxD pour que le logement tienne derrière le commerce
+  if (split_context && split_context.is_split) {
+    const commD = split_context.commerce_depth_m || 6;
+    const gapD = split_context.retrait_inter_m || 4;
+    const commMargin = 0.5;
+    const reservedFront = commMargin + commD + gapD;
+    maxD = Math.max(6, availD - reservedFront - margin); // profondeur restante pour logement
+    console.log(`│ v72.27 SPLIT maxD: availD=${availD.toFixed(1)} - reserved=${reservedFront.toFixed(1)} - margin=${margin} → maxD=${maxD.toFixed(1)}m`);
+  }
   console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
-  // Position en profondeur (retrait de la rue) — v56.7 : basé sur le RÔLE
-  // INTENSIFICATION → plus près de la rue (visibilité, commerce RDC, intensité urbaine)
-  // EQUILIBRE → retrait modéré
-  // PRUDENT → retrait plus marqué (calme, résidentiel, phasage)
+  // Position en profondeur (retrait de la rue) — v72.27 : SPLIT-aware
+  // En mode SPLIT_AV_AR, le logement doit être DERRIÈRE le commerce + gap.
+  // Le centre du logement = marge + commDepth + interGap + bD/2 (calculé après forme)
   let depthPct;
-  if (scenario_role === "INTENSIFICATION") depthPct = 0.45;
-  else if (scenario_role === "PRUDENT") depthPct = 0.62;
-  else depthPct = 0.53; // EQUILIBRE
-  // Ajustement solaire : si la rue est N-S, reculer un peu pour libérer la cour sud
-  if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
-  depthPct = Math.max(0.38, Math.min(0.72, depthPct));
-  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (role=${scenario_role}, mode=${massing_mode})`);
+  let splitForcePosition = false; // v72.27: flag pour forcer la position APRÈS calcul forme
+  if (split_context && split_context.is_split) {
+    // Mode SPLIT : le logement doit commencer APRÈS la zone commerce + gap
+    const commD = split_context.commerce_depth_m || 6;
+    const gapD = split_context.retrait_inter_m || 4;
+    const reservedFront = margin + commD + gapD; // espace réservé devant (commerce + gap)
+    // Le centre du logement sera calculé après la forme (besoin de bD)
+    // Pour l'instant on calcule un depthPct approximatif qui place le logement derrière
+    const logementCenterFromFront = reservedFront + (availD - reservedFront) / 2;
+    depthPct = logementCenterFromFront / availD;
+    depthPct = Math.max(0.50, Math.min(0.85, depthPct));
+    splitForcePosition = true;
+    console.log(`│ v72.27 SPLIT: commerce=${commD}m + gap=${gapD}m → reservedFront=${reservedFront.toFixed(1)}m`);
+    console.log(`│ v72.27 SPLIT: logement center at ${(depthPct*100).toFixed(0)}% depth (${(availD*depthPct).toFixed(1)}m from front)`);
+  } else {
+    // Mode normal : basé sur le RÔLE
+    // INTENSIFICATION → plus près de la rue (visibilité, commerce RDC, intensité urbaine)
+    // EQUILIBRE → retrait modéré
+    // PRUDENT → retrait plus marqué (calme, résidentiel, phasage)
+    if (scenario_role === "INTENSIFICATION") depthPct = 0.45;
+    else if (scenario_role === "PRUDENT") depthPct = 0.62;
+    else depthPct = 0.53; // EQUILIBRE
+    // Ajustement solaire : si la rue est N-S, reculer un peu pour libérer la cour sud
+    if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
+    depthPct = Math.max(0.38, Math.min(0.72, depthPct));
+  }
+  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (role=${scenario_role}, mode=${massing_mode}, split=${!!split_context})`);
   // ── 6. Générer la forme bâtie ──
   let bPts = [];
   let bW, bD;
@@ -3866,8 +3912,27 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
   // Centre U = milieu du bbox, Centre V = retrait en profondeur
   const cU = (minU + maxU) / 2;
-  const cV = minV + availD * depthPct;
-  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)}) [bbox mid-U, ${(depthPct*100).toFixed(0)}% depth-V]`);
+  let cV;
+  if (splitForcePosition && split_context) {
+    // v72.27 SPLIT: positionner le logement PRÉCISÉMENT derrière le commerce + gap
+    // Le commerce est collé au front avec une marge de 0.5m (limite séparative)
+    // Le bord AVANT du logement = minV + commMargin + commDepth + gapD
+    const commD = split_context.commerce_depth_m || 6;
+    const gapD = split_context.retrait_inter_m || 4;
+    const commMargin = 0.5; // même marge que buildCommercePolygon
+    const logementFrontEdge = minV + commMargin + commD + gapD;
+    cV = logementFrontEdge + bD / 2;
+    // S'assurer que le logement reste dans l'enveloppe
+    const logementBackEdge = cV + bD / 2;
+    if (logementBackEdge > maxV - margin) {
+      cV = maxV - margin - bD / 2; // reculer pour rester dans l'enveloppe
+    }
+    console.log(`│ v72.27 SPLIT POSITION: logement front=${logementFrontEdge.toFixed(1)}m center=${cV.toFixed(1)}m back=${(cV+bD/2).toFixed(1)}m`);
+    console.log(`│ v72.27 Commerce zone: [${(minV+margin).toFixed(1)}, ${(minV+margin+commD).toFixed(1)}m] | Gap: ${gapD}m | Logement: [${logementFrontEdge.toFixed(1)}, ${(cV+bD/2).toFixed(1)}m]`);
+  } else {
+    cV = minV + availD * depthPct;
+  }
+  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)}) [bbox mid-U, ${((cV-minV)/availD*100).toFixed(0)}% depth-V]`);
   // Positionner les points : local (u,v) → mètre (x,y) → GPS
   function localToMeter(p) {
     return { x: p.u * sUx + p.v * nUx, y: p.u * sUy + p.v * nUy };
@@ -3895,15 +3960,15 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   return result;
 }
 // ─── SPLIT COMMERCE/LOGEMENT : polygon commerce construit depuis l'enveloppe ──
-// v72.26: Le commerce est une bande rectangulaire DEVANT l'enveloppe (côté rue).
-// Le logement = massingCoords existant (déjà positionné en retrait par computeMassingPolygon).
-// On ne découpe plus le massingCoords — on CONSTRUIT le commerce séparément depuis l'enveloppe.
+// v72.27: Le commerce est une bande rectangulaire COLLÉE AU FRONT de l'enveloppe (limite séparative).
+// Le logement = massingCoords existant (positionné en retrait par computeMassingPolygon + split_context).
+// On CONSTRUIT le commerce séparément depuis l'enveloppe, SANS marge devant (collé à la limite).
 function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   if (!splitLayout || !envelopeCoords || envelopeCoords.length < 3) return null;
   const commDepth = splitLayout.volume_commerce.depth_m || 6;
   const commWidth = splitLayout.volume_commerce.width_m || null;
-  const margin = 2.0; // marge constructive intérieure à l'enveloppe
-  console.log(`┌── buildCommercePolygon v72.26 ──`);
+  const margin = 0.5; // v72.27: marge minimale (commerce collé à la limite séparative)
+  console.log(`┌── buildCommercePolygon v72.27 ──`);
   console.log(`│ commDepth=${commDepth}m  commWidth=${commWidth}m  envVertices=${envelopeCoords.length}`);
   // Centroïde de l'enveloppe
   const cLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -3957,9 +4022,10 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   const envDepth = maxV - minV;
   console.log(`│ Envelope local: W=${envWidth.toFixed(1)}m × D=${envDepth.toFixed(1)}m`);
   console.log(`│ Front edge: [${fi}→${fj}] len=${sLen.toFixed(1)}m`);
-  // Construire le rectangle commerce : bande collée au front de l'enveloppe
+  // v72.27: Construire le rectangle commerce : bande collée au front (limite séparative)
+  // La largeur du commerce utilise la largeur splitLayout (déjà avec retraits latéraux)
   const cW = commWidth ? Math.min(commWidth, envWidth - 2 * margin) : (envWidth - 2 * margin);
-  const cD = Math.min(commDepth, envDepth * 0.35); // max 35% de la profondeur enveloppe
+  const cD = Math.min(commDepth, envDepth * 0.40); // max 40% de la profondeur enveloppe
   const cCenterU = (minU + maxU) / 2; // centré sur la largeur
   const cStartV = minV + margin; // collé au front (avec marge)
   // 4 coins du rectangle commerce en repère local
@@ -5506,6 +5572,12 @@ app.post("/generate-massing", async (req, res) => {
   const bearing = 0;
   const zoom = computeZoomMassing(coords, cLat, cLon); // v56.5: zoom plus serré pour le massing
   console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
+  // v72.27: Passer split_context pour que le logement soit positionné DERRIÈRE le commerce
+  const splitContext = splitLayout ? {
+    commerce_depth_m: splitLayout.volume_commerce.depth_m || 6,
+    retrait_inter_m: splitLayout.retrait_inter_m || 4,
+    is_split: true,
+  } : null;
   const massingCoords = computeMassingPolygon(envelopeCoords, fp, envelopeAreaReal, {
     massing_mode: compute_scenario ? (label === "A" ? "BALANCED" : label === "B" ? "SPREAD" : "COMPACT") : "BALANCED",
     primary_driver: primary_driver || "MAX_CAPACITE",
@@ -5517,6 +5589,7 @@ app.post("/generate-massing", async (req, res) => {
     existing_fp_m2: Number(existing_footprint_m2) || 0,
     road_bearing: Number(road_bearing) || null,        // v56.7: azimut rue depuis la Sheet
     scenario_role: label === "A" ? "INTENSIFICATION" : label === "B" ? "EQUILIBRE" : "PRUDENT",
+    split_context: splitContext,                         // v72.27: positionner logement derrière commerce
   });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
