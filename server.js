@@ -1793,10 +1793,21 @@ function computeSmartScenarios({
           espace_arriere_m2: espaceArriere,
           ces_total_pct: cesTotalPct,
         };
+        // v72.29: FORCER LA DIFFÉRENCIATION — même si les contraintes convergent
+        // Le fp du logement DOIT être réduit par le rôle (visible sur le rendu)
+        const fpLogtDiff = role === "INTENSIFICATION" ? fpLogtFinal
+          : role === "EQUILIBRE" ? Math.round(fpLogtFinal * 0.75)
+          : Math.round(fpLogtFinal * 0.50); // PRUDENT = moitié
+        console.log(`│   v72.29 DIFF: fpLogtFinal=${fpLogtFinal} → fpLogtDiff=${fpLogtDiff} (role=${role})`);
+        // Mettre à jour le splitLayout avec les valeurs différenciées
+        splitLayout.volume_logement.fp_m2 = fpLogtDiff;
+        splitLayout.volume_logement.sdp_m2 = fpLogtDiff * levelsLogt;
+        splitLayout.volume_logement.width_m = Math.round(splitLayout.volume_logement.width_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.85 : 0.70));
+        splitLayout.volume_logement.depth_m = Math.round(splitLayout.volume_logement.depth_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.88 : 0.72));
         // Valeurs principales = LOGEMENT
-        fpRdc = fpLogtFinal;
-        fp = fpLogtFinal;
-        fpEtages = fpLogtFinal;
+        fpRdc = fpLogtDiff;
+        fp = fpLogtDiff;
+        fpEtages = fpLogtDiff;
         levels = levelsLogt;
         totalUnitsResult = nbBoutiques + totalResiUnits;
         totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
@@ -5383,7 +5394,10 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v56.2 ═══", JSON.stringify(req.body).slice(0, 300));
+  console.log("═══ /generate-massing v72.29 ═══");
+  console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
+  console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
+  console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
@@ -5423,25 +5437,31 @@ app.post("/generate-massing", async (req, res) => {
   const envW = Number(envelope_w);
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
-  // v72.28: DÉTECTION ROBUSTE DU LABEL (A/B/C)
-  // Make.com peut ne pas envoyer massing_label → fallback sur slide_name
-  let label = String(massing_label || "").toUpperCase().trim();
-  if (!["A", "B", "C"].includes(label)) {
-    // Fallback 1: extraire du slide_name (ex: "slide_6_massing_B" → "B")
-    const slideStr = String(slide_name || "").toUpperCase();
-    const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s-]*([ABC])\b/i) || slideStr.match(/[_\s-]([ABC])$/);
-    if (slideMatch) {
-      label = slideMatch[1].toUpperCase();
-    } else {
-      // Fallback 2: chercher dans les clés/valeurs du body
-      const bodyStr = JSON.stringify(req.body).toUpperCase();
-      if (/SCENARIO[_\s"]*C|LABEL[_\s":]*"?C"?|PRUDENT/i.test(bodyStr)) label = "C";
-      else if (/SCENARIO[_\s"]*B|LABEL[_\s":]*"?B"?|EQUILIBRE/i.test(bodyStr)) label = "B";
-      else label = "A";
-    }
-    console.log(`[v72.28] massing_label absent/invalide → détecté "${label}" depuis slide_name="${slide_name}"`);
+  // v72.29: DÉTECTION ROBUSTE DU LABEL (A/B/C) — PRIORITÉ À slide_name
+  // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
+  // Le slide_name est TOUJOURS différent (sinon les images s'écrasent) → SOURCE DE VÉRITÉ.
+  let label = "A"; // défaut
+  const slideStr = String(slide_name || "").toUpperCase();
+  const rawLabel = String(massing_label || "").toUpperCase().trim();
+  // PRIORITÉ 1: slide_name (TOUJOURS fiable car unique par requête)
+  const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
+    || slideStr.match(/[_\s.-]([ABC])$/)
+    || slideStr.match(/([ABC])$/);
+  if (slideMatch) {
+    label = slideMatch[1];
+    console.log(`[v72.29] LABEL from slide_name: "${label}" (slide_name="${slide_name}")`);
+  } else if (["A", "B", "C"].includes(rawLabel)) {
+    // PRIORITÉ 2: massing_label (seulement si slide_name ne contient pas A/B/C)
+    label = rawLabel;
+    console.log(`[v72.29] LABEL from massing_label: "${label}" (slide_name="${slide_name}" had no A/B/C)`);
+  } else {
+    // PRIORITÉ 3: chercher dans tout le body
+    const bodyStr = JSON.stringify(req.body).toUpperCase();
+    if (/PRUDENT|[_":]C[_"}\s,]/.test(bodyStr)) label = "C";
+    else if (/EQUILIBRE|[_":]B[_"}\s,]/.test(bodyStr)) label = "B";
+    console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
-  console.log(`[v72.28] LABEL FINAL: "${label}" (massing_label_raw="${massing_label}", slide_name="${slide_name}")`);
+  console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
   // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
