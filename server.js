@@ -4815,35 +4815,29 @@ app.post("/generate", async (req, res) => {
     const SLIDE4_VARIATIONS = 2;
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
-        const b64Input = pngClean.toString("base64");
+        console.log(`[SLIDE4-POLISH] v72.16: Starting multi-render via Images Edit API (${SLIDE4_VARIATIONS} variations)...`);
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.15: Reference-matched prompt + corrected API params
-        const polishPrompt = `Make this 3D urban view look like a premium architectural visualization.
-Buildings: light concrete/beige material, clean surfaces.
-Grass: natural green, realistic.
-Trees: realistic organic shapes, keep exact positions.
-Light: warm natural afternoon sun, soft building shadows.
-Keep same camera angle and full image dimensions. Keep the parcel zone (orange border, dashed lines) visible.`;
-        // v72.15: Launch all variations in parallel
+        // v72.16: Use /v1/images/edits with gpt-image-1 — designed for in-place image editing
+        // The Responses API with image_generation tool was REGENERATING instead of editing
+        const polishPrompt = `Enhance this 3D architectural axonometric view: add subtle concrete texture on buildings, make grass more natural, improve tree realism, add soft shadows. Keep exact same camera angle and layout. Keep the orange parcel boundary and dashed setback lines visible.`;
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
+          // Build multipart form data for /v1/images/edits (Node 18+ native FormData)
+          const form = new FormData();
+          form.append("image", new Blob([pngClean], { type: "image/png" }), "input.png");
+          form.append("prompt", polishPrompt);
+          form.append("model", "gpt-image-1");
+          form.append("size", "1024x1024");
+          form.append("quality", "high");
           polishRequests.push(
-            fetch("https://api.openai.com/v1/responses", {
+            fetch("https://api.openai.com/v1/images/edits", {
               method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-4.1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: polishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", quality: "high", input_fidelity: "high" }]
-              })
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}` },
+              body: form,
             }).then(r => r.json()).catch(err => ({ error: err.message }))
           );
         }
-        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched in parallel (${Date.now() - t0}ms)`);
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} Images Edit API calls launched (${Date.now() - t0}ms)`);
         const polishResults = await Promise.all(polishRequests);
         // v72.1: Score each variation with edge-based drift detection, pick best
         let bestVariation = null;
@@ -4856,13 +4850,18 @@ Keep same camera angle and full image dimensions. Keep the parcel zone (orange b
             continue;
           }
           let polishedB64 = null;
-          if (oaiJson.output) {
+          // v72.16: Images Edit API returns data[0].b64_json
+          if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
+            polishedB64 = oaiJson.data[0].b64_json;
+          }
+          // Fallback: Responses API format
+          if (!polishedB64 && oaiJson.output) {
             for (const item of oaiJson.output) {
               if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
             }
           }
           if (!polishedB64) {
-            variationLog.push(`  v${v+1}: no image returned`);
+            variationLog.push(`  v${v+1}: no image returned — ${JSON.stringify(oaiJson).substring(0, 200)}`);
             continue;
           }
           const enhancedBuf = Buffer.from(polishedB64, "base64");
