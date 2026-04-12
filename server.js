@@ -4630,10 +4630,40 @@ function drawLegendCompass(ctx, W, H, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-  // v70.5: Annotations setback DÉSACTIVÉES (supprimées à la demande)
-  if (false) {
-    ctx.strokeText(ss + "m", cx - 120, cy + 10); ctx.fillText(ss + "m", cx - 120, cy + 10);
-    ctx.strokeText(ss + "m", cx + 120, cy + 10); ctx.fillText(ss + "m", cx + 120, cy + 10);
+  // v72.12: Setback labels on each envelope edge — show 3m/5m cotes
+  const ePts = p.envelopeScreenPts;
+  const pPts = p.parcelScreenPts;
+  const feIdx = p.frontEdgeIndex;
+  if (ePts && ePts.length >= 3 && pPts && pPts.length >= 3) {
+    ctx.save();
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const n = ePts.length;
+    for (let i = 0; i < n; i++) {
+      // Determine setback value for this edge
+      const diff = ((i - (feIdx || 0)) % n + n) % n;
+      let sb;
+      if (diff === 0) sb = setback_front;
+      else if (n === 4 && diff === 2) sb = setback_back;
+      else sb = setback_side;
+      // Midpoint of envelope edge
+      const j = (i + 1) % n;
+      const mx = (ePts[i].x + ePts[j].x) / 2;
+      const my = (ePts[i].y + ePts[j].y) / 2;
+      // Midpoint of corresponding parcel edge
+      const pmx = (pPts[i].x + pPts[j].x) / 2;
+      const pmy = (pPts[i].y + pPts[j].y) / 2;
+      // Place label between parcel edge and envelope edge
+      const lx = (mx + pmx) / 2;
+      const ly = (my + pmy) / 2;
+      // White outline for readability
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = 3;
+      ctx.strokeText(sb + "m", lx, ly);
+      ctx.fillStyle = "#c45030";
+      ctx.fillText(sb + "m", lx, ly);
+    }
     ctx.restore();
   }
 }
