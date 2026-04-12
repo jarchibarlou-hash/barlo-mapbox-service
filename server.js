@@ -4786,7 +4786,11 @@ app.post("/generate", async (req, res) => {
     applyColorRemap(ctx, W, H);
     console.log(`[SLIDE4] v72: Drawing deterministic trees...`);
     drawTrees(ctx, W, H);
-    // v72.8: Compute screen coordinates early — needed for parcel overlay BEFORE pngClean
+    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
+    // pngClean = Mapbox screenshot + color remap + trees — NO extra canvas drawings
+    // Mapbox already draws the parcel + envelope in the HTML — don't duplicate
+    const pngClean = canvas.toBuffer("image/png");
+    // Screen coordinates for overlays (legend, setback labels) — drawn on fallback + after polish
     const pitch = 58;
     const scale = 256 * Math.pow(2, zoom) / (2 * Math.PI);
     function gpsToScreen(lat, lon) {
@@ -4800,44 +4804,6 @@ app.post("/generate", async (req, res) => {
     }
     const parcelScreenPts = coords.map(c => gpsToScreen(c.lat, c.lon));
     const envelopeScreenPts = envelopeCoords.map(c => gpsToScreen(c.lat, c.lon));
-    // v72.8: Draw THICK parcel + setback lines into the deterministic image
-    // These get baked into pngClean so the AI receives them prominently
-    if (parcelScreenPts.length >= 3) {
-      ctx.save();
-      // Parcel fill — semi-transparent sand to reinforce the zone
-      ctx.beginPath();
-      ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
-      for (let i = 1; i < parcelScreenPts.length; i++) ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(230, 200, 155, 0.45)";
-      ctx.fill();
-      // Parcel border — thick solid red/orange
-      ctx.beginPath();
-      ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
-      for (let i = 1; i < parcelScreenPts.length; i++) ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
-      ctx.closePath();
-      ctx.strokeStyle = "#DC4A1A";
-      ctx.lineWidth = 3.5;
-      ctx.stroke();
-      // Envelope/setback — thick dashed red
-      if (envelopeScreenPts && envelopeScreenPts.length >= 3) {
-        ctx.beginPath();
-        ctx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
-        for (let i = 1; i < envelopeScreenPts.length; i++) ctx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
-        ctx.closePath();
-        ctx.strokeStyle = "#C83C1E";
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([10, 6]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      ctx.restore();
-      console.log(`[SLIDE4] v72.8: Parcel + setback lines drawn (thick, baked into pngClean)`);
-    }
-    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
-    // v72: pngClean = fully deterministic image (colors + trees + parcel lines, no UI overlays)
-    // This is the FROZEN base sent to AI polish — and also the fallback if drift detected
-    const pngClean = canvas.toBuffer("image/png");
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
@@ -4858,36 +4824,18 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.11: REVERT to original v71 prompt — this produced the reference image
-        const polishPrompt = `STRICT EDIT ONLY.
+        // v72.12: Exact user spec — white/beige buildings, trees 10% more realistic, no artistic effect
+        const polishPrompt = `STRICT EDIT ONLY. Same camera, same angle, same composition. Do not move anything.
 
-PRESERVE EXACT GEOMETRY — do NOT modify any of the following:
-- Building footprints, positions, shapes, sizes, count
-- Road positions, widths, network
-- Parcel boundary lines (red/orange) and dashed envelope lines
-- Tree positions, sizes, and count (trees are already placed)
-- Green areas and vegetation layout
-- Camera angle, perspective, framing, composition
-- Spatial relationships between all elements
+Buildings must be white or light beige — clean, smooth surfaces. No dark tones, no brown, no weathering.
+Trees: make them slightly more realistic (just 10% improvement) — keep their exact positions and sizes.
+Grass: keep bright green, clean.
+Roads: keep as-is.
+Soft shadows under buildings. Bright natural light.
 
-NO REINTERPRETATION. NO CAMERA CHANGE. NO STRUCTURAL MODIFICATION.
-Do NOT add, remove, move, or resize ANY element.
-Do NOT add text, watermarks, inset images, or UI elements.
+Keep the parcel zone (orange/red border with dashed setback lines) exactly as it is — visible and clean.
 
-ALLOWED non-structural polish ONLY:
-- Slight tonal harmonization across the scene
-- Subtle contrast improvement for architectural clarity
-- Refined soft shadows from buildings and trees (sun from upper-left)
-- Light ambient occlusion where buildings meet the ground
-- Cleaner visual edges and improved sharpness
-- Subtle concrete texture on building surfaces (keep existing gray tones)
-- Warm afternoon daylight color grading
-- Professional architectural visualization finish
-
-The parcel area (beige/sand ground with red border) must remain CLEAN, FLAT, EMPTY.
-Do NOT place anything inside the parcel that is not already there.
-
-QUALITY: Premium architectural presentation. Stability > beauty.`;
+No artistic effects. No film grain. No dark mood. No noise. Clean and premium. Fill entire canvas, no black borders.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
