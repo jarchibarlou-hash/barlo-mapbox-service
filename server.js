@@ -4156,14 +4156,54 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
     const etageH = ${etageH};
-    const totalLevels = ${massingParams.levels};  // v72.22: TOUJOURS utiliser levels du moteur — jamais de fallback calculé
-    const commLevels = ${massingParams.commerce_levels || 0};
     const gap = 0.30;  // v71: gap net entre niveaux (ligne noire visible)
-    for (let f = 0; f < totalLevels; f++) {
-      // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
+    // v72.22: SPLIT_AV_AR — commerce = volume séparé devant, logement = volume derrière
+    ${massingParams.commerce_coords ? `
+    // ══ MODE SPLIT_AV_AR : 2 volumes distincts ══
+    const commerceGeoJSON = ${JSON.stringify({
+      type: "Feature",
+      properties: { height: rdcH, base_height: 0 },
+      geometry: { type: "Polygon", coordinates: [[...massingParams.commerce_coords.map(c => [c.lon, c.lat]), [massingParams.commerce_coords[0].lon, massingParams.commerce_coords[0].lat]]] },
+    })};
+    map.addSource('commerce-volume', { type: 'geojson', data: commerceGeoJSON });
+    // Commerce : 1 niveau ORANGE en avant
+    map.addLayer({
+      id: 'commerce-floor-0', type: 'fill-extrusion', source: 'commerce-volume',
+      paint: {
+        'fill-extrusion-color': '#e07830',
+        'fill-extrusion-height': rdcH,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.92,
+        'fill-extrusion-vertical-gradient': false,
+      },
+    });
+    map.addLayer({ id: 'commerce-footprint', type: 'line', source: 'commerce-volume',
+      paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
+    // Logement : N niveaux BLEU en arrière (massingCoords = logement polygon)
+    const logtLevels = ${massingParams.split_layout ? massingParams.split_layout.volume_logement.levels : massingParams.levels};
+    for (let f = 0; f < logtLevels; f++) {
       const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
       const top  = f === 0 ? rdcH : rdcH + f * etageH;
-      // Gap entre étages (ligne noire fine sur façade) : uniquement ENTRE les étages
+      const baseH = f > 0 ? base + gap / 2 : 0;
+      const topH  = f < logtLevels - 1 ? top - gap / 2 : top;
+      map.addLayer({
+        id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
+        paint: {
+          'fill-extrusion-color': '#3a7ac0',
+          'fill-extrusion-height': topH,
+          'fill-extrusion-base': baseH,
+          'fill-extrusion-opacity': 0.92,
+          'fill-extrusion-vertical-gradient': false,
+        },
+      });
+    }
+    ` : `
+    // ══ MODE SUPERPOSÉ : étages empilés sur un seul volume ══
+    const totalLevels = ${massingParams.levels};  // v72.22: TOUJOURS utiliser levels du moteur — jamais de fallback calculé
+    const commLevels = ${massingParams.commerce_levels || 0};
+    for (let f = 0; f < totalLevels; f++) {
+      const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
+      const top  = f === 0 ? rdcH : rdcH + f * etageH;
       const baseH = f > 0 ? base + gap / 2 : 0;
       const topH  = f < totalLevels - 1 ? top - gap / 2 : top;
       const isComm = f < commLevels;
@@ -4179,6 +4219,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         },
       });
     }
+    `}
     // ── Contour emprise au sol : bleu foncé ──
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
       paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
@@ -4753,7 +4794,7 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, split_layout }) {
   const s = W / 1280;
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
@@ -4770,36 +4811,90 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.fillStyle = "#bbb"; ctx.fillText("E", 22*s, 4*s);
   ctx.restore();
   // ── ANNOTATIONS ÉTAGES : traits + labels à droite du bâtiment (style référence) ──
-  // Positionnées au centre-droit de l'image
-  const rdcH_m = 3.0;  // v71: tous les niveaux = 3m
+  const rdcH_m = 3.0;
   const etageH_m = 3.0;
-  const realTotalH = rdcH_m + (levels - 1) * etageH_m;
-  const sdpTotale = fp_m2 * levels;
-  // Espacement vertical entre annotations (adapté à la perspective)
-  const annX = W * 0.62;         // position X des annotations (à droite du bâtiment)
-  const annBaseY = H * 0.58;     // base du RDC (approximation perspective)
-  const annStepY = -32 * s;      // espacement vertical entre étages
   const lineLen = 14 * s;
-  for (let f = 0; f < levels; f++) {
-    const y = annBaseY + f * annStepY;
-    const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-    // Petit trait horizontal noir fin
-    ctx.beginPath();
-    ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
-    ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
-    // Label : "R+2 : 596 m²" — NOIR avec contour blanc pour lisibilité
+  // v72.22: SPLIT_AV_AR — annotations séparées pour commerce et logement
+  if (split_layout && split_layout.mode === "SPLIT_AV_AR") {
+    const vc = split_layout.volume_commerce;
+    const vl = split_layout.volume_logement;
+    // ── COMMERCE annotations (volume avant, à gauche) ──
+    const commAnnX = W * 0.15;
+    const commBaseY = H * 0.62;
+    const commStepY = -32 * s;
+    for (let f = 0; f < vc.levels; f++) {
+      const y = commBaseY + f * commStepY;
+      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      ctx.beginPath();
+      ctx.moveTo(commAnnX, y); ctx.lineTo(commAnnX + lineLen, y);
+      ctx.strokeStyle = "#e07830"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${vc.fp_m2} m²`, commAnnX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#e07830";
+      ctx.fillText(`${floorLabel} : ${vc.fp_m2} m²`, commAnnX + lineLen + 6*s, y + 4*s);
+    }
+    // Label "Commerce" sous les annotations
+    ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Commerce: ${vc.sdp_m2} m² SDP`, commAnnX, commBaseY + 24*s);
+    ctx.fillStyle = "#e07830";
+    ctx.fillText(`Commerce: ${vc.sdp_m2} m² SDP`, commAnnX, commBaseY + 24*s);
+    // ── LOGEMENT annotations (volume arrière, à droite) ──
+    const logtAnnX = W * 0.62;
+    const logtBaseY = H * 0.58;
+    const logtStepY = -32 * s;
+    for (let f = 0; f < vl.levels; f++) {
+      const y = logtBaseY + f * logtStepY;
+      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      ctx.beginPath();
+      ctx.moveTo(logtAnnX, y); ctx.lineTo(logtAnnX + lineLen, y);
+      ctx.strokeStyle = "#3a7ac0"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${vl.fp_m2} m²`, logtAnnX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#3a7ac0";
+      ctx.fillText(`${floorLabel} : ${vl.fp_m2} m²`, logtAnnX + lineLen + 6*s, y + 4*s);
+    }
+    // Label "Logement" sous les annotations
+    ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Logement: ${vl.sdp_m2} m² SDP`, logtAnnX, logtBaseY + 24*s);
+    ctx.fillStyle = "#3a7ac0";
+    ctx.fillText(`Logement: ${vl.sdp_m2} m² SDP`, logtAnnX, logtBaseY + 24*s);
+    // Total SDP en bas — NOIR avec contour blanc
+    const totalSDP = (vc.sdp_m2 || 0) + (vl.sdp_m2 || 0);
+    ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "center";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, W * 0.5, H * 0.68);
+    ctx.fillStyle = "#000000";
+    ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, W * 0.5, H * 0.68);
+  } else {
+    // ══ MODE SUPERPOSÉ : annotations classiques ══
+    const realTotalH = rdcH_m + (levels - 1) * etageH_m;
+    const sdpTotale = fp_m2 * levels;
+    const annX = W * 0.62;
+    const annBaseY = H * 0.58;
+    const annStepY = -32 * s;
+    for (let f = 0; f < levels; f++) {
+      const y = annBaseY + f * annStepY;
+      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      ctx.beginPath();
+      ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
+      ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#000000";
+      ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    }
+    // Total SDP en bas — NOIR avec contour blanc
     ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
   }
-  // Total SDP en bas — NOIR avec contour blanc
-  ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
-  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-  ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
-  ctx.fillStyle = "#000000";
-  ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
 app.post("/generate", async (req, res) => {
@@ -5104,7 +5199,7 @@ app.post("/generate-massing", async (req, res) => {
   const effectiveProgramMain = program_main || project_type || (bodyHasMixte ? "USAGE_MIXTE" : "");
   console.log(`[MASSING v71.1] program_main="${program_main}" project_type="${project_type}" bodyHasMixte=${bodyHasMixte} → effective="${effectiveProgramMain}"`);
   // ── Déterminer les paramètres du scénario ──
-  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor;
+  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
@@ -5149,7 +5244,8 @@ app.post("/generate-massing", async (req, res) => {
     has_pilotis = sc.has_pilotis || false;
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} (${sc.cos_compliance})`);
+    splitLayout = sc.split_layout || null;
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
@@ -5174,11 +5270,13 @@ app.post("/generate-massing", async (req, res) => {
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
   const habitationLevels = levels - commerceLevels;
-  // v71: LOG DIAGNOSTIC — ce que Make.com envoie réellement
-  console.log(`┌── MASSING DIAGNOSTIC v71 ──`);
-  console.log(`│ label=${label} compute_scenario=${compute_scenario}`);
-  console.log(`│ program_main="${program_main}" → commerce_levels=${commerceLevels}`);
-  console.log(`│ fp=${fp}m² levels=${levels} totalH=${totalH}m`);
+  // v72.22: LOG DIAGNOSTIC COMPLET — traçabilité moteur → 3D
+  console.log(`┌── MASSING DIAGNOSTIC v72.22 ──`);
+  console.log(`│ Scénario: ${label} (${compute_scenario ? "SMART" : "CLASSIQUE"})`);
+  console.log(`│ program_main="${program_main}" effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`│ commerce_raw="${commerce_raw}" → commerceLevels=${commerceLevels}`);
+  console.log(`│ fp=${fp}m² × levels=${levels} = ${Math.round(fp * levels)}m² SDP`);
+  console.log(`│ ${commerceLevels > 0 ? `MIXTE: ${commerceLevels} RDC commerce (ORANGE) + ${habitationLevels} logement (BLEU)` : `LOGEMENT PUR: ${levels} niveaux BLEU`}`);
   console.log(`│ site_area=${site_area} envelope=${envW}×${envD}`);
   console.log(`│ mix_score=${mix_score} rent_score=${rent_score} capacity_score=${capacity_score}`);
   console.log(`│ scenario_role=${scenarioRole} accent=${accentColor}`);
@@ -5249,18 +5347,74 @@ app.post("/generate-massing", async (req, res) => {
     const rdcH = 3.0;   // v71: RDC toujours 3m (commerce et logement même hauteur)
     const etageH = 3.0;                              // étages courants = 3m
     const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
-    console.log(`┌── MASSING 3D RENDER v72.22 ──`);
-    console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC + ${levels - commerceLevels} logement)`);
-    console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
-    console.log(`│ Emprise: ${Math.round(fp)}m² × ${levels} niveaux = ${Math.round(fp * levels)}m² SDP`);
-    console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (commerce), f>=${commerceLevels} → BLEU (logement)`);
-    console.log(`└── FIN DIAGNOSTIC 3D ──`);
+    // v72.22: SPLIT layout — calculer le polygone commerce si split_layout existe
+    let commerceCoords = null;
+    if (splitLayout && splitLayout.mode === "SPLIT_AV_AR") {
+      // Commerce = bande en avant de la parcelle (côté front_edge)
+      // On utilise l'enveloppe et on prend la bande avant de profondeur commerce_depth
+      const vc = splitLayout.volume_commerce;
+      const vl = splitLayout.volume_logement;
+      const interGap = splitLayout.retrait_inter_m || 4;
+      // Calculer le polygone commerce : bande en avant de l'enveloppe
+      const fei = frontEdgeIndex !== undefined ? frontEdgeIndex : 0;
+      const n = envelopeCoords.length;
+      // Front edge = segment [fei, fei+1], on prend la bande à commerce_depth_m de profondeur
+      const i0 = fei % n;
+      const i1 = (fei + 1) % n;
+      const i2 = (fei + 2) % n;
+      const i3 = (fei + 3) % n;
+      // Direction "vers l'intérieur" = de l'arête front vers le centre
+      const frontMidLat = (envelopeCoords[i0].lat + envelopeCoords[i1].lat) / 2;
+      const frontMidLon = (envelopeCoords[i0].lon + envelopeCoords[i1].lon) / 2;
+      const backMidLat = (envelopeCoords[i2].lat + envelopeCoords[i3].lat) / 2;
+      const backMidLon = (envelopeCoords[i2].lon + envelopeCoords[i3].lon) / 2;
+      // Depth fraction: commerce_depth / total_depth
+      const totalDepthM = Math.sqrt(Math.pow((backMidLat - frontMidLat) * 111320, 2) + Math.pow((backMidLon - frontMidLon) * 111320 * Math.cos(cLat * Math.PI / 180), 2));
+      const commFrac = Math.min(0.35, (vc.depth_m || 6) / Math.max(1, totalDepthM));
+      const gapFrac = Math.min(0.15, interGap / Math.max(1, totalDepthM));
+      // Commerce polygon: front edge + inset by commFrac
+      commerceCoords = [
+        envelopeCoords[i0],
+        envelopeCoords[i1],
+        { lat: envelopeCoords[i1].lat + (envelopeCoords[i2].lat - envelopeCoords[i1].lat) * commFrac,
+          lon: envelopeCoords[i1].lon + (envelopeCoords[i2].lon - envelopeCoords[i1].lon) * commFrac },
+        { lat: envelopeCoords[i0].lat + (envelopeCoords[i3].lat - envelopeCoords[i0].lat) * commFrac,
+          lon: envelopeCoords[i0].lon + (envelopeCoords[i3].lon - envelopeCoords[i0].lon) * commFrac },
+      ];
+      // Logement polygon: offset from commerce by (commFrac + gapFrac)
+      const logtStartFrac = commFrac + gapFrac;
+      const massingCoordsOverride = [
+        { lat: envelopeCoords[i0].lat + (envelopeCoords[i3].lat - envelopeCoords[i0].lat) * logtStartFrac,
+          lon: envelopeCoords[i0].lon + (envelopeCoords[i3].lon - envelopeCoords[i0].lon) * logtStartFrac },
+        { lat: envelopeCoords[i1].lat + (envelopeCoords[i2].lat - envelopeCoords[i1].lat) * logtStartFrac,
+          lon: envelopeCoords[i1].lon + (envelopeCoords[i2].lon - envelopeCoords[i1].lon) * logtStartFrac },
+        envelopeCoords[i2],
+        envelopeCoords[i3],
+      ];
+      // Override massingCoords with logement polygon
+      massingCoords.length = 0;
+      massingCoordsOverride.forEach(c => massingCoords.push(c));
+      if (massingCoords._typology) massingCoords._typology = "SPLIT_AV_AR";
+      console.log(`┌── MASSING 3D RENDER v72.22 — SPLIT_AV_AR ──`);
+      console.log(`│ Scénario ${label}: COMMERCE DEVANT + LOGEMENT DERRIÈRE`);
+      console.log(`│ Vol.Commerce: ${vc.fp_m2}m² × ${vc.levels}niv = ${vc.sdp_m2}m² SDP (ORANGE)`);
+      console.log(`│ Vol.Logement: ${vl.fp_m2}m² × ${vl.levels}niv = ${vl.sdp_m2}m² SDP (BLEU)`);
+      console.log(`│ Gap: ${interGap}m | commFrac=${(commFrac*100).toFixed(0)}% gapFrac=${(gapFrac*100).toFixed(0)}%`);
+      console.log(`└── FIN DIAGNOSTIC 3D SPLIT ──`);
+    } else {
+      console.log(`┌── MASSING 3D RENDER v72.22 — SUPERPOSÉ ──`);
+      console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC + ${levels - commerceLevels} logement)`);
+      console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
+      console.log(`│ Emprise: ${Math.round(fp)}m² × ${levels} niveaux = ${Math.round(fp * levels)}m² SDP`);
+      console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (commerce), f>=${commerceLevels} → BLEU (logement)`);
+      console.log(`└── FIN DIAGNOSTIC 3D ──`);
+    }
     // v57.20: passer has_pilotis au rendu pour décaler le bâtiment et dessiner les colonnes
     const hasPilotisRender = String(has_pilotis || "").toLowerCase() === "true" || has_pilotis === true;
-    const pilotisH = hasPilotisRender ? 3.5 : 0; // PILOTIS_CONFIG.PILOTIS_HEIGHT_M
+    const pilotisH = hasPilotisRender ? 3.5 : 0;
     const totalHWithPilotis = realTotalH + pilotisH;
     const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH }, MAPBOX_TOKEN);
+      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH, split_layout: splitLayout, commerce_coords: commerceCoords }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
@@ -5281,7 +5435,7 @@ app.post("/generate-massing", async (req, res) => {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
-      typology: massingCoords._typology,
+      typology: massingCoords._typology, split_layout: splitLayout,
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -5363,8 +5517,43 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
           const enhancedBuf = Buffer.from(polishedB64, "base64");
           // Massing uses default threshold (0.25) — light polish
           const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
-          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓" : "✗"} (shifted=${drift.classShifts}/${drift.totalBlocks} threshold=${(drift.threshold*100)}%)`);
-          if (drift.passed && drift.driftScore < bestDriftScore) {
+          // v72.22: COLOR PRESERVATION CHECK — verify orange (#e07830) and blue (#3a7ac0) floor bands survived polish
+          // Count orange and blue pixels in original vs polished. If polished lost >60% → reject (colors washed out)
+          let colorCheckPassed = true;
+          let colorLog = "";
+          if (commerceLevels > 0) {
+            const polishedImg = await loadImage(enhancedBuf);
+            const checkCanvas = createCanvas(W, H);
+            const checkCtx = checkCanvas.getContext("2d");
+            // Count in original (pngClean)
+            const origImg = await loadImage(pngClean);
+            checkCtx.drawImage(origImg, 0, 0, W, H);
+            const origData = checkCtx.getImageData(0, 0, W, H).data;
+            let origOrange = 0, origBlue = 0;
+            for (let px = 0; px < origData.length; px += 4) {
+              const r = origData[px], g = origData[px+1], b = origData[px+2];
+              if (r > 180 && g > 80 && g < 150 && b < 80) origOrange++;
+              if (b > 140 && r < 100 && g < 150) origBlue++;
+            }
+            // Count in polished
+            checkCtx.drawImage(polishedImg, 0, 0, W, H);
+            const polData = checkCtx.getImageData(0, 0, W, H).data;
+            let polOrange = 0, polBlue = 0;
+            for (let px = 0; px < polData.length; px += 4) {
+              const r = polData[px], g = polData[px+1], b = polData[px+2];
+              if (r > 180 && g > 80 && g < 150 && b < 80) polOrange++;
+              if (b > 140 && r < 100 && g < 150) polBlue++;
+            }
+            const orangeRetained = origOrange > 0 ? polOrange / origOrange : 1;
+            const blueRetained = origBlue > 0 ? polBlue / origBlue : 1;
+            colorLog = ` orange=${Math.round(orangeRetained*100)}% blue=${Math.round(blueRetained*100)}%`;
+            if (orangeRetained < 0.35 || blueRetained < 0.35) {
+              colorCheckPassed = false;
+              colorLog += " COLORS_WASHED";
+            }
+          }
+          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓" : "✗"}${colorLog} (shifted=${drift.classShifts}/${drift.totalBlocks})`);
+          if (drift.passed && colorCheckPassed && drift.driftScore < bestDriftScore) {
             bestDriftScore = drift.driftScore;
             bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
           }
@@ -5382,7 +5571,7 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
             site_area: Number(site_area), bearing, label,
             levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
             total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
-            typology: massingCoords._typology,
+            typology: massingCoords._typology, split_layout: splitLayout,
           });
           const finalPng = finalCtx.canvas.toBuffer("image/png");
           const enhancedPath = `${folder}/${slideName}_enhanced.png`;
