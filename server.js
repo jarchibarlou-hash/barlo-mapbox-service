@@ -4815,29 +4815,28 @@ app.post("/generate", async (req, res) => {
     const SLIDE4_VARIATIONS = 2;
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[SLIDE4-POLISH] v72.16: Starting multi-render via Images Edit API (${SLIDE4_VARIATIONS} variations)...`);
+        console.log(`[SLIDE4-POLISH] Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
+        const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.16: Use /v1/images/edits with gpt-image-1 — designed for in-place image editing
-        // The Responses API with image_generation tool was REGENERATING instead of editing
-        const polishPrompt = `Enhance this 3D architectural axonometric view: add subtle concrete texture on buildings, make grass more natural, improve tree realism, add soft shadows. Keep exact same camera angle and layout. Keep the orange parcel boundary and dashed setback lines visible.`;
+        const polishPrompt = `Add subtle soft shadows under the buildings and slightly improve tree realism. Keep everything else exactly the same — same camera angle, same colors, same layout, same parcel lines. Do not change the image dimensions.`;
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
-          // Use the form-data package (already required at top) for multipart upload
-          const form = new FormData();
-          form.append("image", pngClean, { filename: "input.png", contentType: "image/png" });
-          form.append("prompt", polishPrompt);
-          form.append("model", "gpt-image-1");
-          form.append("size", "1024x1024");
-          form.append("quality", "high");
           polishRequests.push(
-            fetch("https://api.openai.com/v1/images/edits", {
+            fetch("https://api.openai.com/v1/responses", {
               method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, ...form.getHeaders() },
-              body: form,
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gpt-4.1",
+                input: [{ role: "user", content: [
+                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                  { type: "input_text", text: polishPrompt }
+                ]}],
+                tools: [{ type: "image_generation", input_fidelity: "high" }]
+              })
             }).then(r => r.json()).catch(err => ({ error: err.message }))
           );
         }
-        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} Images Edit API calls launched (${Date.now() - t0}ms)`);
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched (${Date.now() - t0}ms)`);
         const polishResults = await Promise.all(polishRequests);
         // v72.1: Score each variation with edge-based drift detection, pick best
         let bestVariation = null;
@@ -4850,18 +4849,13 @@ app.post("/generate", async (req, res) => {
             continue;
           }
           let polishedB64 = null;
-          // v72.16: Images Edit API returns data[0].b64_json
-          if (oaiJson.data && oaiJson.data[0] && oaiJson.data[0].b64_json) {
-            polishedB64 = oaiJson.data[0].b64_json;
-          }
-          // Fallback: Responses API format
-          if (!polishedB64 && oaiJson.output) {
+          if (oaiJson.output) {
             for (const item of oaiJson.output) {
               if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
             }
           }
           if (!polishedB64) {
-            variationLog.push(`  v${v+1}: no image returned — ${JSON.stringify(oaiJson).substring(0, 200)}`);
+            variationLog.push(`  v${v+1}: no image returned`);
             continue;
           }
           const enhancedBuf = Buffer.from(polishedB64, "base64");
