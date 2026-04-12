@@ -4156,8 +4156,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
     const etageH = ${etageH};
-    const totalLevels = ${massingParams.levels || Math.round(massingParams.total_height / etageH)};
-    const commLevels = ${massingParams.commerce_levels};
+    const totalLevels = ${massingParams.levels};  // v72.22: TOUJOURS utiliser levels du moteur — jamais de fallback calculé
+    const commLevels = ${massingParams.commerce_levels || 0};
     const gap = 0.30;  // v71: gap net entre niveaux (ligne noire visible)
     for (let f = 0; f < totalLevels; f++) {
       // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
@@ -5155,11 +5155,21 @@ app.post("/generate-massing", async (req, res) => {
     fp = Number(fp_m2_raw);
     levels = Number(levels_raw);
     totalH = Number(height_raw) || levels * floorH;
-    commerceLevels = Number(commerce_raw);
+    // v72.22: commerce_levels — si la sheet envoie une valeur, on la respecte.
+    // Sinon, on cross-check program_main : si mixte → 1 niveau commerce (RDC), sinon 0.
+    const rawComm = Number(commerce_raw);
+    if (rawComm > 0) {
+      commerceLevels = rawComm;
+    } else if (/mixte|mixed/i.test(effectiveProgramMain)) {
+      commerceLevels = 1; // commerce toujours au RDC
+      console.log(`[CLASSIC] commerce_raw vide mais program_main="${effectiveProgramMain}" → commerce_levels=1 (RDC)`);
+    } else {
+      commerceLevels = 0;
+    }
     has_pilotis = false;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
-    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
+    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels}`);
   }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
@@ -5239,7 +5249,12 @@ app.post("/generate-massing", async (req, res) => {
     const rdcH = 3.0;   // v71: RDC toujours 3m (commerce et logement même hauteur)
     const etageH = 3.0;                              // étages courants = 3m
     const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
-    console.log(`[HEKTAR] levels=${levels} rdcH=${rdcH}m etageH=${etageH}m totalH=${realTotalH}m commerce=${commerceLevels}`);
+    console.log(`┌── MASSING 3D RENDER v72.22 ──`);
+    console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC + ${levels - commerceLevels} logement)`);
+    console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
+    console.log(`│ Emprise: ${Math.round(fp)}m² × ${levels} niveaux = ${Math.round(fp * levels)}m² SDP`);
+    console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (commerce), f>=${commerceLevels} → BLEU (logement)`);
+    console.log(`└── FIN DIAGNOSTIC 3D ──`);
     // v57.20: passer has_pilotis au rendu pour décaler le bâtiment et dessiner les colonnes
     const hasPilotisRender = String(has_pilotis || "").toLowerCase() === "true" || has_pilotis === true;
     const pilotisH = hasPilotisRender ? 3.5 : 0; // PILOTIS_CONFIG.PILOTIS_HEIGHT_M
