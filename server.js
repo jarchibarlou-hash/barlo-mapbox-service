@@ -4858,19 +4858,36 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] v72.1: Starting multi-render (${SLIDE4_VARIATIONS} variations)...`);
         const b64Input = pngClean.toString("base64");
         console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes`);
-        // v72.10: Clean 3D model aesthetic — smooth, no grain, no artistic effects
-        const polishPrompt = `Polish this 3D urban planning model view. Same camera, same angle, same composition. Do not move anything.
+        // v72.11: REVERT to original v71 prompt — this produced the reference image
+        const polishPrompt = `STRICT EDIT ONLY.
 
-Buildings: smooth light gray concrete, clean and flat. No grain, no dirt, no weathering.
-Grass: clean bright green, smooth and uniform.
-Roads: smooth gray.
-Light: bright even daylight, soft shadows only.
+PRESERVE EXACT GEOMETRY — do NOT modify any of the following:
+- Building footprints, positions, shapes, sizes, count
+- Road positions, widths, network
+- Parcel boundary lines (red/orange) and dashed envelope lines
+- Tree positions, sizes, and count (trees are already placed)
+- Green areas and vegetation layout
+- Camera angle, perspective, framing, composition
+- Spatial relationships between all elements
 
-This must look like a clean 3D architectural model — NOT a photograph. No film grain, no noise, no artistic filter, no dark mood. Smooth, clean, bright, professional.
+NO REINTERPRETATION. NO CAMERA CHANGE. NO STRUCTURAL MODIFICATION.
+Do NOT add, remove, move, or resize ANY element.
+Do NOT add text, watermarks, inset images, or UI elements.
 
-The orange/red parcel boundary and dashed setback lines in the center must stay sharp and visible. The sand-colored parcel area must stay clean and empty.
+ALLOWED non-structural polish ONLY:
+- Slight tonal harmonization across the scene
+- Subtle contrast improvement for architectural clarity
+- Refined soft shadows from buildings and trees (sun from upper-left)
+- Light ambient occlusion where buildings meet the ground
+- Cleaner visual edges and improved sharpness
+- Subtle concrete texture on building surfaces (keep existing gray tones)
+- Warm afternoon daylight color grading
+- Professional architectural visualization finish
 
-Fill the entire canvas. No black borders.`;
+The parcel area (beige/sand ground with red border) must remain CLEAN, FLAT, EMPTY.
+Do NOT place anything inside the parcel that is not already there.
+
+QUALITY: Premium architectural presentation. Stability > beauty.`;
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
         for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
