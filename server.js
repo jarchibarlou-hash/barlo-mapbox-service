@@ -1981,8 +1981,10 @@ function computeSmartScenarios({
       // ══════════════════════════════════════════════════════════════════
       if (!splitLayout && role === "PRUDENT" && levels >= 2 && fpRdc <= fpMinViable * 1.15) {
         // C est au plancher d'emprise → réduire d'1 niveau pour différencier de B
-        levels = Math.max(1, levels - 1);
-        console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (emprise au plancher ${fpRdc}m² ≈ fpMin=${fpMinViable}m²)`);
+        // v72.22: en programme mixte, minimum = commerceLevels + 1 (au moins 1 logement au-dessus du commerce)
+        const minLevels = commerceLevels > 0 ? commerceLevels + 1 : 1;
+        levels = Math.max(minLevels, levels - 1);
+        console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (emprise au plancher ${fpRdc}m² ≈ fpMin=${fpMinViable}m² | min=${minLevels} car commerce=${commerceLevels})`);
       }
       // ── PILOTIS ──
       const freeGround = envelope_area - fpRdc;
@@ -5211,11 +5213,13 @@ app.post("/generate-massing", async (req, res) => {
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
   const label = String(massing_label).toUpperCase();
-  // v71.1: Fallback ROBUSTE — chercher "mixte" dans TOUS les champs possibles
+  // v72.22: Fallback ULTRA-ROBUSTE — chercher "mixte" dans TOUS les champs possibles
   // Make.com peut envoyer le type de projet sous n'importe quel nom de champ
+  // Si layout_mode = SPLIT_AV_AR → c'est FORCÉMENT mixte (commerce + logement séparés)
   const bodyStr = JSON.stringify(req.body).toLowerCase();
   const bodyHasMixte = /mixte|mixed/i.test(bodyStr);
-  const effectiveProgramMain = program_main || project_type || (bodyHasMixte ? "USAGE_MIXTE" : "");
+  const splitImpliesMixte = /split_av_ar/i.test(String(layout_mode || ""));
+  const effectiveProgramMain = program_main || project_type || (bodyHasMixte || splitImpliesMixte ? "USAGE_MIXTE" : "");
   console.log(`[MASSING v71.1] program_main="${program_main}" project_type="${project_type}" bodyHasMixte=${bodyHasMixte} → effective="${effectiveProgramMain}"`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
@@ -5275,13 +5279,13 @@ app.post("/generate-massing", async (req, res) => {
     levels = Number(levels_raw);
     totalH = Number(height_raw) || levels * floorH;
     // v72.22: commerce_levels — si la sheet envoie une valeur, on la respecte.
-    // Sinon, on cross-check program_main : si mixte → 1 niveau commerce (RDC), sinon 0.
+    // Sinon, on cross-check program_main ou layout_mode : si mixte ou SPLIT → 1 niveau commerce (RDC)
     const rawComm = Number(commerce_raw);
     if (rawComm > 0) {
       commerceLevels = rawComm;
-    } else if (/mixte|mixed/i.test(effectiveProgramMain)) {
+    } else if (/mixte|mixed/i.test(effectiveProgramMain) || splitImpliesMixte) {
       commerceLevels = 1; // commerce toujours au RDC
-      console.log(`[CLASSIC] commerce_raw vide mais program_main="${effectiveProgramMain}" → commerce_levels=1 (RDC)`);
+      console.log(`[CLASSIC] commerce_raw vide mais effectiveProgram="${effectiveProgramMain}" split=${splitImpliesMixte} → commerce_levels=1 (RDC)`);
     } else {
       commerceLevels = 0;
     }
@@ -5501,9 +5505,9 @@ Apply ONLY these subtle non-structural adjustments:
 - KEEP IMAGE SHARP — do not soften or blur any edges
 
 Do NOT change the maquette/model aesthetic — keep the clean architectural model look.
-This is a white architectural maquette with colored floor bands. Keep it that way.
+This is a WARM BEIGE architectural maquette with colored floor bands. The background is warm beige (#eae8e4), buildings are cream (#f0ede8), roads are gray (#808080). PRESERVE THESE EXACT TONES. Do NOT shift to white, gray, or cool tones. The warm beige palette is essential.
 
-CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in tone and style.`;
+CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in WARM BEIGE tone and style. Do NOT make the scene cooler or whiter.`;
 
         // v72.1: Launch all variations in parallel
         const polishRequests = [];
