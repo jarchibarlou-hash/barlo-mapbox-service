@@ -1628,12 +1628,100 @@ function computeSmartScenarios({
       const fpMaxCes = Math.round(cesFill * effectiveMaxFp);
       const fpMaxEnv = Math.round(maxFpByEnvelope);
       const fpMaxRetraits = Math.round(empriseEffective);
-      // Plateau optimal = maxPerFloor × taille logement de référence / (1 - circulation)
-      // La taille de référence est le T3 (type dominant au Cameroun)
+      // ══════════════════════════════════════════════════════════════════
+      // v72.33: PLATEAU ADAPTATIF — dimensionné par le PROGRAMME CLIENT
+      // ══════════════════════════════════════════════════════════════════
+      // AVANT: fpProgramme = maxPerFloor × refUnitSize → plateau fixe 475m²
+      //   → ignorait target_units, surdimensionnait toujours le plateau
+      // MAINTENANT: fpProgramme = unitsPerFloor_réel × avgSize_adaptatif
+      //   → dimensionné par le programme du client
+      //   → tailles d'appartement FLEXIBLES (compression 10-15% si parcelle contrainte)
+      //   → si même compressé ça ne rentre pas → réduire unités/palier (monter en hauteur)
+      // ══════════════════════════════════════════════════════════════════
       const refUnitSize = sizes.T3 || sizes.T4 || 80;
-      const fpProgramme = Math.round(maxPerFloor * refUnitSize / (1 - circRatio));
-      // Plancher : minimum 2 logements × refSize pour un palier viable
-      const fpMinViable = Math.round(Math.max(200, 2 * refUnitSize / (1 - circRatio)));
+      // v72.33: TAILLE UNITAIRE = DONNÉE CLIENT × RATIO SCÉNARIO
+      // ─────────────────────────────────────────────────────────────
+      // Le nombre d'unités (target_units) est SACRÉ — identique pour A, B, C.
+      // La DIFFÉRENCIATION vient des TAILLES d'appartement :
+      //   A = taille généreuse (UNIT_SIZES.A) — le programme du client tel quel
+      //   B = taille standard (UNIT_SIZES.B) — ~15-20% plus compact
+      //   C = taille compacte (UNIT_SIZES.C) — ~25-30% plus compact
+      // Cela produit naturellement : A → plus grand plateau → plus de SDP
+      //                               C → plateau réduit → moins de SDP
+      // ─────────────────────────────────────────────────────────────
+      // Ratio de taille du scénario vs le scénario A (référence client)
+      const allLabelSizes = (UNIT_SIZES[sizeKey] || UNIT_SIZES.STANDARD);
+      const refT3_A = (allLabelSizes.A && allLabelSizes.A.T3) || 95;
+      const refT3_label = (allLabelSizes[label] && allLabelSizes[label].T3) || refT3_A;
+      const sizeRatio = refT3_label / refT3_A; // A=1.00, B≈0.84, C≈0.74
+      // Taille de base : depuis le formulaire client OU estimation mix
+      const clientAvgSizeRaw = (Number(target_surface_m2) > 0 && target_units > 0)
+        ? Math.round(Number(target_surface_m2) / target_units)
+        : null;
+      // Appliquer le ratio scénario : le client donne la taille "A", B et C s'adaptent
+      const avgResSize = clientAvgSizeRaw
+        ? Math.round(clientAvgSizeRaw * sizeRatio)
+        : computeAvgResidentialSize(sizes, rules, target_units); // déjà label-specific
+      console.log(`│   📋 v72.33 TAILLES: ${clientAvgSizeRaw ? `client=${clientAvgSizeRaw}m²` : `estimé=${Math.round(avgResSize/sizeRatio)}m²`} × ratio_${label}=${sizeRatio.toFixed(2)} → avgResSize=${avgResSize}m²/appt`);
+      // ══════════════════════════════════════════════════════════════════
+      // v72.33: PLATEAU ADAPTATIF — ORDRE DE PRIORITÉ :
+      //   1. NOMBRE D'APPARTEMENTS (target_units) = INPUT CLIENT, SACRÉ
+      //   2. COMBIEN RENTRENT PAR NIVEAU = déterminé par la parcelle
+      //   3. NOMBRE DE NIVEAUX = CONSÉQUENCE (target_units / u_par_niveau)
+      //
+      // La parcelle dicte la capacité du plateau (pas l'inverse).
+      // Les tailles d'appartement s'adaptent : compression 10-15% max
+      // si la parcelle est contrainte, pour maximiser les unités/palier.
+      // ══════════════════════════════════════════════════════════════════
+      const MAX_COMPRESSION = 0.85; // tailles réduites de 15% max
+      const clientUnits = Math.max(1, target_units || 1);
+      // ÉTAPE 1 : Capacité max du plateau (le terrain dicte)
+      const fpMaxParcel = Math.min(fpMaxCes, fpMaxEnv, fpMaxRetraits);
+      const usefulPerFloor = fpMaxParcel * (1 - circRatio); // surface utile par palier
+      // ÉTAPE 2 : Combien d'appartements RENTRENT par palier ?
+      // D'abord essayer avec les tailles STANDARD (100%)
+      let unitsPerFloorStd = Math.floor(usefulPerFloor / avgResSize);
+      // Puis avec les tailles COMPRESSÉES (85%) — 15% plus petit
+      const compressedSize = Math.round(avgResSize * MAX_COMPRESSION);
+      let unitsPerFloorCompressed = Math.floor(usefulPerFloor / compressedSize);
+      // Cap au max programme (pas plus que maxPerFloor)
+      unitsPerFloorStd = Math.min(unitsPerFloorStd, maxPerFloor);
+      unitsPerFloorCompressed = Math.min(unitsPerFloorCompressed, maxPerFloor);
+      // Choisir : si la compression permet +1 unité/palier, ça vaut le coup
+      let adaptiveUnitsPerFloor, unitCompression;
+      if (unitsPerFloorStd >= 1 && unitsPerFloorStd >= unitsPerFloorCompressed) {
+        // Les tailles standard suffisent — pas de compression nécessaire
+        adaptiveUnitsPerFloor = unitsPerFloorStd;
+        unitCompression = 1.0;
+      } else if (unitsPerFloorCompressed > unitsPerFloorStd) {
+        // La compression permet de caser +1 unité — ça vaut le coup
+        adaptiveUnitsPerFloor = unitsPerFloorCompressed;
+        // Compression juste nécessaire pour caser N unités (pas forcément 15%)
+        unitCompression = Math.max(MAX_COMPRESSION, usefulPerFloor / (adaptiveUnitsPerFloor * avgResSize));
+      } else if (unitsPerFloorStd < 1) {
+        // Même 1 appartement standard ne rentre pas → compresser pour 1
+        adaptiveUnitsPerFloor = 1;
+        const minSizeForOne = usefulPerFloor; // tout l'espace utile pour 1 appart
+        unitCompression = Math.max(MAX_COMPRESSION, minSizeForOne / avgResSize);
+      } else {
+        adaptiveUnitsPerFloor = Math.max(1, unitsPerFloorStd);
+        unitCompression = 1.0;
+      }
+      // Taille effective par appartement
+      const effectiveUnitSize = Math.round(avgResSize * unitCompression);
+      // ÉTAPE 3 : Nombre de niveaux = CONSÉQUENCE
+      const levelsFromProgram = Math.max(1, Math.ceil(clientUnits / Math.max(1, adaptiveUnitsPerFloor)));
+      // fpProgramme = dimensionné pour les unités qui rentrent réellement
+      const fpProgramme = Math.round(adaptiveUnitsPerFloor * effectiveUnitSize / (1 - circRatio));
+      // Plancher : minimum 1 appartement compressé
+      const fpMinViable = Math.round(Math.max(100, 1 * compressedSize / (1 - circRatio)));
+      console.log(`│   🏠 v72.33 PLATEAU ADAPTATIF (parcelle → unités → niveaux):`);
+      console.log(`│     1. PROGRAMME CLIENT: ${clientUnits} appartements demandés`);
+      console.log(`│     2. PARCELLE: fpMaxParcel=${fpMaxParcel}m² → utile=${Math.round(usefulPerFloor)}m²/palier`);
+      console.log(`│        avgResSize=${avgResSize}m² → standard: ${unitsPerFloorStd}u/palier | compressé(${Math.round(MAX_COMPRESSION*100)}%): ${unitsPerFloorCompressed}u/palier`);
+      console.log(`│        → CHOIX: ${adaptiveUnitsPerFloor}u/palier × ${effectiveUnitSize}m²/appt (compression=${(unitCompression*100).toFixed(0)}%)`);
+      console.log(`│     3. NIVEAUX = ${clientUnits}u / ${adaptiveUnitsPerFloor}u = ${levelsFromProgram} niveaux nécessaires`);
+      console.log(`│     fpProgramme=${fpProgramme}m² fpMinViable=${fpMinViable}m²`);
       // ══════════════════════════════════════════════════════════════════════
       // v57.13 : LOGIQUE PROGRAMME → TERRAIN (pas l'inverse)
       // ══════════════════════════════════════════════════════════════════════
@@ -1859,12 +1947,10 @@ function computeSmartScenarios({
       const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
       const maxSdpForRole = Math.floor(max_sdp * cosCap);
       if (isFpFromEnvelope) {
-        // ── BUREAUX : plateaux proportionnels au CES effectif et rôle scénario ──
-        // v57.6: Apply roleTargetFactor to ensure A >= B >= C in floor count
-        const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
-        const effectiveTargetBur = Math.max(1, Math.round(target_units * cesRatio * roleTargetFactor));
-        floorsNeeded = Math.min(effectiveTargetBur, effectiveMaxFloors);
+        // ── BUREAUX : plateaux — v72.33 LOGIQUE UNIFIÉE ──
+        // target_units = nombre de plateaux souhaités (SACRÉ)
+        // Niveaux = target_units (1 plateau = 1 niveau)
+        floorsNeeded = Math.min(clientUnits, effectiveMaxFloors);
         // v57.13 : niveaux = conséquence programme, pas de floor min expert
         floorsNeeded = Math.max(1, floorsNeeded);
         // COS check avec SDP duale
@@ -1913,29 +1999,24 @@ function computeSmartScenarios({
         unitMix = { [villaTypo]: 1 };
       } else if (programKey === "USAGE_MIXTE") {
         // ── USAGE MIXTE : Commerce RDC (fpRdc) + Logements étages (fpEtages) ──
+        // v72.33: LOGIQUE UNIFIÉE — target_units SACRÉ, niveaux = conséquence
         const usefulEtage = fpEtages * (1 - circRatio);
         // Commerce count from mix function
-        const estMix = rules.default_mix_fn ? rules.default_mix_fn(target_units) : { COMMERCE: 1, T3: target_units - 1 };
+        const estMix = rules.default_mix_fn ? rules.default_mix_fn(clientUnits) : { COMMERCE: 1, T3: clientUnits - 1 };
         const commerceUnits = estMix.COMMERCE || 1;
-        // Résidentiel par étage
-        const resiAvgSize = computeAvgResidentialSize(sizes, rules, target_units);
-        let resiPerFloor = Math.floor(usefulEtage / resiAvgSize);
-        let effectiveMaxPerFloor = maxPerFloor;
-        // Adaptation maxPerFloor seulement pour A si le plateau le permet
-        if (role === "INTENSIFICATION" && usefulEtage >= resiAvgSize * (maxPerFloor + 1) * 1.20) {
-          effectiveMaxPerFloor = maxPerFloor + 1;
-        }
-        resiPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, resiPerFloor));
-        // v57.6 : target résidentiel proportionnel au CES effectif × rôle
-        const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
-        const effectiveTargetResi = Math.max(1, Math.round((target_units - commerceUnits) * cesRatio * roleTargetFactor));
-        floorsNeeded = 1 + Math.ceil(effectiveTargetResi / resiPerFloor);
-        // v57.13 : niveaux = conséquence programme
+        // Résidentiel cible = PROGRAMME CLIENT (sacré, pas modifié par roleTargetFactor)
+        const resiTarget = Math.max(1, clientUnits - commerceUnits);
+        // Combien de logements RENTRENT par étage (déterminé par le plateau)
+        let resiPerFloor = Math.floor(usefulEtage / avgResSize); // avgResSize déjà différencié par scénario
+        resiPerFloor = Math.max(1, Math.min(maxPerFloor, resiPerFloor));
+        // Niveaux = CONSÉQUENCE (1 RDC commerce + N étages résidentiels)
+        floorsNeeded = 1 + Math.ceil(resiTarget / resiPerFloor);
         floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
+        // Garde-fou COS
         while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
         const actualResiFloors = floorsNeeded - 1;
         totalUnits = commerceUnits + resiPerFloor * actualResiFloors;
+        console.log(`│   v72.33 MIXTE: ${resiTarget} logts cibles / ${resiPerFloor} par palier (${avgResSize}m²) = ${actualResiFloors} étages rési + 1 RDC commerce`);
         // Mix réel
         const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalUnits) : { COMMERCE: commerceUnits, T3: totalUnits - commerceUnits };
         totalUseful = 0;
@@ -1957,49 +2038,21 @@ function computeSmartScenarios({
         // ══════════════════════════════════════════════════════════════════
         // ── Unités/palier : adaptatif au plateau, capé par programme ──
         const usefulEtage = fpEtages * (1 - circRatio);
-        const avgSize = computeAvgResidentialSize(sizes, rules, target_units);
-        let effectiveMaxPerFloor = maxPerFloor;
-        // v57.6 : maxPerFloor adaptatif SEULEMENT pour A (INTENSIFICATION)
-        // Si le plateau est assez grand pour accueillir +1 confortablement
-        // (marge de 20% pour circulation large, rangements, etc.)
-        // On ne touche PAS B/C — ils restent au standard programme.
-        const isMaxDriver = /MAX_CAPACITE|RENTABILITE/i.test(primary_driver);
-        if (role === "INTENSIFICATION") {
-          const canFitMore = usefulEtage >= avgSize * (maxPerFloor + 1) * 1.20;
-          if (canFitMore || isMaxDriver) {
-            effectiveMaxPerFloor = maxPerFloor + 1;
-            console.log(`│   💪 ${role}: plateau ${Math.round(usefulEtage)}m² utile → ${effectiveMaxPerFloor} logts/palier (base ${maxPerFloor})`);
-          }
-        }
-        let unitsPerFloor = Math.floor(usefulEtage / avgSize);
-        unitsPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, unitsPerFloor));
-        // v57.6 : effectiveTarget PROPORTIONNEL au CES effectif × rôle scénario
-        // - CES effectif = profil client (budget, risque, posture)
-        // - roleTargetFactor = ambition du scénario (A=max, B=standard, C=réduit)
-        // Le nombre de logements est un RÉSULTAT, pas une cible fixe.
-        const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
-        const effectiveTarget = Math.max(2, Math.round(target_units * cesRatio * roleTargetFactor));
-        floorsNeeded = Math.ceil(effectiveTarget / unitsPerFloor);
-        // v57.13 : niveaux = CONSÉQUENCE PURE du programme
-        // Tous les scénarios : le nombre de niveaux découle du target effectif / unitsPerFloor
-        // Min niveaux : A/B=2 (collectif à 1 niv n'a pas de sens), C peut descendre à 1
-        // v70.2 FIX B=C : quand les deux sont au plancher (2 niv), C doit pouvoir descendre
-        const minFloors = (role === "PRUDENT") ? 1 : 2;
-        floorsNeeded = Math.max(minFloors, Math.min(floorsNeeded, effectiveMaxFloors));
-        // COS check duale
+        // v72.33: LOGIQUE UNIFIÉE — target_units SACRÉ, niveaux = conséquence
+        // La différenciation A/B/C vient des TAILLES (avgResSize), pas du nombre d'unités
+        // Combien de logements RENTRENT par palier (déterminé par le plateau)
+        let unitsPerFloor = Math.floor(usefulEtage / avgResSize); // avgResSize déjà différencié par scénario
+        unitsPerFloor = Math.max(1, Math.min(maxPerFloor, unitsPerFloor));
+        // Niveaux = CONSÉQUENCE (target_units / unitsPerFloor)
+        floorsNeeded = Math.ceil(clientUnits / unitsPerFloor);
+        floorsNeeded = Math.max(1, Math.min(floorsNeeded, effectiveMaxFloors));
+        // Garde-fou COS
         while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
-        // v57.15: anti-paradoxe zonage — empêche compensation verticale excessive
-        // Quand le terrain contraint le plateau (CES bas → fpEtages réduit → moins de logts/palier),
-        // le moteur ne doit PAS compenser en ajoutant des niveaux au-delà du besoin programme.
-        // Sans ce garde-fou, un CES restrictif (PERIURBAIN, PAVILLON) peut produire PLUS de SDP
-        // qu'un CES permissif (URBAIN) — paradoxe architectural.
-        // Double garde-fou : unités ET SDP ne doivent pas dépasser le programme.
-        while (floorsNeeded > 2 && unitsPerFloor * floorsNeeded > effectiveTarget * 1.20) floorsNeeded--;
-        // SDP cap : la SDP ne doit pas dépasser ce que le programme demande (avec marge role)
-        const sdpCapProgramme = Math.round(target_sdp_programme * roleTargetFactor * 1.35);
-        while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > sdpCapProgramme) floorsNeeded--;
+        // Garde-fou anti-surdimensionnement : SDP ne dépasse pas le programme × 1.35
+        const sdpCapProgramme = Math.round(clientUnits * avgResSize / (1 - circRatio) * 1.35);
+        while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > sdpCapProgramme) floorsNeeded--;
         totalUnits = unitsPerFloor * floorsNeeded;
+        console.log(`│   v72.33 RÉSIDENTIEL: ${clientUnits} logts cibles / ${unitsPerFloor} par palier (${avgResSize}m²/appt) = ${floorsNeeded} niveaux`);
         // Mix réel
         const mix = rules.default_mix_fn ? rules.default_mix_fn(totalUnits) : { T3: totalUnits };
         totalUseful = 0;
@@ -5601,7 +5654,16 @@ app.post("/generate-massing", async (req, res) => {
     const commDepthEstimate = Number(commerce_depth_m) || 6;
     const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
     const logtFpEstimate = fp;  // emprise logement = fp original
-    const logtLevels = levels - commerceLevels; // niveaux logement = total - commerce
+    // v72.32: DIFFÉRENCIATION FORCÉE — même logique que le moteur SPLIT
+    // INTENSIFICATION (A): min 3 niveaux logement (R+3) = pilotis + 3 étages habitables
+    // EQUILIBRE (B): min 2 niveaux logement (R+2) = pilotis + 2 étages habitables
+    // Sans ce forçage, logtLevels = levels - commerceLevels donne trop peu de niveaux
+    // car les niveaux SUPERPOSÉ (total) sont inférieurs aux niveaux SPLIT (logement seul)
+    const maxLogtFloors = Math.max(1, (Number(max_floors) || 99) - commerceLevels);
+    let logtLevels = Math.max(1, levels - commerceLevels);
+    if (label === "A") logtLevels = Math.min(maxLogtFloors, Math.max(3, logtLevels));
+    else if (label === "B") logtLevels = Math.min(maxLogtFloors, Math.max(2, logtLevels));
+    console.log(`[v72.32] SPLIT SYNTHÉTIQUE ${label}: levels_engine=${levels} - commerce=${commerceLevels} → logtLevels=${logtLevels} (maxLogt=${maxLogtFloors})`);
     splitLayout = {
       mode: "SPLIT_AV_AR",
       volume_commerce: {
@@ -5626,9 +5688,16 @@ app.post("/generate-massing", async (req, res) => {
     };
     console.log(`[CLASSIC→SPLIT] splitLayout synthétique construit: commerce=${commFpEstimate}m²×${commerceLevels}niv + logement=${logtFpEstimate}m²×${Math.max(1, logtLevels)}niv`);
   }
+  // v72.32: En SPLIT (moteur ou synthétique), levels doit = niveaux LOGEMENT uniquement
+  // Car le rendu 3D utilise: realTotalH = rdcH + levels * etageH (pilotis + N étages)
+  // Si levels reste en mode SUPERPOSÉ (total), la hauteur est fausse
+  if (splitLayout && splitLayout.volume_logement) {
+    levels = splitLayout.volume_logement.levels;
+    console.log(`[v72.32] SPLIT levels sync: levels=${levels} (logement seul, depuis splitLayout.volume_logement.levels)`);
+  }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
-  const habitationLevels = levels - commerceLevels;
+  const habitationLevels = splitLayout ? levels : levels - commerceLevels;
   // v72.23: LOG DIAGNOSTIC COMPLET — traçabilité moteur → 3D
   console.log(`┌── MASSING DIAGNOSTIC v72.22 ──`);
   console.log(`│ Scénario: ${label} (${compute_scenario ? "SMART" : "CLASSIQUE"})`);
