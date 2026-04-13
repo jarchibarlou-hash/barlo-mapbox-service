@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.1-8G-READY" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.2-8G-FULL-ECHO" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3288,6 +3288,61 @@ app.post("/compute-scenarios", (req, res) => {
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
   const flat = {
+    // ── ECHO INPUT CLIENT (v72.2 — renvoi des données d'entrée pour 8G) ──
+    lead_id: String(p.lead_id || ""),
+    client_name: String(p.client_name || ""),
+    city: String(p.city || ""),
+    district: String(p.district || ""),
+    zoning: String(p.zoning_type || p.zoning || ""),
+    site_area: String(p.site_area || 0),
+    land_width: String(p.land_width || 0),
+    land_depth: String(p.land_depth || 0),
+    terrain_context: String(p.terrain_context || ""),
+    site_context: String(p.site_context || ""),
+    road_bearing: String(p.road_bearing || 0),
+    site_lat: String(p.site_lat || 0),
+    site_lon: String(p.site_lon || 0),
+    site_polygon: String(p.site_polygon || ""),
+    envelope_w: String(p.envelope_w || 0),
+    envelope_d: String(p.envelope_d || 0),
+    envelope_area: String(p.envelope_area || (Number(p.envelope_w || 0) * Number(p.envelope_d || 0))),
+    buildable_fp: String(p.buildable_fp || p.envelope_area || (Number(p.envelope_w || 0) * Number(p.envelope_d || 0))),
+    setback_front: String(p.setback_front || 0),
+    setback_side: String(p.setback_side || 0),
+    setback_back: String(p.setback_back || 0),
+    cos_ratio: String(p.cos_ratio || 0),
+    cos_used: String(p.cos_used || ""),
+    max_height_m: String(p.max_height_m || 0),
+    max_levels_cap: String(p.max_levels_cap || p.max_floors || 0),
+    program_main: String(p.program_main || p.project_type || ""),
+    Target_surface: String(p.target_surface_m2 || p.Target_surface || 0),
+    target_units: String(p.target_units || 0),
+    standing_level: String(p.standing_level || "STANDARD"),
+    Parking_Préférence: String(p.Parking_Préférence || p.parking_preference || ""),
+    Parking_required: String(p.Parking_required || p.parking_required || 0),
+    budget_range: String(p.budget_range || ""),
+    budget_band: String(p.budget_band || ""),
+    budget_tension: String(p.budget_tension || 0),
+    financial_rigidity_score: String(p.financial_rigidity_score || 0),
+    feasibility_posture: String(p.feasibility_posture || "BALANCED"),
+    capacity_score: String(p.capacity_score || 0),
+    density_band: String(p.density_band || ""),
+    density_pressure_factor: String(p.density_pressure_factor || 1),
+    primary_driver: String(p.primary_driver || ""),
+    driver_intensity: String(p.driver_intensity || "MEDIUM"),
+    mix_score: String(p.mix_score || 0),
+    phase_score: String(p.phase_score || 0),
+    rent_score: String(p.rent_score || 0),
+    risk_score: String(p.risk_score || 0),
+    risk_adjusted: String(p.risk_adjusted || 0),
+    site_saturation_level: String(p.site_saturation_level || "MEDIUM"),
+    strategic_position: String(p.strategic_position || ""),
+    // ── ECHO VISUELS (URLs passées par 8D si disponibles) ──
+    satellite_url: String(p.satellite_url || ""),
+    axo_url: String(p.axo_url || ""),
+    massing_A_url: String(p.massing_A_url || ""),
+    massing_B_url: String(p.massing_B_url || ""),
+    massing_C_url: String(p.massing_C_url || ""),
     // ── NARRATIVE ──
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
     rec_scenario: (diag.recommandation || {}).scenario || "",
