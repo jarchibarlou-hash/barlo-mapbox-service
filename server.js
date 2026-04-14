@@ -5978,7 +5978,7 @@ app.post("/generate-massing", async (req, res) => {
         const b64Input = resized.buf.toString("base64");
         console.log(`[MASSING-POLISH] ${label} input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // v72.4: Stronger color preservation for floor coding
-        const massingPolishPrompt = `STRICT EDIT ONLY.
+        let massingPolishPrompt = `STRICT EDIT ONLY.
 
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
 Do NOT modify, move, add, or remove ANY element.
@@ -6005,6 +6005,26 @@ Do NOT change the maquette/model aesthetic — keep the clean architectural mode
 This is a WARM BEIGE architectural maquette with colored floor bands. The background is warm beige (#eae8e4), buildings are cream (#f0ede8), roads are gray (#808080). PRESERVE THESE EXACT TONES. Do NOT shift to white, gray, or cool tones. The warm beige palette is essential.
 
 CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in WARM BEIGE tone and style. Do NOT make the scene cooler or whiter.`;
+
+        // v72.35: Extra warm-tone enforcement for small volumes (C scenario)
+        // Small buildings = more background pixels = AI tends to shift cool/gray
+        const totalBuildingLevels = (habitationLevels || 0) + (commerceLevels || 0);
+        if (totalBuildingLevels <= 2 || label === "C") {
+          const warmEnforcement = `
+
+CRITICAL WARM TONE ENFORCEMENT:
+This is a SMALL building variant. The image is dominated by surrounding context (roads, other buildings, ground).
+You MUST maintain the EXACT SAME warm beige tone (#eae8e4) across the ENTIRE image.
+Do NOT let the large background area become gray, white, cool, or desaturated.
+The surrounding buildings must stay warm cream (#f0ede8), NOT gray or white.
+The ground must stay warm beige, NOT cool gray.
+Roads must stay warm gray (#808080 with slight warmth), NOT cool blue-gray.
+Compare mentally with a warm sunset-lit architectural model — THAT is the target tone.
+ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`;
+          // Append to prompt
+          massingPolishPrompt += warmEnforcement;
+          console.log(`[MASSING-POLISH] ${label} v72.35: Warm-tone enforcement ACTIVE (levels=${totalBuildingLevels})`);
+        }
 
         // v72.34: Launch all variations with robust retry engine
         const polishResults = await Promise.all(
