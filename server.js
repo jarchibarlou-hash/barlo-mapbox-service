@@ -12,7 +12,129 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.0-SUPERVISOR" }));
+// ═══════════════════════════════════════════════════════════════════════════════
+// v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
+// ═══════════════════════════════════════════════════════════════════════════════
+const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
+const POLISH_TIMEOUT_MS = 90000; // 90s per API call
+const POLISH_MAX_RETRIES = 2;    // retry each variation up to 2 times
+const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
+const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
+
+/**
+ * v72.34: Robust single polish API call with retry + timeout + full error logging
+ * Returns { b64: string } on success or { error: string, details: string } on failure
+ */
+async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 1) {
+  const tag = `[POLISH-API] ${label}/v${variationIndex}`;
+  const controller = new (typeof AbortController !== "undefined" ? AbortController : require("abort-controller"))();
+  const timer = setTimeout(() => controller.abort(), POLISH_TIMEOUT_MS);
+  try {
+    console.log(`${tag} attempt ${attempt}/${POLISH_MAX_RETRIES + 1} — model=${POLISH_MODEL}`);
+    const resp = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: POLISH_MODEL,
+        input: [{ role: "user", content: [
+          { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+          { type: "input_text", text: prompt }
+        ]}],
+        tools: [{ type: "image_generation", input_fidelity: "high" }]
+      })
+    });
+    clearTimeout(timer);
+    // Check HTTP status first
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => "no body");
+      const errMsg = `HTTP ${resp.status}: ${errBody.substring(0, 300)}`;
+      console.error(`${tag} API HTTP error: ${errMsg}`);
+      // Rate limit → retry after delay
+      if (resp.status === 429 && attempt <= POLISH_MAX_RETRIES) {
+        const retryAfter = parseInt(resp.headers.get("retry-after") || "3", 10) * 1000;
+        console.log(`${tag} Rate limited — waiting ${retryAfter}ms before retry...`);
+        await new Promise(r => setTimeout(r, retryAfter));
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+      }
+      // Server error (5xx) → retry
+      if (resp.status >= 500 && attempt <= POLISH_MAX_RETRIES) {
+        console.log(`${tag} Server error — retrying in ${POLISH_RETRY_DELAY_MS}ms...`);
+        await new Promise(r => setTimeout(r, POLISH_RETRY_DELAY_MS));
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+      }
+      return { error: `HTTP ${resp.status}`, details: errMsg };
+    }
+    const oaiJson = await resp.json();
+    // Check for API-level error in response body
+    if (oaiJson.error) {
+      const errMsg = typeof oaiJson.error === "string" ? oaiJson.error : JSON.stringify(oaiJson.error);
+      console.error(`${tag} API error in response: ${errMsg.substring(0, 300)}`);
+      if (attempt <= POLISH_MAX_RETRIES) {
+        console.log(`${tag} Retrying in ${POLISH_RETRY_DELAY_MS}ms...`);
+        await new Promise(r => setTimeout(r, POLISH_RETRY_DELAY_MS));
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+      }
+      return { error: "API error", details: errMsg };
+    }
+    // Extract image from response
+    let polishedB64 = null;
+    if (oaiJson.output) {
+      for (const item of oaiJson.output) {
+        if (item.type === "image_generation_call" && item.result) {
+          polishedB64 = item.result;
+          break;
+        }
+      }
+    }
+    if (!polishedB64) {
+      const outputSummary = JSON.stringify(oaiJson.output || oaiJson).substring(0, 400);
+      console.warn(`${tag} No image in response. Output: ${outputSummary}`);
+      if (attempt <= POLISH_MAX_RETRIES) {
+        console.log(`${tag} Retrying (no image)...`);
+        await new Promise(r => setTimeout(r, POLISH_RETRY_DELAY_MS));
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+      }
+      return { error: "no_image", details: outputSummary };
+    }
+    console.log(`${tag} ✓ Image received (attempt ${attempt})`);
+    return { b64: polishedB64 };
+  } catch (err) {
+    clearTimeout(timer);
+    const isTimeout = err.name === "AbortError";
+    const errType = isTimeout ? "TIMEOUT" : "NETWORK";
+    console.error(`${tag} ${errType}: ${err.message}`);
+    if (attempt <= POLISH_MAX_RETRIES) {
+      const delay = isTimeout ? POLISH_RETRY_DELAY_MS * 2 : POLISH_RETRY_DELAY_MS;
+      console.log(`${tag} Retrying in ${delay}ms after ${errType}...`);
+      await new Promise(r => setTimeout(r, delay));
+      return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+    }
+    return { error: errType, details: err.message };
+  }
+}
+
+/**
+ * v72.34: Resize image buffer to max dimension while preserving aspect ratio
+ * Returns { buf: Buffer, w: number, h: number }
+ */
+async function resizeForPolish(pngBuf, maxDim) {
+  const img = await loadImage(pngBuf);
+  const w = img.width, h = img.height;
+  if (w <= maxDim && h <= maxDim) return { buf: pngBuf, w, h };
+  const scale = maxDim / Math.max(w, h);
+  const nw = Math.round(w * scale), nh = Math.round(h * scale);
+  const c = createCanvas(nw, nh);
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0, nw, nh);
+  console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
+  return { buf: c.toBuffer("image/png"), w: nw, h: nh };
+}
+
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.34-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5300,11 +5422,12 @@ app.post("/generate", async (req, res) => {
     const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
     if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
       try {
-        console.log(`[SLIDE4-POLISH] v72.20: Hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%`);
-        const b64Input = pngClean.toString("base64");
-        console.log(`[SLIDE4-POLISH] Input: ${pngClean.length} bytes (base texture only — no legend/parcel overlays)`);
+        console.log(`[SLIDE4-POLISH] v72.34: Robust hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%, model=${POLISH_MODEL}`);
+        // v72.34: Resize for API reliability
+        const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
+        const b64Input = resized.buf.toString("base64");
+        console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // ── ARCHITECTURAL POLISH PROMPT — matches reference render ─────────
-        // Enhances trees + texture while preserving structure strictly.
         const polishPrompt = [
           "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
           "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
@@ -5321,46 +5444,24 @@ app.post("/generate", async (req, res) => {
           "Style: premium architectural maquette visualization. Clean, professional, minimal. No artistic effects, no painterly style.",
           "The buildings must remain in the EXACT SAME positions. The layout must be IDENTICAL."
         ].join(" ");
-        const polishRequests = [];
-        for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
-          polishRequests.push(
-            fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-4.1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: polishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high" }]
-              })
-            }).then(r => r.json()).catch(err => ({ error: err.message }))
-          );
-        }
-        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched in parallel (${Date.now() - t0}ms)`);
-        const polishResults = await Promise.all(polishRequests);
+        // v72.34: Use robust polish engine with retry + timeout
+        const polishResults = await Promise.all(
+          Array.from({ length: SLIDE4_VARIATIONS }, (_, v) =>
+            callPolishAPI(b64Input, polishPrompt, "SLIDE4", v + 1)
+          )
+        );
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls completed (${Date.now() - t0}ms)`);
         // ── DRIFT SCORING — pick best under threshold ───────────────────────
         let bestVariation = null;
         let bestDriftScore = 1.0;
         const variationLog = [];
         for (let v = 0; v < polishResults.length; v++) {
-          const oaiJson = polishResults[v];
-          if (oaiJson.error) {
-            variationLog.push(`  v${v+1}: API error — ${JSON.stringify(oaiJson.error).substring(0, 120)}`);
+          const result = polishResults[v];
+          if (result.error) {
+            variationLog.push(`  v${v+1}: ${result.error} — ${(result.details || "").substring(0, 150)}`);
             continue;
           }
-          let polishedB64 = null;
-          if (oaiJson.output) {
-            for (const item of oaiJson.output) {
-              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-            }
-          }
-          if (!polishedB64) {
-            variationLog.push(`  v${v+1}: no image returned`);
-            continue;
-          }
-          const enhancedBuf = Buffer.from(polishedB64, "base64");
+          const enhancedBuf = Buffer.from(result.b64, "base64");
           // v72.20: Strict drift check — threshold 25%
           const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, SLIDE4_DRIFT_THRESHOLD);
           const pct = (drift.driftScore * 100).toFixed(1);
@@ -5865,16 +5966,17 @@ app.post("/generate-massing", async (req, res) => {
     const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
     // ═══════════════════════════════════════════════════════════════════════════
-    // v72.1: MULTI-RENDER MASSING POLISH — 3 variations, best by drift score
-    // v71 disabled polish due to A/B/C inconsistency.
-    // v72.1: ultra-minimal prompt + multi-render + edge-based drift = safe re-enable
+    // v72.34: ROBUST MULTI-RENDER MASSING POLISH — model fallback, retry, timeout
     // ═══════════════════════════════════════════════════════════════════════════
-    const MASSING_VARIATIONS = 3;
+    const MASSING_VARIATIONS = 2;
     let polishApplied = false;
     if (OPENAI_API_KEY) {
       try {
-        console.log(`[MASSING-POLISH] v72.1: Starting multi-render (${MASSING_VARIATIONS} variations) for ${label}...`);
-        const b64Input = pngClean.toString("base64");
+        console.log(`[MASSING-POLISH] v72.34: Starting robust multi-render (${MASSING_VARIATIONS} variations) for ${label}... model=${POLISH_MODEL}`);
+        // v72.34: Resize image for API — reduces payload, improves reliability
+        const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
+        const b64Input = resized.buf.toString("base64");
+        console.log(`[MASSING-POLISH] ${label} input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // v72.4: Stronger color preservation for floor coding
         const massingPolishPrompt = `STRICT EDIT ONLY.
 
@@ -5904,50 +6006,31 @@ This is a WARM BEIGE architectural maquette with colored floor bands. The backgr
 
 CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in WARM BEIGE tone and style. Do NOT make the scene cooler or whiter.`;
 
-        // v72.1: Launch all variations in parallel
-        const polishRequests = [];
-        for (let v = 0; v < MASSING_VARIATIONS; v++) {
-          polishRequests.push(
-            fetch("https://api.openai.com/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "gpt-4.1",
-                input: [{ role: "user", content: [
-                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-                  { type: "input_text", text: massingPolishPrompt }
-                ]}],
-                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-              })
-            }).then(r => r.json()).catch(err => ({ error: err.message }))
-          );
-        }
-        const polishResults = await Promise.all(polishRequests);
+        // v72.34: Launch all variations with robust retry engine
+        const polishResults = await Promise.all(
+          Array.from({ length: MASSING_VARIATIONS }, (_, v) =>
+            callPolishAPI(b64Input, massingPolishPrompt, label, v + 1)
+          )
+        );
         let bestVariation = null;
         let bestDriftScore = 1.0;
         const variationLog = [];
         for (let v = 0; v < polishResults.length; v++) {
-          const oaiJson = polishResults[v];
-          if (oaiJson.error) { variationLog.push(`  v${v+1}: error`); continue; }
-          let polishedB64 = null;
-          if (oaiJson.output) {
-            for (const item of oaiJson.output) {
-              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
-            }
+          const result = polishResults[v];
+          if (result.error) {
+            variationLog.push(`  v${v+1}: ${result.error} — ${(result.details || "").substring(0, 150)}`);
+            continue;
           }
-          if (!polishedB64) { variationLog.push(`  v${v+1}: no image`); continue; }
-          const enhancedBuf = Buffer.from(polishedB64, "base64");
+          const enhancedBuf = Buffer.from(result.b64, "base64");
           // Massing uses default threshold (0.25) — light polish
           const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
-          // v72.22: COLOR PRESERVATION CHECK — verify orange (#e07830) and blue (#3a7ac0) floor bands survived polish
-          // Count orange and blue pixels in original vs polished. If polished lost >60% → reject (colors washed out)
+          // v72.22: COLOR PRESERVATION CHECK — verify orange and blue floor bands survived
           let colorCheckPassed = true;
           let colorLog = "";
           if (commerceLevels > 0) {
             const polishedImg = await loadImage(enhancedBuf);
             const checkCanvas = createCanvas(W, H);
             const checkCtx = checkCanvas.getContext("2d");
-            // Count in original (pngClean)
             const origImg = await loadImage(pngClean);
             checkCtx.drawImage(origImg, 0, 0, W, H);
             const origData = checkCtx.getImageData(0, 0, W, H).data;
@@ -5957,7 +6040,6 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
               if (r > 180 && g > 80 && g < 150 && b < 80) origOrange++;
               if (b > 140 && r < 100 && g < 150) origBlue++;
             }
-            // Count in polished
             checkCtx.drawImage(polishedImg, 0, 0, W, H);
             const polData = checkCtx.getImageData(0, 0, W, H).data;
             let polOrange = 0, polBlue = 0;
@@ -6008,12 +6090,14 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
           console.warn(`⚠ [MASSING-DRIFT] ${label}: ALL ${MASSING_VARIATIONS} variations rejected — deterministic fallback`);
         }
       } catch (polishErr) {
-        console.error(`[MASSING-POLISH] ${label} exception:`, polishErr.message);
+        console.error(`[MASSING-POLISH] ${label} EXCEPTION:`, polishErr.message, polishErr.stack);
       }
+    } else {
+      console.warn(`[MASSING-POLISH] OPENAI_API_KEY not set — skipping polish`);
     }
-    console.log(`[MASSING] v72.1: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
+    console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.0-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.34-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6035,8 +6119,8 @@ CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look ide
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.0-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.34-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
-  console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
+  console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
 });
