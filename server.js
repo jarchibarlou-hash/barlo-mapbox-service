@@ -2314,9 +2314,16 @@ function computeSmartScenarios({
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
     // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
-    const sdp = (fpRdc && fpEtages && levels > 1)
+    let sdp = (fpRdc && fpEtages && levels > 1)
       ? fpRdc + fpEtages * (levels - 1)
       : fp * levels;
+    // v72.35-FIX: En mode SPLIT, sdp ci-dessus = LOGEMENT seulement.
+    // Il faut ajouter la SDP commerce pour que le flat output (A_sdp, B_sdp, C_sdp)
+    // corresponde au totalSDP affiché sur le rendu (drawMassingOverlays).
+    if (splitLayout && splitLayout.volume_commerce) {
+      sdp += splitLayout.volume_commerce.sdp_m2 || 0;
+      console.log(`│   v72.35-FIX: SDP SPLIT corrigée = logt(${sdp - (splitLayout.volume_commerce.sdp_m2 || 0)}) + commerce(${splitLayout.volume_commerce.sdp_m2}) = ${sdp}m²`);
+    }
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
     let compliance;
     if (cosRatio <= 1.05) compliance = "CONFORME";
@@ -2617,6 +2624,10 @@ function computeSmartScenarios({
     s.sdp_m2 = (s.fp_rdc_m2 && s.fp_etages_m2 && s.levels > 1)
       ? s.fp_rdc_m2 + s.fp_etages_m2 * (s.levels - 1)
       : s.fp_m2 * s.levels;
+    // v72.35-FIX: ajouter commerce SDP si SPLIT
+    if (s.split_layout && s.split_layout.volume_commerce) {
+      s.sdp_m2 += s.split_layout.volume_commerce.sdp_m2 || 0;
+    }
     s.height_m = Math.round(s.levels * floor_height * 10) / 10;
   };
   // ══════════════════════════════════════════════════════════════════
@@ -6126,7 +6137,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.34-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.35-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
