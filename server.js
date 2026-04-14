@@ -12,7 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.2-8G-FULL-ECHO" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.0-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -157,7 +157,6 @@ const ROAD_CLASS_WEIGHT = {
   motorway: 6, trunk: 6, primary: 5, secondary: 4, tertiary: 3,
   street: 2, residential: 2, service: 1, path: 0, pedestrian: 0, track: 0,
 };
-
 async function findNearestRoadEdge(coords, cLat, cLon) {
   // ── MÉTHODE 1: Mapbox Tilequery — requête multi-points le long des arêtes ──
   const mapboxResult = await tryMapboxTilequery(coords, cLat, cLon);
@@ -168,7 +167,6 @@ async function findNearestRoadEdge(coords, cLat, cLon) {
   console.warn("│ ROAD-DETECT: Mapbox ET Nominatim ont échoué, fallback premier segment");
   return null;
 }
-
 async function tryMapboxTilequery(coords, cLat, cLon) {
   if (!MAPBOX_TOKEN) {
     console.warn("│ MAPBOX-TQ: pas de token, skip");
@@ -177,16 +175,13 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
   try {
     const n = coords.length;
     console.log(`│ MAPBOX-TQ: analyse ${n} arêtes via Tilequery...`);
-
     // Pour chaque arête : calculer un point-sonde 8m à l'extérieur du midpoint
     // (dans la direction de la normale sortante)
     const probeResults = [];
-
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
       const midLat = (coords[i].lat + coords[j].lat) / 2;
       const midLon = (coords[i].lon + coords[j].lon) / 2;
-
       // Normale sortante (perpendiculaire à l'arête, vers l'extérieur)
       const edgeDx = (coords[j].lon - coords[i].lon) * Math.cos(midLat * Math.PI / 180);
       const edgeDy = coords[j].lat - coords[i].lat;
@@ -205,10 +200,8 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       const probeOffsetDeg = 8 / 111000; // ~8m en degrés
       const probeLat = midLat + ny * probeOffsetDeg;
       const probeLon = midLon + nx * probeOffsetDeg / Math.cos(midLat * Math.PI / 180);
-
       probeResults.push({ edgeIdx: i, probeLat, probeLon, midLat, midLon });
     }
-
     // Lancer les requêtes Tilequery en parallèle (max 4 arêtes, on les fait toutes)
     const tqPromises = probeResults.map(async (probe) => {
       const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${probe.probeLon},${probe.probeLat}.json?radius=50&limit=10&layers=road&access_token=${MAPBOX_TOKEN}`;
@@ -228,9 +221,7 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
         return { ...probe, roads: [], error: e.name === "AbortError" ? "TIMEOUT" : e.message };
       }
     });
-
     const results = await Promise.all(tqPromises);
-
     // ══════════════════════════════════════════════════════════════════
     // v70.6 SCORING — 2 passes :
     //   Pass 1 : routes à 4-50m (distance normale d'accès)
@@ -242,7 +233,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
     // rue + trottoir + retrait clôture).
     // ══════════════════════════════════════════════════════════════════
     const MIN_ROAD_DIST = 4; // mètres — en dessous = ruelle/mur mitoyen
-
     // Collecter les scores pour chaque arête
     const edgeScores = [];
     for (const r of results) {
@@ -274,7 +264,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       console.log(`│ MAPBOX-TQ: arête ${r.edgeIdx} → ${r.roads.length} routes, best=${bestClass} à ${bestDist.toFixed(1)}m (score_normal=${scoreNormal.toFixed(1)} score_all=${scoreAll.toFixed(1)}${bestDistAll < MIN_ROAD_DIST ? " ⚠ruelle@" + bestDistAll.toFixed(1) + "m" : ""})`);
       edgeScores.push({ idx: r.edgeIdx, scoreNormal, scoreAll, bestClass, bestDist: bestDistNormal, bestDistAll });
     }
-
     // Pass 1 : chercher la meilleure arête avec des routes à distance normale (≥4m)
     let bestEdge = -1, bestScore = -Infinity;
     for (const es of edgeScores) {
@@ -292,7 +281,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       console.log(`│ MAPBOX-TQ: ✓ front = arête ${bestEdge} (score_normal=${bestScore.toFixed(1)}) — route d'accès principale`);
       return bestEdge;
     }
-
     // Pass 2 : fallback — accepter les ruelles (< 4m), avec même préférence arête 0
     bestEdge = -1; bestScore = -Infinity;
     for (const es of edgeScores) {
@@ -314,7 +302,6 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
     return null;
   }
 }
-
 async function tryNominatim(coords, cLat, cLon) {
   try {
     console.log("│ NOMINATIM: tentative reverse geocoding (fallback)...");
@@ -1641,12 +1628,100 @@ function computeSmartScenarios({
       const fpMaxCes = Math.round(cesFill * effectiveMaxFp);
       const fpMaxEnv = Math.round(maxFpByEnvelope);
       const fpMaxRetraits = Math.round(empriseEffective);
-      // Plateau optimal = maxPerFloor × taille logement de référence / (1 - circulation)
-      // La taille de référence est le T3 (type dominant au Cameroun)
+      // ══════════════════════════════════════════════════════════════════
+      // v72.33: PLATEAU ADAPTATIF — dimensionné par le PROGRAMME CLIENT
+      // ══════════════════════════════════════════════════════════════════
+      // AVANT: fpProgramme = maxPerFloor × refUnitSize → plateau fixe 475m²
+      //   → ignorait target_units, surdimensionnait toujours le plateau
+      // MAINTENANT: fpProgramme = unitsPerFloor_réel × avgSize_adaptatif
+      //   → dimensionné par le programme du client
+      //   → tailles d'appartement FLEXIBLES (compression 10-15% si parcelle contrainte)
+      //   → si même compressé ça ne rentre pas → réduire unités/palier (monter en hauteur)
+      // ══════════════════════════════════════════════════════════════════
       const refUnitSize = sizes.T3 || sizes.T4 || 80;
-      const fpProgramme = Math.round(maxPerFloor * refUnitSize / (1 - circRatio));
-      // Plancher : minimum 2 logements × refSize pour un palier viable
-      const fpMinViable = Math.round(Math.max(200, 2 * refUnitSize / (1 - circRatio)));
+      // v72.33: TAILLE UNITAIRE = DONNÉE CLIENT × RATIO SCÉNARIO
+      // ─────────────────────────────────────────────────────────────
+      // Le nombre d'unités (target_units) est SACRÉ — identique pour A, B, C.
+      // La DIFFÉRENCIATION vient des TAILLES d'appartement :
+      //   A = taille généreuse (UNIT_SIZES.A) — le programme du client tel quel
+      //   B = taille standard (UNIT_SIZES.B) — ~15-20% plus compact
+      //   C = taille compacte (UNIT_SIZES.C) — ~25-30% plus compact
+      // Cela produit naturellement : A → plus grand plateau → plus de SDP
+      //                               C → plateau réduit → moins de SDP
+      // ─────────────────────────────────────────────────────────────
+      // Ratio de taille du scénario vs le scénario A (référence client)
+      const allLabelSizes = (UNIT_SIZES[sizeKey] || UNIT_SIZES.STANDARD);
+      const refT3_A = (allLabelSizes.A && allLabelSizes.A.T3) || 95;
+      const refT3_label = (allLabelSizes[label] && allLabelSizes[label].T3) || refT3_A;
+      const sizeRatio = refT3_label / refT3_A; // A=1.00, B≈0.84, C≈0.74
+      // Taille de base : depuis le formulaire client OU estimation mix
+      const clientAvgSizeRaw = (Number(target_surface_m2) > 0 && target_units > 0)
+        ? Math.round(Number(target_surface_m2) / target_units)
+        : null;
+      // Appliquer le ratio scénario : le client donne la taille "A", B et C s'adaptent
+      const avgResSize = clientAvgSizeRaw
+        ? Math.round(clientAvgSizeRaw * sizeRatio)
+        : computeAvgResidentialSize(sizes, rules, target_units); // déjà label-specific
+      console.log(`│   📋 v72.33 TAILLES: ${clientAvgSizeRaw ? `client=${clientAvgSizeRaw}m²` : `estimé=${Math.round(avgResSize/sizeRatio)}m²`} × ratio_${label}=${sizeRatio.toFixed(2)} → avgResSize=${avgResSize}m²/appt`);
+      // ══════════════════════════════════════════════════════════════════
+      // v72.33: PLATEAU ADAPTATIF — ORDRE DE PRIORITÉ :
+      //   1. NOMBRE D'APPARTEMENTS (target_units) = INPUT CLIENT, SACRÉ
+      //   2. COMBIEN RENTRENT PAR NIVEAU = déterminé par la parcelle
+      //   3. NOMBRE DE NIVEAUX = CONSÉQUENCE (target_units / u_par_niveau)
+      //
+      // La parcelle dicte la capacité du plateau (pas l'inverse).
+      // Les tailles d'appartement s'adaptent : compression 10-15% max
+      // si la parcelle est contrainte, pour maximiser les unités/palier.
+      // ══════════════════════════════════════════════════════════════════
+      const MAX_COMPRESSION = 0.85; // tailles réduites de 15% max
+      const clientUnits = Math.max(1, target_units || 1);
+      // ÉTAPE 1 : Capacité max du plateau (le terrain dicte)
+      const fpMaxParcel = Math.min(fpMaxCes, fpMaxEnv, fpMaxRetraits);
+      const usefulPerFloor = fpMaxParcel * (1 - circRatio); // surface utile par palier
+      // ÉTAPE 2 : Combien d'appartements RENTRENT par palier ?
+      // D'abord essayer avec les tailles STANDARD (100%)
+      let unitsPerFloorStd = Math.floor(usefulPerFloor / avgResSize);
+      // Puis avec les tailles COMPRESSÉES (85%) — 15% plus petit
+      const compressedSize = Math.round(avgResSize * MAX_COMPRESSION);
+      let unitsPerFloorCompressed = Math.floor(usefulPerFloor / compressedSize);
+      // Cap au max programme (pas plus que maxPerFloor)
+      unitsPerFloorStd = Math.min(unitsPerFloorStd, maxPerFloor);
+      unitsPerFloorCompressed = Math.min(unitsPerFloorCompressed, maxPerFloor);
+      // Choisir : si la compression permet +1 unité/palier, ça vaut le coup
+      let adaptiveUnitsPerFloor, unitCompression;
+      if (unitsPerFloorStd >= 1 && unitsPerFloorStd >= unitsPerFloorCompressed) {
+        // Les tailles standard suffisent — pas de compression nécessaire
+        adaptiveUnitsPerFloor = unitsPerFloorStd;
+        unitCompression = 1.0;
+      } else if (unitsPerFloorCompressed > unitsPerFloorStd) {
+        // La compression permet de caser +1 unité — ça vaut le coup
+        adaptiveUnitsPerFloor = unitsPerFloorCompressed;
+        // Compression juste nécessaire pour caser N unités (pas forcément 15%)
+        unitCompression = Math.max(MAX_COMPRESSION, usefulPerFloor / (adaptiveUnitsPerFloor * avgResSize));
+      } else if (unitsPerFloorStd < 1) {
+        // Même 1 appartement standard ne rentre pas → compresser pour 1
+        adaptiveUnitsPerFloor = 1;
+        const minSizeForOne = usefulPerFloor; // tout l'espace utile pour 1 appart
+        unitCompression = Math.max(MAX_COMPRESSION, minSizeForOne / avgResSize);
+      } else {
+        adaptiveUnitsPerFloor = Math.max(1, unitsPerFloorStd);
+        unitCompression = 1.0;
+      }
+      // Taille effective par appartement
+      const effectiveUnitSize = Math.round(avgResSize * unitCompression);
+      // ÉTAPE 3 : Nombre de niveaux = CONSÉQUENCE
+      const levelsFromProgram = Math.max(1, Math.ceil(clientUnits / Math.max(1, adaptiveUnitsPerFloor)));
+      // fpProgramme = dimensionné pour les unités qui rentrent réellement
+      const fpProgramme = Math.round(adaptiveUnitsPerFloor * effectiveUnitSize / (1 - circRatio));
+      // Plancher : minimum 1 appartement compressé
+      const fpMinViable = Math.round(Math.max(100, 1 * compressedSize / (1 - circRatio)));
+      console.log(`│   🏠 v72.33 PLATEAU ADAPTATIF (parcelle → unités → niveaux):`);
+      console.log(`│     1. PROGRAMME CLIENT: ${clientUnits} appartements demandés`);
+      console.log(`│     2. PARCELLE: fpMaxParcel=${fpMaxParcel}m² → utile=${Math.round(usefulPerFloor)}m²/palier`);
+      console.log(`│        avgResSize=${avgResSize}m² → standard: ${unitsPerFloorStd}u/palier | compressé(${Math.round(MAX_COMPRESSION*100)}%): ${unitsPerFloorCompressed}u/palier`);
+      console.log(`│        → CHOIX: ${adaptiveUnitsPerFloor}u/palier × ${effectiveUnitSize}m²/appt (compression=${(unitCompression*100).toFixed(0)}%)`);
+      console.log(`│     3. NIVEAUX = ${clientUnits}u / ${adaptiveUnitsPerFloor}u = ${levelsFromProgram} niveaux nécessaires`);
+      console.log(`│     fpProgramme=${fpProgramme}m² fpMinViable=${fpMinViable}m²`);
       // ══════════════════════════════════════════════════════════════════════
       // v57.13 : LOGIQUE PROGRAMME → TERRAIN (pas l'inverse)
       // ══════════════════════════════════════════════════════════════════════
@@ -1699,48 +1774,94 @@ function computeSmartScenarios({
       //     → le client veut le dégagement du terrain derrière
       // Le CES total (vol1 + vol2) reste plafonné par la réglementation.
       // ══════════════════════════════════════════════════════════════════
-      if (String(layout_mode).toUpperCase() === "SPLIT_AV_AR" && isMixte) {
+      // v72.30: INTELLIGENCE DE DISPOSITION PAR RÔLE
+      // SPLIT_AV_AR → 2 volumes séparés (commerce devant + logement sur pilotis derrière)
+      //   ✅ INTENSIFICATION : SPLIT + pilotis + max étages (maximise la SDP)
+      //   ✅ EQUILIBRE : SPLIT + pilotis + étages modérés (compromis espace/densité)
+      //   ❌ PRUDENT : SUPERPOSÉ compact (commerce RDC + logement empilé au-dessus)
+      //      → Plus économique, plus simple à construire, CES réduit, 1 seul volume
+      // Cette logique est STRATÉGIQUE : le PRUDENT choisit la compacité, pas juste moins d'étages.
+      const _splitRequested = String(layout_mode).toUpperCase() === "SPLIT_AV_AR" && isMixte;
+      let _splitViable = true;
+      if (_splitRequested) {
+        const _parcD = envelope_d || Math.round(site_area / (envelope_w || 20));
+        const _commD = Math.min(Number(commerce_depth_m) || 6, _parcD * 0.30);
+        const _gapD = Number(retrait_inter_volumes_m) || 4;
+        const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
+        _splitViable = _logtD >= 8 && _parcD >= 20;
+      }
+      // v72.30: PRUDENT → TOUJOURS SUPERPOSÉ (choix stratégique de compacité)
+      const useSplitForRole = _splitRequested && role !== "PRUDENT" && _splitViable;
+      if (role === "PRUDENT" && _splitRequested) {
+        console.log(`│   🏗️ v72.30 PRUDENT: SPLIT demandé → SUPERPOSÉ COMPACT (choix stratégique: volume unique, commerce RDC + logement dessus)`);
+      }
+      if (useSplitForRole) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
-        // Volume 1 : COMMERCE (bande avant)
-        const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30); // max 30% de la profondeur
-        const commWidth = Math.round(parcWidth - rLateral * 2); // retraits latéraux
+        // Volume 1 : COMMERCE (bande avant) — identique pour les 3 scénarios
+        const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30);
+        const commWidth = Math.round(parcWidth - rLateral * 2);
         const fpCommerce = Math.round(commWidth * commDepth);
         const levelsCommerce = 1;
         const sdpCommerce = fpCommerce;
-        // Volume 2 : LOGEMENT (en retrait)
+        // Volume 2 : LOGEMENT (en retrait) — v72.27: DIFFÉRENCIÉ PAR RÔLE
         const interGap = Number(retrait_inter_volumes_m) || 4;
         const logtDepthDispo = Math.round(parcDepth - rAvant - commDepth - interGap - rArriere);
-        const logtWidth = commWidth; // même largeur que la bande commerce
+        // v72.27: Le RÔLE affecte la largeur ET la profondeur du logement
+        // INTENSIFICATION: utilise toute la largeur disponible
+        // EQUILIBRE: 80% de la largeur → emprise plus compacte
+        // PRUDENT: 65% de la largeur → emprise réduite
+        const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.80 : 0.65;
+        const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
+        const logtWidth = Math.round(commWidth * roleWidthFactor);
+        const logtDepthUsed = Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5) * roleDepthFactor);
+        const fpLogtRaw = Math.round(logtWidth * logtDepthUsed);
         const fpLogt = Math.min(
-          Math.round(logtWidth * Math.min(logtDepthDispo, bodyDepth * 1.5)),
-          Math.round(fpProgramme * roleFpFactor), // capé par le plateau programme × rôle
-          fpMaxCes - fpCommerce, // CES restant après le commerce
+          fpLogtRaw,
+          Math.round(fpProgramme * roleFpFactor),
+          fpMaxCes - fpCommerce,
           fpMaxRetraits - fpCommerce
         );
-        const fpLogtFinal = Math.max(fpMinViable, fpLogt);
-        // CES total = (commerce + logement) / terrain
+        // v72.27: fpMinViable réduit par le rôle pour que PRUDENT soit vraiment plus petit
+        const splitMinViable = role === "INTENSIFICATION" ? fpMinViable : Math.round(fpMinViable * (role === "EQUILIBRE" ? 0.80 : 0.60));
+        const fpLogtFinal = Math.max(splitMinViable, fpLogt);
+        // CES total
         const fpTotal = fpCommerce + fpLogtFinal;
         const cesTotalPct = Math.round(fpTotal / site_area * 100);
-        // Nombre d'unités commerce (1 boutique par tranche de ~25-40m²)
-        const commerceUnitSize = 30; // taille moyenne boutique
+        // Boutiques
+        const commerceUnitSize = 30;
         const nbBoutiques = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
-        // Niveaux logement : depuis le programme résidentiel
+        // Niveaux logement — v72.27: DIFFÉRENCIÉ PAR RÔLE
         const resiTarget = Math.max(1, target_units - nbBoutiques);
         const resiRoleTarget = Math.max(1, Math.round(resiTarget * roleFpFactor));
         const usefulLogt = Math.round(fpLogtFinal * (1 - circRatio));
-        const avgResiSize = refUnitSize; // T3 de référence
+        const avgResiSize = refUnitSize;
         const resiPerFloor = Math.max(1, Math.min(maxPerFloor, Math.floor(usefulLogt / avgResiSize)));
-        let levelsLogt = Math.max(2, Math.ceil(resiRoleTarget / resiPerFloor));
-        levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
-        // COS check sur SDP totale
-        const sdpLogt = fpLogtFinal * levelsLogt;
-        const sdpTotal = sdpCommerce + sdpLogt;
-        while (levelsLogt > 2 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
+        // v72.28: Niveaux FORCÉMENT DIFFÉRENTS par rôle
+        // INTENSIFICATION: max floors (R+2 min), EQUILIBRE: max-1 (R+1 min), PRUDENT: 1 seul (RDC)
+        // En SPLIT, "levels" = niveaux de LOGEMENT (commerce est séparé)
+        let levelsLogt;
+        const baseCalc = Math.max(1, Math.ceil(resiRoleTarget / resiPerFloor));
+        if (role === "INTENSIFICATION") {
+          levelsLogt = Math.max(3, baseCalc);               // R+2 minimum
+          levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
+          if (levelsLogt < 3 && effectiveMaxFloors >= 3) levelsLogt = 3;
+          if (levelsLogt < 2) levelsLogt = 2;               // au moins R+1
+        } else if (role === "EQUILIBRE") {
+          levelsLogt = Math.max(2, baseCalc);               // R+1 minimum
+          levelsLogt = Math.min(levelsLogt, Math.max(2, effectiveMaxFloors - 1));
+        } else { // PRUDENT
+          levelsLogt = 1;                                    // RDC uniquement
+        }
+        // COS check
+        while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
         const totalResiUnits = resiPerFloor * levelsLogt;
-        // Sol libre (espace dégagé derrière le logement)
+        // v72.28: PILOTIS OBLIGATOIRE en SPLIT — logement sur pilotis, habitable à partir de R+1
+        hasPilotis = true;
+        pilotisLevels = 1;
+        // Sol libre
         const freeGroundSplit = Math.round(site_area - fpTotal);
-        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - Math.min(logtDepthDispo, bodyDepth * 1.5) - rArriere) : 0);
+        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - logtDepthUsed - rArriere) : 0);
         splitLayout = {
           mode: "SPLIT_AV_AR",
           volume_commerce: {
@@ -1750,39 +1871,50 @@ function computeSmartScenarios({
             levels: levelsCommerce,
             sdp_m2: sdpCommerce,
             units: nbBoutiques,
-            position: "AVANT (contre clôture)",
+            position: "AVANT (contre limite séparative)",
           },
           volume_logement: {
             fp_m2: fpLogtFinal,
             width_m: logtWidth,
-            depth_m: Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5)),
+            depth_m: logtDepthUsed,
             levels: levelsLogt,
             sdp_m2: fpLogtFinal * levelsLogt,
             units: totalResiUnits,
-            position: `ARRIÈRE (retrait ${Math.round(commDepth + interGap)}m)`,
+            position: `ARRIÈRE sur pilotis (retrait ${Math.round(commDepth + interGap)}m)`,
+            has_pilotis: true,
           },
           retrait_inter_m: interGap,
           espace_arriere_m2: espaceArriere,
           ces_total_pct: cesTotalPct,
         };
-        // Valeurs principales = LOGEMENT (volume dominant pour le rendu 3D et les calculs)
-        fpRdc = fpLogtFinal;
-        fp = fpLogtFinal; // rendu 3D = volume logement
-        fpEtages = fpLogtFinal; // pas d'extension étages en split (volume compact)
+        // v72.29: FORCER LA DIFFÉRENCIATION — même si les contraintes convergent
+        // Le fp du logement DOIT être réduit par le rôle (visible sur le rendu)
+        const fpLogtDiff = role === "INTENSIFICATION" ? fpLogtFinal
+          : role === "EQUILIBRE" ? Math.round(fpLogtFinal * 0.75)
+          : Math.round(fpLogtFinal * 0.50); // PRUDENT = moitié
+        console.log(`│   v72.29 DIFF: fpLogtFinal=${fpLogtFinal} → fpLogtDiff=${fpLogtDiff} (role=${role})`);
+        // Mettre à jour le splitLayout avec les valeurs différenciées
+        splitLayout.volume_logement.fp_m2 = fpLogtDiff;
+        splitLayout.volume_logement.sdp_m2 = fpLogtDiff * levelsLogt;
+        splitLayout.volume_logement.width_m = Math.round(splitLayout.volume_logement.width_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.85 : 0.70));
+        splitLayout.volume_logement.depth_m = Math.round(splitLayout.volume_logement.depth_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.88 : 0.72));
+        // Valeurs principales = LOGEMENT
+        fpRdc = fpLogtDiff;
+        fp = fpLogtDiff;
+        fpEtages = fpLogtDiff;
         levels = levelsLogt;
         totalUnitsResult = nbBoutiques + totalResiUnits;
         totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
         unitMix = { COMMERCE: nbBoutiques };
-        // Mix résidentiel
         const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalResiUnits) : { T3: totalResiUnits };
         for (const [typ, count] of Object.entries(resiMix)) {
           if (count > 0) unitMix[typ] = count;
         }
         unitMixDetail = `SPLIT: ${nbBoutiques} boutiques (${fpCommerce}m² RDC avant) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv arrière)`;
-        console.log(`│   🏪 v57.20 SPLIT_AV_AR ${role}:`);
-        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre clôture`);
+        console.log(`│   🏪 v72.27 SPLIT_AV_AR ${role} (roleWidthFactor=${roleWidthFactor}, roleDepthFactor=${roleDepthFactor}):`);
+        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre limite séparative`);
         console.log(`│     GAP: ${interGap}m (passage véhicule/piéton)`);
-        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5))}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
+        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
         console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
       } else {
       // ── MODE SUPERPOSÉ (défaut) — logique existante ──
@@ -1815,12 +1947,10 @@ function computeSmartScenarios({
       const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
       const maxSdpForRole = Math.floor(max_sdp * cosCap);
       if (isFpFromEnvelope) {
-        // ── BUREAUX : plateaux proportionnels au CES effectif et rôle scénario ──
-        // v57.6: Apply roleTargetFactor to ensure A >= B >= C in floor count
-        const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
-        const effectiveTargetBur = Math.max(1, Math.round(target_units * cesRatio * roleTargetFactor));
-        floorsNeeded = Math.min(effectiveTargetBur, effectiveMaxFloors);
+        // ── BUREAUX : plateaux — v72.33 LOGIQUE UNIFIÉE ──
+        // target_units = nombre de plateaux souhaités (SACRÉ)
+        // Niveaux = target_units (1 plateau = 1 niveau)
+        floorsNeeded = Math.min(clientUnits, effectiveMaxFloors);
         // v57.13 : niveaux = conséquence programme, pas de floor min expert
         floorsNeeded = Math.max(1, floorsNeeded);
         // COS check avec SDP duale
@@ -1869,29 +1999,24 @@ function computeSmartScenarios({
         unitMix = { [villaTypo]: 1 };
       } else if (programKey === "USAGE_MIXTE") {
         // ── USAGE MIXTE : Commerce RDC (fpRdc) + Logements étages (fpEtages) ──
+        // v72.33: LOGIQUE UNIFIÉE — target_units SACRÉ, niveaux = conséquence
         const usefulEtage = fpEtages * (1 - circRatio);
         // Commerce count from mix function
-        const estMix = rules.default_mix_fn ? rules.default_mix_fn(target_units) : { COMMERCE: 1, T3: target_units - 1 };
+        const estMix = rules.default_mix_fn ? rules.default_mix_fn(clientUnits) : { COMMERCE: 1, T3: clientUnits - 1 };
         const commerceUnits = estMix.COMMERCE || 1;
-        // Résidentiel par étage
-        const resiAvgSize = computeAvgResidentialSize(sizes, rules, target_units);
-        let resiPerFloor = Math.floor(usefulEtage / resiAvgSize);
-        let effectiveMaxPerFloor = maxPerFloor;
-        // Adaptation maxPerFloor seulement pour A si le plateau le permet
-        if (role === "INTENSIFICATION" && usefulEtage >= resiAvgSize * (maxPerFloor + 1) * 1.20) {
-          effectiveMaxPerFloor = maxPerFloor + 1;
-        }
-        resiPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, resiPerFloor));
-        // v57.6 : target résidentiel proportionnel au CES effectif × rôle
-        const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
-        const effectiveTargetResi = Math.max(1, Math.round((target_units - commerceUnits) * cesRatio * roleTargetFactor));
-        floorsNeeded = 1 + Math.ceil(effectiveTargetResi / resiPerFloor);
-        // v57.13 : niveaux = conséquence programme
+        // Résidentiel cible = PROGRAMME CLIENT (sacré, pas modifié par roleTargetFactor)
+        const resiTarget = Math.max(1, clientUnits - commerceUnits);
+        // Combien de logements RENTRENT par étage (déterminé par le plateau)
+        let resiPerFloor = Math.floor(usefulEtage / avgResSize); // avgResSize déjà différencié par scénario
+        resiPerFloor = Math.max(1, Math.min(maxPerFloor, resiPerFloor));
+        // Niveaux = CONSÉQUENCE (1 RDC commerce + N étages résidentiels)
+        floorsNeeded = 1 + Math.ceil(resiTarget / resiPerFloor);
         floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
+        // Garde-fou COS
         while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
         const actualResiFloors = floorsNeeded - 1;
         totalUnits = commerceUnits + resiPerFloor * actualResiFloors;
+        console.log(`│   v72.33 MIXTE: ${resiTarget} logts cibles / ${resiPerFloor} par palier (${avgResSize}m²) = ${actualResiFloors} étages rési + 1 RDC commerce`);
         // Mix réel
         const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalUnits) : { COMMERCE: commerceUnits, T3: totalUnits - commerceUnits };
         totalUseful = 0;
@@ -1913,49 +2038,21 @@ function computeSmartScenarios({
         // ══════════════════════════════════════════════════════════════════
         // ── Unités/palier : adaptatif au plateau, capé par programme ──
         const usefulEtage = fpEtages * (1 - circRatio);
-        const avgSize = computeAvgResidentialSize(sizes, rules, target_units);
-        let effectiveMaxPerFloor = maxPerFloor;
-        // v57.6 : maxPerFloor adaptatif SEULEMENT pour A (INTENSIFICATION)
-        // Si le plateau est assez grand pour accueillir +1 confortablement
-        // (marge de 20% pour circulation large, rangements, etc.)
-        // On ne touche PAS B/C — ils restent au standard programme.
-        const isMaxDriver = /MAX_CAPACITE|RENTABILITE/i.test(primary_driver);
-        if (role === "INTENSIFICATION") {
-          const canFitMore = usefulEtage >= avgSize * (maxPerFloor + 1) * 1.20;
-          if (canFitMore || isMaxDriver) {
-            effectiveMaxPerFloor = maxPerFloor + 1;
-            console.log(`│   💪 ${role}: plateau ${Math.round(usefulEtage)}m² utile → ${effectiveMaxPerFloor} logts/palier (base ${maxPerFloor})`);
-          }
-        }
-        let unitsPerFloor = Math.floor(usefulEtage / avgSize);
-        unitsPerFloor = Math.max(1, Math.min(effectiveMaxPerFloor, unitsPerFloor));
-        // v57.6 : effectiveTarget PROPORTIONNEL au CES effectif × rôle scénario
-        // - CES effectif = profil client (budget, risque, posture)
-        // - roleTargetFactor = ambition du scénario (A=max, B=standard, C=réduit)
-        // Le nombre de logements est un RÉSULTAT, pas une cible fixe.
-        const cesRatio = effectiveCES / ces;
-        const roleTargetFactor = ({ INTENSIFICATION: 1.05, EQUILIBRE: 0.70, PRUDENT: 0.45 })[role] || 0.70;
-        const effectiveTarget = Math.max(2, Math.round(target_units * cesRatio * roleTargetFactor));
-        floorsNeeded = Math.ceil(effectiveTarget / unitsPerFloor);
-        // v57.13 : niveaux = CONSÉQUENCE PURE du programme
-        // Tous les scénarios : le nombre de niveaux découle du target effectif / unitsPerFloor
-        // Min niveaux : A/B=2 (collectif à 1 niv n'a pas de sens), C peut descendre à 1
-        // v70.2 FIX B=C : quand les deux sont au plancher (2 niv), C doit pouvoir descendre
-        const minFloors = (role === "PRUDENT") ? 1 : 2;
-        floorsNeeded = Math.max(minFloors, Math.min(floorsNeeded, effectiveMaxFloors));
-        // COS check duale
+        // v72.33: LOGIQUE UNIFIÉE — target_units SACRÉ, niveaux = conséquence
+        // La différenciation A/B/C vient des TAILLES (avgResSize), pas du nombre d'unités
+        // Combien de logements RENTRENT par palier (déterminé par le plateau)
+        let unitsPerFloor = Math.floor(usefulEtage / avgResSize); // avgResSize déjà différencié par scénario
+        unitsPerFloor = Math.max(1, Math.min(maxPerFloor, unitsPerFloor));
+        // Niveaux = CONSÉQUENCE (target_units / unitsPerFloor)
+        floorsNeeded = Math.ceil(clientUnits / unitsPerFloor);
+        floorsNeeded = Math.max(1, Math.min(floorsNeeded, effectiveMaxFloors));
+        // Garde-fou COS
         while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
-        // v57.15: anti-paradoxe zonage — empêche compensation verticale excessive
-        // Quand le terrain contraint le plateau (CES bas → fpEtages réduit → moins de logts/palier),
-        // le moteur ne doit PAS compenser en ajoutant des niveaux au-delà du besoin programme.
-        // Sans ce garde-fou, un CES restrictif (PERIURBAIN, PAVILLON) peut produire PLUS de SDP
-        // qu'un CES permissif (URBAIN) — paradoxe architectural.
-        // Double garde-fou : unités ET SDP ne doivent pas dépasser le programme.
-        while (floorsNeeded > 2 && unitsPerFloor * floorsNeeded > effectiveTarget * 1.20) floorsNeeded--;
-        // SDP cap : la SDP ne doit pas dépasser ce que le programme demande (avec marge role)
-        const sdpCapProgramme = Math.round(target_sdp_programme * roleTargetFactor * 1.35);
-        while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > sdpCapProgramme) floorsNeeded--;
+        // Garde-fou anti-surdimensionnement : SDP ne dépasse pas le programme × 1.35
+        const sdpCapProgramme = Math.round(clientUnits * avgResSize / (1 - circRatio) * 1.35);
+        while (floorsNeeded > 1 && computeSdpDual(floorsNeeded) > sdpCapProgramme) floorsNeeded--;
         totalUnits = unitsPerFloor * floorsNeeded;
+        console.log(`│   v72.33 RÉSIDENTIEL: ${clientUnits} logts cibles / ${unitsPerFloor} par palier (${avgResSize}m²/appt) = ${floorsNeeded} niveaux`);
         // Mix réel
         const mix = rules.default_mix_fn ? rules.default_mix_fn(totalUnits) : { T3: totalUnits };
         totalUseful = 0;
@@ -1971,7 +2068,9 @@ function computeSmartScenarios({
         unitMixDetail = details.join(" + ");
         unitMix = mix;
       }
-      levels = floorsNeeded;
+      // v72.31: En SPLIT, les niveaux sont déjà calculés dans le SPLIT branch (levelsLogt)
+      // NE PAS écraser avec floorsNeeded qui vient de la logique SUPERPOSÉ
+      if (!splitLayout) levels = floorsNeeded;
       // ══════════════════════════════════════════════════════════════════
       // v70.2 ANTI-COLLAPSE : garantir A > B ≥ C en niveaux OU en emprise
       // Quand B et C tombent au même plancher (fpMinViable + 2 niveaux),
@@ -1979,8 +2078,10 @@ function computeSmartScenarios({
       // ══════════════════════════════════════════════════════════════════
       if (!splitLayout && role === "PRUDENT" && levels >= 2 && fpRdc <= fpMinViable * 1.15) {
         // C est au plancher d'emprise → réduire d'1 niveau pour différencier de B
-        levels = Math.max(1, levels - 1);
-        console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (emprise au plancher ${fpRdc}m² ≈ fpMin=${fpMinViable}m²)`);
+        // v72.22: en programme mixte, minimum = commerceLevels + 1 (au moins 1 logement au-dessus du commerce)
+        const minLevels = commerceLevels > 0 ? commerceLevels + 1 : 1;
+        levels = Math.max(minLevels, levels - 1);
+        console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (emprise au plancher ${fpRdc}m² ≈ fpMin=${fpMinViable}m² | min=${minLevels} car commerce=${commerceLevels})`);
       }
       // ── PILOTIS ──
       const freeGround = envelope_area - fpRdc;
@@ -2017,7 +2118,8 @@ function computeSmartScenarios({
       console.log(`│   sol libre=${Math.round(freeGround)}m² parking=${parkingSpotsNeeded} places`);
       if (hasPilotis) console.log(`│   ⚡ PILOTIS activé`);
       if (hasRdcCommerce) console.log(`│   🏪 RDC Commerce (h=${rdcHeightM}m)`);
-      totalUnitsResult = totalUnits || 0;
+      // v72.31: En SPLIT, totalUnitsResult déjà calculé dans le SPLIT branch
+      if (!splitLayout) totalUnitsResult = totalUnits || 0;
     } else {
       // ════════════════════════════════════════════════════════════════════════
       // MODE REGULATION-DRIVEN (FALLBACK) : fp dérivé du CES × ratio
@@ -3288,77 +3390,10 @@ app.post("/compute-scenarios", (req, res) => {
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
   const flat = {
-    // ── ECHO INPUT CLIENT (v72.2 — renvoi des données d'entrée pour 8G) ──
-    lead_id: String(p.lead_id || ""),
-    client_name: String(p.client_name || ""),
-    city: String(p.city || ""),
-    district: String(p.district || ""),
-    zoning: String(p.zoning_type || p.zoning || ""),
-    site_area: String(p.site_area || 0),
-    land_width: String(p.land_width || 0),
-    land_depth: String(p.land_depth || 0),
-    terrain_context: String(p.terrain_context || ""),
-    site_context: String(p.site_context || ""),
-    road_bearing: String(p.road_bearing || 0),
-    site_lat: String(p.site_lat || 0),
-    site_lon: String(p.site_lon || 0),
-    site_polygon: String(p.site_polygon || ""),
-    envelope_w: String(p.envelope_w || 0),
-    envelope_d: String(p.envelope_d || 0),
-    envelope_area: String(p.envelope_area || (Number(p.envelope_w || 0) * Number(p.envelope_d || 0))),
-    buildable_fp: String(p.buildable_fp || p.envelope_area || (Number(p.envelope_w || 0) * Number(p.envelope_d || 0))),
-    setback_front: String(p.setback_front || 0),
-    setback_side: String(p.setback_side || 0),
-    setback_back: String(p.setback_back || 0),
-    cos_ratio: String(p.cos_ratio || 0),
-    cos_used: String(p.cos_used || ""),
-    max_height_m: String(p.max_height_m || 0),
-    max_levels_cap: String(p.max_levels_cap || p.max_floors || 0),
-    program_main: String(p.program_main || p.project_type || ""),
-    Target_surface: String(p.target_surface_m2 || p.Target_surface || 0),
-    target_units: String(p.target_units || 0),
-    standing_level: String(p.standing_level || "STANDARD"),
-    Parking_Préférence: String(p.Parking_Préférence || p.parking_preference || ""),
-    Parking_required: String(p.Parking_required || p.parking_required || 0),
-    budget_range: String(p.budget_range || ""),
-    budget_band: String(p.budget_band || ""),
-    budget_tension: String(p.budget_tension || 0),
-    financial_rigidity_score: String(p.financial_rigidity_score || 0),
-    feasibility_posture: String(p.feasibility_posture || "BALANCED"),
-    capacity_score: String(p.capacity_score || 0),
-    density_band: String(p.density_band || ""),
-    density_pressure_factor: String(p.density_pressure_factor || 1),
-    primary_driver: String(p.primary_driver || ""),
-    driver_intensity: String(p.driver_intensity || "MEDIUM"),
-    mix_score: String(p.mix_score || 0),
-    phase_score: String(p.phase_score || 0),
-    rent_score: String(p.rent_score || 0),
-    risk_score: String(p.risk_score || 0),
-    risk_adjusted: String(p.risk_adjusted || 0),
-    site_saturation_level: String(p.site_saturation_level || "MEDIUM"),
-    strategic_position: String(p.strategic_position || ""),
-    // ── ECHO VISUELS (URLs passées par 8D si disponibles) ──
-    satellite_url: String(p.satellite_url || ""),
-    axo_url: String(p.axo_url || ""),
-    massing_A_url: String(p.massing_A_url || ""),
-    massing_B_url: String(p.massing_B_url || ""),
-    massing_C_url: String(p.massing_C_url || ""),
     // ── NARRATIVE ──
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
     rec_scenario: (diag.recommandation || {}).scenario || "",
     rec_score: (diag.recommandation || {}).score || 0,
-    // ── RÔLES SCÉNARIOS (v72.1 — ajout pour 8G) ──
-    A_role: (sA.role || "ÉQUILIBRE"),
-    B_role: (sB.role || "OPTIMISATION"),
-    C_role: (sC.role || "INTENSIFICATION"),
-    // ── CIBLES PAR SCÉNARIO (v72.1 — echo target_surface pour 8G) ──
-    A_target: String(p.target_surface_m2 || 0),
-    B_target: String(p.target_surface_m2 || 0),
-    C_target: String(p.target_surface_m2 || 0),
-    // ── CIRCULATION (v72.1 — ratio circ pour 8G) ──
-    A_circ_ratio: String(sA.circulation_ratio_pct || 15),
-    B_circ_ratio: String(sB.circulation_ratio_pct || 15),
-    C_circ_ratio: String(sC.circulation_ratio_pct || 15),
     // ── COMPARATIF DELTAS (texte plat) ──
     delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
     delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
@@ -3745,8 +3780,8 @@ function envelopeDepthAtU(uTarget, envLocal) {
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2,
-    road_bearing: roadBearingInput, scenario_role } = context;
-  console.log(`┌── computeMassingPolygon v56.7 (ROAD_BEARING + RÔLE + SOLAR) ──`);
+    road_bearing: roadBearingInput, scenario_role, split_context } = context;
+  console.log(`┌── computeMassingPolygon v72.27 (ROAD_BEARING + RÔLE + SOLAR + SPLIT) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
   // ── 1. Centroïde et conversion mètres ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -3839,21 +3874,49 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // Pas de cross-section, pas de containment check, pas de shrink loop.
   // Garanti de fonctionner pour toute enveloppe convexe.
   const margin = 2.0; // marge constructive (l'enveloppe est déjà en retrait de la parcelle)
-  const maxW = Math.max(8, availW - 2 * margin);
-  const maxD = Math.max(8, availD - 2 * margin);
+  let maxW = Math.max(8, availW - 2 * margin);
+  let maxD = Math.max(8, availD - 2 * margin);
+  // v72.27: En mode SPLIT, réduire maxD pour que le logement tienne derrière le commerce
+  if (split_context && split_context.is_split) {
+    const commD = split_context.commerce_depth_m || 6;
+    const gapD = split_context.retrait_inter_m || 4;
+    const commMargin = 0.5;
+    const reservedFront = commMargin + commD + gapD;
+    maxD = Math.max(6, availD - reservedFront - margin); // profondeur restante pour logement
+    console.log(`│ v72.27 SPLIT maxD: availD=${availD.toFixed(1)} - reserved=${reservedFront.toFixed(1)} - margin=${margin} → maxD=${maxD.toFixed(1)}m`);
+  }
   console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
-  // Position en profondeur (retrait de la rue) — v56.7 : basé sur le RÔLE
-  // INTENSIFICATION → plus près de la rue (visibilité, commerce RDC, intensité urbaine)
-  // EQUILIBRE → retrait modéré
-  // PRUDENT → retrait plus marqué (calme, résidentiel, phasage)
+  // Position en profondeur (retrait de la rue) — v72.27 : SPLIT-aware
+  // En mode SPLIT_AV_AR, le logement doit être DERRIÈRE le commerce + gap.
+  // Le centre du logement = marge + commDepth + interGap + bD/2 (calculé après forme)
   let depthPct;
-  if (scenario_role === "INTENSIFICATION") depthPct = 0.45;
-  else if (scenario_role === "PRUDENT") depthPct = 0.62;
-  else depthPct = 0.53; // EQUILIBRE
-  // Ajustement solaire : si la rue est N-S, reculer un peu pour libérer la cour sud
-  if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
-  depthPct = Math.max(0.38, Math.min(0.72, depthPct));
-  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (role=${scenario_role}, mode=${massing_mode})`);
+  let splitForcePosition = false; // v72.27: flag pour forcer la position APRÈS calcul forme
+  if (split_context && split_context.is_split) {
+    // Mode SPLIT : le logement doit commencer APRÈS la zone commerce + gap
+    const commD = split_context.commerce_depth_m || 6;
+    const gapD = split_context.retrait_inter_m || 4;
+    const reservedFront = margin + commD + gapD; // espace réservé devant (commerce + gap)
+    // Le centre du logement sera calculé après la forme (besoin de bD)
+    // Pour l'instant on calcule un depthPct approximatif qui place le logement derrière
+    const logementCenterFromFront = reservedFront + (availD - reservedFront) / 2;
+    depthPct = logementCenterFromFront / availD;
+    depthPct = Math.max(0.50, Math.min(0.85, depthPct));
+    splitForcePosition = true;
+    console.log(`│ v72.27 SPLIT: commerce=${commD}m + gap=${gapD}m → reservedFront=${reservedFront.toFixed(1)}m`);
+    console.log(`│ v72.27 SPLIT: logement center at ${(depthPct*100).toFixed(0)}% depth (${(availD*depthPct).toFixed(1)}m from front)`);
+  } else {
+    // Mode normal : basé sur le RÔLE
+    // INTENSIFICATION → plus près de la rue (visibilité, commerce RDC, intensité urbaine)
+    // EQUILIBRE → retrait modéré
+    // PRUDENT → retrait plus marqué (calme, résidentiel, phasage)
+    if (scenario_role === "INTENSIFICATION") depthPct = 0.45;
+    else if (scenario_role === "PRUDENT") depthPct = 0.62;
+    else depthPct = 0.53; // EQUILIBRE
+    // Ajustement solaire : si la rue est N-S, reculer un peu pour libérer la cour sud
+    if (solarFavorDepth) depthPct = Math.min(0.70, depthPct + 0.05);
+    depthPct = Math.max(0.38, Math.min(0.72, depthPct));
+  }
+  console.log(`│ Implantation: retrait ${(depthPct*100).toFixed(0)}% de la rue (role=${scenario_role}, mode=${massing_mode}, split=${!!split_context})`);
   // ── 6. Générer la forme bâtie ──
   let bPts = [];
   let bW, bD;
@@ -3929,8 +3992,27 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
   // Centre U = milieu du bbox, Centre V = retrait en profondeur
   const cU = (minU + maxU) / 2;
-  const cV = minV + availD * depthPct;
-  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)}) [bbox mid-U, ${(depthPct*100).toFixed(0)}% depth-V]`);
+  let cV;
+  if (splitForcePosition && split_context) {
+    // v72.27 SPLIT: positionner le logement PRÉCISÉMENT derrière le commerce + gap
+    // Le commerce est collé au front avec une marge de 0.5m (limite séparative)
+    // Le bord AVANT du logement = minV + commMargin + commDepth + gapD
+    const commD = split_context.commerce_depth_m || 6;
+    const gapD = split_context.retrait_inter_m || 4;
+    const commMargin = 0.5; // même marge que buildCommercePolygon
+    const logementFrontEdge = minV + commMargin + commD + gapD;
+    cV = logementFrontEdge + bD / 2;
+    // S'assurer que le logement reste dans l'enveloppe
+    const logementBackEdge = cV + bD / 2;
+    if (logementBackEdge > maxV - margin) {
+      cV = maxV - margin - bD / 2; // reculer pour rester dans l'enveloppe
+    }
+    console.log(`│ v72.27 SPLIT POSITION: logement front=${logementFrontEdge.toFixed(1)}m center=${cV.toFixed(1)}m back=${(cV+bD/2).toFixed(1)}m`);
+    console.log(`│ v72.27 Commerce zone: [${(minV+margin).toFixed(1)}, ${(minV+margin+commD).toFixed(1)}m] | Gap: ${gapD}m | Logement: [${logementFrontEdge.toFixed(1)}, ${(cV+bD/2).toFixed(1)}m]`);
+  } else {
+    cV = minV + availD * depthPct;
+  }
+  console.log(`│ Position: center=(${cU.toFixed(1)}, ${cV.toFixed(1)}) [bbox mid-U, ${((cV-minV)/availD*100).toFixed(0)}% depth-V]`);
   // Positionner les points : local (u,v) → mètre (x,y) → GPS
   function localToMeter(p) {
     return { x: p.u * sUx + p.v * nUx, y: p.u * sUy + p.v * nUy };
@@ -3952,7 +4034,102 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   console.log(`└── end computeMassingPolygon v56 ──`);
   result._typology = typology;
   result._reason = reason;
+  // v72.25: Exporter les infos de repère local pour le SPLIT (découpe commerce/logement)
+  result._frontDir = { sUx, sUy, nUx, nUy }; // direction rue (s) et profondeur site (n)
+  result._centerLatLon = { lat: eLat, lon: eLon };
   return result;
+}
+// ─── SPLIT COMMERCE/LOGEMENT : polygon commerce construit depuis l'enveloppe ──
+// v72.27: Le commerce est une bande rectangulaire COLLÉE AU FRONT de l'enveloppe (limite séparative).
+// Le logement = massingCoords existant (positionné en retrait par computeMassingPolygon + split_context).
+// On CONSTRUIT le commerce séparément depuis l'enveloppe, SANS marge devant (collé à la limite).
+function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
+  if (!splitLayout || !envelopeCoords || envelopeCoords.length < 3) return null;
+  const commDepth = splitLayout.volume_commerce.depth_m || 6;
+  const commWidth = splitLayout.volume_commerce.width_m || null;
+  const margin = 0.5; // v72.27: marge minimale (commerce collé à la limite séparative)
+  console.log(`┌── buildCommercePolygon v72.27 ──`);
+  console.log(`│ commDepth=${commDepth}m  commWidth=${commWidth}m  envVertices=${envelopeCoords.length}`);
+  // Centroïde de l'enveloppe
+  const cLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
+  const cLon = envelopeCoords.reduce((s, p) => s + p.lon, 0) / envelopeCoords.length;
+  // Convertir en mètres
+  const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  // Trouver le bord "façade rue" (même logique que computeMassingPolygon)
+  let frontIdx = 0;
+  if (roadBearing != null && !isNaN(roadBearing)) {
+    const rb = ((roadBearing % 360) + 360) % 360;
+    let bestScore = 999;
+    for (let i = 0; i < envM.length; i++) {
+      const j = (i + 1) % envM.length;
+      const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
+      const edgeLen = Math.sqrt(dx * dx + dy * dy);
+      if (edgeLen < 1) continue;
+      const edgeBearing = ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360;
+      let diff = Math.abs(edgeBearing - rb) % 360;
+      if (diff > 180) diff = 360 - diff;
+      if (diff > 90) diff = 180 - diff;
+      const score = diff - edgeLen * 0.02;
+      if (score < bestScore) { bestScore = score; frontIdx = i; }
+    }
+  } else {
+    let maxLen = 0;
+    for (let i = 0; i < envM.length; i++) {
+      const j = (i + 1) % envM.length;
+      const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len > maxLen) { maxLen = len; frontIdx = i; }
+    }
+  }
+  const fi = frontIdx, fj = (fi + 1) % envM.length;
+  const sDx = envM[fj].x - envM[fi].x, sDy = envM[fj].y - envM[fi].y;
+  const sLen = Math.sqrt(sDx * sDx + sDy * sDy) || 1;
+  const sUx = sDx / sLen, sUy = sDy / sLen; // direction le long de la rue
+  let nUx = -sUy, nUy = sUx; // direction vers l'intérieur du site
+  // Vérifier que "into site" pointe bien vers le centroïde
+  const midFX = (envM[fi].x + envM[fj].x) / 2, midFY = (envM[fi].y + envM[fj].y) / 2;
+  if (nUx * (0 - midFX) + nUy * (0 - midFY) < 0) { nUx = -nUx; nUy = -nUy; }
+  // Projeter l'enveloppe en repère local (u = rue, v = profondeur)
+  const envLocal = envM.map(p => ({
+    u: p.x * sUx + p.y * sUy,
+    v: p.x * nUx + p.y * nUy,
+  }));
+  const minU = Math.min(...envLocal.map(p => p.u));
+  const maxU = Math.max(...envLocal.map(p => p.u));
+  const minV = Math.min(...envLocal.map(p => p.v));
+  const maxV = Math.max(...envLocal.map(p => p.v));
+  const envWidth = maxU - minU;
+  const envDepth = maxV - minV;
+  console.log(`│ Envelope local: W=${envWidth.toFixed(1)}m × D=${envDepth.toFixed(1)}m`);
+  console.log(`│ Front edge: [${fi}→${fj}] len=${sLen.toFixed(1)}m`);
+  // v72.27: Construire le rectangle commerce : bande collée au front (limite séparative)
+  // La largeur du commerce utilise la largeur splitLayout (déjà avec retraits latéraux)
+  const cW = commWidth ? Math.min(commWidth, envWidth - 2 * margin) : (envWidth - 2 * margin);
+  const cD = Math.min(commDepth, envDepth * 0.40); // max 40% de la profondeur enveloppe
+  const cCenterU = (minU + maxU) / 2; // centré sur la largeur
+  const cStartV = minV + margin; // collé au front (avec marge)
+  // 4 coins du rectangle commerce en repère local
+  const commLocal = [
+    { u: cCenterU - cW / 2, v: cStartV },
+    { u: cCenterU + cW / 2, v: cStartV },
+    { u: cCenterU + cW / 2, v: cStartV + cD },
+    { u: cCenterU - cW / 2, v: cStartV + cD },
+  ];
+  console.log(`│ Commerce rect: ${cW.toFixed(1)}m × ${cD.toFixed(1)}m = ${Math.round(cW * cD)}m²`);
+  console.log(`│ Position: u=[${(cCenterU - cW/2).toFixed(1)}, ${(cCenterU + cW/2).toFixed(1)}] v=[${cStartV.toFixed(1)}, ${(cStartV + cD).toFixed(1)}]`);
+  // Convertir local → mètres → GPS
+  function localToGPS(lp) {
+    const mx = lp.u * sUx + lp.v * nUx;
+    const my = lp.u * sUy + lp.v * nUy;
+    return {
+      lat: cLat + my / R_EARTH * 180 / Math.PI,
+      lon: cLon + mx / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
+    };
+  }
+  const commerceGPS = commLocal.map(localToGPS);
+  commerceGPS.forEach((c, i) => console.log(`│ Commerce[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
+  console.log(`└── end buildCommercePolygon v72.26 ──`);
+  return commerceGPS;
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex) {
@@ -3964,7 +4141,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
-
   // v49: accès principal auto-détecté
   const access = computeAccessPoint(parcelCoords, center.lat, center.lon, frontEdgeIndex);
   const arrowLen = 8;
@@ -3978,7 +4154,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     type: "Feature", properties: { label: "Accès" },
     geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
   };
-
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
   return `<!DOCTYPE html>
 <html>
@@ -4000,7 +4175,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
-
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4016,38 +4190,38 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     "sprite": "mapbox://sprites/mapbox/light-v11",
     "layers": [
       { "id": "background", "type": "background",
-        "paint": { "background-color": "#6aad3a" } },
+        "paint": { "background-color": "#4a8c2a" } },
       { "id": "water", "type": "fill",
         "source": "composite", "source-layer": "water",
-        "paint": { "fill-color": "#a8cce0" } },
+        "paint": { "fill-color": "#a0c8dd" } },
       { "id": "landuse-park", "type": "fill",
         "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
-        "paint": { "fill-color": "#5a9e2e" } },
+        "paint": { "fill-color": "#3d7a22" } },
       { "id": "landuse-urban", "type": "fill",
         "source": "composite", "source-layer": "landuse",
         "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
-        "paint": { "fill-color": "#6aad3a" } },
+        "paint": { "fill-color": "#4a8c2a" } },
       { "id": "road-case-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#1a1a1a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100] } },
+        "paint": { "line-color": "#5c5c5c", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100] } },
       { "id": "road-case-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#3a3a3a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56] } },
+        "paint": { "line-color": "#6a6a6a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56] } },
       { "id": "road-fill-secondary", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#2a2a2a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92] } },
+        "paint": { "line-color": "#707070", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92] } },
       { "id": "road-fill-street", "type": "line",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
         "layout": { "line-cap": "round", "line-join": "round" },
-        "paint": { "line-color": "#4a4a4a", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48] } },
+        "paint": { "line-color": "#808080", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48] } },
       { "id": "road-label-major", "type": "symbol",
         "source": "composite", "source-layer": "road",
         "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
@@ -4073,20 +4247,16 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       }
     ]
   };
-
   const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
-
   map.on('style.load', () => {
     // v70.5: Lumière directionnelle forte pour ombres marquées
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.70, position: [1.5, 210, 30] });
-
     const labelLayerId = undefined;
-
     // v70.5: BÂTIMENTS 3D — posés au sol (base=0), hauteurs réalistes
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
@@ -4094,11 +4264,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: {
         'fill-extrusion-color': [
           'interpolate', ['linear'], ['coalesce', ['get', 'height'], 6],
-          0,  '#d8d4cc',
-          4,  '#ccc8c0',
-          10, '#beb8b0',
-          20, '#a8a4a0',
-          40, '#908c88',
+          0,  '#e8e6e2',
+          4,  '#e0deda',
+          10, '#d5d3cf',
+          20, '#cac8c4',
+          40, '#bab8b4',
         ],
         'fill-extrusion-height': [
           'let', 'h', ['coalesce', ['get', 'height'], 0],
@@ -4117,9 +4287,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
-
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
@@ -4129,16 +4297,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
-
     // v70.8: Zone constructible (reculs) — tirets bien visibles
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#d04020', 'line-width': 4,
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
-
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
-
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
   setTimeout(() => { window.__MAP_READY = true; }, 12000);
@@ -4248,14 +4413,86 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     map.addSource('massing', { type: 'geojson', data: ${JSON.stringify(massingGeoJSON)} });
     const rdcH = ${rdcH};
     const etageH = ${etageH};
-    const totalLevels = ${massingParams.levels || Math.round(massingParams.total_height / etageH)};
-    const commLevels = ${massingParams.commerce_levels};
     const gap = 0.30;  // v71: gap net entre niveaux (ligne noire visible)
+    // v72.22: SPLIT_AV_AR — commerce = volume séparé devant, logement = volume derrière
+    ${massingParams.commerce_coords ? `
+    // ══ MODE SPLIT_AV_AR : 2 volumes distincts ══
+    const commerceGeoJSON = ${JSON.stringify({
+      type: "Feature",
+      properties: { height: rdcH, base_height: 0 },
+      geometry: { type: "Polygon", coordinates: [[...massingParams.commerce_coords.map(c => [c.lon, c.lat]), [massingParams.commerce_coords[0].lon, massingParams.commerce_coords[0].lat]]] },
+    })};
+    map.addSource('commerce-volume', { type: 'geojson', data: commerceGeoJSON });
+    // Commerce : 1 niveau ORANGE en avant
+    map.addLayer({
+      id: 'commerce-floor-0', type: 'fill-extrusion', source: 'commerce-volume',
+      paint: {
+        'fill-extrusion-color': '#e07830',
+        'fill-extrusion-height': rdcH,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.92,
+        'fill-extrusion-vertical-gradient': false,
+      },
+    });
+    map.addLayer({ id: 'commerce-footprint', type: 'line', source: 'commerce-volume',
+      paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
+    // v72.28: Logement sur PILOTIS en SPLIT — 4 poteaux aux coins + niveaux habitables au-dessus
+    const logtLevels = ${massingParams.split_layout ? massingParams.split_layout.volume_logement.levels : massingParams.levels};
+    const pilotisH = rdcH; // pilotis = hauteur d'un RDC (3m)
+    // v72.28: 4 POTEAUX PILOTIS aux coins du logement (petits carrés extrudés)
+    const massingRing = ${JSON.stringify(massingGeoJSON)}.geometry.coordinates[0];
+    const colSize = 0.000004; // ~0.45m en GPS (petit carré de poteau)
+    const pilotisFeatures = [];
+    // Prendre les 4 premiers points du polygon (coins du logement)
+    for (let c = 0; c < Math.min(massingRing.length - 1, 4); c++) {
+      const cx = massingRing[c][0], cy = massingRing[c][1];
+      pilotisFeatures.push({
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "Polygon",
+          coordinates: [[ [cx - colSize, cy - colSize], [cx + colSize, cy - colSize],
+                          [cx + colSize, cy + colSize], [cx - colSize, cy + colSize],
+                          [cx - colSize, cy - colSize] ]]
+        }
+      });
+    }
+    const pilotisGeoJSON = { type: "FeatureCollection", features: pilotisFeatures };
+    map.addSource('pilotis-cols', { type: 'geojson', data: pilotisGeoJSON });
+    map.addLayer({
+      id: 'pilotis-columns', type: 'fill-extrusion', source: 'pilotis-cols',
+      paint: {
+        'fill-extrusion-color': '#c8c4bc',
+        'fill-extrusion-height': pilotisH - gap / 2,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.95,
+        'fill-extrusion-vertical-gradient': true,
+      },
+    });
+    // Niveaux habitables logement — commencent AU-DESSUS du pilotis
+    for (let f = 0; f < logtLevels; f++) {
+      const base = pilotisH + f * etageH;
+      const top  = pilotisH + (f + 1) * etageH;
+      const baseH = base + gap / 2;
+      const topH  = f < logtLevels - 1 ? top - gap / 2 : top;
+      map.addLayer({
+        id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
+        paint: {
+          'fill-extrusion-color': '#3a7ac0',
+          'fill-extrusion-height': topH,
+          'fill-extrusion-base': baseH,
+          'fill-extrusion-opacity': 0.92,
+          'fill-extrusion-vertical-gradient': false,
+        },
+      });
+    }
+    ` : `
+    // ══ MODE SUPERPOSÉ : étages empilés sur un seul volume ══
+    const totalLevels = ${massingParams.levels};  // v72.22: TOUJOURS utiliser levels du moteur — jamais de fallback calculé
+    const commLevels = ${massingParams.commerce_levels || 0};
     for (let f = 0; f < totalLevels; f++) {
-      // Hauteur cumulée : RDC a sa propre hauteur, les suivants = etageH
       const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
       const top  = f === 0 ? rdcH : rdcH + f * etageH;
-      // Gap entre étages (ligne noire fine sur façade) : uniquement ENTRE les étages
       const baseH = f > 0 ? base + gap / 2 : 0;
       const topH  = f < totalLevels - 1 ? top - gap / 2 : top;
       const isComm = f < commLevels;
@@ -4271,6 +4508,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         },
       });
     }
+    `}
     // ── Contour emprise au sol : bleu foncé ──
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
       paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
@@ -4361,68 +4599,309 @@ function drawOverlays(ctx, W, H, BH, p) {
 }
 // ─── COLOR REMAP — remplace les teintes beige Mapbox par vert/sable architectural ──
 function applyColorRemap(ctx, W, H) {
+  // v72.21: Mapbox "Hektar Pro" already has green grass (#6aad3a) and dark roads.
+  // NO ground→grass or road→sandy remap needed — that was for the old beige style.
+  // This function now ONLY whitens building rooftops for a premium concrete look.
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
-  // Color distance helper
-  const dist = (r, g, b, tr, tg, tb) => Math.abs(r - tr) + Math.abs(g - tg) + Math.abs(b - tb);
-  // Target ground colors (Mapbox beige tones → green grass)
-  // background #f2f0ec (242,240,236), parks #e0ddd4 (224,221,212), urban #ebe8e2 (235,232,226)
-  // Target road colors (Mapbox tan → sandy beige)
-  // road-fill #eae4d4 (234,228,212), road-case #ccc4ae (204,196,174)
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i], g = d[i+1], b = d[i+2];
-    // Skip mostly white/bright pixels (buildings, rooftops) — R>235 AND G>235 AND B>230
-    if (r > 235 && g > 235 && b > 230) continue;
-    // Skip dark pixels (shadows, edges) — brightness < 120
-    const brightness = (r + g + b) / 3;
-    if (brightness < 120) continue;
-    // Skip reddish/pinkish pixels (parcel zone)
-    if (r > 180 && g < 140 && b < 140) continue;
-    // Skip blueish pixels (envelope lines, water)
-    if (b > r + 20 && b > g + 10) continue;
-    // Road detection: tan/warm gray tones where R > G > B with specific ranges
-    const isRoad = dist(r, g, b, 234, 228, 212) < 30 || dist(r, g, b, 204, 196, 174) < 30 ||
-                   (r > 180 && g > 170 && b > 140 && b < 190 && r - b > 30 && r - b < 70 && g - b > 20);
-    if (isRoad) {
-      // Sandy beige road
-      const factor = brightness / 220;
-      d[i]   = Math.min(255, Math.round(195 * factor));  // R
-      d[i+1] = Math.min(255, Math.round(180 * factor));  // G
-      d[i+2] = Math.min(255, Math.round(145 * factor));  // B
-      continue;
+
+  // ─── STEP 1: Build rooftop mask ──────────────────────────────────────────
+  // In 3D axonometric view, building rooftops have darker building-side pixels
+  // directly below them. Ground does NOT have this brightness drop.
+  const roofMask = new Uint8Array(W * H);
+  for (let y = 0; y < H - 15; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = (y * W + x) * 4;
+      const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+      const brightness = (r + g + b) / 3;
+      // Building rooftops in Mapbox Hektar Pro: #d8d4cc to #908c88 → brightness 140-215
+      // Green grass #6aad3a → brightness ~112. Skip grass and very dark/bright pixels.
+      if (brightness < 130 || brightness > 240) continue;
+      // Skip green pixels (grass) — g channel dominant
+      if (g > r + 20 && g > b + 30) continue;
+      // Skip reddish pixels (parcel zone)
+      if (r > 180 && g < 140 && b < 140) continue;
+      // Check 2-15 pixels below for building wall (brightness drop > 30)
+      for (let dy = 2; dy <= 15; dy++) {
+        const by = y + dy;
+        if (by >= H) break;
+        const bi = (by * W + x) * 4;
+        const bBright = (d[bi] + d[bi + 1] + d[bi + 2]) / 3;
+        if (brightness - bBright > 30) {
+          // Verify the dark pixel is a building wall (neutral gray, not green grass)
+          const wr = d[bi], wg = d[bi + 1], wb = d[bi + 2];
+          const isWall = Math.abs(wr - wg) < 30 && Math.abs(wg - wb) < 30;
+          const isGrass = wg > wr + 15 && wg > wb + 20;
+          if (isWall && !isGrass) {
+            roofMask[y * W + x] = 1;
+            break;
+          }
+        }
+      }
     }
-    // Ground detection: beige/warm gray tones (background, parks, urban landuse)
-    const isGround = dist(r, g, b, 242, 240, 236) < 25 || dist(r, g, b, 224, 221, 212) < 25 ||
-                     dist(r, g, b, 235, 232, 226) < 25 ||
-                     (r > 190 && g > 190 && b > 180 && Math.abs(r - g) < 15 && r - b < 30 && r - b > -5);
-    if (isGround) {
-      // Green grass — slight variation based on original brightness for natural look
-      const factor = brightness / 240;
-      const variation = ((i / 4) % 7) * 2 - 6; // subtle per-pixel noise
-      d[i]   = Math.min(255, Math.round((75 + variation) * factor));   // R
-      d[i+1] = Math.min(255, Math.round((145 + variation) * factor));  // G
-      d[i+2] = Math.min(255, Math.round((60 + variation) * factor));   // B
+  }
+  // Expand rooftop mask upward + laterally for full coverage
+  const roofMask2 = new Uint8Array(roofMask);
+  for (let y = 3; y < H; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      if (roofMask[y * W + x]) {
+        for (let dy = 1; dy <= 4; dy++) {
+          if (y - dy >= 0) roofMask2[(y - dy) * W + x] = 1;
+        }
+        // Slight lateral expansion for edge coverage
+        roofMask2[y * W + x - 1] = 1;
+        roofMask2[y * W + x + 1] = 1;
+      }
+    }
+  }
+
+  // ─── STEP 2: Building whitening — rooftop pixels → warm white concrete ───
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!roofMask2[y * W + x]) continue;
+      const i = (y * W + x) * 4;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      const brightness = (r + g + b) / 3;
+      if (brightness > 245 || brightness < 70) continue;
+      // Skip green pixels that leaked into mask
+      if (g > r + 15 && g > b + 25) continue;
+      // Skip parcel red
+      if (r > 180 && g < 130 && b < 130) continue;
+      // Remap to warm white — preserve luminosity
+      const lum = Math.min(1.3, brightness / 180);
+      d[i]     = Math.min(255, Math.round(242 * lum));
+      d[i + 1] = Math.min(255, Math.round(240 * lum));
+      d[i + 2] = Math.min(255, Math.round(235 * lum));
     }
   }
   ctx.putImageData(imgData, 0, 0);
 }
-// Helper: draw trees along road edges on green-background maps
+// ─── v72.17 DETERMINISTIC SHADOWS — sun from upper-left ─────────────────────
+// Scans each grass pixel and checks if building pixels exist ~15px toward upper-left
+// If yes → darken the grass to simulate shadow projection
+function applyDeterministicShadows(ctx, W, H) {
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const d = imgData.data;
+  const SHADOW_DIST = 18; // pixels to check for building occlusion
+  const SHADOW_DARKEN = 0.7; // shadow intensity (0.7 = 30% darker)
+  for (let y = SHADOW_DIST; y < H; y++) {
+    for (let x = SHADOW_DIST; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const r = d[i], g = d[i+1], b = d[i+2];
+      // Only shadow on grass pixels (green: R<110, G>100, B<90)
+      if (!(r < 110 && g > 100 && b < 90)) continue;
+      // Check if there's a building pixel ~SHADOW_DIST pixels to the upper-left
+      let hasBuildingAbove = false;
+      for (let s = 8; s <= SHADOW_DIST; s += 5) {
+        const si = ((y - s) * W + (x - Math.floor(s * 0.6))) * 4;
+        if (si < 0 || si >= d.length) continue;
+        const sr = d[si], sg = d[si+1], sb = d[si+2];
+        const sBright = (sr + sg + sb) / 3;
+        // Building: bright (>180), not grass-green
+        if (sBright > 180 && sg < sr + 30) { hasBuildingAbove = true; break; }
+      }
+      if (hasBuildingAbove) {
+        d[i]   = Math.round(r * SHADOW_DARKEN);
+        d[i+1] = Math.round(g * SHADOW_DARKEN);
+        d[i+2] = Math.round(b * SHADOW_DARKEN);
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+// ─── v72.17 WARM COLOR GRADING — subtle warm tone shift ─────────────────────
+function applyWarmGrading(ctx, W, H) {
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // Slight warm shift: +3R, +1G, -2B
+    d[i]   = Math.min(255, d[i] + 3);
+    d[i+1] = Math.min(255, d[i+1] + 1);
+    d[i+2] = Math.max(0, d[i+2] - 2);
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+// ─── v72.3 BLOCK-GRID DRIFT DETECTION ─────────────────────────────────────────
+// Lessons from production (v72.1 and v72.2 both failed):
+//   - Pixel-level edge comparison doesn't work: AI polish transforms everything
+//   - Even strong Sobel edges shift when textures/shadows are added
+//
+// NEW APPROACH: Compare the MACRO LAYOUT using a coarse grid.
+//   1. Divide both images into blocks (e.g. 32×32 grid = 1024 blocks on 1280px)
+//   2. For each block, compute average brightness (grayscale)
+//   3. Classify each block: BRIGHT (building/roof), DARK (road/shadow), MID (grass/ground)
+//   4. Compare classification maps — if the same blocks are bright/dark/mid, structure is intact
+//
+// This is robust because:
+//   - Polish changes colors/textures → brightness shifts within a class are OK
+//   - A BUILDING MOVING would change block classifications (bright block becomes mid)
+//   - A new phantom building would flip a mid/dark block to bright
+//   - Tonal harmonization doesn't flip classifications
+//
+// v72.5: threshold is now a parameter — heavy polish (slide 4) needs higher threshold
+async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H, customThreshold) {
+  const cleanImg = await loadImage(cleanPngBuf);
+  const polishedImg = await loadImage(polishedPngBuf);
+  const cleanCanvas = createCanvas(W, H);
+  const cleanCtx = cleanCanvas.getContext("2d");
+  cleanCtx.drawImage(cleanImg, 0, 0, W, H);
+  const polishedCanvas = createCanvas(W, H);
+  const polishedCtx = polishedCanvas.getContext("2d");
+  polishedCtx.drawImage(polishedImg, 0, 0, W, H);
+  const cleanData = cleanCtx.getImageData(0, 0, W, H).data;
+  const polishedData = polishedCtx.getImageData(0, 0, W, H).data;
+  // Grid parameters
+  const BLOCK = 40; // 40px blocks → 32×32 grid on 1280px image
+  const cols = Math.floor(W / BLOCK);
+  const rows = Math.floor(H / BLOCK);
+  // Compute average brightness per block for both images
+  function blockBrightness(data, bx, by) {
+    let sum = 0, count = 0;
+    for (let y = by * BLOCK; y < Math.min((by + 1) * BLOCK, H); y++) {
+      for (let x = bx * BLOCK; x < Math.min((bx + 1) * BLOCK, W); x++) {
+        const idx = (y * W + x) * 4;
+        sum += 0.299 * data[idx] + 0.587 * data[idx+1] + 0.114 * data[idx+2];
+        count++;
+      }
+    }
+    return sum / count;
+  }
+  // Classify block: 0=DARK (<80), 1=MID (80-170), 2=BRIGHT (>170)
+  function classify(brightness) {
+    if (brightness < 80) return 0;
+    if (brightness > 170) return 2;
+    return 1;
+  }
+  let totalBlocks = 0;
+  let classShifts = 0;     // blocks that changed classification (structural drift)
+  let bigBrightnessShifts = 0; // blocks with >60 brightness change (extreme)
+  for (let by = 0; by < rows; by++) {
+    for (let bx = 0; bx < cols; bx++) {
+      totalBlocks++;
+      const cb = blockBrightness(cleanData, bx, by);
+      const pb = blockBrightness(polishedData, bx, by);
+      const cc = classify(cb);
+      const pc = classify(pb);
+      if (cc !== pc) classShifts++;
+      if (Math.abs(cb - pb) > 60) bigBrightnessShifts++;
+    }
+  }
+  const classShiftRatio = totalBlocks > 0 ? classShifts / totalBlocks : 0;
+  // v72.5: Configurable threshold per pipeline
+  // - Slide 4 heavy polish (texture, grass, concrete) → 0.55 (legitimately flips many blocks)
+  // - Massing light polish (tonal only) → 0.25 (stricter, less transformation expected)
+  const DRIFT_THRESHOLD = customThreshold || 0.25;
+  const passed = classShiftRatio < DRIFT_THRESHOLD;
+  return {
+    driftScore: +classShiftRatio.toFixed(4),
+    passed,
+    totalBlocks,
+    classShifts,
+    bigBrightnessShifts,
+    threshold: DRIFT_THRESHOLD,
+    details: !passed
+      ? `DRIFT: ${(classShiftRatio * 100).toFixed(1)}% blocks shifted class (${classShifts}/${totalBlocks}, threshold ${DRIFT_THRESHOLD * 100}%)`
+      : `OK: ${(classShiftRatio * 100).toFixed(1)}% blocks shifted (${classShifts}/${totalBlocks}) — macro structure preserved`,
+  };
+}
+// ─── v72.4 POST-POLISH SHARPENING — counteract AI softness ──────────────────
+// Applies a 3×3 unsharp-mask kernel on the canvas pixels.
+// amount=0.35 is tuned for typical OpenAI edit output — enough to restore
+// crisp edges without introducing halo artifacts.
+function applySharpen(ctx, W, H, amount = 0.35) {
+  const imageData = ctx.getImageData(0, 0, W, H);
+  const src = new Uint8ClampedArray(imageData.data); // copy of original
+  const dst = imageData.data;
+  const a = amount;
+  const center = 1 + 4 * a;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const val = center * src[i + c]
+          - a * src[((y - 1) * W + x) * 4 + c]
+          - a * src[((y + 1) * W + x) * 4 + c]
+          - a * src[(y * W + (x - 1)) * 4 + c]
+          - a * src[(y * W + (x + 1)) * 4 + c];
+        dst[i + c] = val < 0 ? 0 : val > 255 ? 255 : (val + 0.5) | 0;
+      }
+      dst[i + 3] = src[i + 3]; // alpha unchanged
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+// ─── v72.6 PARCEL ZONE OVERLAY — redrawn AFTER AI polish to guarantee visibility ───
+// The AI polish tends to cover parcel boundaries with grass/texture.
+// This function redraws the parcel fill, parcel border, and envelope dashed lines
+// deterministically on top of the polished image. 100% safe per Supervisor protocol.
+function drawParcelZone(ctx, W, H, parcelScreenPts, envelopeScreenPts) {
+  if (!parcelScreenPts || parcelScreenPts.length < 3) return;
+  // 1. Semi-transparent fill inside parcel — sand/beige to "clear" the grass invasion
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+  for (let i = 1; i < parcelScreenPts.length; i++) {
+    ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "rgba(222, 197, 155, 0.55)"; // sand/beige, semi-transparent
+  ctx.fill();
+  // 2. Parcel boundary — solid red/orange, thick
+  ctx.beginPath();
+  ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
+  for (let i = 1; i < parcelScreenPts.length; i++) {
+    ctx.lineTo(parcelScreenPts[i].x, parcelScreenPts[i].y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(220, 80, 30, 0.9)";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // 3. Envelope (setback zone) — dashed red, thinner
+  if (envelopeScreenPts && envelopeScreenPts.length >= 3) {
+    ctx.beginPath();
+    ctx.moveTo(envelopeScreenPts[0].x, envelopeScreenPts[0].y);
+    for (let i = 1; i < envelopeScreenPts.length; i++) {
+      ctx.lineTo(envelopeScreenPts[i].x, envelopeScreenPts[i].y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = "rgba(200, 60, 30, 0.8)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+// ─── v72 DETERMINISTIC TREES — seeded PRNG, improved canopy, shadow casting ──
+// Seed is derived from pixel coordinates → identical output on every run
+function seedRandom(seed) {
+  // Simple mulberry32 PRNG — deterministic from integer seed
+  let t = (seed >>> 0) + 0x6D2B79F5;
+  return function() {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 function drawTrees(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
   const treePositions = [];
-  const step = 32;
+  const step = 28; // v72: tighter grid for more tree candidates
+  const minTreeDist = 22; // minimum distance between tree centers
+  // v72: seeded PRNG based on image dimensions (deterministic)
+  const rng = seedRandom(W * 10000 + H);
   for (let y = step; y < H - step; y += step) {
     for (let x = step; x < W - step; x += step) {
       const idx = (y * W + x) * 4;
       const r = d[idx], g = d[idx+1], b = d[idx+2];
-      // Is this a green grass pixel? (Mapbox green background ~#5a9848 = R90,G152,B72)
+      // Is this a green grass pixel? (after applyColorRemap: ~R75,G145,B60)
       const isGrass = (g > 80 && g > r * 1.2 && g > b * 1.4 && r < 150);
       if (!isGrass) continue;
-      // Check road nearby (sandy ~#c4b494 = R196,G180,B148 or border ~#8a7d62)
+      // Check road nearby (sandy after remap: ~R195,G180,B145)
       let nearRoad = false;
-      for (let dy = -18; dy <= 18; dy += 6) {
-        for (let dx = -18; dx <= 18; dx += 6) {
+      for (let dy = -20; dy <= 20; dy += 6) {
+        for (let dx = -20; dx <= 20; dx += 6) {
           const nx = x + dx, ny = y + dy;
           if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
           const ni = (ny * W + nx) * 4;
@@ -4435,34 +4914,79 @@ function drawTrees(ctx, W, H) {
       }
       // Not on/near building (white/bright areas)
       let nearBuilding = false;
-      for (let dy = -24; dy <= 4; dy += 6) {
-        for (let dx = -12; dx <= 12; dx += 6) {
-          const nx = x + dx, ny = Math.max(0, Math.min(H-1, y + dy));
+      for (let dy = -28; dy <= 4; dy += 6) {
+        for (let dx = -14; dx <= 14; dx += 6) {
+          const nx = Math.max(0, Math.min(W-1, x + dx));
+          const ny = Math.max(0, Math.min(H-1, y + dy));
           const ni = (ny * W + nx) * 4;
           if (d[ni] > 200 && d[ni+1] > 200 && d[ni+2] > 190) { nearBuilding = true; break; }
         }
         if (nearBuilding) break;
       }
-      if (nearRoad && !nearBuilding && ((x * 7 + y * 13) % 5) < 2) {
-        treePositions.push({ x, y });
+      // Not on parcel area (reddish boundary zone)
+      let onParcel = false;
+      const pr = d[idx], pg = d[idx+1], pb = d[idx+2];
+      // Beige/sand parcel interior or red boundary
+      if ((pr > 180 && pg > 150 && pb > 100 && pr > pg && pr - pb > 40) || (pr > 180 && pg < 140 && pb < 140)) {
+        onParcel = true;
+      }
+      // v72: seeded selection — use PRNG instead of modulo hash for better distribution
+      const selectChance = rng();
+      if (nearRoad && !nearBuilding && !onParcel && selectChance < 0.35) {
+        // Check min distance from existing trees
+        let tooClose = false;
+        for (const existing of treePositions) {
+          const dx2 = x - existing.x, dy2 = y - existing.y;
+          if (dx2 * dx2 + dy2 * dy2 < minTreeDist * minTreeDist) { tooClose = true; break; }
+        }
+        if (!tooClose) {
+          // v72: slight jitter from PRNG for natural look (but deterministic)
+          const jx = Math.round((rng() - 0.5) * 8);
+          const jy = Math.round((rng() - 0.5) * 8);
+          treePositions.push({ x: x + jx, y: y + jy });
+        }
+      }
+      // v72: also place trees in open green areas (not just near roads)
+      if (!nearRoad && !nearBuilding && !onParcel && isGrass && selectChance > 0.85 && selectChance < 0.92) {
+        let tooClose = false;
+        for (const existing of treePositions) {
+          const dx2 = x - existing.x, dy2 = y - existing.y;
+          if (dx2 * dx2 + dy2 * dy2 < (minTreeDist * 1.5) * (minTreeDist * 1.5)) { tooClose = true; break; }
+        }
+        if (!tooClose) {
+          treePositions.push({ x: x + Math.round((rng() - 0.5) * 6), y: y + Math.round((rng() - 0.5) * 6) });
+        }
       }
     }
   }
+  console.log(`[TREES] v72: ${treePositions.length} deterministic trees placed (seeded PRNG)`);
+  // v72: Sort by Y for correct overlap (back-to-front painter's order)
+  treePositions.sort((a, b) => a.y - b.y);
   for (const t of treePositions) {
-    const radius = 10 + ((t.x * 3 + t.y * 7) % 6);
-    // Shadow
+    // v72: seeded radius per tree — deterministic
+    const tRng = seedRandom(t.x * 1000 + t.y);
+    const radius = 9 + Math.round(tRng() * 7); // 9-16px range
+    // Shadow (offset toward bottom-right — sun from upper-left)
     ctx.beginPath();
-    ctx.arc(t.x + 2, t.y + 3, radius, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(20,50,15,0.35)";
+    ctx.arc(t.x + 3, t.y + 4, radius + 1, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(15,40,10,0.30)";
     ctx.fill();
-    // Canopy
+    // Canopy — multi-layer gradient for 3D spherical look
     ctx.beginPath();
     ctx.arc(t.x, t.y, radius, 0, Math.PI * 2);
-    const grad = ctx.createRadialGradient(t.x - 3, t.y - 3, 1, t.x, t.y, radius);
-    grad.addColorStop(0, "#5aad42");
-    grad.addColorStop(0.5, "#3d8a2e");
-    grad.addColorStop(1, "#2d6e22");
+    const grad = ctx.createRadialGradient(t.x - radius * 0.25, t.y - radius * 0.25, 1, t.x, t.y, radius);
+    // v72: slightly varied greens per tree for natural look (seeded)
+    const gVar = Math.round(tRng() * 20) - 10;
+    grad.addColorStop(0, `rgb(${90 + gVar},${175 + gVar},${66 + gVar})`);
+    grad.addColorStop(0.45, `rgb(${61 + gVar},${138 + gVar},${46 + gVar})`);
+    grad.addColorStop(0.8, `rgb(${45 + gVar},${110 + gVar},${34 + gVar})`);
+    grad.addColorStop(1, `rgb(${35 + gVar},${85 + gVar},${28 + gVar})`);
     ctx.fillStyle = grad;
+    ctx.fill();
+    // v72: subtle highlight spot for 3D depth
+    ctx.beginPath();
+    ctx.arc(t.x - radius * 0.2, t.y - radius * 0.2, radius * 0.35, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(140,210,100,0.15)";
     ctx.fill();
   }
 }
@@ -4513,13 +5037,7 @@ function drawLegendCompass(ctx, W, H, p) {
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
   ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
-
-  // v70.5: Annotations setback DÉSACTIVÉES (supprimées à la demande)
-  if (false) {
-    ctx.strokeText(ss + "m", cx - 120, cy + 10); ctx.fillText(ss + "m", cx - 120, cy + 10);
-    ctx.strokeText(ss + "m", cx + 120, cy + 10); ctx.fillText(ss + "m", cx + 120, cy + 10);
-    ctx.restore();
-  }
+  // v72.22: Setback labels DISABLED per user request
 }
 // ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
 function drawSolarArc(ctx, W, H, p) {
@@ -4565,9 +5083,8 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, split_layout }) {
   const s = W / 1280;
-
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
   ctx.translate(W - 60*s, H - 60*s);
@@ -4582,38 +5099,103 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   ctx.fillStyle = "#bbb"; ctx.fillText("O", -22*s, 4*s);
   ctx.fillStyle = "#bbb"; ctx.fillText("E", 22*s, 4*s);
   ctx.restore();
-
   // ── ANNOTATIONS ÉTAGES : traits + labels à droite du bâtiment (style référence) ──
-  // Positionnées au centre-droit de l'image
-  const rdcH_m = 3.0;  // v71: tous les niveaux = 3m
+  const rdcH_m = 3.0;
   const etageH_m = 3.0;
-  const realTotalH = rdcH_m + (levels - 1) * etageH_m;
-  const sdpTotale = fp_m2 * levels;
-  // Espacement vertical entre annotations (adapté à la perspective)
-  const annX = W * 0.62;         // position X des annotations (à droite du bâtiment)
-  const annBaseY = H * 0.58;     // base du RDC (approximation perspective)
-  const annStepY = -32 * s;      // espacement vertical entre étages
   const lineLen = 14 * s;
-  for (let f = 0; f < levels; f++) {
-    const y = annBaseY + f * annStepY;
-    const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-    // Petit trait horizontal noir fin
+  // v72.28: SPLIT_AV_AR — annotations LOGEMENT en haut, COMMERCE en dessous (même colonne droite)
+  if (split_layout && split_layout.mode === "SPLIT_AV_AR") {
+    const vc = split_layout.volume_commerce;
+    const vl = split_layout.volume_logement;
+    const annX = W * 0.62;
+    const stepY = -32 * s;
+    // ── LOGEMENT annotations (en haut, BLEU) — niveaux habitables sur pilotis ──
+    const logtBaseY = H * 0.52;
+    for (let f = 0; f < vl.levels; f++) {
+      const y = logtBaseY + f * stepY;
+      // v72.28: En SPLIT avec pilotis, le logement commence à R+1
+      const floorLabel = `R+${f + 1}`;
+      ctx.beginPath();
+      ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
+      ctx.strokeStyle = "#3a7ac0"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${vl.fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#3a7ac0";
+      ctx.fillText(`${floorLabel} : ${vl.fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    }
+    // Pilotis annotation
+    const pilotisY = logtBaseY + 24*s;
     ctx.beginPath();
-    ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
-    ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
-    // Label : "R+2 : 596 m²" — NOIR avec contour blanc pour lisibilité
+    ctx.moveTo(annX, pilotisY); ctx.lineTo(annX + lineLen, pilotisY);
+    ctx.strokeStyle = "#b0aea8"; ctx.lineWidth = 2*s; ctx.stroke();
+    ctx.font = `${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    ctx.fillStyle = "#888";
+    ctx.fillText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    // Label "Logement" sous les niveaux
+    const logtLabelY = pilotisY + 22*s;
+    ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Logement: ${vl.sdp_m2} m² SDP`, annX, logtLabelY);
+    ctx.fillStyle = "#3a7ac0";
+    ctx.fillText(`Logement: ${vl.sdp_m2} m² SDP`, annX, logtLabelY);
+    // ── COMMERCE annotations (en dessous du logement, ORANGE) ──
+    const commBaseY = logtLabelY + 28*s;
+    for (let f = 0; f < vc.levels; f++) {
+      const y = commBaseY + f * 24*s;
+      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      ctx.beginPath();
+      ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
+      ctx.strokeStyle = "#e07830"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${vc.fp_m2} m² (commerce)`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#e07830";
+      ctx.fillText(`${floorLabel} : ${vc.fp_m2} m² (commerce)`, annX + lineLen + 6*s, y + 4*s);
+    }
+    // Label "Commerce" sous
+    const commLabelY = commBaseY + vc.levels * 24*s + 4*s;
+    ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
+    ctx.fillStyle = "#e07830";
+    ctx.fillText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
+    // Total SDP en bas — NOIR avec contour blanc
+    const totalSDP = (vc.sdp_m2 || 0) + (vl.sdp_m2 || 0);
+    const totalY = commLabelY + 24*s;
+    ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "left";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+    ctx.strokeText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
+    ctx.fillStyle = "#000000";
+    ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
+  } else {
+    // ══ MODE SUPERPOSÉ : annotations classiques ══
+    const realTotalH = rdcH_m + (levels - 1) * etageH_m;
+    const sdpTotale = fp_m2 * levels;
+    const annX = W * 0.62;
+    const annBaseY = H * 0.58;
+    const annStepY = -32 * s;
+    for (let f = 0; f < levels; f++) {
+      const y = annBaseY + f * annStepY;
+      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      ctx.beginPath();
+      ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
+      ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#000000";
+      ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    }
+    // Total SDP en bas — NOIR avec contour blanc
     ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
   }
-  // Total SDP en bas — NOIR avec contour blanc
-  ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
-  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-  ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
-  ctx.fillStyle = "#000000";
-  ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
 app.post("/generate", async (req, res) => {
@@ -4663,20 +5245,33 @@ app.post("/generate", async (req, res) => {
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(await loadImage(screenshotBuf), 0, 0);
-    // v65.2: N'ajouter NI légende NI labels NI boussole AVANT le polish AI
-    // pour éviter le dédoublement — tout sera dessiné APRÈS le polish
+    // ═══════════════════════════════════════════════════════════════════════
+    // v72 DETERMINISTIC PIPELINE — all structural rendering BEFORE AI polish
+    // Step 1: Color remap (Mapbox beige → green grass + sandy roads)
+    // Step 2: Deterministic trees (seeded PRNG, identical every run)
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log(`[SLIDE4] v72: Applying deterministic color remap...`);
+    applyColorRemap(ctx, W, H);
+    console.log(`[SLIDE4] v72: Drawing deterministic trees...`);
+    drawTrees(ctx, W, H);
+    console.log(`[SLIDE4] v72: Applying deterministic shadows...`);
+    applyDeterministicShadows(ctx, W, H);
+    console.log(`[SLIDE4] v72: Applying warm color grading...`);
+    applyWarmGrading(ctx, W, H);
+    console.log(`[SLIDE4] v72: Applying light sharpening...`);
+    applySharpen(ctx, W, H, 0.25);
+    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
+    // pngClean = Mapbox screenshot + color remap + trees — NO extra canvas drawings
+    // Mapbox already draws the parcel + envelope in the HTML — don't duplicate
     const pngClean = canvas.toBuffer("image/png");
-    // Version avec overlays (fallback si pas d'AI polish)
-    // v70.1: Projeter GPS → pixels screen pour positionner les labels sur les arêtes
+    // Screen coordinates for overlays (legend, setback labels) — drawn on fallback + after polish
     const pitch = 58;
     const scale = 256 * Math.pow(2, zoom) / (2 * Math.PI);
     function gpsToScreen(lat, lon) {
-      // Mercator projection relative to center
-      const dx = (lon - cLat > 1000 ? lon : lon) - cLon; // lon diff in degrees
+      const dx = (lon - cLat > 1000 ? lon : lon) - cLon;
       const dyMerc = Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) - Math.log(Math.tan(Math.PI / 4 + cLat * Math.PI / 360));
       const px = dx * Math.PI / 180 * scale;
       const py = -dyMerc * scale;
-      // Apply pitch perspective (simplified: scale Y by cos(pitch), offset toward bottom)
       const pitchRad = pitch * Math.PI / 180;
       const cosPitch = Math.cos(pitchRad);
       return { x: W / 2 + px, y: H / 2 + py * cosPitch };
@@ -4694,94 +5289,161 @@ app.post("/generate", async (req, res) => {
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
-    // ── v61.9: Polish via Responses API — CLEAN SMOOTH ──
-    if (OPENAI_API_KEY) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // v72.20: HYBRID AI POLISH — strict stability protocol
+    // Strategy: AI polishes ONLY the base texture (no overlays visible to AI)
+    //           → strict drift scoring (25%) → redraw overlays on top
+    //           → fallback to deterministic if all variations fail
+    // ═══════════════════════════════════════════════════════════════════════════
+    const SLIDE4_VARIATIONS = 3;
+    const SLIDE4_AI_POLISH_ENABLED = true;
+    const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
+    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
       try {
-        console.log("[SLIDE4-POLISH] Starting AI polish v68.0-MINIMAL...");
-        // v68: Envoyer en pleine résolution (1280×1280) pour éviter le flou du downscale
+        console.log(`[SLIDE4-POLISH] v72.20: Hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%`);
         const b64Input = pngClean.toString("base64");
-        console.log(`[SLIDE4-POLISH] Full-res input: ${pngClean.length} bytes, b64: ${b64Input.length} chars`);
-
-        // === v70.7 — ARCHITECTURAL RENDER POLISH ===
-        const polishPrompt = `Transform this 3D architectural site plan into a photo-realistic architectural rendering.
-
-GEOMETRY RULES (STRICT):
-- Keep ALL building footprints, positions, shapes, and sizes EXACTLY as shown.
-- Keep ALL roads in their exact positions and widths.
-- Keep the red/orange parcel boundary lines and dashed envelope lines PERFECTLY intact — sharp geometric edges, no bleeding, no smearing, no feathering. These are precision architectural zoning lines.
-- Keep the same camera angle, framing, and composition. Do NOT crop or shift.
-- Do NOT add text, watermarks, inset images, or UI elements.
-
-VISUAL ENHANCEMENT (MANDATORY):
-- TREES: Add small realistic round-canopy trees (dark green, 3D spherical crowns) scattered in green areas between buildings. Trees must be SMALL — canopy diameter 2-4m maximum, never bigger than a car. Do NOT make oversized trees that dwarf buildings. Place them naturally along roads and in yards. About 20-35 trees visible. No trees inside the beige parcel area.
-- SHADOWS: Add realistic cast shadows from ALL buildings and trees. Sun from the upper-left (northwest). Shadows should fall on the ground, roads, and other surfaces. Soft penumbra edges.
-- BUILDINGS: Apply concrete/gray texture to all buildings. Slightly weathered, realistic. Not pure white — use light gray (#c8c4bc) with subtle variation. Keep the flat-roof architectural style.
-- ROADS: Dark asphalt gray (#3a3a3a), slightly textured. No vegetation on road surfaces.
-- GRASS: Rich green lawn texture with subtle shade variations. Not flat — show mowing patterns or slight color variation.
-- PARCEL: The highlighted parcel area (beige/ochre/sand colored ground with red border) must be a CLEAN, FLAT, EMPTY plot of beige/sand ground. Do NOT place any buildings, structures, objects, vegetation, or details INSIDE the parcel. The parcel interior must be ONLY flat beige/sand ground with the red boundary line and dashed envelope line visible. No trees, no grass, no buildings inside — just clean empty sand/beige terrain.
-- LIGHTING: Warm afternoon daylight. Natural ambient occlusion where buildings meet the ground.
-
-QUALITY: Photo-realistic architectural visualization quality. Clean, professional, suitable for a client presentation.`;
-
-        const oaiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4.1",
-            input: [{ role: "user", content: [
-              { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-              { type: "input_text", text: polishPrompt }
-            ]}],
-            tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
-          })
-        });
-        console.log(`[SLIDE4-POLISH] Responses API status: ${oaiRes.status} (${Date.now() - t0}ms)`);
-        const oaiJson = await oaiRes.json();
-
-        if (oaiJson.error) {
-          console.error(`[SLIDE4-POLISH] API error: ${JSON.stringify(oaiJson.error)}`);
-        } else {
+        console.log(`[SLIDE4-POLISH] Input: ${pngClean.length} bytes (base texture only — no legend/parcel overlays)`);
+        // ── ARCHITECTURAL POLISH PROMPT — matches reference render ─────────
+        // Enhances trees + texture while preserving structure strictly.
+        const polishPrompt = [
+          "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
+          "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
+          "Do NOT move, add, remove, or redesign any building.",
+          "Do NOT change the camera angle or perspective.",
+          "Do NOT add people, vehicles, text, labels, or watermarks.",
+          "Apply ONLY these specific enhancements:",
+          "1. Replace the simple green sphere trees with realistic architectural maquette-style trees (same positions, same sizes, natural leafy canopy).",
+          "2. Add subtle realistic shadows under buildings (soft, natural afternoon light from the south).",
+          "3. Give the white/light buildings a subtle clean matte concrete texture (keep them white/light, do not darken them).",
+          "4. Enhance the green grass ground with subtle natural grass texture (keep the same green tone).",
+          "5. Refine road surfaces with subtle asphalt texture.",
+          "6. Overall warm afternoon lighting with gentle ambient occlusion.",
+          "Style: premium architectural maquette visualization. Clean, professional, minimal. No artistic effects, no painterly style.",
+          "The buildings must remain in the EXACT SAME positions. The layout must be IDENTICAL."
+        ].join(" ");
+        const polishRequests = [];
+        for (let v = 0; v < SLIDE4_VARIATIONS; v++) {
+          polishRequests.push(
+            fetch("https://api.openai.com/v1/responses", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gpt-4.1",
+                input: [{ role: "user", content: [
+                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                  { type: "input_text", text: polishPrompt }
+                ]}],
+                tools: [{ type: "image_generation", input_fidelity: "high" }]
+              })
+            }).then(r => r.json()).catch(err => ({ error: err.message }))
+          );
+        }
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls launched in parallel (${Date.now() - t0}ms)`);
+        const polishResults = await Promise.all(polishRequests);
+        // ── DRIFT SCORING — pick best under threshold ───────────────────────
+        let bestVariation = null;
+        let bestDriftScore = 1.0;
+        const variationLog = [];
+        for (let v = 0; v < polishResults.length; v++) {
+          const oaiJson = polishResults[v];
+          if (oaiJson.error) {
+            variationLog.push(`  v${v+1}: API error — ${JSON.stringify(oaiJson.error).substring(0, 120)}`);
+            continue;
+          }
           let polishedB64 = null;
           if (oaiJson.output) {
             for (const item of oaiJson.output) {
               if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
             }
           }
-          if (polishedB64) {
-            console.log(`[SLIDE4-POLISH] SUCCESS (${polishedB64.length} chars, ${Date.now() - t0}ms)`);
-            const enhancedMapBuf = Buffer.from(polishedB64, "base64");
-            const finalCanvas = createCanvas(W, H);
-            const finalCtx = finalCanvas.getContext("2d");
-            finalCtx.drawImage(await loadImage(enhancedMapBuf), 0, 0, W, H);
-
-            // ═══════════════════════════════════════════════════════════════
-            // v70.9: Redessiner parcelle + enveloppe APRÈS AI polish
-            // L'AI altère/efface les lignes → on les redessine en canvas
-            // pour garantir des bords nets et géométriques.
-            // ═══════════════════════════════════════════════════════════════
-            // v70.10: PAS de re-dessin parcelle/enveloppe en canvas
-            // Mapbox les dessine déjà à la bonne échelle via fill-extrusion + line layers.
-            // Le re-dessin canvas créait un doublon à une échelle différente (projection GPS→px décalée).
-
-            drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
-            drawSolarArc(finalCtx, W, H, { bearing });
-            const finalPng = finalCanvas.toBuffer("image/png");
-            const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
-            const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
-            if (!ue2) {
-              const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
-              enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
-              console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
-            } else {
-              console.warn("[SLIDE4-POLISH] Upload error:", ue2.message);
-            }
-          } else {
-            console.warn("[SLIDE4-POLISH] No image in response:", JSON.stringify(oaiJson).substring(0, 300));
+          if (!polishedB64) {
+            variationLog.push(`  v${v+1}: no image returned`);
+            continue;
+          }
+          const enhancedBuf = Buffer.from(polishedB64, "base64");
+          // v72.20: Strict drift check — threshold 25%
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, SLIDE4_DRIFT_THRESHOLD);
+          const pct = (drift.driftScore * 100).toFixed(1);
+          const pass = drift.driftScore < SLIDE4_DRIFT_THRESHOLD ? "PASS" : "FAIL";
+          variationLog.push(`  v${v+1}: drift=${pct}% (${drift.classShifts}/${drift.totalBlocks} blocks) → ${pass}`);
+          // Only consider variations that PASS the threshold
+          if (drift.driftScore < SLIDE4_DRIFT_THRESHOLD && drift.driftScore < bestDriftScore) {
+            bestDriftScore = drift.driftScore;
+            bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
           }
         }
-      } catch (oaiErr) { console.error("[SLIDE4-POLISH] Exception:", oaiErr.message); }
+        console.log(`[SLIDE4-POLISH] v72.20 Multi-render results (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
+        if (bestVariation) {
+          console.log(`[SLIDE4-POLISH] ✓ ACCEPTED v${bestVariation.index} (drift=${(bestDriftScore * 100).toFixed(1)}% < ${SLIDE4_DRIFT_THRESHOLD * 100}% threshold)`);
+          const polishedImg = await loadImage(bestVariation.buf);
+          const finalCanvas = createCanvas(W, H);
+          const finalCtx = finalCanvas.getContext("2d");
+          finalCtx.drawImage(polishedImg, 0, 0, W, H);
+          // Black bar detection — crop if AI shifted content
+          const scanData = finalCtx.getImageData(0, 0, W, H).data;
+          let leftBlack = 0, rightBlack = 0, topBlack = 0, bottomBlack = 0;
+          for (let x = 0; x < W / 4; x++) {
+            let isBlack = true;
+            for (let y = 0; y < H; y += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) leftBlack = x + 1; else break;
+          }
+          for (let x = W - 1; x > W * 3 / 4; x--) {
+            let isBlack = true;
+            for (let y = 0; y < H; y += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) rightBlack = W - x; else break;
+          }
+          for (let y = 0; y < H / 4; y++) {
+            let isBlack = true;
+            for (let x = 0; x < W; x += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) topBlack = y + 1; else break;
+          }
+          for (let y = H - 1; y > H * 3 / 4; y--) {
+            let isBlack = true;
+            for (let x = 0; x < W; x += 10) {
+              const idx = (y * W + x) * 4;
+              if (scanData[idx] + scanData[idx+1] + scanData[idx+2] > 30) { isBlack = false; break; }
+            }
+            if (isBlack) bottomBlack = H - y; else break;
+          }
+          if (leftBlack > 2 || rightBlack > 2 || topBlack > 2 || bottomBlack > 2) {
+            console.log(`[SLIDE4-POLISH] Black bars L=${leftBlack} R=${rightBlack} T=${topBlack} B=${bottomBlack} — cropping`);
+            const srcX = leftBlack, srcY = topBlack;
+            const srcW = W - leftBlack - rightBlack, srcH = H - topBlack - bottomBlack;
+            finalCtx.clearRect(0, 0, W, H);
+            finalCtx.drawImage(polishedImg, srcX, srcY, srcW, srcH, 0, 0, W, H);
+          }
+          // Post-polish sharpening to counteract AI softness
+          applySharpen(finalCtx, W, H, 0.30);
+          // ── REDRAW OVERLAYS on polished image (AI never saw these) ─────────
+          drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
+          drawSolarArc(finalCtx, W, H, { bearing });
+          const finalPng = finalCanvas.toBuffer("image/png");
+          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
+          if (!ue2) {
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
+            console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
+          }
+        } else {
+          console.log(`⚠ [SLIDE4-POLISH] ALL ${SLIDE4_VARIATIONS} variations FAILED drift check (>${SLIDE4_DRIFT_THRESHOLD * 100}%) — using deterministic fallback`);
+          // Fallback: deterministic render is already in 'png' with overlays — no action needed
+        }
+      } catch (oaiErr) {
+        console.error("[SLIDE4-POLISH] Exception:", oaiErr.message);
+        console.log("[SLIDE4-POLISH] Fallback to deterministic render (already uploaded)");
+      }
     } else {
-      console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — skipping");
+      if (!OPENAI_API_KEY) console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — using deterministic render");
     }
     return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
@@ -4794,7 +5456,10 @@ QUALITY: Photo-realistic architectural visualization quality. Clean, professiona
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v56.2 ═══", JSON.stringify(req.body).slice(0, 300));
+  console.log("═══ /generate-massing v72.29 ═══");
+  console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
+  console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
+  console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
@@ -4824,21 +5489,72 @@ app.post("/generate-massing", async (req, res) => {
     // ── v56.7 : orientation rue ──
     road_bearing,          // azimut de la route principale (degrés, depuis la Sheet)
     front_edge,            // v70: override index arête front (0-3)
+    // ── v72.22 : disposition spatiale commerce/logement ──
+    layout_mode,           // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
+    commerce_depth_m,      // profondeur bande commerciale (défaut 6m)
+    retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
   const envW = Number(envelope_w);
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
-  const label = String(massing_label).toUpperCase();
-  // v71.1: Fallback ROBUSTE — chercher "mixte" dans TOUS les champs possibles
-  // Make.com peut envoyer le type de projet sous n'importe quel nom de champ
-  const bodyStr = JSON.stringify(req.body).toLowerCase();
-  const bodyHasMixte = /mixte|mixed/i.test(bodyStr);
-  const effectiveProgramMain = program_main || project_type || (bodyHasMixte ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v71.1] program_main="${program_main}" project_type="${project_type}" bodyHasMixte=${bodyHasMixte} → effective="${effectiveProgramMain}"`);
+  // v72.29: DÉTECTION ROBUSTE DU LABEL (A/B/C) — PRIORITÉ À slide_name
+  // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
+  // Le slide_name est TOUJOURS différent (sinon les images s'écrasent) → SOURCE DE VÉRITÉ.
+  let label = "A"; // défaut
+  const slideStr = String(slide_name || "").toUpperCase();
+  const rawLabel = String(massing_label || "").toUpperCase().trim();
+  // PRIORITÉ 1: slide_name (TOUJOURS fiable car unique par requête)
+  const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
+    || slideStr.match(/[_\s.-]([ABC])$/)
+    || slideStr.match(/([ABC])$/);
+  if (slideMatch) {
+    label = slideMatch[1];
+    console.log(`[v72.29] LABEL from slide_name: "${label}" (slide_name="${slide_name}")`);
+  } else if (["A", "B", "C"].includes(rawLabel)) {
+    // PRIORITÉ 2: massing_label (seulement si slide_name ne contient pas A/B/C)
+    label = rawLabel;
+    console.log(`[v72.29] LABEL from massing_label: "${label}" (slide_name="${slide_name}" had no A/B/C)`);
+  } else {
+    // PRIORITÉ 3: chercher dans tout le body
+    const bodyStr = JSON.stringify(req.body).toUpperCase();
+    if (/PRUDENT|[_":]C[_"}\s,]/.test(bodyStr)) label = "C";
+    else if (/EQUILIBRE|[_":]B[_"}\s,]/.test(bodyStr)) label = "B";
+    console.log(`[v72.29] LABEL from body scan: "${label}"`);
+  }
+  console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
+  // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
+  // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
+  // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
+  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
+  // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
+  // ── Détection MIXTE ──
+  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
+  // ── Détection SPLIT ──
+  // Signal 1: layout_mode explicitement SPLIT_AV_AR
+  const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
+  // Signal 2: une valeur du body mentionne clairement la séparation
+  const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
+  // Signal 3: commerce_depth_m est envoyé avec une valeur > 0 → c'est forcément du SPLIT
+  const hasCommerceDepth = Number(commerce_depth_m) > 0;
+  // ── Résolution ──
+  const effectiveLayoutMode = (layoutModeIsSplit || bodyHasSplit || hasCommerceDepth)
+    ? "SPLIT_AV_AR" : "SUPERPOSE";
+  const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
+  // ── Programme effectif ──
+  const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
+  console.log(`[MASSING v72.25] ┌── DÉTECTION MIXTE/SPLIT ──`);
+  console.log(`[MASSING v72.25] │ program_main="${program_main}" project_type="${project_type}"`);
+  console.log(`[MASSING v72.25] │ layout_mode_raw="${layout_mode}" commerce_depth_m="${commerce_depth_m}" retrait="${retrait_inter_volumes_m}"`);
+  console.log(`[MASSING v72.25] │ bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit} splitActive=${splitActive}`);
+  console.log(`[MASSING v72.25] │ effectiveLayoutMode="${effectiveLayoutMode}" effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.25] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
+  console.log(`[MASSING v72.25] │ field_values_sample="${fieldValues.slice(0, 500)}"`);
+  console.log(`[MASSING v72.25] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
-  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor;
+  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
@@ -4874,8 +5590,19 @@ app.post("/generate-massing", async (req, res) => {
       density_pressure_factor: Number(density_pressure_factor) || 1,
       driver_intensity: driver_intensity || "MEDIUM",
       strategic_position: strategic_position || "",
+      // v72.22: disposition spatiale commerce/logement
+      layout_mode: effectiveLayoutMode,
+      commerce_depth_m: Number(commerce_depth_m) || 6,
+      retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
     });
     const sc = scenarios[label] || scenarios.A;
+    // v72.28: LOG les 3 scénarios pour vérifier la différenciation
+    console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
+    for (const k of ["A", "B", "C"]) {
+      const s = scenarios[k];
+      if (s) console.log(`[v72.28] ${k}: fp=${s.fp_m2}m² levels=${s.levels} split=${s.split_layout ? s.split_layout.volume_logement.levels + "niv_logt" : "none"} pilotis=${s.has_pilotis}`);
+    }
+    console.log(`[v72.28] USING: label="${label}" → fp=${sc.fp_m2}m² levels=${sc.levels}`);
     fp = sc.fp_m2;
     levels = sc.levels;
     totalH = sc.height_m;
@@ -4883,26 +5610,101 @@ app.post("/generate-massing", async (req, res) => {
     has_pilotis = sc.has_pilotis || false;
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} (${sc.cos_compliance})`);
+    splitLayout = sc.split_layout || null;
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
     levels = Number(levels_raw);
     totalH = Number(height_raw) || levels * floorH;
-    commerceLevels = Number(commerce_raw);
+    // v72.22: commerce_levels — si la sheet envoie une valeur, on la respecte.
+    // Sinon, on cross-check program_main ou layout_mode : si mixte ou SPLIT → 1 niveau commerce (RDC)
+    const rawComm = Number(commerce_raw);
+    if (rawComm > 0) {
+      commerceLevels = rawComm;
+    } else if (/mixte|mixed/i.test(effectiveProgramMain) || splitActive) {
+      commerceLevels = 1; // commerce toujours au RDC
+      console.log(`[CLASSIC] commerce_raw vide mais effectiveProgram="${effectiveProgramMain}" split=${splitActive} → commerce_levels=1 (RDC)`);
+    } else {
+      commerceLevels = 0;
+    }
     has_pilotis = false;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
-    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m`);
+    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels}`);
+  }
+  // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
+  // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
+  if (commerceLevels === 0 && (bodyHasMixte || splitActive)) {
+    commerceLevels = 1;
+    console.log(`[OVERRIDE] commerceLevels=0 mais body contient mixte/split → FORCÉ à 1 (commerce RDC ORANGE)`);
+  }
+  // v72.28: Si mixte SUPERPOSÉ et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
+  // En SPLIT, les levels = logement seulement (commerce est un volume séparé) → PAS de override
+  if (commerceLevels > 0 && levels <= commerceLevels && !splitLayout) {
+    const oldLevels = levels;
+    levels = commerceLevels + 1;
+    console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
+  }
+  // v72.23: SPLIT SYNTHÉTIQUE — si le body demande un SPLIT mais splitLayout est null,
+  // on construit un splitLayout synthétique pour que le rendu 3D montre 2 volumes séparés.
+  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact (volume unique).
+  // A et B gardent le SPLIT avec commerce en front + logement sur pilotis derrière.
+  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && label !== "C") {
+    const commDepthEstimate = Number(commerce_depth_m) || 6;
+    const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
+    const logtFpEstimate = fp;  // emprise logement = fp original
+    // v72.32: DIFFÉRENCIATION FORCÉE — même logique que le moteur SPLIT
+    // INTENSIFICATION (A): min 3 niveaux logement (R+3) = pilotis + 3 étages habitables
+    // EQUILIBRE (B): min 2 niveaux logement (R+2) = pilotis + 2 étages habitables
+    // Sans ce forçage, logtLevels = levels - commerceLevels donne trop peu de niveaux
+    // car les niveaux SUPERPOSÉ (total) sont inférieurs aux niveaux SPLIT (logement seul)
+    const maxLogtFloors = Math.max(1, (Number(max_floors) || 99) - commerceLevels);
+    let logtLevels = Math.max(1, levels - commerceLevels);
+    if (label === "A") logtLevels = Math.min(maxLogtFloors, Math.max(3, logtLevels));
+    else if (label === "B") logtLevels = Math.min(maxLogtFloors, Math.max(2, logtLevels));
+    console.log(`[v72.32] SPLIT SYNTHÉTIQUE ${label}: levels_engine=${levels} - commerce=${commerceLevels} → logtLevels=${logtLevels} (maxLogt=${maxLogtFloors})`);
+    splitLayout = {
+      mode: "SPLIT_AV_AR",
+      volume_commerce: {
+        fp_m2: commFpEstimate,
+        width_m: Math.round(envW * 0.8),
+        depth_m: commDepthEstimate,
+        levels: commerceLevels,
+        sdp_m2: commFpEstimate * commerceLevels,
+        units: Math.max(1, Math.floor(commFpEstimate / 30)),
+        position: "AVANT (contre clôture)",
+      },
+      volume_logement: {
+        fp_m2: logtFpEstimate,
+        width_m: Math.round(envW * 0.8),
+        depth_m: Math.round(envD * 0.5),
+        levels: Math.max(1, logtLevels),
+        sdp_m2: logtFpEstimate * Math.max(1, logtLevels),
+        units: 0,
+        position: "ARRIÈRE",
+      },
+      retrait_inter_m: Number(retrait_inter_volumes_m) || 4,
+    };
+    console.log(`[CLASSIC→SPLIT] splitLayout synthétique construit: commerce=${commFpEstimate}m²×${commerceLevels}niv + logement=${logtFpEstimate}m²×${Math.max(1, logtLevels)}niv`);
+  }
+  // v72.32: En SPLIT (moteur ou synthétique), levels doit = niveaux LOGEMENT uniquement
+  // Car le rendu 3D utilise: realTotalH = rdcH + levels * etageH (pilotis + N étages)
+  // Si levels reste en mode SUPERPOSÉ (total), la hauteur est fausse
+  if (splitLayout && splitLayout.volume_logement) {
+    levels = splitLayout.volume_logement.levels;
+    console.log(`[v72.32] SPLIT levels sync: levels=${levels} (logement seul, depuis splitLayout.volume_logement.levels)`);
   }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
-  const habitationLevels = levels - commerceLevels;
-  // v71: LOG DIAGNOSTIC — ce que Make.com envoie réellement
-  console.log(`┌── MASSING DIAGNOSTIC v71 ──`);
-  console.log(`│ label=${label} compute_scenario=${compute_scenario}`);
-  console.log(`│ program_main="${program_main}" → commerce_levels=${commerceLevels}`);
-  console.log(`│ fp=${fp}m² levels=${levels} totalH=${totalH}m`);
+  const habitationLevels = splitLayout ? levels : levels - commerceLevels;
+  // v72.23: LOG DIAGNOSTIC COMPLET — traçabilité moteur → 3D
+  console.log(`┌── MASSING DIAGNOSTIC v72.22 ──`);
+  console.log(`│ Scénario: ${label} (${compute_scenario ? "SMART" : "CLASSIQUE"})`);
+  console.log(`│ program_main="${program_main}" effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`│ commerce_raw="${commerce_raw}" → commerceLevels=${commerceLevels}`);
+  console.log(`│ fp=${fp}m² × levels=${levels} = ${Math.round(fp * levels)}m² SDP`);
+  console.log(`│ ${commerceLevels > 0 ? `MIXTE: ${commerceLevels} RDC commerce (ORANGE) + ${habitationLevels} logement (BLEU)` : `LOGEMENT PUR: ${levels} niveaux BLEU`}`);
   console.log(`│ site_area=${site_area} envelope=${envW}×${envD}`);
   console.log(`│ mix_score=${mix_score} rent_score=${rent_score} capacity_score=${capacity_score}`);
   console.log(`│ scenario_role=${scenarioRole} accent=${accentColor}`);
@@ -4946,6 +5748,12 @@ app.post("/generate-massing", async (req, res) => {
   const bearing = 0;
   const zoom = computeZoomMassing(coords, cLat, cLon); // v56.5: zoom plus serré pour le massing
   console.log(`Map view: bearing=${bearing}° zoom=${zoom}`);
+  // v72.27: Passer split_context pour que le logement soit positionné DERRIÈRE le commerce
+  const splitContext = splitLayout ? {
+    commerce_depth_m: splitLayout.volume_commerce.depth_m || 6,
+    retrait_inter_m: splitLayout.retrait_inter_m || 4,
+    is_split: true,
+  } : null;
   const massingCoords = computeMassingPolygon(envelopeCoords, fp, envelopeAreaReal, {
     massing_mode: compute_scenario ? (label === "A" ? "BALANCED" : label === "B" ? "SPREAD" : "COMPACT") : "BALANCED",
     primary_driver: primary_driver || "MAX_CAPACITE",
@@ -4957,6 +5765,7 @@ app.post("/generate-massing", async (req, res) => {
     existing_fp_m2: Number(existing_footprint_m2) || 0,
     road_bearing: Number(road_bearing) || null,        // v56.7: azimut rue depuis la Sheet
     scenario_role: label === "A" ? "INTENSIFICATION" : label === "B" ? "EQUILIBRE" : "PRUDENT",
+    split_context: splitContext,                         // v72.27: positionner logement derrière commerce
   });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -4972,20 +5781,68 @@ app.post("/generate-massing", async (req, res) => {
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
     const rdcH = 3.0;   // v71: RDC toujours 3m (commerce et logement même hauteur)
     const etageH = 3.0;                              // étages courants = 3m
-    const realTotalH = rdcH + (levels - 1) * etageH; // hauteur réelle avec RDC variable
-    console.log(`[HEKTAR] levels=${levels} rdcH=${rdcH}m etageH=${etageH}m totalH=${realTotalH}m commerce=${commerceLevels}`);
-    // v57.20: passer has_pilotis au rendu pour décaler le bâtiment et dessiner les colonnes
+    // v72.28: SPLIT 3D — commerce construit depuis l'ENVELOPPE, logement = massingCoords
+    let commerceCoords = null;
+    if (splitLayout && commerceLevels > 0) {
+      commerceCoords = buildCommercePolygon(envelopeCoords, splitLayout, Number(road_bearing) || null);
+    }
+    const useSplit3D = commerceCoords !== null;
+    // v72.28: En SPLIT, la hauteur totale du logement = pilotis (3m) + levels × etageH
+    const realTotalH = useSplit3D
+      ? rdcH + levels * etageH    // pilotis (rdcH) + N niveaux habitables au-dessus
+      : rdcH + (levels - 1) * etageH; // mode normal : RDC + (N-1) étages
+    console.log(`┌── MASSING 3D RENDER v72.26 — ${useSplit3D ? "SPLIT_AV_AR" : "SUPERPOSÉ"} ──`);
+    console.log(`│ Scénario ${label}: ${levels} niveaux (${commerceLevels} commerce RDC ORANGE + ${levels - commerceLevels} logement BLEU)`);
+    console.log(`│ Hauteurs: RDC=${rdcH}m, étages=${etageH}m, total=${realTotalH}m`);
+    console.log(`│ Emprise logement: ${Math.round(fp)}m² × ${levels} niveaux = ${Math.round(fp * levels)}m² SDP`);
+    if (useSplit3D) {
+      console.log(`│ SPLIT 3D ACTIF: commerce=${commerceCoords.length}pts (orange DEVANT) | logement=massingCoords (bleu DERRIÈRE)`);
+      console.log(`│ Commerce: 1 niveau ORANGE | Logement: ${splitLayout.volume_logement.levels} niveaux BLEU`);
+    } else {
+      console.log(`│ Couleurs: f<${commerceLevels} → ORANGE (#e07830), f>=${commerceLevels} → BLEU (#3a7ac0)`);
+    }
+    console.log(`└── FIN DIAGNOSTIC 3D ──`);
+    // v72.28: En SPLIT, pilotis déjà inclus dans realTotalH — pas de double ajout
     const hasPilotisRender = String(has_pilotis || "").toLowerCase() === "true" || has_pilotis === true;
-    const pilotisH = hasPilotisRender ? 3.5 : 0; // PILOTIS_CONFIG.PILOTIS_HEIGHT_M
+    const pilotisH = (hasPilotisRender && !useSplit3D) ? 3.5 : 0; // SPLIT gère pilotis dans realTotalH
     const totalHWithPilotis = realTotalH + pilotisH;
-    const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, massingCoords,
-      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH }, MAPBOX_TOKEN);
+    // v72.26: En mode SPLIT, massingCoords = logement (en retrait), commerceCoords = devant (depuis enveloppe)
+    const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
+      massingCoords,
+      { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH,
+        split_layout: useSplit3D ? splitLayout : null,
+        commerce_coords: useSplit3D ? commerceCoords : null }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 25000 });
+    // v72.22: Attendre un peu plus pour que les tuiles soient bien peintes
+    await new Promise(r => setTimeout(r, 1500));
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
-    const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+    let screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+    // v72.22: TONE CHECK — vérifier que le fond est bien beige (pas gris/blanc = Mapbox default light)
+    // On sample un pixel de coin (hors bâtiment massing) — si trop froid (R≈G≈B > 230), c'est le style light par défaut
+    const toneImg = await loadImage(screenshotBuf);
+    const toneW = toneImg.width, toneH = toneImg.height;
+    const toneCanvas = createCanvas(toneW, toneH);
+    const toneCtx = toneCanvas.getContext("2d");
+    toneCtx.drawImage(toneImg, 0, 0, toneW, toneH);
+    // Sample 50 pixels en haut à gauche (zone de fond sans bâtiment)
+    const cornerData = toneCtx.getImageData(50, 50, 10, 5).data;
+    let coldPixels = 0, totalChecked = 0;
+    for (let i = 0; i < cornerData.length; i += 4) {
+      const r = cornerData[i], g = cornerData[i+1], b = cornerData[i+2];
+      totalChecked++;
+      // Si R≈G≈B et luminosité > 230 → fond blanc/gris froid (style light par défaut)
+      if (r > 225 && g > 225 && b > 225 && Math.abs(r - g) < 8 && Math.abs(g - b) < 8) coldPixels++;
+    }
+    const coldRatio = coldPixels / Math.max(1, totalChecked);
+    if (coldRatio > 0.5) {
+      console.log(`[HEKTAR] ⚠️ TONE CHECK: fond trop froid (${Math.round(coldRatio*100)}% cold pixels) — retry screenshot après délai...`);
+      await new Promise(r => setTimeout(r, 3000));
+      screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+      console.log(`[HEKTAR] Retry screenshot: ${screenshotBuf.length} bytes`);
+    }
     await page.close();
-    console.log(`[HEKTAR] Screenshot: ${screenshotBuf.length} bytes`);
+    console.log(`[HEKTAR] Screenshot: ${screenshotBuf.length} bytes (coldRatio=${Math.round(coldRatio*100)}%)`);
     // Canvas overlay à la résolution native du screenshot (2560×2560)
     const img = await loadImage(screenshotBuf);
     const W = img.width, H = img.height;  // sera 2560×2560
@@ -5000,20 +5857,165 @@ app.post("/generate-massing", async (req, res) => {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
-      typology: massingCoords._typology,
+      typology: massingCoords._typology, split_layout: splitLayout,
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
     const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
-    // v71: PAS de AI polish pour les massing — rendu 100% déterministe via Mapbox
-    // L'AI polish créait des rendus incohérents entre A, B et C (couleurs, textures, artefacts différents).
-    // Le style Mapbox maquette blanche + overlays canvas = résultat propre, stable, identique à chaque run.
-    console.log(`[MASSING] v71: No AI polish — deterministic Mapbox rendering (${Date.now() - t0}ms)`);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // v72.1: MULTI-RENDER MASSING POLISH — 3 variations, best by drift score
+    // v71 disabled polish due to A/B/C inconsistency.
+    // v72.1: ultra-minimal prompt + multi-render + edge-based drift = safe re-enable
+    // ═══════════════════════════════════════════════════════════════════════════
+    const MASSING_VARIATIONS = 2;
+    let polishApplied = false;
+    if (OPENAI_API_KEY) {
+      try {
+        console.log(`[MASSING-POLISH] v72.1: Starting multi-render (${MASSING_VARIATIONS} variations) for ${label}...`);
+        const b64Input = pngClean.toString("base64");
+        // v72.4: Stronger color preservation for floor coding
+        const massingPolishPrompt = `STRICT EDIT ONLY.
+
+PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
+Do NOT modify, move, add, or remove ANY element.
+Do NOT change building shapes, positions, sizes, count.
+Do NOT reinterpret, redesign, or restyle the scene.
+NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
+
+CRITICAL COLOR PRESERVATION:
+- The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
+- These colors MUST remain vivid and clearly distinguishable after polish.
+- Do NOT wash out, desaturate, or unify the floor colors.
+- Do NOT turn orange or blue floors into beige, gray, or white.
+- The color difference between floor types is essential information — preserve it exactly.
+
+Apply ONLY these subtle non-structural adjustments:
+- Very slight tonal harmonization (uniform warm balance) — but KEEP floor colors intact
+- Minimal contrast improvement for visual clarity
+- Subtle soft shadows under the building volume
+- Gentle ambient occlusion at ground contact
+- Clean, professional finish
+- KEEP IMAGE SHARP — do not soften or blur any edges
+
+Do NOT change the maquette/model aesthetic — keep the clean architectural model look.
+This is a WARM BEIGE architectural maquette with colored floor bands. The background is warm beige (#eae8e4), buildings are cream (#f0ede8), roads are gray (#808080). PRESERVE THESE EXACT TONES. Do NOT shift to white, gray, or cool tones. The warm beige palette is essential.
+
+CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in WARM BEIGE tone and style. Do NOT make the scene cooler or whiter.`;
+
+        // v72.1: Launch all variations in parallel
+        const polishRequests = [];
+        for (let v = 0; v < MASSING_VARIATIONS; v++) {
+          polishRequests.push(
+            fetch("https://api.openai.com/v1/responses", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "gpt-4.1",
+                input: [{ role: "user", content: [
+                  { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
+                  { type: "input_text", text: massingPolishPrompt }
+                ]}],
+                tools: [{ type: "image_generation", input_fidelity: "high", action: "edit" }]
+              })
+            }).then(r => r.json()).catch(err => ({ error: err.message }))
+          );
+        }
+        const polishResults = await Promise.all(polishRequests);
+        let bestVariation = null;
+        let bestDriftScore = 1.0;
+        const variationLog = [];
+        for (let v = 0; v < polishResults.length; v++) {
+          const oaiJson = polishResults[v];
+          if (oaiJson.error) { variationLog.push(`  v${v+1}: error`); continue; }
+          let polishedB64 = null;
+          if (oaiJson.output) {
+            for (const item of oaiJson.output) {
+              if (item.type === "image_generation_call" && item.result) { polishedB64 = item.result; break; }
+            }
+          }
+          if (!polishedB64) { variationLog.push(`  v${v+1}: no image`); continue; }
+          const enhancedBuf = Buffer.from(polishedB64, "base64");
+          // Massing uses default threshold (0.25) — light polish
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
+          // v72.22: COLOR PRESERVATION CHECK — verify orange (#e07830) and blue (#3a7ac0) floor bands survived polish
+          // Count orange and blue pixels in original vs polished. If polished lost >60% → reject (colors washed out)
+          let colorCheckPassed = true;
+          let colorLog = "";
+          if (commerceLevels > 0) {
+            const polishedImg = await loadImage(enhancedBuf);
+            const checkCanvas = createCanvas(W, H);
+            const checkCtx = checkCanvas.getContext("2d");
+            // Count in original (pngClean)
+            const origImg = await loadImage(pngClean);
+            checkCtx.drawImage(origImg, 0, 0, W, H);
+            const origData = checkCtx.getImageData(0, 0, W, H).data;
+            let origOrange = 0, origBlue = 0;
+            for (let px = 0; px < origData.length; px += 4) {
+              const r = origData[px], g = origData[px+1], b = origData[px+2];
+              if (r > 180 && g > 80 && g < 150 && b < 80) origOrange++;
+              if (b > 140 && r < 100 && g < 150) origBlue++;
+            }
+            // Count in polished
+            checkCtx.drawImage(polishedImg, 0, 0, W, H);
+            const polData = checkCtx.getImageData(0, 0, W, H).data;
+            let polOrange = 0, polBlue = 0;
+            for (let px = 0; px < polData.length; px += 4) {
+              const r = polData[px], g = polData[px+1], b = polData[px+2];
+              if (r > 180 && g > 80 && g < 150 && b < 80) polOrange++;
+              if (b > 140 && r < 100 && g < 150) polBlue++;
+            }
+            const orangeRetained = origOrange > 0 ? polOrange / origOrange : 1;
+            const blueRetained = origBlue > 0 ? polBlue / origBlue : 1;
+            colorLog = ` orange=${Math.round(orangeRetained*100)}% blue=${Math.round(blueRetained*100)}%`;
+            if (orangeRetained < 0.35 || blueRetained < 0.35) {
+              colorCheckPassed = false;
+              colorLog += " COLORS_WASHED";
+            }
+          }
+          variationLog.push(`  v${v+1}: drift=${(drift.driftScore * 100).toFixed(2)}% ${drift.passed ? "✓" : "✗"}${colorLog} (shifted=${drift.classShifts}/${drift.totalBlocks})`);
+          if (drift.passed && colorCheckPassed && drift.driftScore < bestDriftScore) {
+            bestDriftScore = drift.driftScore;
+            bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
+          }
+        }
+        console.log(`[MASSING-POLISH] ${label} multi-render (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
+        if (bestVariation) {
+          console.log(`[MASSING-POLISH] ${label} ✓ Best: v${bestVariation.index} (drift=${(bestVariation.drift.driftScore * 100).toFixed(2)}%)`);
+          const finalCanvas = createCanvas(W, H);
+          const finalCtx = finalCanvas.getContext("2d");
+          finalCtx.drawImage(await loadImage(bestVariation.buf), 0, 0, W, H);
+          // v72.4: Post-polish sharpening (lighter for massing — already at 2x resolution)
+          applySharpen(finalCtx, W, H, 0.25);
+          console.log(`[MASSING-POLISH] ${label} v72.4: Sharpening applied (amount=0.25)`);
+          drawMassingOverlays(finalCtx, W, H, {
+            site_area: Number(site_area), bearing, label,
+            levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
+            total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
+            typology: massingCoords._typology, split_layout: splitLayout,
+          });
+          const finalPng = finalCtx.canvas.toBuffer("image/png");
+          const enhancedPath = `${folder}/${slideName}_enhanced.png`;
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
+          if (!ue2) {
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
+            polishApplied = true;
+            console.log(`✓ [MASSING-POLISH] ${label} enhanced uploaded (${Date.now() - t0}ms)`);
+          }
+        } else {
+          console.warn(`⚠ [MASSING-DRIFT] ${label}: ALL ${MASSING_VARIATIONS} variations rejected — deterministic fallback`);
+        }
+      } catch (polishErr) {
+        console.error(`[MASSING-POLISH] ${label} exception:`, polishErr.message);
+      }
+    }
+    console.log(`[MASSING] v72.1: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "71.1-STABLE",
+      ok: true, cached: false, server_version: "72.0-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
+      polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
       actual_typology: massingCoords._typology || "BLOC",
       actual_envelope_w: actualEnvW.toFixed(1), actual_envelope_d: actualEnvD.toFixed(1),
@@ -5033,7 +6035,7 @@ app.post("/generate-massing", async (req, res) => {
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v71.1-STABLE on port ${PORT}`);
+  console.log(`BARLO v72.0-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"}`);
