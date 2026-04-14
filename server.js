@@ -131,7 +131,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.34-SUPERVISOR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.37-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3479,7 +3479,24 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ max_floors=${p.max_floors} max_height=${p.max_height_m} floor_h=${p.floor_height}`);
   console.log(`║ budget_tension=${p.budget_tension} budget_band=${p.budget_band}`);
   console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
+  console.log(`║ layout_mode=${p.layout_mode} commerce_depth_m=${p.commerce_depth_m}`);
   console.log(`╚════════════════════════════════════════╝\n`);
+  // ── v72.37: AUTO-DÉTECTION SPLIT (réplique /generate-massing lines 5649-5666) ──
+  const fieldValues_cs = Object.values(p).map(v => String(v).toLowerCase()).join(" ");
+  const bodyHasMixte_cs = /mixte|mixed|usage.?mixte/i.test(fieldValues_cs);
+  const layoutModeIsSplit_cs = String(p.layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
+  const bodyHasSplit_cs = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues_cs);
+  const hasCommerceDepth_cs = Number(p.commerce_depth_m) > 0;
+  const effectiveLayoutMode_cs = (layoutModeIsSplit_cs || bodyHasSplit_cs || hasCommerceDepth_cs)
+    ? "SPLIT_AV_AR" : "SUPERPOSE";
+  const splitActive_cs = effectiveLayoutMode_cs === "SPLIT_AV_AR";
+  const effectiveProgramMain_cs = p.program_main || p.project_type || ((bodyHasMixte_cs || splitActive_cs) ? "USAGE_MIXTE" : "");
+  console.log(`[v72.37] ┌── COMPUTE-SCENARIOS: DÉTECTION MIXTE/SPLIT ──`);
+  console.log(`[v72.37] │ program_main_raw="${p.program_main}" layout_mode_raw="${p.layout_mode}" commerce_depth_m="${p.commerce_depth_m}"`);
+  console.log(`[v72.37] │ bodyHasMixte=${bodyHasMixte_cs} bodyHasSplit=${bodyHasSplit_cs} hasCommerceDepth=${hasCommerceDepth_cs}`);
+  console.log(`[v72.37] │ effectiveLayoutMode="${effectiveLayoutMode_cs}" effectiveProgramMain="${effectiveProgramMain_cs}"`);
+  console.log(`[v72.37] │ field_values_sample="${fieldValues_cs.slice(0, 300)}"`);
+  console.log(`[v72.37] └── FIN DÉTECTION ──`);
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
@@ -3490,7 +3507,7 @@ app.post("/compute-scenarios", (req, res) => {
     primary_driver: p.primary_driver || "MAX_CAPACITE",
     max_floors: Number(p.max_floors) || 99,
     max_height_m: Number(p.max_height_m) || 99,
-    program_main: p.program_main || p.project_type || "",
+    program_main: effectiveProgramMain_cs,
     target_surface_m2: Number(p.target_surface_m2) || 0,
     site_saturation_level: p.site_saturation_level || "MEDIUM",
     financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
@@ -3514,8 +3531,8 @@ app.post("/compute-scenarios", (req, res) => {
     density_pressure_factor: Number(p.density_pressure_factor) || 1,
     driver_intensity: p.driver_intensity || "MEDIUM",
     strategic_position: p.strategic_position || "",
-    // v57.20 : disposition spatiale
-    layout_mode: p.layout_mode || "SUPERPOSE",
+    // v57.20 : disposition spatiale — v72.37: auto-detect SPLIT
+    layout_mode: effectiveLayoutMode_cs,
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
@@ -6130,7 +6147,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.34-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.37-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6152,7 +6169,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.36-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.37-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
