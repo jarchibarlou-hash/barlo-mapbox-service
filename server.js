@@ -2314,15 +2314,18 @@ function computeSmartScenarios({
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
     // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
-    let sdp = (fpRdc && fpEtages && levels > 1)
-      ? fpRdc + fpEtages * (levels - 1)
-      : fp * levels;
-    // v72.35-FIX: En mode SPLIT, sdp ci-dessus = LOGEMENT seulement.
-    // Il faut ajouter la SDP commerce pour que le flat output (A_sdp, B_sdp, C_sdp)
-    // corresponde au totalSDP affiché sur le rendu (drawMassingOverlays).
-    if (splitLayout && splitLayout.volume_commerce) {
-      sdp += splitLayout.volume_commerce.sdp_m2 || 0;
-      console.log(`│   v72.35-FIX: SDP SPLIT corrigée = logt(${sdp - (splitLayout.volume_commerce.sdp_m2 || 0)}) + commerce(${splitLayout.volume_commerce.sdp_m2}) = ${sdp}m²`);
+    let sdp;
+    if (splitLayout && splitLayout.volume_commerce && splitLayout.volume_logement) {
+      // v72.36-FIX: En mode SPLIT, sdp = EXACTEMENT commerce + logement
+      // Même formule que drawMassingOverlays (render) : totalSDP = vc.sdp_m2 + vl.sdp_m2
+      const commSdp = splitLayout.volume_commerce.sdp_m2 || 0;
+      const logtSdp = splitLayout.volume_logement.sdp_m2 || 0;
+      sdp = commSdp + logtSdp;
+      console.log(`│   v72.36-FIX: SDP SPLIT = commerce(${commSdp}) + logement(${logtSdp}) = ${sdp}m² [render-aligned]`);
+    } else {
+      sdp = (fpRdc && fpEtages && levels > 1)
+        ? fpRdc + fpEtages * (levels - 1)
+        : fp * levels;
     }
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
     let compliance;
@@ -2621,12 +2624,14 @@ function computeSmartScenarios({
   const r = results;
   // Helper : recalcule SDP duale pour un scénario
   const recalcSdp = (s) => {
-    s.sdp_m2 = (s.fp_rdc_m2 && s.fp_etages_m2 && s.levels > 1)
-      ? s.fp_rdc_m2 + s.fp_etages_m2 * (s.levels - 1)
-      : s.fp_m2 * s.levels;
-    // v72.35-FIX: ajouter commerce SDP si SPLIT
-    if (s.split_layout && s.split_layout.volume_commerce) {
-      s.sdp_m2 += s.split_layout.volume_commerce.sdp_m2 || 0;
+    if (s.split_layout && s.split_layout.volume_commerce && s.split_layout.volume_logement) {
+      // v72.36-FIX: SPLIT → sdp = commerce + logement (miroir du render)
+      s.split_layout.volume_logement.sdp_m2 = s.split_layout.volume_logement.fp_m2 * s.split_layout.volume_logement.levels;
+      s.sdp_m2 = (s.split_layout.volume_commerce.sdp_m2 || 0) + s.split_layout.volume_logement.sdp_m2;
+    } else {
+      s.sdp_m2 = (s.fp_rdc_m2 && s.fp_etages_m2 && s.levels > 1)
+        ? s.fp_rdc_m2 + s.fp_etages_m2 * (s.levels - 1)
+        : s.fp_m2 * s.levels;
     }
     s.height_m = Math.round(s.levels * floor_height * 10) / 10;
   };
@@ -3446,8 +3451,18 @@ function computeSmartScenarios({
   console.log(`│ A(${r.A.role}): fp=${r.A.fp_m2}m² × ${r.A.levels}niv = ${r.A.sdp_m2}m² SDP (${r.A.cos_ratio_pct}%COS) ${r.A.cos_compliance} | ${r.A.unit_mix_detail}`);
   console.log(`│ B(${r.B.role}): fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}%COS) ${r.B.cos_compliance} | ${r.B.unit_mix_detail}`);
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
+  // v72.36: LOG SPLIT DIAGNOSTIC — traçabilité SDP flat vs render
+  for (const lbl of ["A", "B", "C"]) {
+    const sc = r[lbl];
+    if (sc && sc.split_layout) {
+      const sl = sc.split_layout;
+      const vc = sl.volume_commerce || {};
+      const vl = sl.volume_logement || {};
+      console.log(`│ v72.36 SPLIT-CHECK ${lbl}: comm=${vc.fp_m2}m²×${vc.levels}niv=${vc.sdp_m2}m² + logt=${vl.fp_m2}m²×${vl.levels}niv=${vl.sdp_m2}m² → TOTAL=${(vc.sdp_m2||0)+(vl.sdp_m2||0)}m² | flat_sdp_m2=${sc.sdp_m2}m² ${sc.sdp_m2 === (vc.sdp_m2||0)+(vl.sdp_m2||0) ? "✅MATCH" : "❌MISMATCH"}`);
+    }
+  }
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
-  console.log(`└── end SCENARIO ENGINE v57.20 ──`);
+  console.log(`└── end SCENARIO ENGINE v72.36 ──`);
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
@@ -6137,7 +6152,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.35-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.36-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
