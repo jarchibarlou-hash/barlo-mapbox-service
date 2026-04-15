@@ -784,6 +784,30 @@ const VACANCY_RATE_BY_ZONING = {
 // Fourchette de coûts construction : le costPerM2 du standing est le MEDIAN
 // BAS = -15%, HAUT = +20% (aléas chantier, fondations, accès)
 const COST_RANGE_MULT = { bas: 0.85, median: 1.0, haut: 1.20 };
+// v72.53 — COÛT/m² EXPLICITE par STANDING × RÔLE (A/B/C)
+// Valeurs calées sur le marché Cameroun (Douala/Yaoundé)
+// A = coût CIBLE du programme (haut de la fourchette du standing)
+// B = coût MÉDIAN (milieu de la fourchette)
+// C = coût PLANCHER (bas de la fourchette — construction la plus économique)
+// Chaque standing a ses propres bornes réelles, pas des % génériques
+const COST_PER_M2_BY_ROLE = {
+  //                          A (cible)    B (médian)   C (plancher)
+  ECONOMIQUE: { A: 250000,  B: 212500,  C: 175000 },  // 175k–250k FCFA/m²
+  ECO:        { A: 250000,  B: 212500,  C: 175000 },  // alias ECONOMIQUE
+  STANDARD:   { A: 350000,  B: 300000,  C: 250000 },  // 250k–350k FCFA/m²
+  HAUT:       { A: 450000,  B: 387500,  C: 325000 },  // 325k–450k FCFA/m²
+  PREMIUM:    { A: 550000,  B: 475000,  C: 400000 },  // 400k–550k FCFA/m²
+};
+// Ajustement optionnel par driver : le driver peut décaler légèrement le coût cible
+// RENTABILITE → A plus haut (+5%) car finitions supérieures pour meilleurs loyers
+// SECURISATION → A plus bas (-3%) car prudence budgétaire
+const COST_DRIVER_ADJUST = {
+  MAX_CAPACITE:         0.00,
+  RENTABILITE:         +0.05,  // +5% sur A pour qualité locative
+  SECURISATION_RISQUE: -0.03,  // -3% prudence
+  MIXTE_PROGRAMME:      0.00,
+  PHASAGE_FONCIER:     -0.02,  // -2% construction phasée
+};
 // ══════════════════════════════════════════════════════════════════════════════
 // v57.7 — RETRAITS RÉGLEMENTAIRES (SETBACKS) par zonage
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1689,6 +1713,24 @@ function computeSmartScenarios({
       bodyDepth = resolveField(rules.body_depth_m, stdKey);
       maxPerFloor = resolveField(rules.max_units_per_floor, stdKey);
       groundReserve = resolveField(rules.ground_reserve, label) || 0.25;
+      // ══════════════════════════════════════════════════════════════════════
+      // v72.53: TYPOLOGY IMPACT — la forme du bâtiment modifie les calculs
+      // Pré-sélection de la typology AVANT les calculs de SDP/coûts
+      // ══════════════════════════════════════════════════════════════════════
+      const envAspectCalc = envelope_w / Math.max(1, envelope_d);
+      const fillRatioCalc = (effectiveCES * site_area * (CES_FILL_BY_ROLE[role] || 0.80)) / Math.max(1, envelope_area);
+      const preTypology = preSelectTypology({
+        fp_m2: effectiveCES * site_area * (CES_FILL_BY_ROLE[role] || 0.80),
+        envelope_area, site_area, envAspect: envAspectCalc,
+        massing_mode: SCENARIO_MASSING_MODE[label] || "BALANCED",
+        scenario_role: role, standing_level, program_main, isMixte, fillRatio: fillRatioCalc,
+      });
+      const typoImpact = TYPOLOGY_IMPACT[preTypology] || TYPOLOGY_IMPACT.BLOC;
+      // Appliquer les modifiers typologiques
+      circRatio = Math.max(0.08, Math.min(0.35, circRatio + typoImpact.circ_modifier));
+      bodyDepth = Math.round(bodyDepth * typoImpact.body_depth_mult);
+      console.log(`│   🏛️ v72.53 TYPOLOGY: ${preTypology} → circ+${(typoImpact.circ_modifier*100).toFixed(0)}%=${(circRatio*100).toFixed(0)}%, body×${typoImpact.body_depth_mult}=${bodyDepth}m, coût×${typoImpact.cost_mult}`);
+      console.log(`│     ${typoImpact.description}`);
       let maxFloorsProg = rules.max_floors || 99;
       // ── CAS SPÉCIAUX ──
       const isBungalow = programKey === "MAISON_INDIVIDUELLE" && target_units > 1;
@@ -1892,16 +1934,21 @@ function computeSmartScenarios({
       // Avant : fpRdc = fpProgramme (identique pour A, B, C)
       // → quand fpProgramme < tous les plafonds, les 3 scénarios sont identiques.
       //
-      // PHILOSOPHIE ARCHITECTE-CONSEIL :
-      //   A = LE PROGRAMME DU CLIENT tel quel (budget + contraintes + priorités)
-      //       → fpProgramme × 1.00 = on livre exactement le plateau optimal
-      //   B = VERSION ÉQUILIBRÉE si A coince (budget serré, risques)
-      //       → fpProgramme × 0.85 = plateau réduit de 15%, plus de marge
-      //   C = VERSION PRUDENTE / PHASABLE
-      //       → fpProgramme × 0.65 = emprise minimale, max espace libre
+      // ══════════════════════════════════════════════════════════════════
+      // v72.53 PHILOSOPHIE DES 3 SCÉNARIOS :
+      //   A = EXACTEMENT LA DEMANDE DU CLIENT
+      //       → fpProgramme × 1.00 = programme complet, tailles généreuses
+      //       → Ni plus, ni moins que ce que le client a demandé
+      //   B = ALTERNATIVE ÉQUILIBRÉE
+      //       → fpProgramme × 0.85 = même programme, surfaces/coûts moindres
+      //       → Tailles d'unités réduites (~15%), budget plus accessible
+      //   C = PRUDENT — IMPLANTATION DIFFÉRENTE + COMPACTE SI OPTIMAL
+      //       → fpProgramme × 0.70 = emprise compacte, volume unique SUPERPOSÉ
+      //       → Possibilité d'une implantation alternative (ex: SUPERPOSÉ au lieu de SPLIT)
+      //       → Coûts minimisés, programme livré en version économique
       // Le terrain plafonne toujours (CES, enveloppe, retraits).
       // ══════════════════════════════════════════════════════════════════
-      const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.75, PRUDENT: 0.55 };
+      const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.85, PRUDENT: 0.70 };
       const roleFpFactor = ROLE_FP_FACTOR[role] || 1.0;
       // ══════════════════════════════════════════════════════════════════
       // v57.20 SPLIT_AV_AR : COMMERCE DEVANT (clôture) + LOGEMENT DERRIÈRE
@@ -1932,6 +1979,10 @@ function computeSmartScenarios({
         const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
         _splitViable = _logtD >= 8 && _parcD >= 20;
       }
+      // v72.53: RÈGLES SPLIT_AV_AR :
+      // - Commerce collé à la LIMITE SÉPARATIVE côté front (ligne de setback avant)
+      // - Logement EN RETRAIT sur PILOTIS (habitable à partir de R+1)
+      // - Pilotis obligatoire quand : SPLIT_AV_AR OU terrain étroit (< 10m constructible)
       // v72.30: PRUDENT → TOUJOURS SUPERPOSÉ (choix stratégique de compacité)
       const useSplitForRole = _splitRequested && role !== "PRUDENT" && _splitViable;
       if (role === "PRUDENT" && _splitRequested) {
@@ -1940,67 +1991,109 @@ function computeSmartScenarios({
       if (useSplitForRole) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
-        // Volume 1 : COMMERCE (bande avant) — identique pour les 3 scénarios
+        // Volume 1 : COMMERCE (bande avant) — collé à la LIMITE SÉPARATIVE FRONT
+        // v72.53: le commerce colle au setback avant (retrait_avant = position du commerce)
+        // Pleine largeur : couvre toute la façade côté rue (identique pour A/B)
         const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30);
-        const commWidth = Math.round(parcWidth - rLateral * 2);
+        // v72.53: respecter la mitoyenneté (2 mitoyens → pas de retrait latéral)
+        const commWidth = Math.round(parcWidth - retraitLatEffectif);
         const fpCommerce = Math.round(commWidth * commDepth);
         const levelsCommerce = 1;
         const sdpCommerce = fpCommerce;
-        // Volume 2 : LOGEMENT (en retrait) — v72.27: DIFFÉRENCIÉ PAR RÔLE
+        // ══════════════════════════════════════════════════════════════════
+        // v72.53: PROGRAMME-DRIVEN — le mix client donne les unités VOULUES
+        // Le nombre d'unités commerce + résidentiel vient du PROGRAMME,
+        // pas de la capacité physique de la bande commerciale.
+        // ══════════════════════════════════════════════════════════════════
+        const estMixSplit = rules.default_mix_fn ? rules.default_mix_fn(clientUnits) : { COMMERCE: 1 };
+        const programmeCommerceUnits = estMixSplit.COMMERCE || 1;
+        // v72.53: Résidentiel cible = PROGRAMME CLIENT (SACRÉ, identique A/B/C)
+        const resiTarget = Math.max(1, clientUnits - programmeCommerceUnits);
+        // Volume 2 : LOGEMENT (en retrait sur pilotis) — v72.53 PROGRAMME-DRIVEN
         const interGap = Number(retrait_inter_volumes_m) || 4;
         const logtDepthDispo = Math.round(parcDepth - rAvant - commDepth - interGap - rArriere);
-        // v72.27: Le RÔLE affecte la largeur ET la profondeur du logement
-        // INTENSIFICATION: utilise toute la largeur disponible
-        // EQUILIBRE: 80% de la largeur → emprise plus compacte
-        // PRUDENT: 65% de la largeur → emprise réduite
-        const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.80 : 0.65;
-        const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
-        const logtWidth = Math.round(commWidth * roleWidthFactor);
+        // v72.53: Le RÔLE affecte les dimensions physiques (différenciation architecturale)
+        const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
+        const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.90 : 0.75;
+        const logtWidth = Math.round((parcWidth - retraitLatEffectif) * roleWidthFactor);
         const logtDepthUsed = Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5) * roleDepthFactor);
         const fpLogtRaw = Math.round(logtWidth * logtDepthUsed);
+        // ══════════════════════════════════════════════════════════════════
+        // v72.53: FLOOR PLATE DIMENSIONNÉE PAR LE PROGRAMME
+        // Au lieu de maximiser la surface terrain (fpProgramme = adaptiveUnitsPerFloor),
+        // on dimensionne pour le nombre d'unités résidentielles NÉCESSAIRES par étage.
+        // ══════════════════════════════════════════════════════════════════
+        const maxResiPerFloorSplit = Math.max(1, Math.floor(
+          fpLogtRaw * (1 - circRatio) / Math.max(40, effectiveUnitSize)
+        ));
+        const idealResiPerFloor = Math.min(resiTarget, maxResiPerFloorSplit);
+        const fpLogtFromProgramme = Math.round(idealResiPerFloor * effectiveUnitSize / (1 - _safeCirc));
+        console.log(`│   v72.53 PROGRAMME-SPLIT: ${clientUnits}u → ${programmeCommerceUnits} commerce + ${resiTarget} rési | max ${maxResiPerFloorSplit}/étage → idéal ${idealResiPerFloor}/étage → fpLogtProg=${fpLogtFromProgramme}m²`);
+        // Cap par les contraintes terrain (le terrain PLAFONNE, le programme DIMENSIONNE)
         const fpLogt = Math.min(
           fpLogtRaw,
-          Math.round(fpProgramme * roleFpFactor),
+          fpLogtFromProgramme,
           fpMaxCes - fpCommerce,
           fpMaxRetraits - fpCommerce
         );
-        // v72.27: fpMinViable réduit par le rôle pour que PRUDENT soit vraiment plus petit
-        const splitMinViable = role === "INTENSIFICATION" ? fpMinViable : Math.round(fpMinViable * (role === "EQUILIBRE" ? 0.80 : 0.60));
+        // Plancher viable (au moins 1 logement compressé)
+        const splitMinViable = Math.round(Math.max(80, 1 * compressedSize / (1 - _safeCirc)));
         const fpLogtFinal = Math.max(splitMinViable, fpLogt);
         // CES total
         const fpTotal = fpCommerce + fpLogtFinal;
         const cesTotalPct = Math.round(fpTotal / site_area * 100);
         // Boutiques
+        // v72.53: Commerce band = pleine largeur (colle à la limite séparative front)
+        // Mais le PROGRAMME détermine le nombre d'unités commerciales reportées
         const commerceUnitSize = 30;
-        const nbBoutiques = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
-        // Niveaux logement — v72.27: DIFFÉRENCIÉ PAR RÔLE
-        const resiTarget = Math.max(1, target_units - nbBoutiques);
-        const resiRoleTarget = Math.max(1, Math.round(resiTarget * roleFpFactor));
+        const nbBoutiquesTerrain = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
+        const nbBoutiques = programmeCommerceUnits; // PROGRAMME, pas terrain
+        // v72.53: resiTarget déjà calculé ci-dessus (programme-driven)
         const usefulLogt = Math.round(fpLogtFinal * (1 - circRatio));
         const avgResiSize = refUnitSize;
         const resiPerFloor = Math.max(1, Math.min(maxPerFloor, Math.floor(usefulLogt / avgResiSize)));
-        // v72.28: Niveaux FORCÉMENT DIFFÉRENTS par rôle
-        // INTENSIFICATION: max floors (R+2 min), EQUILIBRE: max-1 (R+1 min), PRUDENT: 1 seul (RDC)
-        // En SPLIT, "levels" = niveaux de LOGEMENT (commerce est séparé)
+        // ══════════════════════════════════════════════════════════════════
+        // v72.53: NIVEAUX = CONSÉQUENCE DU PROGRAMME (target_units SACRÉ)
+        // A (INTENSIFICATION) = EXACTEMENT la demande client, ni plus ni moins
+        //   → Le client demande N logements, on livre N logements au juste dimensionnement
+        // B (EQUILIBRE) = même nombre d'unités, tailles légèrement réduites
+        //   → Surfaces et coûts moindres, mais programme complet
+        // C (PRUDENT) = SUPERPOSÉ compact (géré ailleurs)
+        //   → Implantation différente si plus optimal
+        // ══════════════════════════════════════════════════════════════════
         let levelsLogt;
-        const baseCalc = Math.max(1, Math.ceil(resiRoleTarget / resiPerFloor));
+        const baseCalc = Math.max(1, Math.ceil(resiTarget / resiPerFloor));
         if (role === "INTENSIFICATION") {
-          levelsLogt = Math.max(3, baseCalc);               // R+2 minimum
-          levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
-          if (levelsLogt < 3 && effectiveMaxFloors >= 3) levelsLogt = 3;
-          if (levelsLogt < 2) levelsLogt = 2;               // au moins R+1
+          // A = EXACTEMENT le programme client — pas de niveau en plus
+          levelsLogt = Math.min(baseCalc, effectiveMaxFloors);
+          levelsLogt = Math.max(1, levelsLogt);
         } else if (role === "EQUILIBRE") {
-          levelsLogt = Math.max(2, baseCalc);               // R+1 minimum
-          levelsLogt = Math.min(levelsLogt, Math.max(2, effectiveMaxFloors - 1));
-        } else { // PRUDENT
-          levelsLogt = 1;                                    // RDC uniquement
+          levelsLogt = Math.min(baseCalc, effectiveMaxFloors);
+          levelsLogt = Math.max(1, levelsLogt);
+        } else {
+          levelsLogt = 1; // PRUDENT = SUPERPOSÉ
         }
-        // COS check
+        // Garde-fou COS
         while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
+        // v72.53: Garde-fou PROGRAMME — SDP total ne dépasse pas programme × 1.35
+        const sdpCapSplit = Math.round((resiTarget * effectiveUnitSize / (1 - _safeCirc) + sdpCommerce) * 1.35);
+        while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > sdpCapSplit) levelsLogt--;
         const totalResiUnits = resiPerFloor * levelsLogt;
-        // v72.28: PILOTIS OBLIGATOIRE en SPLIT — logement sur pilotis, habitable à partir de R+1
-        hasPilotis = true;
+        // ══════════════════════════════════════════════════════════════════
+        // v72.53: RÈGLE DES PILOTIS — logement habitable à partir de R+1
+        // Pilotis OBLIGATOIRE quand :
+        //   1. SPLIT_AV_AR : commerce en front + logement en retrait → pilotis
+        //   2. Terrain trop étroit : constructibleWidth < 10m → pilotis pour libérer le sol
+        // Le RDC du volume logement = pilotis (parking, accès, local technique)
+        // Les logements démarrent à R+1 (ventilation, intimité, sécurité)
+        // ══════════════════════════════════════════════════════════════════
+        const constructibleWidthSplit = parcWidth - retraitLatEffectif;
+        const isTerrainEtroit = constructibleWidthSplit < 10;
+        hasPilotis = true; // SPLIT = toujours pilotis
         pilotisLevels = 1;
+        if (isTerrainEtroit) {
+          console.log(`│   ⚡ v72.53 PILOTIS: terrain étroit (${constructibleWidthSplit}m < 10m) → pilotis obligatoire`);
+        }
         // Sol libre
         const freeGroundSplit = Math.round(site_area - fpTotal);
         const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - logtDepthUsed - rArriere) : 0);
@@ -2013,7 +2106,7 @@ function computeSmartScenarios({
             levels: levelsCommerce,
             sdp_m2: sdpCommerce,
             units: nbBoutiques,
-            position: "AVANT (contre limite séparative)",
+            position: "AVANT (collé à la limite séparative front, aligné sur ligne de setback)",
           },
           volume_logement: {
             fp_m2: fpLogtFinal,
@@ -2029,21 +2122,17 @@ function computeSmartScenarios({
           espace_arriere_m2: espaceArriere,
           ces_total_pct: cesTotalPct,
         };
-        // v72.29: FORCER LA DIFFÉRENCIATION — même si les contraintes convergent
-        // Le fp du logement DOIT être réduit par le rôle (visible sur le rendu)
-        const fpLogtDiff = role === "INTENSIFICATION" ? fpLogtFinal
-          : role === "EQUILIBRE" ? Math.round(fpLogtFinal * 0.75)
-          : Math.round(fpLogtFinal * 0.50); // PRUDENT = moitié
-        console.log(`│   v72.29 DIFF: fpLogtFinal=${fpLogtFinal} → fpLogtDiff=${fpLogtDiff} (role=${role})`);
-        // Mettre à jour le splitLayout avec les valeurs différenciées
-        splitLayout.volume_logement.fp_m2 = fpLogtDiff;
-        splitLayout.volume_logement.sdp_m2 = fpLogtDiff * levelsLogt;
-        splitLayout.volume_logement.width_m = Math.round(splitLayout.volume_logement.width_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.85 : 0.70));
-        splitLayout.volume_logement.depth_m = Math.round(splitLayout.volume_logement.depth_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.88 : 0.72));
+        // v72.53: SUPPRESSION du v72.29 DIFF — la différenciation est DÉJÀ faite par :
+        //   - roleWidthFactor / roleDepthFactor (dimensions physiques du volume)
+        //   - roleFpFactor (cap sur fpProgramme)
+        //   - le nombre de niveaux (INTENSIFICATION=3+, EQUILIBRE=2, PRUDENT=SUPERPOSÉ)
+        // Appliquer un facteur SUPPLÉMENTAIRE de 0.75/0.50 crée un triple-compounding
+        // qui rend B et C absurdement petits (B=36% de A au lieu de ~80%).
+        console.log(`│   v72.53 SPLIT: fpLogtFinal=${fpLogtFinal} (role=${role}, pas de double-réduction)`);
         // Valeurs principales = LOGEMENT
-        fpRdc = fpLogtDiff;
-        fp = fpLogtDiff;
-        fpEtages = fpLogtDiff;
+        fpRdc = fpLogtFinal;
+        fp = fpLogtFinal;
+        fpEtages = fpLogtFinal;
         levels = levelsLogt;
         totalUnitsResult = nbBoutiques + totalResiUnits;
         totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
@@ -2052,17 +2141,33 @@ function computeSmartScenarios({
         for (const [typ, count] of Object.entries(resiMix)) {
           if (count > 0) unitMix[typ] = count;
         }
-        unitMixDetail = `SPLIT: ${nbBoutiques} boutiques (${fpCommerce}m² RDC avant) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv arrière)`;
-        console.log(`│   🏪 v72.27 SPLIT_AV_AR ${role} (roleWidthFactor=${roleWidthFactor}, roleDepthFactor=${roleDepthFactor}):`);
-        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre limite séparative`);
+        unitMixDetail = `SPLIT: ${nbBoutiques} commerce prog (${fpCommerce}m² bande front, ${nbBoutiquesTerrain} locaux possibles) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv sur pilotis arrière)`;
+        console.log(`│   🏪 v72.53 SPLIT_AV_AR ${role} PROGRAMME-DRIVEN:`);
+        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} prog / ${nbBoutiquesTerrain} possibles) — collé limite séparative front`);
         console.log(`│     GAP: ${interGap}m (passage véhicule/piéton)`);
-        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
+        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv sur PILOTIS R+1 (${totalResiUnits} logts pour ${resiTarget} cibles)`);
         console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
+        console.log(`│     ${isTerrainEtroit ? '⚡TERRAIN ÉTROIT' : '✓largeur OK'} (${constructibleWidthSplit}m constructible)`);
       } else {
-      // ── MODE SUPERPOSÉ (défaut) — logique existante ──
+      // ── MODE SUPERPOSÉ (défaut) — v72.53: PROGRAMME-DRIVEN ──
       fpRdc = Math.round(fpProgramme * roleFpFactor);
       // v72.51: garde anti-NaN sur fpRdc
       if (isNaN(fpRdc)) fpRdc = Math.round(Math.min(empriseEffective, envelope_area * 0.60));
+      // ══════════════════════════════════════════════════════════════════
+      // v72.53: PROGRAMME-DRIVEN CAP — ne pas surdimensionner le plateau
+      // fpProgramme est basé sur adaptiveUnitsPerFloor (capacité TERRAIN).
+      // Pour un petit programme (ex: 3 unités), le terrain peut en caser 4-6/étage
+      // → fpProgramme = 4×72/0.82 = 351m² quand le programme ne demande que 2 rési.
+      // CAP: le plateau ne dépasse pas ce dont le PROGRAMME a besoin par étage.
+      // ══════════════════════════════════════════════════════════════════
+      const estMixSuper = rules.default_mix_fn ? rules.default_mix_fn(clientUnits) : {};
+      const commerceUnitsSuper = isMixte ? (estMixSuper.COMMERCE || 1) : 0;
+      const resiUnitsSuper = Math.max(1, clientUnits - commerceUnitsSuper);
+      // Combien d'unités par étage au maximum (capé par le programme)
+      const resiPerFloorProg = Math.min(resiUnitsSuper, _safeAdaptive || 2);
+      const fpCapProgramme = Math.round(resiPerFloorProg * _safeEffSize / (1 - _safeCirc));
+      fpRdc = Math.min(fpRdc, fpCapProgramme);
+      console.log(`│   v72.53 SUPERPOSÉ PROGRAMME-CAP: rési=${resiUnitsSuper}u, perFloor=${resiPerFloorProg}, fpCap=${fpCapProgramme}m² → fpRdc=${fpRdc}m²`);
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
       fpRdc = Math.max(fpRdc, fpMinViable);
@@ -2237,7 +2342,10 @@ function computeSmartScenarios({
       // v57.16: ratio parking/vert — si le parking requis dépasse 40% du sol libre,
       // le ratio 1/3 parking - 2/3 vert est impossible → pilotis auto
       const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
-      if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" && (
+      // v72.53: PILOTIS — terrain trop étroit (constructible < 10m)
+      const constructibleWidthSuper = (envelope_w || 0) - retraitLatEffectif;
+      const isTerrainEtroitSuper = constructibleWidthSuper > 0 && constructibleWidthSuper < 10;
+      if (!isBungalow && (pilotisRule === true || isTerrainEtroitSuper || (pilotisRule === "auto" && (
         // ancien seuil : sol libre insuffisant en absolu
         ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
           && freeGround < parkingM2Needed)
@@ -2246,6 +2354,9 @@ function computeSmartScenarios({
       )))) {
         hasPilotis = true;
         pilotisLevels = 1;
+        if (isTerrainEtroitSuper) {
+          console.log(`│   ⚡ v72.53 PILOTIS: terrain étroit (${Math.round(constructibleWidthSuper)}m constructible < 10m) → pilotis R+1 obligatoire`);
+        }
         if (parkingRatioExceeded) {
           console.log(`│   🅿️→🏗️ v57.16: parking ${Math.round(parkingM2Needed)}m² > 40% sol libre ${Math.round(freeGround)}m² → PILOTIS AUTO (ratio 1/3-2/3 impossible sans pilotis)`);
         }
@@ -2340,27 +2451,47 @@ function computeSmartScenarios({
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
     // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
-    const sdp = (fpRdc && fpEtages && levels > 1)
+    // v72.53: en SPLIT, le SDP TOTAL = commerce + logement (pas juste logement)
+    const sdpLogement = (fpRdc && fpEtages && levels > 1)
       ? fpRdc + fpEtages * (levels - 1)
       : fp * levels;
+    const sdpCommerce = splitLayout ? (splitLayout.volume_commerce.sdp_m2 || 0) : 0;
+    const sdp = sdpLogement + sdpCommerce;
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
     let compliance;
     if (cosRatio <= 1.05) compliance = "CONFORME";
     else if (cosRatio <= 1.30) compliance = "DEROGATION_POSSIBLE";
     else compliance = "AMBITIEUX_HORS_COS";
-    // v57.6: Coût estimé FCFA (Cameroun) = Construction + VRD
-    // Construction = SDP × coût/m²
+    // v72.53: Coût estimé FCFA (Cameroun) — DIFFÉRENCIÉ commerce vs bâti
+    // Commerce = construction plus simple (pas de cuisine/SdB) → 80% du coût bâti
+    // Bâti résidentiel = coût standard standing
     // VRD = 10% de SDP × 50% du coût/m²
-    // Total = construction + VRD = SDP × costPerM2 × 1.05
-    const COST_PER_M2_FCFA = {
-      PREMIUM: 400000, HAUT: 350000,
-      STANDARD: 250000,
-      ECONOMIQUE: 180000, ECO: 180000
-    };
-    const costPerM2 = COST_PER_M2_FCFA[String(standing_level).toUpperCase()] || 250000;
-    const constructionCost = sdp * costPerM2;
-    const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
-    const estimatedCost = Math.round(constructionCost + vrdCost);
+    const COMMERCE_COST_RATIO = 0.80; // commerce = 80% du coût bâti (20% moins cher)
+    // v72.53: Coût/m² EXPLICITE par standing × rôle (valeurs marché Cameroun)
+    const standingKey = String(standing_level).toUpperCase();
+    const roleRange = COST_PER_M2_BY_ROLE[standingKey] || COST_PER_M2_BY_ROLE.STANDARD;
+    const costPerM2Standing = roleRange[label] || roleRange.B; // A=cible, B=médian, C=plancher
+    // Ajustement driver optionnel (±quelques % selon la stratégie client)
+    const driverAdj = COST_DRIVER_ADJUST[primary_driver] || 0;
+    const costPerM2Base = label === "A" ? Math.round(costPerM2Standing * (1 + driverAdj)) : costPerM2Standing;
+    // v72.53 TYPOLOGY: appliquer cost_mult de la typologie au coût/m² positionné
+    const costPerM2 = Math.round(costPerM2Base * (typoImpact ? typoImpact.cost_mult : 1.0));
+    const costPerM2Commerce = Math.round(costPerM2 * COMMERCE_COST_RATIO);
+    // Coût construction différencié + surcharges typologiques
+    const constructionCostBati = sdpLogement * costPerM2;
+    const constructionCostCommerce = sdpCommerce * costPerM2Commerce;
+    const constructionCost = constructionCostBati + constructionCostCommerce;
+    // v72.53 TYPOLOGY: surcharges fondations et toiture (proportionnelles à l'empreinte)
+    const _typoFondMult = typoImpact ? typoImpact.fondation_mult : 1.0;
+    const _typoToitMult = typoImpact ? typoImpact.toiture_mult : 1.0;
+    const _fpForSurcharges = fpRdc || fp;
+    const fondationSurcharge = Math.round(_fpForSurcharges * costPerM2Base * (_typoFondMult - 1.0) * 0.15);
+    const toitureSurcharge = Math.round(_fpForSurcharges * costPerM2Base * (_typoToitMult - 1.0) * 0.10);
+    // v72.53 VRD avec multiplicateur zoning (basé sur le coût standing brut, pas le positionné)
+    const vrdZoningMult = VRD_MULT_BY_ZONING[String(zoning_type).toUpperCase()] || VRD_MULT_BY_ZONING.Z_DEFAULT || 1.0;
+    const vrdCost = Math.round(((sdpLogement + sdpCommerce) * 0.10) * (costPerM2Standing * 0.50) * vrdZoningMult);
+    const estimatedCost = Math.round(constructionCost + fondationSurcharge + toitureSurcharge + vrdCost);
+    console.log(`│   💰 COÛT ${label}: ${standingKey}[${label}]=${costPerM2Standing} driverAdj=${driverAdj > 0 ? '+' : ''}${(driverAdj*100).toFixed(0)}% → base=${costPerM2Base} × typo(${preTypology})=${typoImpact ? typoImpact.cost_mult : 1} → ${costPerM2}/m² | fond=+${fondationSurcharge} toit=+${toitureSurcharge} | VRD×${vrdZoningMult}=${vrdCost} | TOTAL=${Math.round(estimatedCost/1e6)}M`);
     // budgetMax is already computed before the loop
     const budgetFit = budgetMax > 0
       ? (estimatedCost <= budgetMax ? "DANS_BUDGET" : estimatedCost <= budgetMax * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
@@ -2462,6 +2593,29 @@ function computeSmartScenarios({
       accent_color: accents[label],
       estimated_cost: estimatedCost,
       budget_fit: budgetFit,
+      // v72.53 TYPOLOGY impact
+      typology: preTypology || "BLOC",
+      typology_impact: typoImpact ? {
+        cost_mult: typoImpact.cost_mult,
+        fondation_mult: typoImpact.fondation_mult,
+        toiture_mult: typoImpact.toiture_mult,
+        circ_modifier: typoImpact.circ_modifier,
+        efficiency: typoImpact.efficiency,
+        description: typoImpact.description,
+      } : null,
+      cost_detail: {
+        cost_per_m2_standing: costPerM2Standing,
+        cost_driver_adjust: driverAdj,
+        cost_per_m2_base: costPerM2Base,
+        cost_per_m2_typo: costPerM2,
+        cost_per_m2_commerce: costPerM2Commerce,
+        construction_bati: Math.round(constructionCostBati),
+        construction_commerce: Math.round(constructionCostCommerce),
+        fondation_surcharge: fondationSurcharge || 0,
+        toiture_surcharge: toitureSurcharge || 0,
+        vrd: vrdCost,
+        vrd_zoning_mult: vrdZoningMult || 1.0,
+      },
       // v57.0 CES-driven extras
       program_driven: isProgramDriven,
       program_key: programKey || "NONE",
@@ -3482,15 +3636,21 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ disposition="${p.disposition}" layout_mode="${p.layout_mode}"`);
   console.log(`╚════════════════════════════════════════╝\n`);
 
-  // ── v72.52: PARSING ROBUSTE des dimensions ──────────────────────────────────
-  // Make.com peut envoyer "20 - 6" au lieu de 20 (formule Sheet lue comme texte)
-  // parseFloat("20 - 6") = 20, Number("20 - 6") = NaN
+  // ── v72.53: PARSING ROBUSTE des dimensions ──────────────────────────────────
+  // Make.com peut envoyer "20 - 6" (formule Sheet comme texte) au lieu d'un nombre.
+  // Number("20 - 6") = NaN → CRASH.
+  // parseFloat("20 - 6") = 20 → CORRECT car le serveur attend les dimensions BRUTES.
+  // Le serveur applique lui-même les retraits avec la bonne logique de mitoyenneté.
+  // Évaluer l'arithmétique (20-6=14) serait FAUX car ça donnerait des dimensions NETTES
+  // que le serveur re-soustrairait → double soustraction.
   const _safeFloat = (v) => {
     if (v === null || v === undefined || v === "") return 0;
     if (typeof v === "number") return isNaN(v) ? 0 : v;
-    const n = Number(v);
+    const s = String(v).trim();
+    const n = Number(s);
     if (!isNaN(n)) return n;
-    const f = parseFloat(String(v));
+    // Prendre le premier nombre de la chaîne (= dimension BRUTE du terrain)
+    const f = parseFloat(s);
     return (!isNaN(f)) ? f : 0;
   };
 
@@ -3665,6 +3825,66 @@ app.post("/compute-scenarios", (req, res) => {
       console.log(`[v72.50] → C.levels réduit car B.sdp(${bSdp2}) ≤ C.sdp(${cSdp}) → C.sdp=${scenarios.C.sdp_m2}`);
     }
   }
+  // ── v72.53: RECALCUL DES COÛTS après anti-collapse ──
+  // L'anti-collapse modifie les SDP/levels/fp → les coûts doivent être recalculés
+  // v72.53: commerce = 80% du coût bâti (construction plus simple)
+  const COMMERCE_COST_RATIO_RECALC = 0.80;
+  const COST_RANGE_MULT_RECALC = { bas: 0.85, haut: 1.20 };
+  const standingRecalc = String(p.standing_level || "STANDARD").toUpperCase();
+  const roleRangeRecalc = COST_PER_M2_BY_ROLE[standingRecalc] || COST_PER_M2_BY_ROLE.STANDARD;
+  const zoningRecalc = String(p.zoning_type || "URBAIN").toUpperCase();
+  const vrdMultRecalc = VRD_MULT_BY_ZONING[zoningRecalc] || VRD_MULT_BY_ZONING.Z_DEFAULT || 1.0;
+  const driverRecalc = String(p.primary_driver || "MAX_CAPACITE").toUpperCase();
+  const driverAdjRecalc = COST_DRIVER_ADJUST[driverRecalc] || 0;
+  for (const label of ["A", "B", "C"]) {
+    const sc = scenarios[label];
+    if (!sc) continue;
+    const newSdp = sc.sdp_m2;
+    if (!newSdp || isNaN(newSdp) || newSdp <= 0) continue;
+    // v72.53: récupérer la typologie stockée dans le scénario
+    const scTypo = TYPOLOGY_IMPACT[sc.typology] || TYPOLOGY_IMPACT.BLOC;
+    // v72.53: coût/m² explicite par rôle + ajustement driver
+    const rcCostPerM2Standing = roleRangeRecalc[label] || roleRangeRecalc.B;
+    const rcCostPerM2Base = label === "A" ? Math.round(rcCostPerM2Standing * (1 + driverAdjRecalc)) : rcCostPerM2Standing;
+    const costPerM2Recalc = Math.round(rcCostPerM2Base * scTypo.cost_mult);
+    const costPerM2CommerceRecalc = Math.round(costPerM2Recalc * COMMERCE_COST_RATIO_RECALC);
+    // v72.53: coût différencié commerce vs bâti
+    const scCommerceSdp = (sc.split_layout && sc.split_layout.volume_commerce) ? (sc.split_layout.volume_commerce.sdp_m2 || 0) : 0;
+    const scBatiSdp = newSdp - scCommerceSdp;
+    const newCostConstruction = scBatiSdp * costPerM2Recalc + scCommerceSdp * costPerM2CommerceRecalc;
+    // v72.53: surcharges fondations + toiture (proportionnelles à l'empreinte)
+    const scFp = sc.fp_rdc_m2 || sc.fp_m2 || 0;
+    const rcFondSurcharge = Math.round(scFp * rcCostPerM2Base * (scTypo.fondation_mult - 1.0) * 0.15);
+    const rcToitSurcharge = Math.round(scFp * rcCostPerM2Base * (scTypo.toiture_mult - 1.0) * 0.10);
+    // v72.53: VRD avec multiplicateur zoning (basé sur coût médian du standing)
+    const rcVrdBase = roleRangeRecalc.B; // médian du standing pour VRD
+    const newCostVrd = Math.round((newSdp * 0.10) * (rcVrdBase * 0.50) * vrdMultRecalc);
+    const newEstimatedCost = Math.round(newCostConstruction + rcFondSurcharge + rcToitSurcharge + newCostVrd);
+    sc.estimated_cost = newEstimatedCost;
+    sc.cost_total_fcfa = newEstimatedCost;
+    sc.cost_construction_fcfa = Math.round(newCostConstruction);
+    sc.cost_fondation_surcharge = rcFondSurcharge;
+    sc.cost_toiture_surcharge = rcToitSurcharge;
+    sc.cost_vrd_fcfa = newCostVrd;
+    sc.cost_per_m2_sdp = Math.round(newEstimatedCost / Math.max(1, newSdp));
+    sc.cost_per_unit = sc.total_units > 0 ? Math.round(newEstimatedCost / sc.total_units) : 0;
+    sc.cout_fourchette = { bas: Math.round(newEstimatedCost * COST_RANGE_MULT_RECALC.bas), median: newEstimatedCost, haut: Math.round(newEstimatedCost * COST_RANGE_MULT_RECALC.haut) };
+    // Mettre à jour cost_detail aussi
+    if (sc.cost_detail) {
+      sc.cost_detail.cost_per_m2_standing = rcCostPerM2Standing;
+      sc.cost_detail.cost_driver_adjust = driverAdjRecalc;
+      sc.cost_detail.cost_per_m2_base = rcCostPerM2Base;
+      sc.cost_detail.cost_per_m2_typo = costPerM2Recalc;
+      sc.cost_detail.cost_per_m2_commerce = costPerM2CommerceRecalc;
+      sc.cost_detail.construction_bati = Math.round(scBatiSdp * costPerM2Recalc);
+      sc.cost_detail.construction_commerce = Math.round(scCommerceSdp * costPerM2CommerceRecalc);
+      sc.cost_detail.fondation_surcharge = rcFondSurcharge;
+      sc.cost_detail.toiture_surcharge = rcToitSurcharge;
+      sc.cost_detail.vrd = newCostVrd;
+    }
+    console.log(`[v72.53] RECALC COÛTS ${label}(${sc.typology}): ${standingRecalc}[${label}]=${rcCostPerM2Standing} adj=${driverAdjRecalc} → base=${rcCostPerM2Base} × typo=${scTypo.cost_mult} → ${costPerM2Recalc}/m² | bâti=${scBatiSdp}m² comm=${scCommerceSdp}m² | fond=+${rcFondSurcharge} toit=+${rcToitSurcharge} VRD=${newCostVrd} → ${Math.round(newEstimatedCost/1e6)}M`);
+  }
+
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
   const comp = diag.comparatif || {};
@@ -3729,6 +3949,8 @@ app.post("/compute-scenarios", (req, res) => {
     A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
     A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
     A_budget_fit: sA.budget_fit || "",
+    A_typology: sA.typology || "BLOC",
+    A_typology_desc: (sA.typology_impact || {}).description || "",
     A_ces_pct: String(sA.ces_fill_pct || 0), A_cos_pct: String(sA.cos_ratio_pct || 0),
     A_cos_compliance: sA.cos_compliance || "",
     A_free_ground: `${sA.free_ground_m2 || 0} m²`,
@@ -3765,6 +3987,8 @@ app.post("/compute-scenarios", (req, res) => {
     B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
     B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
     B_budget_fit: sB.budget_fit || "",
+    B_typology: sB.typology || "BLOC",
+    B_typology_desc: (sB.typology_impact || {}).description || "",
     B_ces_pct: String(sB.ces_fill_pct || 0), B_cos_pct: String(sB.cos_ratio_pct || 0),
     B_cos_compliance: sB.cos_compliance || "",
     B_free_ground: `${sB.free_ground_m2 || 0} m²`,
@@ -3801,6 +4025,8 @@ app.post("/compute-scenarios", (req, res) => {
     C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
     C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
     C_budget_fit: sC.budget_fit || "",
+    C_typology: sC.typology || "BLOC",
+    C_typology_desc: (sC.typology_impact || {}).description || "",
     C_ces_pct: String(sC.ces_fill_pct || 0), C_cos_pct: String(sC.cos_ratio_pct || 0),
     C_cos_compliance: sC.cos_compliance || "",
     C_free_ground: `${sC.free_ground_m2 || 0} m²`,
@@ -3875,6 +4101,116 @@ app.post("/compute-scenarios", (req, res) => {
 //   EN_U     → 3 ailes + cour intérieure, programme mixte, standing élevé
 //   EN_L     → 2 ailes, terrain d'angle, extension/rénovation
 //   EXTENSION→ barre accolée à un côté (parcelle déjà occupée)
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.53: IMPACT DES TYPOLOGIES SUR LES CALCULS
+// Chaque forme a un impact RÉEL sur : circulation, coûts, efficacité, profondeur
+// Ces modifiers sont appliqués dans computeSmartScenarios (pas juste le rendu 3D)
+// ══════════════════════════════════════════════════════════════════════════════
+const TYPOLOGY_IMPACT = {
+  BLOC: {
+    // Rectangle compact : fondations simples, toiture rectangulaire, circulation minimale
+    // Le plus économique à construire — référence de coût
+    circ_modifier: 0,        // pas de surcoût circulation (couloir central simple)
+    cost_mult: 1.00,         // référence coût construction
+    body_depth_mult: 1.00,   // profondeur standard
+    efficiency: 0.84,        // ratio surface utile / SDP (bon)
+    fondation_mult: 1.00,    // fondations simples (rectangle)
+    toiture_mult: 1.00,      // toiture simple (2 pans ou terrasse)
+    description: "Volume compact rectangulaire — coût optimisé, fondations simples",
+  },
+  BARRE: {
+    // Lamelle allongée : double orientation, ventilation traversante, couloirs latéraux
+    // Éclairage naturel optimal — légèrement plus cher (linéaire de façade)
+    circ_modifier: +0.02,    // +2% circulation (couloir latéral + escaliers en bouts)
+    cost_mult: 1.08,         // +8% (plus de linéaire de façade, étanchéité, finitions)
+    body_depth_mult: 0.75,   // corps de bâti plus mince (ventilation traversante)
+    efficiency: 0.82,        // ratio utile/SDP (bon, grâce à la double orientation)
+    fondation_mult: 1.05,    // fondations linéaires (plus longues)
+    toiture_mult: 1.05,      // toiture allongée
+    description: "Lamelle allongée — double orientation, ventilation traversante, éclairage optimal",
+  },
+  EN_U: {
+    // 3 ailes autour d'une cour : circulation plus complexe (3 cages d'escalier)
+    // Premium — cour intérieure créant un microclimat, mais fondations complexes
+    circ_modifier: +0.06,    // +6% circulation (3 cages d'escalier, coursives, hall)
+    cost_mult: 1.15,         // +15% (3 ailes, joints de dilatation, cour, fondations en U)
+    body_depth_mult: 0.80,   // ailes plus minces (éclairage sur cour + extérieur)
+    efficiency: 0.78,        // ratio utile/SDP (perdu en circulation, mais cour = valeur)
+    fondation_mult: 1.20,    // fondations complexes (3 directions, angles)
+    toiture_mult: 1.15,      // 3 toitures + noues intérieures
+    description: "3 ailes en U avec cour intérieure — prestige, microclimat, mixité optimale",
+  },
+  EN_L: {
+    // 2 ailes en angle : compromis entre BLOC et EN_U
+    // Bon éclairage, angle crée un espace semi-protégé
+    circ_modifier: +0.03,    // +3% (2 cages, angle de circulation)
+    cost_mult: 1.10,         // +10% (angle, 2 ailes, joint de dilatation)
+    body_depth_mult: 0.85,   // ailes légèrement plus minces
+    efficiency: 0.80,        // ratio utile/SDP (bon compromis)
+    fondation_mult: 1.10,    // fondations en angle
+    toiture_mult: 1.08,      // 2 toitures + noue à l'angle
+    description: "2 ailes en L — bon compromis lumière/coût, espace semi-protégé en angle",
+  },
+  EXTENSION: {
+    // Accolée à l'existant : 1 mur mitoyen partagé, fondations partielles
+    // Économique car 1 façade en moins, mais contraintes structurelles existant
+    circ_modifier: +0.01,    // +1% (raccordement à l'existant)
+    cost_mult: 1.05,         // +5% (raccordement structurel, reprise fondations)
+    body_depth_mult: 0.90,   // légèrement contraint par l'existant
+    efficiency: 0.82,        // bon (1 mur partagé = moins de déperditions)
+    fondation_mult: 1.08,    // reprise fondations existantes
+    toiture_mult: 1.02,      // raccord toiture existante
+    description: "Extension accolée — raccordement à l'existant, 1 façade partagée",
+  },
+};
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.53: VRD PAR ZONAGE — le coût des réseaux varie selon la zone
+// URBAIN: réseaux existants, raccordement court → VRD bas
+// PERIURBAIN: réseaux proches, quelques extensions → VRD moyen
+// RURAL/PAVILLON: pas de réseaux, tout à créer → VRD élevé
+// ══════════════════════════════════════════════════════════════════════════════
+const VRD_MULT_BY_ZONING = {
+  URBAIN: 0.80,      // réseaux existants, raccordement court
+  MIXTE: 0.90,       // zone mixte, réseaux partiels
+  PERIURBAIN: 1.00,  // référence — quelques extensions nécessaires
+  PAVILLON: 1.20,    // zone résidentielle, extensions significatives
+  RURAL: 1.50,       // tout à créer (routes, eau, électricité, assainissement)
+  Z_DEFAULT: 1.00,   // fallback
+};
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.53: PRÉ-SÉLECTION TYPOLOGIQUE POUR LE CALCUL
+// Version simplifiée de selectTypology() utilisable DANS computeSmartScenarios
+// (la version complète avec bearing/solaire est pour le rendu 3D)
+// ══════════════════════════════════════════════════════════════════════════════
+function preSelectTypology({ fp_m2, envelope_area, site_area, envAspect, massing_mode,
+  scenario_role, standing_level, program_main, isMixte, fillRatio }) {
+  const isPremium = /PREMIUM|HAUT/i.test(standing_level || "");
+  // Contrainte géométrique dure
+  if (fillRatio > 0.80) return "BLOC";
+  // PRUDENT → BLOC (simple, économique)
+  if (scenario_role === "PRUDENT" && fillRatio > 0.30) return "BLOC";
+  // INTENSIFICATION + grand terrain mixte → EN_U
+  if (scenario_role === "INTENSIFICATION" && isMixte && envelope_area > 400 && fillRatio > 0.30) return "EN_U";
+  // INTENSIFICATION + terrain allongé → BARRE
+  if (scenario_role === "INTENSIFICATION" && envAspect > 1.8) return "BARRE";
+  // COMPACT → BLOC ou EN_U
+  if (massing_mode === "COMPACT") {
+    if (isPremium && isMixte && envelope_area > 400) return "EN_U";
+    return "BLOC";
+  }
+  // SPREAD → BARRE ou EN_L
+  if (massing_mode === "SPREAD") {
+    if (envAspect > 1.5) return "BARRE";
+    if (isPremium && envelope_area > 350) return "EN_L";
+    return "BARRE";
+  }
+  // BALANCED → selon contexte
+  if (isPremium && isMixte && envelope_area > 500) return "EN_U";
+  if (envAspect > 2.0) return "BARRE";
+  if (fillRatio > 0.35 && fillRatio < 0.65 && envelope_area > 350) return "EN_L";
+  return "BLOC";
+}
 // ─── SÉLECTION TYPOLOGIQUE v56.2 ─────────────────────────────────────────────
 // Chaque scénario (A/B/C) peut avoir une typologie DIFFÉRENTE.
 // Le choix tient compte de :
@@ -6323,7 +6659,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.52-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.53-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
