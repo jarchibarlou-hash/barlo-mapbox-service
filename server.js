@@ -131,7 +131,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.39-SUPERVISOR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.41-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3121,6 +3121,43 @@ function computeSmartScenarios({
       }
     }
   }
+  // ══════════════════════════════════════════════════════════════════
+  // v72.40: ANTI-COLLAPSE A vs B — si A.sdp ≈ B.sdp, forcer la différenciation
+  // Cas fréquent sur petites parcelles : les contraintes terrain font converger A et B.
+  // Stratégie : B est réduit (1 niveau en moins ou emprise -15%)
+  // ══════════════════════════════════════════════════════════════════
+  if (r.A && r.B) {
+    const aSdp = Math.round(r.A.sdp_m2), bSdp = Math.round(r.B.sdp_m2);
+    const diffAB = aSdp > 0 ? Math.abs(aSdp - bSdp) / aSdp : 0;
+    if (diffAB < 0.08) { // moins de 8% d'écart → quasi-identiques
+      console.log(`│ ⚠️ v72.40 ANTI-COLLAPSE A/B: A.sdp=${aSdp} ≈ B.sdp=${bSdp} (diff=${(diffAB*100).toFixed(1)}%) → différenciation`);
+      if (r.B.levels >= 2) {
+        // Réduire B d'1 niveau → SDP naturellement plus bas
+        r.B.levels = r.B.levels - 1;
+        recalcSdp(r.B);
+        console.log(`│   → B réduit à ${r.B.levels} niv, SDP=${r.B.sdp_m2}m² (était ${bSdp}m²)`);
+      } else {
+        // B déjà à 1 niveau → réduire emprise de 20%
+        r.B.fp_m2 = Math.round(r.B.fp_m2 * 0.80);
+        r.B.fp_rdc_m2 = Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.80);
+        r.B.fp_etages_m2 = Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.80);
+        recalcSdp(r.B);
+        console.log(`│   → B emprise réduite à ${r.B.fp_m2}m², SDP=${r.B.sdp_m2}m² (était ${bSdp}m²)`);
+      }
+      // Vérifier que B reste > C après la réduction
+      if (r.C && r.B.sdp_m2 <= r.C.sdp_m2) {
+        // B est tombé en-dessous de C → ajuster C
+        r.C.levels = Math.max(1, r.B.levels - 1);
+        if (r.C.levels === r.B.levels) {
+          r.C.fp_m2 = Math.round(r.B.fp_m2 * 0.80);
+          r.C.fp_rdc_m2 = Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.80);
+          r.C.fp_etages_m2 = Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.80);
+        }
+        recalcSdp(r.C);
+        console.log(`│   → C ajusté aussi: ${r.C.levels}niv, SDP=${r.C.sdp_m2}m²`);
+      }
+    }
+  }
   // v57.21 SAFETY NET: enforce A.fp_m2 >= B.fp_m2 >= C.fp_m2
   // The core calculation should always produce this, but post-processing
   // or edge cases might break it. This is the last line of defense.
@@ -3481,26 +3518,21 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
   console.log(`║ layout_mode=${p.layout_mode} commerce_depth_m=${p.commerce_depth_m}`);
   console.log(`╚════════════════════════════════════════╝\n`);
-  // ── v72.39: DÉTECTION SPLIT — uniquement si le client l'a coché dans le formulaire ──
-  // Le formulaire Google envoie "Commerce devant, logement en retrait" → Make.com le mappe
-  // Signaux valides : layout_mode=SPLIT_AV_AR, OU body contient "commerce devant/retrait/split_av/dissoci"
+  // ── v72.41: SPLIT = layout_mode explicite OU texte EXACT du formulaire Google ──
+  // Le formulaire a 2 options : "Tout dans un seul bâtiment" | "Commerce devant, logement en retrait"
+  // Signal 1: layout_mode=SPLIT_AV_AR (si Make.com le mappe)
+  // Signal 2: une valeur du body contient LE TEXTE EXACT du formulaire (fallback si pas mappé)
   const fieldValues_cs = Object.values(p).map(v => String(v).toLowerCase()).join(" ");
   const layoutModeIsSplit_cs = String(p.layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  const bodyHasSplit_cs = /split.?av|commerce.?devant|devant.?retrait|dissoci|logement.?en.?retrait/i.test(fieldValues_cs);
-  const hasCommerceDepth_cs = Number(p.commerce_depth_m) > 0;
-  const effectiveLayoutMode_cs = (layoutModeIsSplit_cs || bodyHasSplit_cs || hasCommerceDepth_cs)
-    ? "SPLIT_AV_AR" : "SUPERPOSE";
-  const splitActive_cs = effectiveLayoutMode_cs === "SPLIT_AV_AR";
-  const bodyHasMixte_cs = /mixte|mixed|usage.?mixte/i.test(fieldValues_cs);
-  const effectiveProgramMain_cs = p.program_main || p.project_type || ((bodyHasMixte_cs || splitActive_cs) ? "USAGE_MIXTE" : "");
-  // ── LOG COMPLET pour diagnostic — on dump TOUTES les clés et valeurs reçues ──
-  console.log(`[v72.39] ┌── COMPUTE-SCENARIOS: DÉTECTION SPLIT ──`);
-  console.log(`[v72.39] │ layout_mode_raw="${p.layout_mode}" commerce_depth_m="${p.commerce_depth_m}"`);
-  console.log(`[v72.39] │ layoutModeIsSplit=${layoutModeIsSplit_cs} bodyHasSplit=${bodyHasSplit_cs} hasCommerceDepth=${hasCommerceDepth_cs}`);
-  console.log(`[v72.39] │ → effectiveLayoutMode="${effectiveLayoutMode_cs}" effectiveProgramMain="${effectiveProgramMain_cs}"`);
-  console.log(`[v72.39] │ TOUTES LES CLÉS REÇUES: ${Object.keys(p).join(", ")}`);
-  console.log(`[v72.39] │ TOUTES LES VALEURS: ${fieldValues_cs.slice(0, 600)}`);
-  console.log(`[v72.39] └── FIN DÉTECTION ──`);
+  const formSaysCommDevant_cs = /commerce devant.{0,5}logement en retrait/i.test(fieldValues_cs);
+  const effectiveLayoutMode_cs = (layoutModeIsSplit_cs || formSaysCommDevant_cs) ? "SPLIT_AV_AR" : "SUPERPOSE";
+  const effectiveProgramMain_cs = p.program_main || p.project_type || "";
+  console.log(`[v72.41] ┌── COMPUTE-SCENARIOS: DÉTECTION SPLIT ──`);
+  console.log(`[v72.41] │ layout_mode_raw="${p.layout_mode}" formSaysCommDevant=${formSaysCommDevant_cs}`);
+  console.log(`[v72.41] │ → effectiveLayoutMode="${effectiveLayoutMode_cs}" program="${effectiveProgramMain_cs}"`);
+  console.log(`[v72.41] │ CLÉS REÇUES: ${Object.keys(p).join(", ")}`);
+  console.log(`[v72.41] │ VALEURS: ${fieldValues_cs.slice(0, 500)}`);
+  console.log(`[v72.41] └── FIN DÉTECTION ──`);
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
@@ -5667,35 +5699,21 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
   console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
-  // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
-  // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
-  // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
+  // ── v72.41: SPLIT = layout_mode explicite OU texte EXACT du formulaire Google ──
   const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
-  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
-  // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
-  // ── Détection MIXTE ──
-  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
-  // ── Détection SPLIT ──
-  // Signal 1: layout_mode explicitement SPLIT_AV_AR
   const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  // Signal 2: une valeur du body mentionne clairement la séparation
-  const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
-  // Signal 3: commerce_depth_m est envoyé avec une valeur > 0 → c'est forcément du SPLIT
-  const hasCommerceDepth = Number(commerce_depth_m) > 0;
-  // ── Résolution v72.39: SPLIT uniquement si coché par le client ──
-  const effectiveLayoutMode = (layoutModeIsSplit || bodyHasSplit || hasCommerceDepth)
-    ? "SPLIT_AV_AR" : "SUPERPOSE";
+  const formSaysCommDevant = /commerce devant.{0,5}logement en retrait/i.test(fieldValues);
+  const effectiveLayoutMode = (layoutModeIsSplit || formSaysCommDevant) ? "SPLIT_AV_AR" : "SUPERPOSE";
   const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
   // ── Programme effectif ──
+  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
   const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v72.39] ┌── DÉTECTION MIXTE/SPLIT ──`);
-  console.log(`[MASSING v72.39] │ program_main="${program_main}" project_type="${project_type}"`);
-  console.log(`[MASSING v72.39] │ layout_mode_raw="${layout_mode}" commerce_depth_m="${commerce_depth_m}" retrait="${retrait_inter_volumes_m}"`);
-  console.log(`[MASSING v72.39] │ bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit} hasCommerceDepth=${hasCommerceDepth} splitActive=${splitActive}`);
-  console.log(`[MASSING v72.39] │ effectiveLayoutMode="${effectiveLayoutMode}" effectiveProgramMain="${effectiveProgramMain}"`);
-  console.log(`[MASSING v72.39] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
-  console.log(`[MASSING v72.39] │ field_values_sample="${fieldValues.slice(0, 500)}"`);
-  console.log(`[MASSING v72.39] └── FIN DÉTECTION ──`);
+  console.log(`[MASSING v72.41] ┌── DÉTECTION SPLIT ──`);
+  console.log(`[MASSING v72.41] │ layout_mode_raw="${layout_mode}" formSaysCommDevant=${formSaysCommDevant}`);
+  console.log(`[MASSING v72.41] │ → effectiveLayoutMode="${effectiveLayoutMode}" program="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.41] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
+  console.log(`[MASSING v72.41] │ field_values_sample="${fieldValues.slice(0, 400)}"`);
+  console.log(`[MASSING v72.41] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
@@ -5776,11 +5794,11 @@ app.post("/generate-massing", async (req, res) => {
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels}`);
   }
-  // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
-  // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
-  if (commerceLevels === 0 && (bodyHasMixte || splitActive)) {
+  // v72.40: Si le programme est MIXTE (moteur ou effectiveProgramMain) et commerceLevels=0 → forcer 1
+  const isMixteProgram = /mixte|mixed/i.test(effectiveProgramMain);
+  if (commerceLevels === 0 && (isMixteProgram || splitActive)) {
     commerceLevels = 1;
-    console.log(`[OVERRIDE] commerceLevels=0 mais body contient mixte/split → FORCÉ à 1 (commerce RDC ORANGE)`);
+    console.log(`[OVERRIDE] commerceLevels=0 mais programme mixte → FORCÉ à 1 (commerce RDC ORANGE)`);
   }
   // v72.28: Si mixte SUPERPOSÉ et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
   // En SPLIT, les levels = logement seulement (commerce est un volume séparé) → PAS de override
@@ -5789,11 +5807,11 @@ app.post("/generate-massing", async (req, res) => {
     levels = commerceLevels + 1;
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
   }
-  // v72.23: SPLIT SYNTHÉTIQUE — si le body demande un SPLIT mais splitLayout est null,
-  // on construit un splitLayout synthétique pour que le rendu 3D montre 2 volumes séparés.
-  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact (volume unique).
-  // A et B gardent le SPLIT avec commerce en front + logement sur pilotis derrière.
-  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && label !== "C") {
+  // v72.40: SPLIT SYNTHÉTIQUE — UNIQUEMENT si layout_mode explicitement SPLIT_AV_AR
+  // ET que le moteur n'a pas produit de splitLayout (fallback visuel).
+  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact.
+  // v72.41: layoutModeIsSplit OU formSaysCommDevant (texte exact du formulaire Google)
+  if (!splitLayout && (layoutModeIsSplit || formSaysCommDevant) && commerceLevels > 0 && label !== "C") {
     const commDepthEstimate = Number(commerce_depth_m) || 6;
     const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
     const logtFpEstimate = fp;  // emprise logement = fp original
@@ -6151,7 +6169,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.39-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.41-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6173,7 +6191,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.39-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.41-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
