@@ -1404,6 +1404,20 @@ function computeSmartScenarios({
   // ≈24×24 au lieu du vrai bbox ≈49×47), ce qui causait fp_A=342 au lieu de ~1100.
   // La contrainte physique (bâtiment dans l'enveloppe) est gérée par
   // computeMassingPolygon au moment du rendu, avec cross-section + containment check.
+
+  // v72.52: GARDE ANTI-NaN sur envelope_w et envelope_d
+  // Si les valeurs sont NaN/0, on déduit depuis envelope_area (polygone) ou site_area
+  if (isNaN(envelope_w) || envelope_w <= 0) {
+    const fallbackArea = env_area_override || site_area * 0.6;
+    envelope_w = Math.round(Math.sqrt(fallbackArea) * 1.1); // slightly wider than square
+    console.warn(`[v72.52] ⚠️ envelope_w was NaN/0 → fallback=${envelope_w}m (from area=${fallbackArea}m²)`);
+  }
+  if (isNaN(envelope_d) || envelope_d <= 0) {
+    const fallbackArea = env_area_override || site_area * 0.6;
+    envelope_d = Math.round(Math.sqrt(fallbackArea) * 0.9); // slightly narrower
+    console.warn(`[v72.52] ⚠️ envelope_d was NaN/0 → fallback=${envelope_d}m (from area=${fallbackArea}m²)`);
+  }
+
   const envelope_bbox = envelope_w * envelope_d;
   const envelope_area = env_area_override || envelope_bbox;
   const ces = ZONING_CES[zoning_type] || 0.50;
@@ -3468,6 +3482,25 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ disposition="${p.disposition}" layout_mode="${p.layout_mode}"`);
   console.log(`╚════════════════════════════════════════╝\n`);
 
+  // ── v72.52: PARSING ROBUSTE des dimensions ──────────────────────────────────
+  // Make.com peut envoyer "20 - 6" au lieu de 20 (formule Sheet lue comme texte)
+  // parseFloat("20 - 6") = 20, Number("20 - 6") = NaN
+  const _safeFloat = (v) => {
+    if (v === null || v === undefined || v === "") return 0;
+    if (typeof v === "number") return isNaN(v) ? 0 : v;
+    const n = Number(v);
+    if (!isNaN(n)) return n;
+    const f = parseFloat(String(v));
+    return (!isNaN(f)) ? f : 0;
+  };
+
+  // v72.52: Appliquer parseFloat sur envelope_w et envelope_d AVANT tout calcul
+  const parsed_envelope_w = _safeFloat(p.envelope_w);
+  const parsed_envelope_d = _safeFloat(p.envelope_d);
+  const parsed_site_area  = _safeFloat(p.site_area);
+  const parsed_envelope_area = _safeFloat(p.envelope_area);
+  console.log(`[v72.52] PARSED DIMS: envelope_w=${parsed_envelope_w} envelope_d=${parsed_envelope_d} site_area=${parsed_site_area} envelope_area=${parsed_envelope_area} (raw: w="${p.envelope_w}" d="${p.envelope_d}")`);
+
   // ── v72.51: CALCUL DES SCORES CÔTÉ SERVEUR ──────────────────────────────────
   // Make.com écrase les formules Google Sheet → on calcule tout ici à partir des données brutes
   const _n = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
@@ -3549,10 +3582,10 @@ app.post("/compute-scenarios", (req, res) => {
   const effectiveLayoutMode_cs = (dispositionIsSplit_cs || layoutModeIsSplit_cs) ? "SPLIT_AV_AR" : "SUPERPOSE";
   console.log(`[v72.50] SPLIT: disposition="${dispositionRaw_cs}"→${dispositionIsSplit_cs} | layout_mode="${p.layout_mode}"→${layoutModeIsSplit_cs} | RESULT=${effectiveLayoutMode_cs}`);
   const scenarios = computeSmartScenarios({
-    site_area: Number(p.site_area),
-    envelope_w: Number(p.envelope_w),
-    envelope_d: Number(p.envelope_d),
-    envelope_area: Number(p.envelope_area) || undefined,
+    site_area: parsed_site_area,
+    envelope_w: parsed_envelope_w,
+    envelope_d: parsed_envelope_d,
+    envelope_area: parsed_envelope_area || undefined,
     zoning_type: p.zoning_type || "URBAIN",
     floor_height: Number(p.floor_height) || 3.2,
     primary_driver: p.primary_driver || "MAX_CAPACITE",
@@ -6290,7 +6323,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.51-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.52-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
