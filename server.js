@@ -20,6 +20,7 @@ const POLISH_TIMEOUT_MS = 90000; // 90s per API call
 const POLISH_MAX_RETRIES = 2;    // retry each variation up to 2 times
 const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
+
 /**
  * v72.34: Robust single polish API call with retry + timeout + full error logging
  * Returns { b64: string } on success or { error: string, details: string } on failure
@@ -115,6 +116,7 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
     return { error: errType, details: err.message };
   }
 }
+
 /**
  * v72.34: Resize image buffer to max dimension while preserving aspect ratio
  * Returns { buf: Buffer, w: number, h: number }
@@ -131,7 +133,8 @@ async function resizeForPolish(pngBuf, maxDim) {
   console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.41-SUPERVISOR" }));
+
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.50-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2314,19 +2317,9 @@ function computeSmartScenarios({
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
     // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
-    let sdp;
-    if (splitLayout && splitLayout.volume_commerce && splitLayout.volume_logement) {
-      // v72.36-FIX: En mode SPLIT, sdp = EXACTEMENT commerce + logement
-      // Même formule que drawMassingOverlays (render) : totalSDP = vc.sdp_m2 + vl.sdp_m2
-      const commSdp = splitLayout.volume_commerce.sdp_m2 || 0;
-      const logtSdp = splitLayout.volume_logement.sdp_m2 || 0;
-      sdp = commSdp + logtSdp;
-      console.log(`│   v72.36-FIX: SDP SPLIT = commerce(${commSdp}) + logement(${logtSdp}) = ${sdp}m² [render-aligned]`);
-    } else {
-      sdp = (fpRdc && fpEtages && levels > 1)
-        ? fpRdc + fpEtages * (levels - 1)
-        : fp * levels;
-    }
+    const sdp = (fpRdc && fpEtages && levels > 1)
+      ? fpRdc + fpEtages * (levels - 1)
+      : fp * levels;
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
     let compliance;
     if (cosRatio <= 1.05) compliance = "CONFORME";
@@ -2624,15 +2617,9 @@ function computeSmartScenarios({
   const r = results;
   // Helper : recalcule SDP duale pour un scénario
   const recalcSdp = (s) => {
-    if (s.split_layout && s.split_layout.volume_commerce && s.split_layout.volume_logement) {
-      // v72.36-FIX: SPLIT → sdp = commerce + logement (miroir du render)
-      s.split_layout.volume_logement.sdp_m2 = s.split_layout.volume_logement.fp_m2 * s.split_layout.volume_logement.levels;
-      s.sdp_m2 = (s.split_layout.volume_commerce.sdp_m2 || 0) + s.split_layout.volume_logement.sdp_m2;
-    } else {
-      s.sdp_m2 = (s.fp_rdc_m2 && s.fp_etages_m2 && s.levels > 1)
-        ? s.fp_rdc_m2 + s.fp_etages_m2 * (s.levels - 1)
-        : s.fp_m2 * s.levels;
-    }
+    s.sdp_m2 = (s.fp_rdc_m2 && s.fp_etages_m2 && s.levels > 1)
+      ? s.fp_rdc_m2 + s.fp_etages_m2 * (s.levels - 1)
+      : s.fp_m2 * s.levels;
     s.height_m = Math.round(s.levels * floor_height * 10) / 10;
   };
   // ══════════════════════════════════════════════════════════════════
@@ -3121,43 +3108,6 @@ function computeSmartScenarios({
       }
     }
   }
-  // ══════════════════════════════════════════════════════════════════
-  // v72.40: ANTI-COLLAPSE A vs B — si A.sdp ≈ B.sdp, forcer la différenciation
-  // Cas fréquent sur petites parcelles : les contraintes terrain font converger A et B.
-  // Stratégie : B est réduit (1 niveau en moins ou emprise -15%)
-  // ══════════════════════════════════════════════════════════════════
-  if (r.A && r.B) {
-    const aSdp = Math.round(r.A.sdp_m2), bSdp = Math.round(r.B.sdp_m2);
-    const diffAB = aSdp > 0 ? Math.abs(aSdp - bSdp) / aSdp : 0;
-    if (diffAB < 0.08) { // moins de 8% d'écart → quasi-identiques
-      console.log(`│ ⚠️ v72.40 ANTI-COLLAPSE A/B: A.sdp=${aSdp} ≈ B.sdp=${bSdp} (diff=${(diffAB*100).toFixed(1)}%) → différenciation`);
-      if (r.B.levels >= 2) {
-        // Réduire B d'1 niveau → SDP naturellement plus bas
-        r.B.levels = r.B.levels - 1;
-        recalcSdp(r.B);
-        console.log(`│   → B réduit à ${r.B.levels} niv, SDP=${r.B.sdp_m2}m² (était ${bSdp}m²)`);
-      } else {
-        // B déjà à 1 niveau → réduire emprise de 20%
-        r.B.fp_m2 = Math.round(r.B.fp_m2 * 0.80);
-        r.B.fp_rdc_m2 = Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.80);
-        r.B.fp_etages_m2 = Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.80);
-        recalcSdp(r.B);
-        console.log(`│   → B emprise réduite à ${r.B.fp_m2}m², SDP=${r.B.sdp_m2}m² (était ${bSdp}m²)`);
-      }
-      // Vérifier que B reste > C après la réduction
-      if (r.C && r.B.sdp_m2 <= r.C.sdp_m2) {
-        // B est tombé en-dessous de C → ajuster C
-        r.C.levels = Math.max(1, r.B.levels - 1);
-        if (r.C.levels === r.B.levels) {
-          r.C.fp_m2 = Math.round(r.B.fp_m2 * 0.80);
-          r.C.fp_rdc_m2 = Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.80);
-          r.C.fp_etages_m2 = Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.80);
-        }
-        recalcSdp(r.C);
-        console.log(`│   → C ajusté aussi: ${r.C.levels}niv, SDP=${r.C.sdp_m2}m²`);
-      }
-    }
-  }
   // v57.21 SAFETY NET: enforce A.fp_m2 >= B.fp_m2 >= C.fp_m2
   // The core calculation should always produce this, but post-processing
   // or edge cases might break it. This is the last line of defense.
@@ -3488,18 +3438,8 @@ function computeSmartScenarios({
   console.log(`│ A(${r.A.role}): fp=${r.A.fp_m2}m² × ${r.A.levels}niv = ${r.A.sdp_m2}m² SDP (${r.A.cos_ratio_pct}%COS) ${r.A.cos_compliance} | ${r.A.unit_mix_detail}`);
   console.log(`│ B(${r.B.role}): fp=${r.B.fp_m2}m² × ${r.B.levels}niv = ${r.B.sdp_m2}m² SDP (${r.B.cos_ratio_pct}%COS) ${r.B.cos_compliance} | ${r.B.unit_mix_detail}`);
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
-  // v72.36: LOG SPLIT DIAGNOSTIC — traçabilité SDP flat vs render
-  for (const lbl of ["A", "B", "C"]) {
-    const sc = r[lbl];
-    if (sc && sc.split_layout) {
-      const sl = sc.split_layout;
-      const vc = sl.volume_commerce || {};
-      const vl = sl.volume_logement || {};
-      console.log(`│ v72.36 SPLIT-CHECK ${lbl}: comm=${vc.fp_m2}m²×${vc.levels}niv=${vc.sdp_m2}m² + logt=${vl.fp_m2}m²×${vl.levels}niv=${vl.sdp_m2}m² → TOTAL=${(vc.sdp_m2||0)+(vl.sdp_m2||0)}m² | flat_sdp_m2=${sc.sdp_m2}m² ${sc.sdp_m2 === (vc.sdp_m2||0)+(vl.sdp_m2||0) ? "✅MATCH" : "❌MISMATCH"}`);
-    }
-  }
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
-  console.log(`└── end SCENARIO ENGINE v72.36 ──`);
+  console.log(`└── end SCENARIO ENGINE v57.20 ──`);
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
@@ -3516,23 +3456,14 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ max_floors=${p.max_floors} max_height=${p.max_height_m} floor_h=${p.floor_height}`);
   console.log(`║ budget_tension=${p.budget_tension} budget_band=${p.budget_band}`);
   console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
-  console.log(`║ layout_mode=${p.layout_mode} commerce_depth_m=${p.commerce_depth_m}`);
+  console.log(`║ disposition="${p.disposition}" layout_mode="${p.layout_mode}"`);
   console.log(`╚════════════════════════════════════════╝\n`);
-  // ── v72.41: SPLIT = layout_mode explicite OU texte EXACT du formulaire Google ──
-  // Le formulaire a 2 options : "Tout dans un seul bâtiment" | "Commerce devant, logement en retrait"
-  // Signal 1: layout_mode=SPLIT_AV_AR (si Make.com le mappe)
-  // Signal 2: une valeur du body contient LE TEXTE EXACT du formulaire (fallback si pas mappé)
-  const fieldValues_cs = Object.values(p).map(v => String(v).toLowerCase()).join(" ");
+  // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google, colonne BE) ──
+  const dispositionRaw_cs = String(p.disposition || "").toLowerCase();
+  const dispositionIsSplit_cs = /commerce devant|retrait|split/i.test(dispositionRaw_cs);
   const layoutModeIsSplit_cs = String(p.layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  const formSaysCommDevant_cs = /commerce devant.{0,5}logement en retrait/i.test(fieldValues_cs);
-  const effectiveLayoutMode_cs = (layoutModeIsSplit_cs || formSaysCommDevant_cs) ? "SPLIT_AV_AR" : "SUPERPOSE";
-  const effectiveProgramMain_cs = p.program_main || p.project_type || "";
-  console.log(`[v72.41] ┌── COMPUTE-SCENARIOS: DÉTECTION SPLIT ──`);
-  console.log(`[v72.41] │ layout_mode_raw="${p.layout_mode}" formSaysCommDevant=${formSaysCommDevant_cs}`);
-  console.log(`[v72.41] │ → effectiveLayoutMode="${effectiveLayoutMode_cs}" program="${effectiveProgramMain_cs}"`);
-  console.log(`[v72.41] │ CLÉS REÇUES: ${Object.keys(p).join(", ")}`);
-  console.log(`[v72.41] │ VALEURS: ${fieldValues_cs.slice(0, 500)}`);
-  console.log(`[v72.41] └── FIN DÉTECTION ──`);
+  const effectiveLayoutMode_cs = (dispositionIsSplit_cs || layoutModeIsSplit_cs) ? "SPLIT_AV_AR" : "SUPERPOSE";
+  console.log(`[v72.50] SPLIT: disposition="${dispositionRaw_cs}"→${dispositionIsSplit_cs} | layout_mode="${p.layout_mode}"→${layoutModeIsSplit_cs} | RESULT=${effectiveLayoutMode_cs}`);
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
@@ -3543,7 +3474,7 @@ app.post("/compute-scenarios", (req, res) => {
     primary_driver: p.primary_driver || "MAX_CAPACITE",
     max_floors: Number(p.max_floors) || 99,
     max_height_m: Number(p.max_height_m) || 99,
-    program_main: effectiveProgramMain_cs,
+    program_main: p.program_main || p.project_type || "",
     target_surface_m2: Number(p.target_surface_m2) || 0,
     site_saturation_level: p.site_saturation_level || "MEDIUM",
     financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
@@ -3567,11 +3498,56 @@ app.post("/compute-scenarios", (req, res) => {
     density_pressure_factor: Number(p.density_pressure_factor) || 1,
     driver_intensity: p.driver_intensity || "MEDIUM",
     strategic_position: p.strategic_position || "",
-    // v57.20 : disposition spatiale — v72.37: auto-detect SPLIT
+    // v72.50 : disposition spatiale — détecté depuis le champ "disposition" du formulaire
     layout_mode: effectiveLayoutMode_cs,
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
+  // ── v72.50: ANTI-COLLAPSE — garantir A > B > C en SDP ──
+  // Sur petites parcelles avec scores vides, le moteur peut produire A ≈ B.
+  // On force la différenciation en post-processing.
+  const _recalcSdp = (sc) => {
+    if (sc.split_layout && sc.split_layout.volume_commerce && sc.split_layout.volume_logement) {
+      sc.sdp_m2 = (sc.split_layout.volume_commerce.sdp_m2 || 0) + (sc.split_layout.volume_logement.sdp_m2 || 0);
+    } else {
+      const fpRdc = sc.fp_rdc_m2 || sc.fp_m2;
+      const fpEt = sc.fp_etages_m2 || sc.fp_m2;
+      sc.sdp_m2 = fpRdc + fpEt * (sc.levels - 1);
+    }
+    sc.height_m = Math.round(sc.levels * 3.2 * 10) / 10;
+  };
+  if (scenarios.A && scenarios.B) {
+    const aSdp = Math.round(scenarios.A.sdp_m2);
+    const bSdp = Math.round(scenarios.B.sdp_m2);
+    const diffAB = aSdp > 0 ? Math.abs(aSdp - bSdp) / aSdp : 0;
+    if (diffAB < 0.08) {
+      console.log(`[v72.50] ⚠️ ANTI-COLLAPSE A/B: A.sdp=${aSdp} B.sdp=${bSdp} diff=${(diffAB*100).toFixed(1)}% < 8% → FORÇAGE`);
+      if (scenarios.B.levels >= 2) {
+        scenarios.B.levels = scenarios.B.levels - 1;
+        if (scenarios.B.split_layout && scenarios.B.split_layout.volume_logement) {
+          scenarios.B.split_layout.volume_logement.levels = Math.max(1, scenarios.B.split_layout.volume_logement.levels - 1);
+          scenarios.B.split_layout.volume_logement.sdp_m2 = scenarios.B.split_layout.volume_logement.fp_m2 * scenarios.B.split_layout.volume_logement.levels;
+        }
+        _recalcSdp(scenarios.B);
+        console.log(`[v72.50] → B.levels réduit → B.sdp=${scenarios.B.sdp_m2}`);
+      } else {
+        scenarios.B.fp_m2 = Math.round(scenarios.B.fp_m2 * 0.80);
+        scenarios.B.fp_rdc_m2 = Math.round((scenarios.B.fp_rdc_m2 || scenarios.B.fp_m2) * 0.80);
+        scenarios.B.fp_etages_m2 = Math.round((scenarios.B.fp_etages_m2 || scenarios.B.fp_m2) * 0.80);
+        _recalcSdp(scenarios.B);
+        console.log(`[v72.50] → B.fp réduit 80% → B.sdp=${scenarios.B.sdp_m2}`);
+      }
+    }
+  }
+  if (scenarios.B && scenarios.C) {
+    const bSdp2 = Math.round(scenarios.B.sdp_m2);
+    const cSdp = Math.round(scenarios.C.sdp_m2);
+    if (bSdp2 <= cSdp && scenarios.C.levels >= 2) {
+      scenarios.C.levels = scenarios.C.levels - 1;
+      _recalcSdp(scenarios.C);
+      console.log(`[v72.50] → C.levels réduit car B.sdp(${bSdp2}) ≤ C.sdp(${cSdp}) → C.sdp=${scenarios.C.sdp_m2}`);
+    }
+  }
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
   const comp = diag.comparatif || {};
@@ -4802,6 +4778,7 @@ function applyColorRemap(ctx, W, H) {
   // This function now ONLY whitens building rooftops for a premium concrete look.
   const imgData = ctx.getImageData(0, 0, W, H);
   const d = imgData.data;
+
   // ─── STEP 1: Build rooftop mask ──────────────────────────────────────────
   // In 3D axonometric view, building rooftops have darker building-side pixels
   // directly below them. Ground does NOT have this brightness drop.
@@ -4851,6 +4828,7 @@ function applyColorRemap(ctx, W, H) {
       }
     }
   }
+
   // ─── STEP 2: Building whitening — rooftop pixels → warm white concrete ───
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -5668,6 +5646,8 @@ app.post("/generate-massing", async (req, res) => {
     layout_mode,           // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
     commerce_depth_m,      // profondeur bande commerciale (défaut 6m)
     retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
+    // ── v72.50 : champ dédié disposition du formulaire Google (colonne BE) ──
+    disposition,           // "Commerce devant, logement en retrait" | "Tout dans un seul bâtiment" | vide
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -5699,21 +5679,23 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
   console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
-  // ── v72.41: SPLIT = layout_mode explicite OU texte EXACT du formulaire Google ──
-  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
+  const dispositionRaw = String(disposition || "").toLowerCase();
+  const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
   const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  const formSaysCommDevant = /commerce devant.{0,5}logement en retrait/i.test(fieldValues);
-  const effectiveLayoutMode = (layoutModeIsSplit || formSaysCommDevant) ? "SPLIT_AV_AR" : "SUPERPOSE";
+  const effectiveLayoutMode = (dispositionIsSplit || layoutModeIsSplit) ? "SPLIT_AV_AR" : "SUPERPOSE";
   const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
-  // ── Programme effectif ──
+  // ── Détection MIXTE ──
+  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
   const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
   const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v72.41] ┌── DÉTECTION SPLIT ──`);
-  console.log(`[MASSING v72.41] │ layout_mode_raw="${layout_mode}" formSaysCommDevant=${formSaysCommDevant}`);
-  console.log(`[MASSING v72.41] │ → effectiveLayoutMode="${effectiveLayoutMode}" program="${effectiveProgramMain}"`);
-  console.log(`[MASSING v72.41] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
-  console.log(`[MASSING v72.41] │ field_values_sample="${fieldValues.slice(0, 400)}"`);
-  console.log(`[MASSING v72.41] └── FIN DÉTECTION ──`);
+  console.log(`[MASSING v72.50] ┌── DÉTECTION SPLIT ──`);
+  console.log(`[MASSING v72.50] │ disposition="${dispositionRaw}" → ${dispositionIsSplit}`);
+  console.log(`[MASSING v72.50] │ layout_mode="${layout_mode}" → ${layoutModeIsSplit}`);
+  console.log(`[MASSING v72.50] │ → effectiveLayoutMode="${effectiveLayoutMode}" splitActive=${splitActive}`);
+  console.log(`[MASSING v72.50] │ effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.50] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
+  console.log(`[MASSING v72.50] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
@@ -5794,11 +5776,11 @@ app.post("/generate-massing", async (req, res) => {
     accentColor = String(accent_raw);
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels}`);
   }
-  // v72.40: Si le programme est MIXTE (moteur ou effectiveProgramMain) et commerceLevels=0 → forcer 1
-  const isMixteProgram = /mixte|mixed/i.test(effectiveProgramMain);
-  if (commerceLevels === 0 && (isMixteProgram || splitActive)) {
+  // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
+  // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
+  if (commerceLevels === 0 && (bodyHasMixte || splitActive)) {
     commerceLevels = 1;
-    console.log(`[OVERRIDE] commerceLevels=0 mais programme mixte → FORCÉ à 1 (commerce RDC ORANGE)`);
+    console.log(`[OVERRIDE] commerceLevels=0 mais body contient mixte/split → FORCÉ à 1 (commerce RDC ORANGE)`);
   }
   // v72.28: Si mixte SUPERPOSÉ et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
   // En SPLIT, les levels = logement seulement (commerce est un volume séparé) → PAS de override
@@ -5807,11 +5789,11 @@ app.post("/generate-massing", async (req, res) => {
     levels = commerceLevels + 1;
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
   }
-  // v72.40: SPLIT SYNTHÉTIQUE — UNIQUEMENT si layout_mode explicitement SPLIT_AV_AR
-  // ET que le moteur n'a pas produit de splitLayout (fallback visuel).
-  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact.
-  // v72.41: layoutModeIsSplit OU formSaysCommDevant (texte exact du formulaire Google)
-  if (!splitLayout && (layoutModeIsSplit || formSaysCommDevant) && commerceLevels > 0 && label !== "C") {
+  // v72.23: SPLIT SYNTHÉTIQUE — si le body demande un SPLIT mais splitLayout est null,
+  // on construit un splitLayout synthétique pour que le rendu 3D montre 2 volumes séparés.
+  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact (volume unique).
+  // A et B gardent le SPLIT avec commerce en front + logement sur pilotis derrière.
+  if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && label !== "C") {
     const commDepthEstimate = Number(commerce_depth_m) || 6;
     const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
     const logtFpEstimate = fp;  // emprise logement = fp original
@@ -6039,17 +6021,20 @@ app.post("/generate-massing", async (req, res) => {
         console.log(`[MASSING-POLISH] ${label} input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // v72.4: Stronger color preservation for floor coding
         let massingPolishPrompt = `STRICT EDIT ONLY.
+
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
 Do NOT modify, move, add, or remove ANY element.
 Do NOT change building shapes, positions, sizes, count.
 Do NOT reinterpret, redesign, or restyle the scene.
 NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
+
 CRITICAL COLOR PRESERVATION:
 - The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
 - These colors MUST remain vivid and clearly distinguishable after polish.
 - Do NOT wash out, desaturate, or unify the floor colors.
 - Do NOT turn orange or blue floors into beige, gray, or white.
 - The color difference between floor types is essential information — preserve it exactly.
+
 Apply ONLY these subtle non-structural adjustments:
 - Very slight tonal harmonization (uniform warm balance) — but KEEP floor colors intact
 - Minimal contrast improvement for visual clarity
@@ -6057,14 +6042,18 @@ Apply ONLY these subtle non-structural adjustments:
 - Gentle ambient occlusion at ground contact
 - Clean, professional finish
 - KEEP IMAGE SHARP — do not soften or blur any edges
+
 Do NOT change the maquette/model aesthetic — keep the clean architectural model look.
 This is a WARM BEIGE architectural maquette with colored floor bands. The background is warm beige (#eae8e4), buildings are cream (#f0ede8), roads are gray (#808080). PRESERVE THESE EXACT TONES. Do NOT shift to white, gray, or cool tones. The warm beige palette is essential.
+
 CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in WARM BEIGE tone and style. Do NOT make the scene cooler or whiter.`;
+
         // v72.35: Extra warm-tone enforcement for small volumes (C scenario)
         // Small buildings = more background pixels = AI tends to shift cool/gray
         const totalBuildingLevels = (habitationLevels || 0) + (commerceLevels || 0);
         if (totalBuildingLevels <= 2 || label === "C") {
           const warmEnforcement = `
+
 CRITICAL WARM TONE ENFORCEMENT:
 This is a SMALL building variant. The image is dominated by surrounding context (roads, other buildings, ground).
 You MUST maintain the EXACT SAME warm beige tone (#eae8e4) across the ENTIRE image.
@@ -6078,6 +6067,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
           massingPolishPrompt += warmEnforcement;
           console.log(`[MASSING-POLISH] ${label} v72.35: Warm-tone enforcement ACTIVE (levels=${totalBuildingLevels})`);
         }
+
         // v72.34: Launch all variations with robust retry engine
         const polishResults = await Promise.all(
           Array.from({ length: MASSING_VARIATIONS }, (_, v) =>
@@ -6169,7 +6159,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.41-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.50-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6191,7 +6181,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.41-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.50-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
