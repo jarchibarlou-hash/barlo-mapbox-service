@@ -1699,8 +1699,10 @@ function computeSmartScenarios({
         * capacityBoost                   // capacité élevée → +6% max
         * densityBandMult;                // zone dense → CES poussé (+10% max)
       // Bornes : jamais en dessous de 40% du CES réglementaire, jamais au-dessus de 105%
+      // v72.51: garde anti-NaN sur le CES client
+      const _safeClientCesMod = (isNaN(clientCesMod) || clientCesMod <= 0) ? 0.80 : clientCesMod;
       const effectiveCES = Math.max(ces * 0.40, Math.min(ces * 1.05,
-        ces * clientCesMod
+        ces * _safeClientCesMod
       ));
       effectiveCESOutput = effectiveCES;
       const effectiveMaxFp = Math.round(effectiveCES * site_area);
@@ -1834,7 +1836,11 @@ function computeSmartScenarios({
       // ÉTAPE 3 : Nombre de niveaux = CONSÉQUENCE
       const levelsFromProgram = Math.max(1, Math.ceil(clientUnits / Math.max(1, adaptiveUnitsPerFloor)));
       // fpProgramme = dimensionné pour les unités qui rentrent réellement
-      const fpProgramme = Math.round(adaptiveUnitsPerFloor * effectiveUnitSize / (1 - circRatio));
+      // v72.51: garde anti-NaN — si un facteur est invalide, fallback sur valeurs sûres
+      const _safeAdaptive = isNaN(adaptiveUnitsPerFloor) ? 1 : adaptiveUnitsPerFloor;
+      const _safeEffSize = isNaN(effectiveUnitSize) ? (sizes.T3 || 80) : effectiveUnitSize;
+      const _safeCirc = (isNaN(circRatio) || circRatio >= 1) ? 0.20 : circRatio;
+      const fpProgramme = Math.round(_safeAdaptive * _safeEffSize / (1 - _safeCirc));
       // Plancher : minimum 1 appartement compressé
       const fpMinViable = Math.round(Math.max(100, 1 * compressedSize / (1 - circRatio)));
       console.log(`│   🏠 v72.33 PLATEAU ADAPTATIF (parcelle → unités → niveaux):`);
@@ -2041,10 +2047,13 @@ function computeSmartScenarios({
       } else {
       // ── MODE SUPERPOSÉ (défaut) — logique existante ──
       fpRdc = Math.round(fpProgramme * roleFpFactor);
+      // v72.51: garde anti-NaN sur fpRdc
+      if (isNaN(fpRdc)) fpRdc = Math.round(Math.min(empriseEffective, envelope_area * 0.60));
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
       fpRdc = Math.max(fpRdc, fpMinViable);
       fpRdc = Math.round(fpRdc);
+      if (isNaN(fpRdc)) fpRdc = Math.max(100, Math.round(envelope_area * 0.40)); // ultime fallback
       }
       const cesPctResult = Math.round((splitLayout ? (splitLayout.volume_commerce.fp_m2 + fpRdc) : fpRdc) / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
@@ -6281,7 +6290,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.50-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.51-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
