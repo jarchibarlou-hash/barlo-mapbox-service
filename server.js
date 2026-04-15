@@ -3458,6 +3458,81 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
   console.log(`║ disposition="${p.disposition}" layout_mode="${p.layout_mode}"`);
   console.log(`╚════════════════════════════════════════╝\n`);
+
+  // ── v72.51: CALCUL DES SCORES CÔTÉ SERVEUR ──────────────────────────────────
+  // Make.com écrase les formules Google Sheet → on calcule tout ici à partir des données brutes
+  const _n = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
+  const rawBF = _n(p.setback_side_m || p.setback_side);   // BF = setback_side_m
+  const rawBG = _n(p.setback_back_m || p.setback_back);   // BG = setback_back_m
+  const rawBH = _n(p.envelope_w);                          // BH = envelope_w_m
+  const rawBD = _n(p.plot_d_m || p.plot_d || p.site_depth || p.envelope_d);  // BD = plot_d_m
+  const rawL  = _n(p.site_area);                           // L  = site_area_m2
+  const rawS  = _n(p.target_units);                        // S  = target_units
+  const rawR  = _n(p.target_surface_m2);                   // R  = target_surface_m2
+  const rawZ  = _n(p.financial_rigidity_score);             // Z  = financial_rigidity_score
+  const rawAY = String(p.primary_driver || "").toUpperCase(); // AY = primary_driver
+  const rawCI = String(p.budget_band || "").toUpperCase();    // CI = budget_band
+
+  // ── Scores normalisés (CC-CG) ──
+  const calc_rent_score_norm     = Math.round((rawBF / 50) * 100);      // CC
+  const calc_capacity_score_norm = Math.round((rawBG / 50) * 100);      // CD
+  const calc_risk_score_norm     = Math.round((rawBH / 50) * 100);      // CE
+
+  // ── Scores principaux (BT-BX) ──
+  const calc_rent_score     = rawL ? Math.min(100, Math.max(0, rawBF + (rawBG * 1.5) + rawBH)) : 0;  // BT
+  const calc_capacity_score = rawL ? Math.min(100, Math.max(0, (calc_rent_score_norm + calc_capacity_score_norm + calc_risk_score_norm) / 3)) : 0; // BU
+  const calc_mix_score_norm = Math.round((calc_rent_score / 50) * 100);  // CF
+  const calc_phase_score_norm = Math.round((calc_capacity_score / 50) * 100); // CG
+  const calc_phase_score    = rawL ? 35 : 0;  // BW
+  const calc_risk_score     = rawL ? 45 : 0;  // BX
+
+  // ── Density & pressure (BA, BY) ──
+  const calc_density_band = rawBD >= 15 ? "HIGH" : (rawBD >= 8 ? "MEDIUM" : "LOW");  // BA
+  const calc_density_pressure_factor = calc_density_band === "HIGH" ? 15 : (calc_density_band === "MEDIUM" ? 7 : 0); // BY
+  const calc_risk_adjusted = Math.min(100, calc_risk_score_norm + calc_density_pressure_factor); // BZ
+
+  // ── Second best & dominance (CA, CB) ──
+  const scoreArray = [calc_rent_score_norm, calc_capacity_score_norm, calc_risk_score_norm, calc_mix_score_norm].sort((a, b) => b - a);
+  const calc_second_best_score = scoreArray[1] || 0;  // CA
+  const calc_dominance_gap = (scoreArray[0] || 0) - calc_second_best_score;  // CB
+
+  // ── Decision columns (_calc: CJ-CP) ──
+  const calc_density_band_calc = rawL < 800 ? "LOW DENSITY" : (rawL < 1500 ? "MEDIUM DENSITY" : "HIGH DENSITY"); // CJ
+  let calc_budget_tension_calc = "LOW_TENSION"; // CK
+  if (rawCI === "LOW_BUDGET" && (rawS >= 10 || rawR >= 900)) calc_budget_tension_calc = "HIGH_TENSION";
+  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 14 || rawR >= 1400)) calc_budget_tension_calc = "HIGH_TENSION";
+  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 8 || rawR >= 900)) calc_budget_tension_calc = "MEDIUM_TENSION";
+
+  const calc_feasibility_posture = calc_risk_score_norm >= 75 ? "DEFENSIVE" : ((calc_risk_score_norm <= 40 && calc_density_band_calc === "HIGH DENSITY") ? "OFFENSIVE" : "BALANCED"); // CL
+
+  let calc_program_intent = "BALANCED_RESIDENTIAL"; // CM
+  if (rawAY === "RENT_SCORE" || rawAY === "CAPACITY_SCORE" || rawAY === "RENTABILITE" || rawAY === "CAPACITE") calc_program_intent = "MAX_YIELD";
+  else if (rawAY === "MIX_SCORE" || rawAY === "MIXTE" || rawAY === "EQUILIBRE") calc_program_intent = "MIXED_PROGRAM";
+  else if (rawAY === "PHASE_SCORE" || rawAY === "PHASAGE") calc_program_intent = "PHASED_STRATEGY";
+  else if (rawAY === "RISK_SCORE" || rawAY === "RISQUE") calc_program_intent = "LOW_RISK_STRATEGY";
+  else if (rawZ >= 8) calc_program_intent = "DEFENSIVE_PROGRAM";
+
+  let calc_program_alignment = "MEDIUM_ALIGNMENT"; // CN
+  if ((calc_program_intent === "MAX_YIELD" || calc_program_intent === "MIXED_PROGRAM") && (calc_density_band_calc === "LOW DENSITY" || calc_budget_tension_calc === "HIGH_TENSION" || calc_feasibility_posture === "DEFENSIVE")) calc_program_alignment = "LOW_ALIGNMENT";
+  else if ((calc_program_intent === "LOW_RISK_STRATEGY" || calc_program_intent === "DEFENSIVE_PROGRAM") && (calc_budget_tension_calc === "LOW_TENSION" || calc_feasibility_posture === "BALANCED")) calc_program_alignment = "HIGH_ALIGNMENT";
+  else if (calc_program_intent === "BALANCED_RESIDENTIAL" && (calc_feasibility_posture === "BALANCED" || calc_feasibility_posture === "OFFENSIVE")) calc_program_alignment = "HIGH_ALIGNMENT";
+
+  const calc_strategic_position = calc_program_alignment === "HIGH_ALIGNMENT" ? "ALIGNED_STRATEGY" : (calc_program_alignment === "MEDIUM_ALIGNMENT" ? "NEGOTIATED_STRATEGY" : (calc_program_alignment === "LOW_ALIGNMENT" ? "CORRECTIVE_STRATEGY" : "BALANCED_POSITION")); // CO
+  const calc_recommended_scenario = calc_feasibility_posture === "OFFENSIVE" ? "A" : (calc_feasibility_posture === "BALANCED" ? "B" : "C"); // CP
+
+  // ── Driver intensity (AZ) ──
+  let calc_driver_intensity = "MOYENNE";
+  if (rawAY === "RENTABILITE" || rawAY === "RENT_SCORE") calc_driver_intensity = calc_rent_score_norm >= 70 ? "FORTE" : (calc_rent_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
+  else if (rawAY === "CAPACITE" || rawAY === "CAPACITY_SCORE") calc_driver_intensity = calc_capacity_score_norm >= 70 ? "FORTE" : (calc_capacity_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
+
+  console.log(`[v72.51] SCORES CALCULÉS SERVEUR: rent_score=${calc_rent_score} capacity=${calc_capacity_score} risk_norm=${calc_risk_score_norm}`);
+  console.log(`[v72.51] density_band=${calc_density_band} feasibility=${calc_feasibility_posture} strategic=${calc_strategic_position} recommended=${calc_recommended_scenario}`);
+  console.log(`[v72.51] program_intent=${calc_program_intent} alignment=${calc_program_alignment} driver_intensity=${calc_driver_intensity}`);
+
+  // Utiliser les scores calculés si ceux reçus sont vides/0
+  const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
+  const useCalcStr = (received, calculated) => (received && received.length > 0) ? received : calculated;
+
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google, colonne BE) ──
   const dispositionRaw_cs = String(p.disposition || "").toLowerCase();
   const dispositionIsSplit_cs = /commerce devant|retrait|split/i.test(dispositionRaw_cs);
@@ -3478,9 +3553,9 @@ app.post("/compute-scenarios", (req, res) => {
     target_surface_m2: Number(p.target_surface_m2) || 0,
     site_saturation_level: p.site_saturation_level || "MEDIUM",
     financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
-    density_band: p.density_band || "",
-    risk_adjusted: Number(p.risk_adjusted) || 0,
-    feasibility_posture: p.feasibility_posture || "BALANCED",
+    density_band: useCalcStr(p.density_band, calc_density_band),
+    risk_adjusted: useCalc(Number(p.risk_adjusted), calc_risk_adjusted),
+    feasibility_posture: useCalcStr(p.feasibility_posture, calc_feasibility_posture),
     scenario_A_role: p.scenario_A_role || "",
     scenario_B_role: p.scenario_B_role || "",
     scenario_C_role: p.scenario_C_role || "",
@@ -3490,14 +3565,14 @@ app.post("/compute-scenarios", (req, res) => {
     budget_tension: Number(p.budget_tension) || 0,
     standing_level: p.standing_level || "STANDARD",
     target_units: Number(p.target_units) || 0,
-    rent_score: Number(p.rent_score) || 0,
-    capacity_score: Number(p.capacity_score) || 0,
+    rent_score: useCalc(Number(p.rent_score), calc_rent_score),
+    capacity_score: useCalc(Number(p.capacity_score), calc_capacity_score),
     mix_score: Number(p.mix_score) || 0,
-    phase_score: Number(p.phase_score) || 0,
-    risk_score: Number(p.risk_score) || 0,
-    density_pressure_factor: Number(p.density_pressure_factor) || 1,
-    driver_intensity: p.driver_intensity || "MEDIUM",
-    strategic_position: p.strategic_position || "",
+    phase_score: useCalc(Number(p.phase_score), calc_phase_score),
+    risk_score: useCalc(Number(p.risk_score), calc_risk_score),
+    density_pressure_factor: useCalc(Number(p.density_pressure_factor), calc_density_pressure_factor),
+    driver_intensity: useCalcStr(p.driver_intensity, calc_driver_intensity),
+    strategic_position: useCalcStr(p.strategic_position, calc_strategic_position),
     // v72.50 : disposition spatiale — détecté depuis le champ "disposition" du formulaire
     layout_mode: effectiveLayoutMode_cs,
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
@@ -3724,7 +3799,32 @@ app.post("/compute-scenarios", (req, res) => {
     site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
     site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
   };
-  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, ...flat });
+  // ── v72.51: Inclure les scores calculés dans la réponse pour que Make.com les écrive dans le Sheet ──
+  const computed_scores = {
+    rent_score_norm: calc_rent_score_norm,
+    capacity_score_norm: calc_capacity_score_norm,
+    risk_score_norm: calc_risk_score_norm,
+    rent_score: Math.round(calc_rent_score),
+    capacity_score: Math.round(calc_capacity_score),
+    mix_score_norm: calc_mix_score_norm,
+    phase_score_norm: calc_phase_score_norm,
+    phase_score: calc_phase_score,
+    risk_score: calc_risk_score,
+    density_band: calc_density_band,
+    density_pressure_factor: calc_density_pressure_factor,
+    risk_adjusted: calc_risk_adjusted,
+    second_best_score: calc_second_best_score,
+    dominance_gap: calc_dominance_gap,
+    density_band_calc: calc_density_band_calc,
+    budget_tension_calc: calc_budget_tension_calc,
+    feasibility_posture_calc: calc_feasibility_posture,
+    program_intent_calc: calc_program_intent,
+    program_alignment_calc: calc_program_alignment,
+    strategic_position_calc: calc_strategic_position,
+    recommended_scenario_calc: calc_recommended_scenario,
+    driver_intensity: calc_driver_intensity,
+  };
+  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, computed_scores, ...flat });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
 // Sélection automatique de la forme bâtie selon le contexte :
