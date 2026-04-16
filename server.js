@@ -4422,6 +4422,198 @@ app.post("/compute-scenarios", (req, res) => {
     recommended_scenario_calc: calc_recommended_scenario,
     driver_intensity: calc_driver_intensity,
   };
+  // ══════════════════════════════════════════════════════════════════════
+  // v72.60: PROMPTS GPT PRÉ-CONSTRUITS — Make.com mappe SEULEMENT 2 champs
+  // gpt_system_prompt → Message 1 (system) dans le module OpenAI
+  // gpt_user_prompt   → Message 2 (user) dans le module OpenAI
+  // Toutes les valeurs sont DÉJÀ injectées → zéro mapping de variables
+  // ══════════════════════════════════════════════════════════════════════
+  const _f = flat; // alias court
+  const _quartier = String(p.quartier || p.localisation || p.city || "Douala");
+  const _clientName = String(p.client_name || p.nom_client || "");
+
+  flat.gpt_system_prompt = `Tu es un expert en diagnostic immobilier au Cameroun, spécialiste des projets résidentiels et mixtes à Douala. Tu rédiges les textes d'un rapport diagnostic pour un client.
+
+${_f.gpt_text_rules}
+
+RÈGLES COMPLÉMENTAIRES DE RÉDACTION :
+
+STYLE :
+- Ton professionnel, accessible, pédagogique. Pas de jargon technique non expliqué.
+- TOUJOURS au conditionnel pour le financier ("s'élèverait à", "se situerait à", "atteindrait").
+- JAMAIS de question directe au client. Utiliser : "La question qui se pose ici sera de savoir si... ou si..."
+- Parler de "surface habitable hors circulations" et JAMAIS de "surface nette" ou "surface utile nette".
+- Ne JAMAIS inventer de chiffre. Si un champ est vide ou 0, ne pas mentionner ce point.
+- Ne JAMAIS faire d'addition, multiplication ou division. Utiliser UNIQUEMENT les champs pré-calculés fournis.
+
+STRUCTURE DES SCÉNARIOS :
+- A = EXACTEMENT la demande du client, dimensionnement optimal pour le programme cible. Ce n'est PAS une intensification idiote qui dépasse le programme — c'est la réponse fidèle à la demande.
+- B = Alternative équilibrée : même programme mais avec des compromis spécifiques et justifiés (compacité, coût, simplicité). B doit TOUJOURS être moins cher et moins grand que A.
+- C = Prudent/compact : volume unique SUPERPOSÉ, maîtrise du budget, sécurité réglementaire.
+
+FINANCIER :
+- Démontrer le raisonnement : d'abord le coût au m² dans le contexte local et le standing, puis la surface, puis les autres frais.
+- TOUJOURS présenter la fourchette réaliste.
+- Mentionner le commerce construit à 80% du coût bâtiment quand l'info est fournie.
+- Chaque somme présentée doit correspondre EXACTEMENT aux données fournies.
+
+RISQUES :
+- Être SPÉCIFIQUE : pas de phrase générique. Chaque risque doit être démontré avec un chiffre ou une conséquence concrète.
+
+SPLIT / PILOTIS :
+- Quand le scénario est en SPLIT (commerce devant + logement arrière sur pilotis), EXPLIQUER le choix architectural : intimité des logements, accès séparé commerce/résidentiel, ventilation naturelle, pilotis = parking ou local technique au RDC du volume logement.`;
+
+  flat.gpt_user_prompt = `Génère les textes du diagnostic immobilier. Respecte STRICTEMENT les données — NE RECALCULE RIEN.
+
+═══ CONTEXTE PROJET ═══
+Client : ${_clientName}
+Localisation : ${_quartier}, Douala
+Terrain : ${p.site_area || 0} m² (${_f.retrait_emprise_constructible} constructibles après retraits)
+Retraits : avant ${_f.retrait_avant}, latéral ${_f.retrait_lateral}, arrière ${_f.retrait_arriere}
+Mitoyenneté : ${_f.retrait_mitoyennete} côté(s)
+Zoning : ${p.zoning_type || "URBAIN"}
+Programme : ${_f.profil_programme} — ${_f.profil_cible_unites} unités, standing ${_f.profil_standing}
+Budget client : ${_f.profil_budget_max}
+Enveloppe bâtie : ${p.envelope_w || 0} × ${p.envelope_d || 0} m
+COS réglementaire : ${_f.site_cos_regl} → SDP max autorisée : ${_f.site_sdp_max}
+Orientation : façade optimale ${_f.orient_facade_optimale}, façade à protéger ${_f.orient_facade_proteger}
+Ventilation traversante : ${_f.orient_ventilation} | Brise-soleil : ${_f.orient_brise_soleil}
+Scénario recommandé : ${_f.rec_scenario} (score ${_f.rec_score}/100)
+
+═══ SCÉNARIO A — ${_f.A_role} ═══
+Gabarit : ${_f.A_R_plus} — ${_f.A_gabarit}
+Emprise : ${_f.A_fp} m² (CES ${_f.A_ces_pct}%)
+SDP totale : ${_f.A_sdp} m²
+Programme : ${_f.A_unit_summary}
+Surface habitable hors circulations : ${_f.A_hab_m2_total} m² | Circulations : ${_f.A_circ_pct} (${_f.A_circ_m2} m²)
+Surface habitable moyenne par unité : ${_f.A_m2_hab_par_unite} m²
+Typologie : ${_f.A_typology} — ${_f.A_typology_desc}
+COS : ${_f.A_cos_depassement_text}
+Coût/m² : ${_f.A_cost_per_m2_text}
+${_f.A_commerce_cost_info}
+Ventilation construction : ${_f.A_ventil_equation}
+Budget : ${_f.A_budget_equation}
+Fourchette : ${_f.A_fourchette_text}
+Budget global : ${_f.A_global_M}M FCFA
+Honoraires : entre ${_f.A_hono_bas_M}M et ${_f.A_hono_haut_M}M (${_f.A_hono_taux_bas} à ${_f.A_hono_taux_haut})
+Frais annexes : ${_f.A_frais_M}M
+Durée chantier : ${_f.A_duree_chantier}
+Mix détaillé : ${_f.A_unit_mix}
+
+═══ SCÉNARIO B — ${_f.B_role} ═══
+Gabarit : ${_f.B_R_plus} — ${_f.B_gabarit}
+Emprise : ${_f.B_fp} m² (CES ${_f.B_ces_pct}%)
+SDP totale : ${_f.B_sdp} m²
+Programme : ${_f.B_unit_summary}
+Surface habitable hors circulations : ${_f.B_hab_m2_total} m² | Circulations : ${_f.B_circ_pct} (${_f.B_circ_m2} m²)
+Surface habitable moyenne par unité : ${_f.B_m2_hab_par_unite} m²
+Typologie : ${_f.B_typology} — ${_f.B_typology_desc}
+COS : ${_f.B_cos_depassement_text}
+Coût/m² : ${_f.B_cost_per_m2_text}
+${_f.B_commerce_cost_info}
+Ventilation construction : ${_f.B_ventil_equation}
+Budget : ${_f.B_budget_equation}
+Fourchette : ${_f.B_fourchette_text}
+Budget global : ${_f.B_global_M}M FCFA
+Honoraires : entre ${_f.B_hono_bas_M}M et ${_f.B_hono_haut_M}M (${_f.B_hono_taux_bas} à ${_f.B_hono_taux_haut})
+Frais annexes : ${_f.B_frais_M}M
+Durée chantier : ${_f.B_duree_chantier}
+Mix détaillé : ${_f.B_unit_mix}
+
+═══ SCÉNARIO C — ${_f.C_role} ═══
+Gabarit : ${_f.C_R_plus} — ${_f.C_gabarit}
+Emprise : ${_f.C_fp} m² (CES ${_f.C_ces_pct}%)
+SDP totale : ${_f.C_sdp} m²
+Programme : ${_f.C_unit_summary}
+Surface habitable hors circulations : ${_f.C_hab_m2_total} m² | Circulations : ${_f.C_circ_pct} (${_f.C_circ_m2} m²)
+Surface habitable moyenne par unité : ${_f.C_m2_hab_par_unite} m²
+Typologie : ${_f.C_typology} — ${_f.C_typology_desc}
+COS : ${_f.C_cos_depassement_text}
+Coût/m² : ${_f.C_cost_per_m2_text}
+${_f.C_commerce_cost_info}
+Ventilation construction : ${_f.C_ventil_equation}
+Budget : ${_f.C_budget_equation}
+Fourchette : ${_f.C_fourchette_text}
+Budget global : ${_f.C_global_M}M FCFA
+Honoraires : entre ${_f.C_hono_bas_M}M et ${_f.C_hono_haut_M}M (${_f.C_hono_taux_bas} à ${_f.C_hono_taux_haut})
+Frais annexes : ${_f.C_frais_M}M
+Durée chantier : ${_f.C_duree_chantier}
+Mix détaillé : ${_f.C_unit_mix}
+
+═══ COMPARATIFS ═══
+Delta B vs A : SDP ${_f.delta_BA_sdp}, coût ${_f.delta_BA_cout}
+Delta C vs A : SDP ${_f.delta_CA_sdp}, coût ${_f.delta_CA_cout}
+Delta C vs B : SDP ${_f.delta_CB_sdp}, coût ${_f.delta_CB_cout}
+Phasage : ${_f.phasage_text}
+Durée totale : ${_f.phasage_duree_mois} mois en ${_f.phasage_nb_phases} phase(s)
+
+═══ TEXTES À GÉNÉRER ═══
+Génère EXACTEMENT les champs suivants. Retourne UNIQUEMENT un JSON valide avec ces clés :
+
+{
+  "slide_3_intro_text": "[Commence par 'Ce projet consiste à valoriser un terrain de ${p.site_area || 0} m² à ${_quartier}, Douala'. NE PAS mentionner le nom du client. Présenter le programme (mixte, standing, budget). Nommer les 3 scénarios (A=${_f.A_role}, B=${_f.B_role}, C=${_f.C_role}) et expliquer leur rôle. NE PAS donner de conclusion budgétaire ici. Dire que le diagnostic éclairera le choix. 4-6 phrases.]",
+
+  "slide_3_programme_text": "[Programme : ${_f.profil_cible_unites} unités, standing ${_f.profil_standing}. SDP max ${_f.site_sdp_max}. Retraits → emprise ${_f.retrait_emprise_constructible}. NE PAS détailler les scénarios. Plans en APS. 3-4 phrases.]",
+
+  "slide_4_text": "[Terrain ${p.site_area || 0} m², ~${p.envelope_w || 0}m × ${p.envelope_d || 0}m. Retraits → ${_f.retrait_emprise_constructible}. Accès voie publique. Mitoyenneté ${_f.retrait_mitoyennete} côté(s). Impact ouvertures, ventilation. 4-5 phrases.]",
+
+  "slide_5_text": "[COS limite SDP à ${_f.site_sdp_max}. A: ${_f.A_cos_depassement_text}. B: ${_f.B_cos_depassement_text}. C: ${_f.C_cos_depassement_text}. Rapport à la rue, mitoyenneté. 4-6 phrases.]",
+
+  "scenario_A_summary_text": "[${_f.A_role}. ${_f.A_R_plus}, ${_f.A_gabarit}. SDP ${_f.A_sdp} m² sur ${_f.A_fp} m². Si SPLIT/pilotis: expliquer intimité, accès séparé, pilotis=parking. ${_f.A_unit_summary}. Habitable: ${_f.A_hab_m2_total} m² hors circ (${_f.A_circ_pct}). Moyenne ${_f.A_m2_hab_par_unite} m²/unité. Répond EXACTEMENT à la demande. 5-7 phrases. Finir par 'La question qui se pose...']",
+
+  "scenario_A_financial_text": "[Standing ${_f.profil_standing}. Coût ${_f.A_cost_per_m2_text} pour ${_f.A_sdp} m². ${_f.A_commerce_cost_info}. Ventilation: ${_f.A_ventil_equation}. VRD ${_f.A_vrd_M}M. Honoraires ${_f.A_hono_bas_M}M-${_f.A_hono_haut_M}M. Frais ${_f.A_frais_M}M. TOTAL: ${_f.A_budget_equation}. Fourchette: ${_f.A_fourchette_text}. Vs budget ${_f.profil_budget_max}. CONDITIONNEL. 6-8 phrases.]",
+
+  "scenario_A_risk_text": "[1) ${_f.A_cos_depassement_text} → refus permis possible. 2) Hausse 10% = +${Math.round(Number(_f.A_global_M) * 0.1)}M. 3) Complexité ${_f.A_R_plus}. 4) Circulations ${_f.A_circ_pct}. CHAQUE risque chiffré. 4-5 phrases.]",
+
+  "scenario_B_summary_text": "[${_f.B_role}. ${_f.B_R_plus}, ${_f.B_gabarit}. SDP ${_f.B_sdp} m² sur ${_f.B_fp} m². ${_f.B_unit_summary}. Habitable: ${_f.B_hab_m2_total} m² (${_f.B_circ_pct}). Moyenne ${_f.B_m2_hab_par_unite} m²/unité. JUSTIFIER en quoi B est plus équilibré que A: moins de niveaux, emprise réduite, coût moindre. 5-7 phrases. 'La question qui se pose...']",
+
+  "scenario_B_financial_text": "[Coût ${_f.B_cost_per_m2_text} pour ${_f.B_sdp} m². ${_f.B_commerce_cost_info}. Ventilation: ${_f.B_ventil_equation}. TOTAL: ${_f.B_budget_equation}. Fourchette: ${_f.B_fourchette_text}. B toujours moins cher que A. CONDITIONNEL. 6-8 phrases.]",
+
+  "scenario_B_risk_text": "[COS: ${_f.B_cos_depassement_text}. Compacité ${_f.B_m2_hab_par_unite} m²/unité. Hausse 10% = +${Math.round(Number(_f.B_global_M) * 0.1)}M. Structure simplifiée vs A. 3-4 phrases.]",
+
+  "scenario_C_summary_text": "[${_f.C_role}. ${_f.C_R_plus}, ${_f.C_gabarit}. SDP ${_f.C_sdp} m² sur ${_f.C_fp} m². ${_f.C_unit_summary}. Habitable: ${_f.C_hab_m2_total} m² (${_f.C_circ_pct}). Moyenne ${_f.C_m2_hab_par_unite} m²/unité. Compact, maîtrise budget. 5-7 phrases. 'La question qui se pose...']",
+
+  "scenario_C_financial_text": "[Coût ${_f.C_cost_per_m2_text} pour ${_f.C_sdp} m². ${_f.C_commerce_cost_info}. Ventilation: ${_f.C_ventil_equation}. TOTAL: ${_f.C_budget_equation}. Fourchette: ${_f.C_fourchette_text}. Le plus proche du budget client. CONDITIONNEL. 6-8 phrases.]",
+
+  "scenario_C_risk_text": "[COS: ${_f.C_cos_depassement_text}. Compacité ${_f.C_m2_hab_par_unite} m²/unité. Hausse 10% = +${Math.round(Number(_f.C_global_M) * 0.1)}M. Faible emprise. 3-4 phrases.]",
+
+  "comparatif_intro_text": "[A(${_f.A_sdp}m², ${_f.A_R_plus}), B(${_f.B_sdp}m², ${_f.B_R_plus}), C(${_f.C_sdp}m², ${_f.C_R_plus}). Écart A↔C: ${_f.delta_CA_sdp}/${_f.delta_CA_cout}. B entre les deux: ${_f.delta_CB_sdp}/${_f.delta_CB_cout}. 4-5 phrases.]",
+  "comparatif_A_label": "${_f.A_role} — ${_f.A_R_plus}",
+  "comparatif_B_label": "${_f.B_role} — ${_f.B_R_plus}",
+  "comparatif_C_label": "${_f.C_role} — ${_f.C_R_plus}",
+  "comparatif_A_sdp": "${_f.A_sdp} m²",
+  "comparatif_B_sdp": "${_f.B_sdp} m²",
+  "comparatif_C_sdp": "${_f.C_sdp} m²",
+  "comparatif_A_cost": "${_f.A_global_M}M FCFA",
+  "comparatif_B_cost": "${_f.B_global_M}M FCFA",
+  "comparatif_C_cost": "${_f.C_global_M}M FCFA",
+  "comparatif_A_units": "${_f.A_unit_summary}",
+  "comparatif_B_units": "${_f.B_unit_summary}",
+  "comparatif_C_units": "${_f.C_unit_summary}",
+
+  "strategic_arbitrage_text": "[Arbitrage. Priorités client: programme ${_f.profil_programme}, budget ${_f.profil_budget_max}. Recommandation: ${_f.rec_scenario}. Pourquoi les autres sont moins adaptés. 5-7 phrases.]",
+
+  "success_intro_text": "[Le scénario ${_f.rec_scenario} constitue la base la plus solide. 1-2 phrases.]",
+  "success_technical_text": "[Technique du scénario recommandé. 4-5 phrases.]",
+  "success_financial_text": "[Budget du recommandé. Position vs budget client. 4-5 phrases.]",
+  "success_strategic_text": "[Phasage: ${_f.phasage_text}. Durée ${_f.phasage_duree_mois} mois. Saison des pluies. 4-5 phrases.]",
+
+  "invisible_intro_text": "[Aspects techniques et administratifs à anticiper. 1-2 phrases.]",
+  "invisible_technical_text": "[Fondations, ventilation mitoyenneté, accès chantier zone dense. 4-5 phrases.]",
+  "invisible_financial_text": "[Honoraires, permis, études géotechniques, bureau contrôle. 4-5 phrases.]",
+  "invisible_strategic_text": "[Phasage décaissements. Saison pluies. Logistique quartier dense. 4-5 phrases.]",
+
+  "next_step_intro_text": "[Business plan et faisabilité sur le scénario recommandé. 2-3 phrases.]",
+  "next_step_scope_text": "[APS, APD, permis, études exécution, consultation entreprises, chantier. 5-7 phrases.]",
+  "next_step_outcome_text": "[Plans détaillés, estimatif actualisé, dossier permis. 2-3 phrases.]",
+
+  "conclusion_summary_text": "[Résumé: terrain analysé, 3 scénarios, ${_f.rec_scenario} recommandé. 3-4 phrases.]",
+  "conclusion_positioning_text": "[Pourquoi le recommandé est le meilleur compromis. 3-4 phrases.]",
+  "conclusion_projection_text": "[Durée chantier, saison pluies, livraison. 2-3 phrases.]"
+}`;
+
+  console.log(`[v72.60] GPT PROMPTS PRÉ-CONSTRUITS: system=${flat.gpt_system_prompt.length} chars, user=${flat.gpt_user_prompt.length} chars`);
+
   return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, computed_scores, ...flat });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
