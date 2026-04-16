@@ -3805,12 +3805,22 @@ app.post("/compute-scenarios", (req, res) => {
   const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
   const useCalcStr = (received, calculated) => (received && String(received).length > 0 && !_isSheetErr(received)) ? received : calculated;
 
-  // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google, colonne BE) ──
+  // ── v72.62: DÉTECTION SPLIT — ALIGNÉE avec /generate-massing (4 signaux identiques) ──
+  // Signal 1: layout_mode explicitement SPLIT_AV_AR
+  const layoutModeIsSplit_cs = String(p.layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
+  // Signal 2: disposition (formulaire Google) mentionne commerce devant/split
   const dispositionRaw_cs = String(p.disposition || "").toLowerCase();
   const dispositionIsSplit_cs = /commerce devant|retrait|split/i.test(dispositionRaw_cs);
-  const layoutModeIsSplit_cs = String(p.layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  const effectiveLayoutMode_cs = (dispositionIsSplit_cs || layoutModeIsSplit_cs) ? "SPLIT_AV_AR" : "SUPERPOSE";
-  console.log(`[v72.50] SPLIT: disposition="${dispositionRaw_cs}"→${dispositionIsSplit_cs} | layout_mode="${p.layout_mode}"→${layoutModeIsSplit_cs} | RESULT=${effectiveLayoutMode_cs}`);
+  // Signal 3: body contient des mots-clés SPLIT dans les valeurs
+  const fieldValues_cs = Object.values(p).map(v => String(v).toLowerCase()).join(" ");
+  const bodyHasSplit_cs = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues_cs);
+  // Signal 4: commerce_depth_m > 0 avec programme mixte → FORCÉMENT du SPLIT
+  const bodyHasMixte_cs = /mixte|mixed|usage.?mixte/i.test(fieldValues_cs);
+  const hasCommerceDepth_cs = Number(p.commerce_depth_m) > 0;
+  // ── Résolution SPLIT (IDENTIQUE au massing endpoint) ──
+  const effectiveLayoutMode_cs = (layoutModeIsSplit_cs || dispositionIsSplit_cs || bodyHasSplit_cs || (hasCommerceDepth_cs && bodyHasMixte_cs))
+    ? "SPLIT_AV_AR" : "SUPERPOSE";
+  console.log(`[v72.62] SPLIT DETECTION: layout_mode="${p.layout_mode}"→${layoutModeIsSplit_cs} | disposition="${dispositionRaw_cs}"→${dispositionIsSplit_cs} | bodyHasSplit=${bodyHasSplit_cs} | commerceDepth=${p.commerce_depth_m} hasMixte=${bodyHasMixte_cs} | RESULT=${effectiveLayoutMode_cs}`);
   const scenarios = computeSmartScenarios({
     site_area: parsed_site_area,
     envelope_w: parsed_envelope_w,
@@ -4019,21 +4029,27 @@ app.post("/compute-scenarios", (req, res) => {
       ? `${rPlusStr} sur pilotis (commerce devant + logement arrière)`
       : (sc.commerce_levels > 0 ? `${rPlusStr} (commerce RDC + logement dessus)` : rPlusStr);
 
-    // Unit summary
-    const mix = sc.unit_mix || {};
-    const commerceUnits = mix.COMMERCE || 0;
-    const t2Units = mix.T2 || 0;
-    const t3Units = mix.T3 || 0;
-    const t4Units = mix.T4 || 0;
-    const studioUnits = mix.STUDIO || 0;
-    const totalLogements = (sc.total_units || 0) - commerceUnits;
-    const parts = [];
-    if (commerceUnits > 0) parts.push(`${commerceUnits} commerce`);
-    if (studioUnits > 0) parts.push(`${studioUnits} studio${studioUnits > 1 ? 's' : ''}`);
-    if (t2Units > 0) parts.push(`${t2Units} logement${t2Units > 1 ? 's' : ''} T2`);
-    if (t3Units > 0) parts.push(`${t3Units} logement${t3Units > 1 ? 's' : ''} T3`);
-    if (t4Units > 0) parts.push(`${t4Units} logement${t4Units > 1 ? 's' : ''} T4`);
-    const unitSummary = `${sc.total_units || 0} unités : ${parts.join(' + ')}`;
+    // Unit summary — parse unit_mix_detail string (ex: "1×COMMERCE(40m²) + 2×T3(72m²)")
+    const mixDetail = sc.unit_mix_detail || "";
+    const parsedParts = [];
+    let parsedCommerceCount = 0;
+    const mixRegex = /(\d+)×(\w+)\((\d+)m²\)/g;
+    let m;
+    while ((m = mixRegex.exec(mixDetail)) !== null) {
+      const count = parseInt(m[1]);
+      const typ = m[2];
+      const size = m[3];
+      if (typ === "COMMERCE") {
+        parsedCommerceCount += count;
+        parsedParts.push(`${count} commerce (${size}m²)`);
+      } else {
+        parsedParts.push(`${count} logement${count > 1 ? 's' : ''} ${typ} (${size}m²)`);
+      }
+    }
+    const totalLogements = (sc.total_units || 0) - parsedCommerceCount;
+    const unitSummary = parsedParts.length > 0
+      ? `${sc.total_units || 0} unités : ${parsedParts.join(' + ')}`
+      : `${sc.total_units || 0} unités (${sc.unit_mix_detail || "détail non disponible"})`;
 
     // Financial — VERIFIED arithmetic
     const vent = sc.cout_ventilation || {};
@@ -4071,10 +4087,10 @@ app.post("/compute-scenarios", (req, res) => {
     const fourchetteBasM = fourchette.bas ? Math.round(fourchette.bas / 1e6) : 0;
     const fourchetteHautM = fourchette.haut ? Math.round(fourchette.haut / 1e6) : 0;
 
-    // Habitable surface
+    // Habitable surface — utiliser le ratio moteur (circulation architecturale par étage)
     const habM2 = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
-    const circPct = sc.sdp_m2 > 0 ? Math.round((1 - habM2 / sc.sdp_m2) * 100) : 0;
-    const circM2 = Math.round(sc.sdp_m2 - habM2);
+    const circPct = sc.circulation_ratio_pct || (sc.sdp_m2 > 0 ? Math.round((1 - habM2 / sc.sdp_m2) * 100) : 0);
+    const circM2 = Math.round(sc.sdp_m2 * circPct / 100);
 
     // COS compliance
     const cosMax = Math.round(0.6 * (sc._site_area || Number(p.site_area) || 0));
@@ -4432,36 +4448,42 @@ app.post("/compute-scenarios", (req, res) => {
   const _quartier = String(p.quartier || p.localisation || p.city || "Douala");
   const _clientName = String(p.client_name || p.nom_client || "");
 
-  flat.gpt_system_prompt = `Tu es un expert en diagnostic immobilier au Cameroun, spécialiste des projets résidentiels et mixtes à Douala. Tu rédiges les textes d'un rapport diagnostic pour un client.
+  flat.gpt_system_prompt = `Tu es un architecte-urbaniste expert en diagnostic immobilier au Cameroun, avec 20 ans d'expérience sur des projets résidentiels et mixtes à Douala. Tu rédiges les textes d'un rapport diagnostic professionnel pour un client investisseur.
 
 ${_f.gpt_text_rules}
 
-RÈGLES COMPLÉMENTAIRES DE RÉDACTION :
+IDENTITÉ DU TON :
+Tu écris comme un architecte conseil qui s'adresse à son client en face-à-face : professionnel, naturel, rassurant mais honnête. Tu expliques les choix comme si tu dessinais sur une nappe — pas de jargon gratuit, pas de phrases creuses, pas de copier-coller administratif.
+- Chaque phrase doit APPORTER une information ou un raisonnement. Pas de remplissage.
+- Tu guides le client dans sa réflexion, tu ne lui assènes pas des vérités.
+- Quand tu parles d'un risque, tu l'expliques concrètement ET tu donnes la solution ou l'atténuation.
 
-STYLE :
-- Ton professionnel, accessible, pédagogique. Pas de jargon technique non expliqué.
-- TOUJOURS au conditionnel pour le financier ("s'élèverait à", "se situerait à", "atteindrait").
-- JAMAIS de question directe au client. Utiliser : "La question qui se pose ici sera de savoir si... ou si..."
-- Parler de "surface habitable hors circulations" et JAMAIS de "surface nette" ou "surface utile nette".
-- Ne JAMAIS inventer de chiffre. Si un champ est vide ou 0, ne pas mentionner ce point.
-- Ne JAMAIS faire d'addition, multiplication ou division. Utiliser UNIQUEMENT les champs pré-calculés fournis.
+RÈGLES DE RÉDACTION STRICTES :
+- TOUJOURS au conditionnel pour tout montant ("s'élèverait à", "se situerait autour de", "représenterait").
+- JAMAIS de question directe au client. Formulation : "La question qui se pose ici sera de savoir si… ou si…"
+- Dire "surface habitable hors circulations", JAMAIS "surface nette" ni "surface utile nette".
+- Ne JAMAIS inventer un chiffre. Si un champ est vide ou 0, ignorer le point silencieusement.
+- Ne JAMAIS faire d'addition, multiplication ou division — UNIQUEMENT utiliser les valeurs pré-calculées.
+- JAMAIS de phrase générique applicable à n'importe quel projet. Chaque phrase doit être SPÉCIFIQUE à ce terrain, ce programme, ce budget.
 
-STRUCTURE DES SCÉNARIOS :
-- A = EXACTEMENT la demande du client, dimensionnement optimal pour le programme cible. Ce n'est PAS une intensification idiote qui dépasse le programme — c'est la réponse fidèle à la demande.
-- B = Alternative équilibrée : même programme mais avec des compromis spécifiques et justifiés (compacité, coût, simplicité). B doit TOUJOURS être moins cher et moins grand que A.
-- C = Prudent/compact : volume unique SUPERPOSÉ, maîtrise du budget, sécurité réglementaire.
+LOGIQUE DES SCÉNARIOS :
+- A = la réponse FIDÈLE à la demande du client. Dimensionnement optimal pour SON programme, SON nombre d'unités. Pas une intensification délirante.
+- B = alternative équilibrée : même objectif mais avec des compromis justifiés (moins de niveaux, emprise réduite, coût maîtrisé). B est TOUJOURS moins cher que A.
+- C = prudent/compact : enveloppe réduite, budget maîtrisé, conformité réglementaire sécurisée. Le filet de sécurité.
 
 FINANCIER :
-- Démontrer le raisonnement : d'abord le coût au m² dans le contexte local et le standing, puis la surface, puis les autres frais.
-- TOUJOURS présenter la fourchette réaliste.
-- Mentionner le commerce construit à 80% du coût bâtiment quand l'info est fournie.
-- Chaque somme présentée doit correspondre EXACTEMENT aux données fournies.
+- DÉMONTRER le raisonnement étape par étape : d'abord le coût unitaire au m² (contexte local + standing), puis la surface totale, puis les postes complémentaires (VRD, honoraires, frais).
+- TOUJOURS donner la fourchette réaliste, pas juste un chiffre.
+- Le commerce est construit à 80% du coût du bâtiment — mentionner systématiquement quand l'info est fournie.
+- Chaque somme citée doit correspondre EXACTEMENT aux données fournies. Zéro arrondi personnel.
 
 RISQUES :
-- Être SPÉCIFIQUE : pas de phrase générique. Chaque risque doit être démontré avec un chiffre ou une conséquence concrète.
+- SPÉCIFIQUES et CHIFFRÉS. Pas "il y a un risque de dépassement" mais "une hausse de 10% des matériaux ajouterait XM au budget".
+- Chaque risque est suivi d'une piste de mitigation ou d'une conséquence concrète.
 
 SPLIT / PILOTIS :
-- Quand le scénario est en SPLIT (commerce devant + logement arrière sur pilotis), EXPLIQUER le choix architectural : intimité des logements, accès séparé commerce/résidentiel, ventilation naturelle, pilotis = parking ou local technique au RDC du volume logement.`;
+- Quand un scénario est en SPLIT (commerce devant + logement arrière sur pilotis), EXPLIQUER le choix : intimité résidentielle, accès séparés, ventilation naturelle optimisée, RDC sur pilotis = parking couvert ou local technique.
+- Bien distinguer les 2 volumes : volume commercial (RDC clôture) et volume logement (sur pilotis derrière).`;
 
   flat.gpt_user_prompt = `Génère les textes du diagnostic immobilier. Respecte STRICTEMENT les données — NE RECALCULE RIEN.
 
@@ -7416,7 +7438,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.60-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.62-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
