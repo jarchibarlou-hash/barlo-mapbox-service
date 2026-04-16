@@ -1694,6 +1694,9 @@ function computeSmartScenarios({
     // v57.20 SPLIT : volumes séparés (commerce + logement)
     let splitLayout = null; // sera rempli si layout_mode === "SPLIT_AV_AR"
     let target_sdp_programme = 0; // ancre client : target_units × refSize / (1-circ)
+    // v72.53 TYPOLOGY — déclaré ici pour être accessible dans TOUS les chemins (CES-driven ou legacy)
+    let preTypology = "BLOC";
+    let typoImpact = TYPOLOGY_IMPACT.BLOC;
     // v57.13 EXPERT RATIOS — lookup pour ce programme × zonage × scénario
     const scenarioKey = label; // A, B, C
     const expertZone = EXPERT_RATIOS[programKey]?.[zoning_type] || EXPERT_RATIOS[programKey]?.Z_DEFAULT;
@@ -1719,13 +1722,13 @@ function computeSmartScenarios({
       // ══════════════════════════════════════════════════════════════════════
       const envAspectCalc = envelope_w / Math.max(1, envelope_d);
       const fillRatioCalc = (ces * site_area * (CES_FILL_BY_ROLE[role] || 0.80)) / Math.max(1, envelope_area);
-      const preTypology = preSelectTypology({
+      preTypology = preSelectTypology({
         fp_m2: ces * site_area * (CES_FILL_BY_ROLE[role] || 0.80),
         envelope_area, site_area, envAspect: envAspectCalc,
         massing_mode: SCENARIO_MASSING_MODE[label] || "BALANCED",
         scenario_role: role, standing_level, program_main, isMixte, fillRatio: fillRatioCalc,
       });
-      const typoImpact = TYPOLOGY_IMPACT[preTypology] || TYPOLOGY_IMPACT.BLOC;
+      typoImpact = TYPOLOGY_IMPACT[preTypology] || TYPOLOGY_IMPACT.BLOC;
       // Appliquer les modifiers typologiques
       circRatio = Math.max(0.08, Math.min(0.35, circRatio + typoImpact.circ_modifier));
       bodyDepth = Math.round(bodyDepth * typoImpact.body_depth_mult);
