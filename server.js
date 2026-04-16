@@ -3954,6 +3954,159 @@ app.post("/compute-scenarios", (req, res) => {
       sc.cost_detail.vrd = newCostVrd;
     }
     console.log(`[v72.53] RECALC COÛTS ${label}(${sc.typology}): ${standingRecalc}[${label}]=${rcCostPerM2Standing} adj=${driverAdjRecalc} → base=${rcCostPerM2Base} × typo=${scTypo.cost_mult} → ${costPerM2Recalc}/m² | bâti=${scBatiSdp}m² comm=${scCommerceSdp}m² | fond=+${rcFondSurcharge} toit=+${rcToitSurcharge} VRD=${newCostVrd} → ${Math.round(newEstimatedCost/1e6)}M`);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // v72.60: RECALC VENTILATION — maintenir la cohérence GO+SO+LT = construction
+    // CRITIQUE: sans ce recalcul, les flat fields A_ventil_go etc. reflètent
+    // les ANCIENNES valeurs alors que A_cost_total reflète le NOUVEAU coût
+    // → GPT reçoit des chiffres qui ne s'additionnent pas
+    // ══════════════════════════════════════════════════════════════════════
+    const rcGO = Math.round(newCostConstruction * COST_VENTILATION_PCT.gros_oeuvre);
+    const rcSO = Math.round(newCostConstruction * COST_VENTILATION_PCT.second_oeuvre);
+    const rcLT = Math.round(newCostConstruction * COST_VENTILATION_PCT.lots_techniques);
+    const rcAmenExt = Math.round(newCostConstruction * COST_VENTILATION_PCT.amenagements_ext);
+    const rcHonoraires = calcHonorairesDegressifs(newEstimatedCost);
+    const rcHonoMedian = rcHonoraires.median || Math.round((rcHonoraires.bas + rcHonoraires.haut) / 2);
+    const rcFraisPermis = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.permis_construire);
+    const rcFraisAssurance = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.assurance_dommage_ouvrage);
+    const rcFraisEtudes = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.etudes_techniques);
+    const rcFraisDivers = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.divers_imprevus);
+    const rcTotalFrais = rcFraisPermis + rcFraisAssurance + rcFraisEtudes + rcFraisDivers;
+    const rcMalusSolaire = sc.malus_orientation_solaire_fcfa || 0;
+    const rcGlobalProjet = newEstimatedCost + rcHonoMedian + rcTotalFrais + rcMalusSolaire;
+    sc.cout_ventilation = {
+      gros_oeuvre_fcfa: rcGO,
+      second_oeuvre_fcfa: rcSO,
+      lots_techniques_fcfa: rcLT,
+      amenagements_ext_fcfa: rcAmenExt,
+      vrd_fcfa: newCostVrd,
+      sous_total_construction_fcfa: newEstimatedCost,
+      honoraires_architecte: {
+        bas_fcfa: rcHonoraires.bas,
+        median_fcfa: rcHonoMedian,
+        haut_fcfa: rcHonoraires.haut,
+        taux_bas_pct: newEstimatedCost > 0 ? Math.round(rcHonoraires.bas / newEstimatedCost * 10000) / 100 : 0,
+        taux_median_pct: newEstimatedCost > 0 ? Math.round(rcHonoMedian / newEstimatedCost * 10000) / 100 : 0,
+        taux_haut_pct: newEstimatedCost > 0 ? Math.round(rcHonoraires.haut / newEstimatedCost * 10000) / 100 : 0,
+      },
+      frais_annexes: {
+        permis_construire_fcfa: rcFraisPermis,
+        assurance_dommage_ouvrage_fcfa: rcFraisAssurance,
+        etudes_techniques_fcfa: rcFraisEtudes,
+        divers_imprevus_fcfa: rcFraisDivers,
+        total_frais_annexes_fcfa: rcTotalFrais,
+      },
+      malus_orientation_solaire_fcfa: rcMalusSolaire,
+      cout_global_projet_fcfa: rcGlobalProjet,
+    };
+    sc.cout_global_projet_fcfa = rcGlobalProjet;
+    sc.honoraires_architecte_fcfa = rcHonoMedian;
+    console.log(`[v72.60] RECALC VENTILATION ${label}: GO=${Math.round(rcGO/1e6)}M SO=${Math.round(rcSO/1e6)}M LT=${Math.round(rcLT/1e6)}M VRD=${Math.round(newCostVrd/1e6)}M | hono=${Math.round(rcHonoMedian/1e6)}M frais=${Math.round(rcTotalFrais/1e6)}M → global=${Math.round(rcGlobalProjet/1e6)}M`);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // v72.60: PRÉ-CALCUL DES CHAMPS INJECTION TEXTE
+  // ══════════════════════════════════════════════════════════════════════
+  function buildTextInjection(sc, label) {
+    if (!sc || !sc.sdp_m2) return {};
+    // R+ notation
+    const totalLevels = (sc.has_pilotis ? 1 : 0) + (sc.levels || 0) + (sc.commerce_levels || 0);
+    const rPlus = sc.split_layout
+      ? sc.levels  // SPLIT: levels = logement only, pilotis is RDC
+      : (totalLevels - 1); // SUPERPOSÉ: RDC + N = R+N
+    const rPlusStr = `R+${rPlus}`;
+    const gabaritStr = sc.split_layout
+      ? `${rPlusStr} sur pilotis (commerce devant + logement arrière)`
+      : (sc.commerce_levels > 0 ? `${rPlusStr} (commerce RDC + logement dessus)` : rPlusStr);
+
+    // Unit summary
+    const mix = sc.unit_mix || {};
+    const commerceUnits = mix.COMMERCE || 0;
+    const t2Units = mix.T2 || 0;
+    const t3Units = mix.T3 || 0;
+    const t4Units = mix.T4 || 0;
+    const studioUnits = mix.STUDIO || 0;
+    const totalLogements = (sc.total_units || 0) - commerceUnits;
+    const parts = [];
+    if (commerceUnits > 0) parts.push(`${commerceUnits} commerce`);
+    if (studioUnits > 0) parts.push(`${studioUnits} studio${studioUnits > 1 ? 's' : ''}`);
+    if (t2Units > 0) parts.push(`${t2Units} logement${t2Units > 1 ? 's' : ''} T2`);
+    if (t3Units > 0) parts.push(`${t3Units} logement${t3Units > 1 ? 's' : ''} T3`);
+    if (t4Units > 0) parts.push(`${t4Units} logement${t4Units > 1 ? 's' : ''} T4`);
+    const unitSummary = `${sc.total_units || 0} unités : ${parts.join(' + ')}`;
+
+    // Financial — VERIFIED arithmetic
+    const vent = sc.cout_ventilation || {};
+    const goM = vent.gros_oeuvre_fcfa ? Math.round(vent.gros_oeuvre_fcfa / 1e6) : 0;
+    const soM = vent.second_oeuvre_fcfa ? Math.round(vent.second_oeuvre_fcfa / 1e6) : 0;
+    const ltM = vent.lots_techniques_fcfa ? Math.round(vent.lots_techniques_fcfa / 1e6) : 0;
+    const constructionM = Math.round((sc.cost_construction_fcfa || sc.estimated_cost || 0) / 1e6);
+    const vrdM = vent.vrd_fcfa ? Math.round(vent.vrd_fcfa / 1e6) : 0;
+    const travauxM = Math.round((sc.estimated_cost || 0) / 1e6);
+    const honoObj = vent.honoraires_architecte || {};
+    const honoBasM = honoObj.bas_fcfa ? Math.round(honoObj.bas_fcfa / 1e6) : 0;
+    const honoMedianM = honoObj.median_fcfa ? Math.round(honoObj.median_fcfa / 1e6) : 0;
+    const honoHautM = honoObj.haut_fcfa ? Math.round(honoObj.haut_fcfa / 1e6) : 0;
+    const fraisM = vent.frais_annexes ? Math.round(vent.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0;
+    const globalM = vent.cout_global_projet_fcfa ? Math.round(vent.cout_global_projet_fcfa / 1e6) : 0;
+    // VERIFIED equation: sum MUST equal global
+    const sumCheck = travauxM + honoMedianM + fraisM;
+    const budgetEquation = `${travauxM}M travaux + ${honoMedianM}M honoraires + ${fraisM}M frais annexes = ${sumCheck}M FCFA`;
+    const ventilEquation = `gros oeuvre ${goM}M (55%) + second oeuvre ${soM}M (25%) + lots techniques ${ltM}M (15%) = ${goM + soM + ltM}M FCFA de construction`;
+
+    // Cost per m²
+    const costPerM2 = sc.cost_per_m2_sdp ? Math.round(sc.cost_per_m2_sdp / 1000) : 0;
+    const costPerM2Full = sc.cost_per_m2_sdp || 0;
+
+    // Commerce cost info
+    const commCostPerM2 = (sc.cost_detail || {}).cost_per_m2_commerce || 0;
+    const batiCostPerM2 = (sc.cost_detail || {}).cost_per_m2_typo || 0;
+    const commerceCostInfo = commCostPerM2 > 0
+      ? `Commerce construit à 80% du coût bâtiment : ${Math.round(commCostPerM2/1000)}k/m² contre ${Math.round(batiCostPerM2/1000)}k/m² pour le bâtiment`
+      : "";
+
+    // Budget fit
+    const budgetClientFcsa = sc.budget_client_fcsa || 0;
+    const fourchette = sc.cout_fourchette || {};
+    const fourchetteBasM = fourchette.bas ? Math.round(fourchette.bas / 1e6) : 0;
+    const fourchetteHautM = fourchette.haut ? Math.round(fourchette.haut / 1e6) : 0;
+
+    // Habitable surface
+    const habM2 = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
+    const circPct = sc.sdp_m2 > 0 ? Math.round((1 - habM2 / sc.sdp_m2) * 100) : 0;
+    const circM2 = Math.round(sc.sdp_m2 - habM2);
+
+    // COS compliance
+    const cosMax = Math.round(0.6 * (sc._site_area || Number(p.site_area) || 0));
+    const cosDepassement = sc.sdp_m2 > cosMax ? sc.sdp_m2 - cosMax : 0;
+
+    return {
+      R_plus: rPlusStr,
+      gabarit: gabaritStr,
+      unit_summary: unitSummary,
+      logement_count: String(totalLogements),
+      commerce_count: String(commerceUnits),
+      hab_m2: String(Math.round(habM2)),
+      circ_pct: `${circPct}%`,
+      circ_m2: String(circM2),
+      m2_hab_par_unite: String(sc.m2_habitable_par_logement || Math.round(habM2 / Math.max(1, sc.total_units || 1))),
+      budget_equation: budgetEquation,
+      ventil_equation: ventilEquation,
+      cost_per_m2_fcfa: String(costPerM2Full),
+      cost_per_m2_text: `${costPerM2}k FCFA/m² (${Math.round(costPerM2Full)} FCFA/m²)`,
+      commerce_cost_info: commerceCostInfo,
+      travaux_M: String(travauxM),
+      vrd_M: String(vrdM),
+      hono_median_M: String(honoMedianM),
+      hono_bas_M: String(honoBasM),
+      hono_haut_M: String(honoHautM),
+      frais_M: String(fraisM),
+      global_M: String(globalM),
+      fourchette_text: `entre ${fourchetteBasM}M et ${fourchetteHautM}M FCFA`,
+      cos_max_m2: String(cosMax),
+      cos_depassement_m2: String(cosDepassement),
+      cos_depassement_text: cosDepassement > 0 ? `Dépassement de ${cosDepassement}m² par rapport au COS (${cosMax}m² autorisés)` : `Conforme au COS (${sc.sdp_m2}m² sur ${cosMax}m² autorisés)`,
+    };
   }
 
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
@@ -3971,6 +4124,15 @@ app.post("/compute-scenarios", (req, res) => {
   const sA = scenarios.A || {};
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
+
+  // Store site_area in scenarios for buildTextInjection to access
+  for (const l of ["A", "B", "C"]) {
+    if (scenarios[l]) scenarios[l]._site_area = Number(p.site_area) || 0;
+  }
+
+  const txtA = buildTextInjection(sA, "A");
+  const txtB = buildTextInjection(sB, "B");
+  const txtC = buildTextInjection(sC, "C");
   const flat = {
     // ── NARRATIVE ──
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
@@ -4138,6 +4300,88 @@ app.post("/compute-scenarios", (req, res) => {
     C_frais_etudes: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.etudes_techniques_fcfa / 1e6) : 0}M`,
     C_frais_divers: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.divers_imprevus_fcfa / 1e6) : 0}M`,
     C_ventil_global: `${(sC.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sC.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
+    // ══ v72.60: TEXT INJECTION — champs pré-calculés pour GPT ══
+    A_R_plus: txtA.R_plus || "R+0",
+    A_gabarit: txtA.gabarit || "",
+    A_unit_summary: txtA.unit_summary || "",
+    A_logement_count: txtA.logement_count || "0",
+    A_commerce_count: txtA.commerce_count || "0",
+    A_hab_m2_total: txtA.hab_m2 || "0",
+    A_circ_pct: txtA.circ_pct || "0%",
+    A_circ_m2: txtA.circ_m2 || "0",
+    A_m2_hab_par_unite: txtA.m2_hab_par_unite || "0",
+    A_budget_equation: txtA.budget_equation || "",
+    A_ventil_equation: txtA.ventil_equation || "",
+    A_cost_per_m2_text: txtA.cost_per_m2_text || "",
+    A_commerce_cost_info: txtA.commerce_cost_info || "",
+    A_travaux_M: txtA.travaux_M || "0",
+    A_vrd_M: txtA.vrd_M || "0",
+    A_hono_median_M: txtA.hono_median_M || "0",
+    A_hono_bas_M: txtA.hono_bas_M || "0",
+    A_hono_haut_M: txtA.hono_haut_M || "0",
+    A_frais_M: txtA.frais_M || "0",
+    A_global_M: txtA.global_M || "0",
+    A_fourchette_text: txtA.fourchette_text || "",
+    A_cos_depassement_text: txtA.cos_depassement_text || "",
+    B_R_plus: txtB.R_plus || "R+0",
+    B_gabarit: txtB.gabarit || "",
+    B_unit_summary: txtB.unit_summary || "",
+    B_logement_count: txtB.logement_count || "0",
+    B_commerce_count: txtB.commerce_count || "0",
+    B_hab_m2_total: txtB.hab_m2 || "0",
+    B_circ_pct: txtB.circ_pct || "0%",
+    B_circ_m2: txtB.circ_m2 || "0",
+    B_m2_hab_par_unite: txtB.m2_hab_par_unite || "0",
+    B_budget_equation: txtB.budget_equation || "",
+    B_ventil_equation: txtB.ventil_equation || "",
+    B_cost_per_m2_text: txtB.cost_per_m2_text || "",
+    B_commerce_cost_info: txtB.commerce_cost_info || "",
+    B_travaux_M: txtB.travaux_M || "0",
+    B_vrd_M: txtB.vrd_M || "0",
+    B_hono_median_M: txtB.hono_median_M || "0",
+    B_hono_bas_M: txtB.hono_bas_M || "0",
+    B_hono_haut_M: txtB.hono_haut_M || "0",
+    B_frais_M: txtB.frais_M || "0",
+    B_global_M: txtB.global_M || "0",
+    B_fourchette_text: txtB.fourchette_text || "",
+    B_cos_depassement_text: txtB.cos_depassement_text || "",
+    C_R_plus: txtC.R_plus || "R+0",
+    C_gabarit: txtC.gabarit || "",
+    C_unit_summary: txtC.unit_summary || "",
+    C_logement_count: txtC.logement_count || "0",
+    C_commerce_count: txtC.commerce_count || "0",
+    C_hab_m2_total: txtC.hab_m2 || "0",
+    C_circ_pct: txtC.circ_pct || "0%",
+    C_circ_m2: txtC.circ_m2 || "0",
+    C_m2_hab_par_unite: txtC.m2_hab_par_unite || "0",
+    C_budget_equation: txtC.budget_equation || "",
+    C_ventil_equation: txtC.ventil_equation || "",
+    C_cost_per_m2_text: txtC.cost_per_m2_text || "",
+    C_commerce_cost_info: txtC.commerce_cost_info || "",
+    C_travaux_M: txtC.travaux_M || "0",
+    C_vrd_M: txtC.vrd_M || "0",
+    C_hono_median_M: txtC.hono_median_M || "0",
+    C_hono_bas_M: txtC.hono_bas_M || "0",
+    C_hono_haut_M: txtC.hono_haut_M || "0",
+    C_frais_M: txtC.frais_M || "0",
+    C_global_M: txtC.global_M || "0",
+    C_fourchette_text: txtC.fourchette_text || "",
+    C_cos_depassement_text: txtC.cos_depassement_text || "",
+    // ══ v72.60: PROMPT INJECTION — directives strictes pour GPT ══
+    gpt_text_rules: `RÈGLES ABSOLUES POUR LA GÉNÉRATION DES TEXTES DIAGNOSTIC BARLO:
+1. UTILISE UNIQUEMENT les champs {X}_budget_equation, {X}_ventil_equation, {X}_unit_summary, {X}_R_plus, {X}_gabarit TELS QUELS. NE JAMAIS recalculer, inventer ou arrondir différemment.
+2. Notation gabarit: utilise TOUJOURS le champ {X}_R_plus (ex: R+3, R+2, R+1). Ne JAMAIS deviner la notation R+.
+3. Unités: utilise {X}_unit_summary tel quel. Ne JAMAIS changer le nombre d'unités ou les types.
+4. Financier: TOUJOURS au conditionnel ("s'élèverait à", "atteindrait"). TOUJOURS présenter la fourchette {X}_fourchette_text.
+5. Surface: parler de "surface habitable hors circulations" ({X}_hab_m2_total m²), JAMAIS de "surface nette".
+6. Budget equation: {X}_budget_equation est la SEULE décomposition autorisée. Les sous-totaux DOIVENT additionner au global.
+7. Ventilation: {X}_ventil_equation est la SEULE ventilation autorisée.
+8. Commerce: {X}_commerce_cost_info doit être mentionné pour expliquer le différentiel de coût.
+9. COS: {X}_cos_depassement_text est la seule formulation autorisée pour le dépassement réglementaire.
+10. Scenario A = EXACTEMENT la demande client (pas d'intensification idiote). B = équilibre justifié. C = prudent compact.
+11. Ne JAMAIS poser de question directe au client. Utiliser "La question qui se pose ici sera de savoir si... ou si..."
+12. Commencer slide_3 (intro) par "Ce projet consiste" SANS mentionner le nom du client.
+13. PAS DE CONCLUSION sur le respect budgétaire en slide_3. Juste expliquer le rôle de chaque scénario.`,
     // ── PROFIL CLIENT (echo) ──
     profil_posture: profil.posture || "",
     profil_budget_band: profil.budget_band || "",
