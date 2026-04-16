@@ -1980,7 +1980,12 @@ function computeSmartScenarios({
         const _commD = Math.min(Number(commerce_depth_m) || 6, _parcD * 0.30);
         const _gapD = Number(retrait_inter_volumes_m) || 4;
         const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
-        _splitViable = _logtD >= 8 && _parcD >= 20;
+        // v72.55: seuil abaissé de 8m à 5m — 7m de profondeur logement est viable au Cameroun
+        // et gap réduit de 4m à 2m pour terrains étroits (passage piéton, pas véhicule)
+        const _gapDViability = Math.min(_gapD, 2); // viabilité calculée avec gap piéton
+        const _logtDRelaxed = _parcD - rAvant - _commD - _gapDViability - rArriere;
+        _splitViable = _logtDRelaxed >= 5 && _parcD >= 15;
+        if (!_splitViable) console.log(`│   ⚠️ SPLIT NON VIABLE: logtDepth=${_logtDRelaxed}m (min 5m) parcD=${_parcD}m (min 15m)`);
       }
       // v72.53: RÈGLES SPLIT_AV_AR :
       // - Commerce collé à la LIMITE SÉPARATIVE côté front (ligne de setback avant)
@@ -5833,30 +5838,48 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.fillStyle = "#000000";
     ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
   } else {
-    // ══ MODE SUPERPOSÉ : annotations classiques ══
-    const realTotalH = rdcH_m + (levels - 1) * etageH_m;
+    // ══ MODE SUPERPOSÉ : annotations par étage ══
+    // v72.55: Annotations MIXTE = commerce (orange) pour les niveaux commerce + logement (bleu) pour le reste
+    const commLev = commerce_levels || 0;
     const sdpTotale = fp_m2 * levels;
+    const sdpCommerce = commLev > 0 ? fp_m2 * commLev : 0;
+    const sdpLogement = sdpTotale - sdpCommerce;
     const annX = W * 0.62;
     const annBaseY = H * 0.58;
     const annStepY = -32 * s;
     for (let f = 0; f < levels; f++) {
       const y = annBaseY + f * annStepY;
       const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      const isCommerce = f < commLev;
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
-      ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
+      ctx.strokeStyle = isCommerce ? "#e07830" : "#3a7ac0"; ctx.lineWidth = 2*s; ctx.stroke();
+      const floorText = isCommerce ? `${floorLabel} : ${fp_m2} m² (commerce)` : `${floorLabel} : ${fp_m2} m²`;
       ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
-      ctx.fillStyle = "#000000";
-      ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.strokeText(floorText, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = isCommerce ? "#e07830" : "#3a7ac0";
+      ctx.fillText(floorText, annX + lineLen + 6*s, y + 4*s);
     }
-    // Total SDP en bas — NOIR avec contour blanc
-    ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
+    // Résumé commerce + logement + total
+    let summaryY = annBaseY + 24*s;
+    if (commLev > 0) {
+      ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
+      ctx.strokeText(`Commerce: ${sdpCommerce.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
+      ctx.fillStyle = "#e07830";
+      ctx.fillText(`Commerce: ${sdpCommerce.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
+      summaryY += 18*s;
+      ctx.strokeText(`Logement: ${sdpLogement.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
+      ctx.fillStyle = "#3a7ac0";
+      ctx.fillText(`Logement: ${sdpLogement.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
+      summaryY += 18*s;
+    }
+    ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
+    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
+    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
   }
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
@@ -6111,7 +6134,7 @@ app.post("/generate-massing", async (req, res) => {
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
-    envelope_w, envelope_d,
+    envelope_w, envelope_d, envelope_area: envelope_area_raw,  // v72.55: CRITIQUE — manquait, causait SDP ×2
     massing_label = "A", slide_name,
     style_ref_url = null,
     // ── Mode classique (valeurs pré-calculées par la sheet) ──
@@ -6161,8 +6184,12 @@ app.post("/generate-massing", async (req, res) => {
   };
   const envW = _safeFloatM(envelope_w);
   const envD = _safeFloatM(envelope_d);
+  const envArea = _safeFloatM(envelope_area_raw); // v72.55: zone constructible réelle (après retraits)
   const floorH = _safeFloatM(fh_raw) || 3.2;
-  console.log(`[v72.54] PARSED DIMS: envW=${envW} envD=${envD} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" fh="${fh_raw}")`);
+  console.log(`[v72.55] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}" fh="${fh_raw}")`);
+  if (envArea > 0 && envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
+    console.log(`[v72.55] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart > 30%! Le moteur utilisera envelope_area=${envArea}m² (zone constructible réelle)`);
+  }
   // v72.54: DÉTECTION ROBUSTE DU LABEL (A/B/C) — multiple stratégies
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
   // Ordre de priorité : render_label > slide_name > massing_label > body scan
@@ -6233,6 +6260,7 @@ app.post("/generate-massing", async (req, res) => {
       site_area: _safeFloatM(site_area),
       envelope_w: envW,
       envelope_d: envD,
+      envelope_area: envArea || undefined,  // v72.55: CRITIQUE — sans ça, moteur utilise envW×envD qui peut être 2× trop grand
       zoning_type: String(zoning_type),
       floor_height: floorH,
       primary_driver: primary_driver || "MAX_CAPACITE",
@@ -6687,7 +6715,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.54-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.55-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6709,7 +6737,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.54-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.55-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
