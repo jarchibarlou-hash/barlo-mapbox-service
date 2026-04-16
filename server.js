@@ -1979,13 +1979,14 @@ function computeSmartScenarios({
         const _parcD = envelope_d || Math.round(site_area / (envelope_w || 20));
         const _commD = Math.min(Number(commerce_depth_m) || 6, _parcD * 0.30);
         const _gapD = Number(retrait_inter_volumes_m) || 4;
-        const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
-        // v72.55: seuil abaissé de 8m à 5m — 7m de profondeur logement est viable au Cameroun
-        // et gap réduit de 4m à 2m pour terrains étroits (passage piéton, pas véhicule)
-        const _gapDViability = Math.min(_gapD, 2); // viabilité calculée avec gap piéton
-        const _logtDRelaxed = _parcD - rAvant - _commD - _gapDViability - rArriere;
-        _splitViable = _logtDRelaxed >= 5 && _parcD >= 15;
-        if (!_splitViable) console.log(`│   ⚠️ SPLIT NON VIABLE: logtDepth=${_logtDRelaxed}m (min 5m) parcD=${_parcD}m (min 15m)`);
+        // v72.63: FIX CRITIQUE — envelope_d est DÉJÀ après retraits (land_depth - rAvant - rArrière)
+        // NE PAS re-soustraire rAvant et rArrière, sinon double-comptage → SPLIT toujours "non viable"
+        const _logtD = _parcD - _commD - _gapD;
+        const _gapDViability = Math.min(_gapD, 2);
+        const _logtDRelaxed = _parcD - _commD - _gapDViability;
+        _splitViable = _logtDRelaxed >= 5 && _parcD >= 12;
+        console.log(`│   v72.63 SPLIT VIABILITY: parcD=${_parcD}m commD=${_commD.toFixed(1)}m gap=${_gapD}m → logtD=${_logtD.toFixed(1)}m (relaxed=${_logtDRelaxed.toFixed(1)}m) → ${_splitViable ? "✅ VIABLE" : "❌ NON VIABLE"}`);
+        if (!_splitViable) console.log(`│   ⚠️ SPLIT NON VIABLE: logtDepth=${_logtDRelaxed.toFixed(1)}m (min 5m) parcD=${_parcD}m (min 12m)`);
       }
       // v72.53: RÈGLES SPLIT_AV_AR :
       // - Commerce collé à la LIMITE SÉPARATIVE côté front (ligne de setback avant)
@@ -2019,7 +2020,9 @@ function computeSmartScenarios({
         const resiTarget = Math.max(1, clientUnits - programmeCommerceUnits);
         // Volume 2 : LOGEMENT (en retrait sur pilotis) — v72.53 PROGRAMME-DRIVEN
         const interGap = Number(retrait_inter_volumes_m) || 4;
-        const logtDepthDispo = Math.round(parcDepth - rAvant - commDepth - interGap - rArriere);
+        // v72.63: FIX — parcDepth = envelope_d = DÉJÀ après retraits (rAvant/rArriere exclus)
+        // Ne PAS re-soustraire rAvant/rArriere ici
+        const logtDepthDispo = Math.round(parcDepth - commDepth - interGap);
         // v72.53: Le RÔLE affecte les dimensions physiques (différenciation architecturale)
         const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
         const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.90 : 0.75;
@@ -2110,7 +2113,8 @@ function computeSmartScenarios({
         }
         // Sol libre
         const freeGroundSplit = Math.round(site_area - fpTotal);
-        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - logtDepthUsed - rArriere) : 0);
+        // v72.63: FIX — même correction, parcDepth déjà net de retraits
+        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - commDepth - interGap - logtDepthUsed) : 0);
         splitLayout = {
           mode: "SPLIT_AV_AR",
           volume_commerce: {
@@ -4015,6 +4019,53 @@ app.post("/compute-scenarios", (req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════════════
+  // v72.63: RECOMPUTE DELTAS — après anti-collapse + recalc coûts
+  // Les deltas dans diagnostic.comparatif étaient calculés AVANT anti-collapse
+  // → ils reflètent A ≈ B (d'où delta ≈ 0). On les recalcule maintenant.
+  // ══════════════════════════════════════════════════════════════════════
+  if (scenarios.diagnostic && scenarios.diagnostic.comparatif) {
+    const _reExtract = (sc) => ({
+      sdp_m2: sc.sdp_m2 || 0,
+      surface_habitable_m2: sc.surface_habitable_m2 || 0,
+      unites: sc.total_units || 0,
+      cout_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost || 0,
+      sol_libre_m2: sc.free_ground_m2 || 0,
+    });
+    const _reDeltas = (ref, alt, refLabel, altLabel) => {
+      const dSdp = alt.sdp_m2 - ref.sdp_m2;
+      const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
+      const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
+      const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
+      const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
+      return {
+        label: `${altLabel} vs ${refLabel}`,
+        delta_sdp_m2: dSdp,
+        delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
+        delta_unites: alt.unites - ref.unites,
+        delta_cout_fcfa: dCout,
+        delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
+        delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
+        delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
+        valeur_marginale_fcfa_par_m2: valeurMarginale,
+        commentaire: marginaleFavorable
+          ? `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — inférieur au coût moyen (${Math.round(coutM2Ref / 1000)}k/m²), investissement efficace.`
+          : dSdp > 0
+          ? `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — supérieur au coût moyen (${Math.round(coutM2Ref / 1000)}k/m²), rendement décroissant.`
+          : `L'économie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifié.`,
+      };
+    };
+    const rA = _reExtract(scenarios.A);
+    const rB = _reExtract(scenarios.B);
+    const rC = _reExtract(scenarios.C);
+    scenarios.diagnostic.comparatif.deltas = {
+      B_vs_A: _reDeltas(rA, rB, "A", "B"),
+      C_vs_A: _reDeltas(rA, rC, "A", "C"),
+      C_vs_B: _reDeltas(rB, rC, "B", "C"),
+    };
+    console.log(`[v72.63] DELTAS RECOMPUTED: B_vs_A SDP=${scenarios.diagnostic.comparatif.deltas.B_vs_A.delta_sdp_m2}m² (${scenarios.diagnostic.comparatif.deltas.B_vs_A.delta_sdp_pct}%) | C_vs_A SDP=${scenarios.diagnostic.comparatif.deltas.C_vs_A.delta_sdp_m2}m²`);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
   // v72.60: PRÉ-CALCUL DES CHAMPS INJECTION TEXTE
   // ══════════════════════════════════════════════════════════════════════
   function buildTextInjection(sc, label) {
@@ -4735,7 +4786,7 @@ app.post("/generate-texts", async (req, res) => {
 
     return res.json({
       ok: true,
-      server_version: "72.62-GENERATE-TEXTS",
+      server_version: "72.63-GENERATE-TEXTS",
       gpt_model: "gpt-4o",
       gpt_elapsed_ms: gptElapsed,
       gpt_tokens: gptData.usage || {},
@@ -7438,7 +7489,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.62-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.63-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -7460,7 +7511,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.62-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.63-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
