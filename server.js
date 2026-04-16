@@ -3627,6 +3627,91 @@ function computeSmartScenarios({
   console.log(`└── end SCENARIO ENGINE v57.20 ──`);
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.59: FONCTION GLOBALE — calcul des scores depuis les champs bruts du body
+// Utilisée par /compute-scenarios ET /generate-massing pour GARANTIR la cohérence
+// ══════════════════════════════════════════════════════════════════════════════
+function computeScoresFromRaw(p) {
+  const _n = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
+  const rawBF = _n(p.setback_side_m || p.setback_side);
+  const rawBG = _n(p.setback_back_m || p.setback_back);
+  const rawBH = _n(p.envelope_w);
+  const rawBD = _n(p.plot_d_m || p.plot_d || p.site_depth || p.envelope_d);
+  const rawL  = _n(p.site_area);
+  const rawS  = _n(p.target_units);
+  const rawR  = _n(p.target_surface_m2);
+  const rawZ  = _n(p.financial_rigidity_score);
+  const rawAY = String(p.primary_driver || "").toUpperCase();
+  const rawCI = String(p.budget_band || "").toUpperCase();
+  // Scores normalisés
+  const rent_score_norm     = Math.round((rawBF / 50) * 100);
+  const capacity_score_norm = Math.round((rawBG / 50) * 100);
+  const risk_score_norm     = Math.round((rawBH / 50) * 100);
+  // Scores principaux
+  const rent_score     = rawL ? Math.min(100, Math.max(0, rawBF + (rawBG * 1.5) + rawBH)) : 0;
+  const capacity_score = rawL ? Math.min(100, Math.max(0, (rent_score_norm + capacity_score_norm + risk_score_norm) / 3)) : 0;
+  const mix_score_norm = Math.round((rent_score / 50) * 100);
+  const phase_score_norm = Math.round((capacity_score / 50) * 100);
+  const phase_score    = rawL ? 35 : 0;
+  const risk_score     = rawL ? 45 : 0;
+  // Density & pressure
+  const density_band = rawBD >= 15 ? "HIGH" : (rawBD >= 8 ? "MEDIUM" : "LOW");
+  const density_pressure_factor = density_band === "HIGH" ? 15 : (density_band === "MEDIUM" ? 7 : 0);
+  const risk_adjusted = Math.min(100, risk_score_norm + density_pressure_factor);
+  // Second best & dominance
+  const scoreArray = [rent_score_norm, capacity_score_norm, risk_score_norm, mix_score_norm].sort((a, b) => b - a);
+  const second_best_score = scoreArray[1] || 0;
+  const dominance_gap = (scoreArray[0] || 0) - second_best_score;
+  // Decision columns
+  const density_band_calc = rawL < 800 ? "LOW DENSITY" : (rawL < 1500 ? "MEDIUM DENSITY" : "HIGH DENSITY");
+  let budget_tension_calc = "LOW_TENSION";
+  if (rawCI === "LOW_BUDGET" && (rawS >= 10 || rawR >= 900)) budget_tension_calc = "HIGH_TENSION";
+  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 14 || rawR >= 1400)) budget_tension_calc = "HIGH_TENSION";
+  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 8 || rawR >= 900)) budget_tension_calc = "MEDIUM_TENSION";
+  const feasibility_posture = risk_score_norm >= 75 ? "DEFENSIVE" : ((risk_score_norm <= 40 && density_band_calc === "HIGH DENSITY") ? "OFFENSIVE" : "BALANCED");
+  let program_intent = "BALANCED_RESIDENTIAL";
+  if (rawAY === "RENT_SCORE" || rawAY === "CAPACITY_SCORE" || rawAY === "RENTABILITE" || rawAY === "CAPACITE") program_intent = "MAX_YIELD";
+  else if (rawAY === "MIX_SCORE" || rawAY === "MIXTE" || rawAY === "EQUILIBRE") program_intent = "MIXED_PROGRAM";
+  else if (rawAY === "PHASE_SCORE" || rawAY === "PHASAGE") program_intent = "PHASED_STRATEGY";
+  else if (rawAY === "RISK_SCORE" || rawAY === "RISQUE") program_intent = "LOW_RISK_STRATEGY";
+  else if (rawZ >= 8) program_intent = "DEFENSIVE_PROGRAM";
+  let program_alignment = "MEDIUM_ALIGNMENT";
+  if ((program_intent === "MAX_YIELD" || program_intent === "MIXED_PROGRAM") && (density_band_calc === "LOW DENSITY" || budget_tension_calc === "HIGH_TENSION" || feasibility_posture === "DEFENSIVE")) program_alignment = "LOW_ALIGNMENT";
+  else if ((program_intent === "LOW_RISK_STRATEGY" || program_intent === "DEFENSIVE_PROGRAM") && (budget_tension_calc === "LOW_TENSION" || feasibility_posture === "BALANCED")) program_alignment = "HIGH_ALIGNMENT";
+  else if (program_intent === "BALANCED_RESIDENTIAL" && (feasibility_posture === "BALANCED" || feasibility_posture === "OFFENSIVE")) program_alignment = "HIGH_ALIGNMENT";
+  const strategic_position = program_alignment === "HIGH_ALIGNMENT" ? "ALIGNED_STRATEGY" : (program_alignment === "MEDIUM_ALIGNMENT" ? "NEGOTIATED_STRATEGY" : (program_alignment === "LOW_ALIGNMENT" ? "CORRECTIVE_STRATEGY" : "BALANCED_POSITION"));
+  const recommended_scenario = feasibility_posture === "OFFENSIVE" ? "A" : (feasibility_posture === "BALANCED" ? "B" : "C");
+  // Driver intensity
+  let driver_intensity = "MOYENNE";
+  if (rawAY === "RENTABILITE" || rawAY === "RENT_SCORE") driver_intensity = rent_score_norm >= 70 ? "FORTE" : (rent_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
+  else if (rawAY === "CAPACITE" || rawAY === "CAPACITY_SCORE") driver_intensity = capacity_score_norm >= 70 ? "FORTE" : (capacity_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
+  // useCalc helpers: prefer received value if non-zero, else use calculated
+  const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
+  const useCalcStr = (received, calculated) => (received && String(received).length > 0) ? received : calculated;
+  return {
+    // Final scores (with useCalc applied — prefer received if present)
+    rent_score: useCalc(Number(p.rent_score), rent_score),
+    capacity_score: useCalc(Number(p.capacity_score), capacity_score),
+    mix_score: Number(p.mix_score) || 0,
+    phase_score: useCalc(Number(p.phase_score), phase_score),
+    risk_score: useCalc(Number(p.risk_score), risk_score),
+    density_band: useCalcStr(p.density_band, density_band),
+    risk_adjusted: useCalc(Number(p.risk_adjusted), risk_adjusted),
+    feasibility_posture: useCalcStr(p.feasibility_posture, feasibility_posture),
+    density_pressure_factor: useCalc(Number(p.density_pressure_factor), density_pressure_factor),
+    driver_intensity: useCalcStr(p.driver_intensity, driver_intensity),
+    strategic_position: useCalcStr(p.strategic_position, strategic_position),
+    // Raw calculated values (for computed_scores response)
+    rent_score_norm, capacity_score_norm, risk_score_norm,
+    mix_score_norm, phase_score_norm,
+    second_best_score, dominance_gap,
+    density_band_calc, budget_tension_calc,
+    program_intent_calc: program_intent,
+    program_alignment_calc: program_alignment,
+    recommended_scenario,
+    feasibility_posture_calc: feasibility_posture,
+  };
+}
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
@@ -3669,6 +3754,8 @@ app.post("/compute-scenarios", (req, res) => {
     return (!isNaN(f)) ? f : 0;
   };
 
+  // v72.59: Appel de la fonction GLOBALE computeScoresFromRaw (définie avant ce endpoint)
+
   // v72.52: Appliquer parseFloat sur envelope_w et envelope_d AVANT tout calcul
   const parsed_envelope_w = _safeFloat(p.envelope_w);
   const parsed_envelope_d = _safeFloat(p.envelope_d);
@@ -3676,75 +3763,34 @@ app.post("/compute-scenarios", (req, res) => {
   const parsed_envelope_area = _safeFloat(p.envelope_area);
   console.log(`[v72.52] PARSED DIMS: envelope_w=${parsed_envelope_w} envelope_d=${parsed_envelope_d} site_area=${parsed_site_area} envelope_area=${parsed_envelope_area} (raw: w="${p.envelope_w}" d="${p.envelope_d}")`);
 
-  // ── v72.51: CALCUL DES SCORES CÔTÉ SERVEUR ──────────────────────────────────
-  // Make.com écrase les formules Google Sheet → on calcule tout ici à partir des données brutes
-  const _n = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
-  const rawBF = _n(p.setback_side_m || p.setback_side);   // BF = setback_side_m
-  const rawBG = _n(p.setback_back_m || p.setback_back);   // BG = setback_back_m
-  const rawBH = _n(p.envelope_w);                          // BH = envelope_w_m
-  const rawBD = _n(p.plot_d_m || p.plot_d || p.site_depth || p.envelope_d);  // BD = plot_d_m
-  const rawL  = _n(p.site_area);                           // L  = site_area_m2
-  const rawS  = _n(p.target_units);                        // S  = target_units
-  const rawR  = _n(p.target_surface_m2);                   // R  = target_surface_m2
-  const rawZ  = _n(p.financial_rigidity_score);             // Z  = financial_rigidity_score
-  const rawAY = String(p.primary_driver || "").toUpperCase(); // AY = primary_driver
-  const rawCI = String(p.budget_band || "").toUpperCase();    // CI = budget_band
+  // ── v72.59: APPEL DE LA FONCTION PARTAGÉE POUR CALCULER LES SCORES ──
+  const scores = computeScoresFromRaw(p);
+  const calc_rent_score = scores.rent_score;
+  const calc_capacity_score = scores.capacity_score;
+  const calc_phase_score = scores.phase_score;
+  const calc_risk_score = scores.risk_score;
+  const calc_density_band = scores.density_band;
+  const calc_risk_adjusted = scores.risk_adjusted;
+  const calc_feasibility_posture = scores.feasibility_posture;
+  const calc_density_pressure_factor = scores.density_pressure_factor;
+  const calc_driver_intensity = scores.driver_intensity;
+  const calc_strategic_position = scores.strategic_position;
+  const calc_rent_score_norm = scores.rent_score_norm;
+  const calc_capacity_score_norm = scores.capacity_score_norm;
+  const calc_risk_score_norm = scores.risk_score_norm;
+  const calc_mix_score_norm = scores.mix_score_norm;
+  const calc_phase_score_norm = scores.phase_score_norm;
+  const calc_second_best_score = scores.second_best_score;
+  const calc_dominance_gap = scores.dominance_gap;
+  const calc_density_band_calc = scores.density_band_calc;
+  const calc_budget_tension_calc = scores.budget_tension_calc;
+  const calc_program_intent = scores.program_intent_calc;
+  const calc_program_alignment = scores.program_alignment_calc;
+  const calc_recommended_scenario = scores.recommended_scenario;
 
-  // ── Scores normalisés (CC-CG) ──
-  const calc_rent_score_norm     = Math.round((rawBF / 50) * 100);      // CC
-  const calc_capacity_score_norm = Math.round((rawBG / 50) * 100);      // CD
-  const calc_risk_score_norm     = Math.round((rawBH / 50) * 100);      // CE
-
-  // ── Scores principaux (BT-BX) ──
-  const calc_rent_score     = rawL ? Math.min(100, Math.max(0, rawBF + (rawBG * 1.5) + rawBH)) : 0;  // BT
-  const calc_capacity_score = rawL ? Math.min(100, Math.max(0, (calc_rent_score_norm + calc_capacity_score_norm + calc_risk_score_norm) / 3)) : 0; // BU
-  const calc_mix_score_norm = Math.round((calc_rent_score / 50) * 100);  // CF
-  const calc_phase_score_norm = Math.round((calc_capacity_score / 50) * 100); // CG
-  const calc_phase_score    = rawL ? 35 : 0;  // BW
-  const calc_risk_score     = rawL ? 45 : 0;  // BX
-
-  // ── Density & pressure (BA, BY) ──
-  const calc_density_band = rawBD >= 15 ? "HIGH" : (rawBD >= 8 ? "MEDIUM" : "LOW");  // BA
-  const calc_density_pressure_factor = calc_density_band === "HIGH" ? 15 : (calc_density_band === "MEDIUM" ? 7 : 0); // BY
-  const calc_risk_adjusted = Math.min(100, calc_risk_score_norm + calc_density_pressure_factor); // BZ
-
-  // ── Second best & dominance (CA, CB) ──
-  const scoreArray = [calc_rent_score_norm, calc_capacity_score_norm, calc_risk_score_norm, calc_mix_score_norm].sort((a, b) => b - a);
-  const calc_second_best_score = scoreArray[1] || 0;  // CA
-  const calc_dominance_gap = (scoreArray[0] || 0) - calc_second_best_score;  // CB
-
-  // ── Decision columns (_calc: CJ-CP) ──
-  const calc_density_band_calc = rawL < 800 ? "LOW DENSITY" : (rawL < 1500 ? "MEDIUM DENSITY" : "HIGH DENSITY"); // CJ
-  let calc_budget_tension_calc = "LOW_TENSION"; // CK
-  if (rawCI === "LOW_BUDGET" && (rawS >= 10 || rawR >= 900)) calc_budget_tension_calc = "HIGH_TENSION";
-  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 14 || rawR >= 1400)) calc_budget_tension_calc = "HIGH_TENSION";
-  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 8 || rawR >= 900)) calc_budget_tension_calc = "MEDIUM_TENSION";
-
-  const calc_feasibility_posture = calc_risk_score_norm >= 75 ? "DEFENSIVE" : ((calc_risk_score_norm <= 40 && calc_density_band_calc === "HIGH DENSITY") ? "OFFENSIVE" : "BALANCED"); // CL
-
-  let calc_program_intent = "BALANCED_RESIDENTIAL"; // CM
-  if (rawAY === "RENT_SCORE" || rawAY === "CAPACITY_SCORE" || rawAY === "RENTABILITE" || rawAY === "CAPACITE") calc_program_intent = "MAX_YIELD";
-  else if (rawAY === "MIX_SCORE" || rawAY === "MIXTE" || rawAY === "EQUILIBRE") calc_program_intent = "MIXED_PROGRAM";
-  else if (rawAY === "PHASE_SCORE" || rawAY === "PHASAGE") calc_program_intent = "PHASED_STRATEGY";
-  else if (rawAY === "RISK_SCORE" || rawAY === "RISQUE") calc_program_intent = "LOW_RISK_STRATEGY";
-  else if (rawZ >= 8) calc_program_intent = "DEFENSIVE_PROGRAM";
-
-  let calc_program_alignment = "MEDIUM_ALIGNMENT"; // CN
-  if ((calc_program_intent === "MAX_YIELD" || calc_program_intent === "MIXED_PROGRAM") && (calc_density_band_calc === "LOW DENSITY" || calc_budget_tension_calc === "HIGH_TENSION" || calc_feasibility_posture === "DEFENSIVE")) calc_program_alignment = "LOW_ALIGNMENT";
-  else if ((calc_program_intent === "LOW_RISK_STRATEGY" || calc_program_intent === "DEFENSIVE_PROGRAM") && (calc_budget_tension_calc === "LOW_TENSION" || calc_feasibility_posture === "BALANCED")) calc_program_alignment = "HIGH_ALIGNMENT";
-  else if (calc_program_intent === "BALANCED_RESIDENTIAL" && (calc_feasibility_posture === "BALANCED" || calc_feasibility_posture === "OFFENSIVE")) calc_program_alignment = "HIGH_ALIGNMENT";
-
-  const calc_strategic_position = calc_program_alignment === "HIGH_ALIGNMENT" ? "ALIGNED_STRATEGY" : (calc_program_alignment === "MEDIUM_ALIGNMENT" ? "NEGOTIATED_STRATEGY" : (calc_program_alignment === "LOW_ALIGNMENT" ? "CORRECTIVE_STRATEGY" : "BALANCED_POSITION")); // CO
-  const calc_recommended_scenario = calc_feasibility_posture === "OFFENSIVE" ? "A" : (calc_feasibility_posture === "BALANCED" ? "B" : "C"); // CP
-
-  // ── Driver intensity (AZ) ──
-  let calc_driver_intensity = "MOYENNE";
-  if (rawAY === "RENTABILITE" || rawAY === "RENT_SCORE") calc_driver_intensity = calc_rent_score_norm >= 70 ? "FORTE" : (calc_rent_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
-  else if (rawAY === "CAPACITE" || rawAY === "CAPACITY_SCORE") calc_driver_intensity = calc_capacity_score_norm >= 70 ? "FORTE" : (calc_capacity_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
-
-  console.log(`[v72.51] SCORES CALCULÉS SERVEUR: rent_score=${calc_rent_score} capacity=${calc_capacity_score} risk_norm=${calc_risk_score_norm}`);
-  console.log(`[v72.51] density_band=${calc_density_band} feasibility=${calc_feasibility_posture} strategic=${calc_strategic_position} recommended=${calc_recommended_scenario}`);
-  console.log(`[v72.51] program_intent=${calc_program_intent} alignment=${calc_program_alignment} driver_intensity=${calc_driver_intensity}`);
+  console.log(`[v72.59] SCORES CALCULÉS SERVEUR: rent_score=${calc_rent_score} capacity=${calc_capacity_score} risk_norm=${calc_risk_score_norm}`);
+  console.log(`[v72.59] density_band=${calc_density_band} feasibility=${calc_feasibility_posture} strategic=${calc_strategic_position} recommended=${calc_recommended_scenario}`);
+  console.log(`[v72.59] program_intent=${calc_program_intent} alignment=${calc_program_alignment} driver_intensity=${calc_driver_intensity}`);
 
   // Utiliser les scores calculés si ceux reçus sont vides/0
   const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
@@ -3770,9 +3816,10 @@ app.post("/compute-scenarios", (req, res) => {
     target_surface_m2: Number(p.target_surface_m2) || 0,
     site_saturation_level: p.site_saturation_level || "MEDIUM",
     financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
-    density_band: useCalcStr(p.density_band, calc_density_band),
-    risk_adjusted: useCalc(Number(p.risk_adjusted), calc_risk_adjusted),
-    feasibility_posture: useCalcStr(p.feasibility_posture, calc_feasibility_posture),
+    // v72.59: scores.* contient DÉJÀ les valeurs useCalc'd (pref received, sinon calculated)
+    density_band: scores.density_band,
+    risk_adjusted: scores.risk_adjusted,
+    feasibility_posture: scores.feasibility_posture,
     scenario_A_role: p.scenario_A_role || "",
     scenario_B_role: p.scenario_B_role || "",
     scenario_C_role: p.scenario_C_role || "",
@@ -3782,14 +3829,14 @@ app.post("/compute-scenarios", (req, res) => {
     budget_tension: Number(p.budget_tension) || 0,
     standing_level: p.standing_level || "STANDARD",
     target_units: Number(p.target_units) || 0,
-    rent_score: useCalc(Number(p.rent_score), calc_rent_score),
-    capacity_score: useCalc(Number(p.capacity_score), calc_capacity_score),
-    mix_score: Number(p.mix_score) || 0,
-    phase_score: useCalc(Number(p.phase_score), calc_phase_score),
-    risk_score: useCalc(Number(p.risk_score), calc_risk_score),
-    density_pressure_factor: useCalc(Number(p.density_pressure_factor), calc_density_pressure_factor),
-    driver_intensity: useCalcStr(p.driver_intensity, calc_driver_intensity),
-    strategic_position: useCalcStr(p.strategic_position, calc_strategic_position),
+    rent_score: scores.rent_score,
+    capacity_score: scores.capacity_score,
+    mix_score: scores.mix_score,
+    phase_score: scores.phase_score,
+    risk_score: scores.risk_score,
+    density_pressure_factor: scores.density_pressure_factor,
+    driver_intensity: scores.driver_intensity,
+    strategic_position: scores.strategic_position,
     // v72.50 : disposition spatiale — détecté depuis le champ "disposition" du formulaire
     layout_mode: effectiveLayoutMode_cs,
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
@@ -6135,7 +6182,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v72.58 ═══");
+  console.log("═══ /generate-massing v72.59 ═══");
   // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
   for (const key of Object.keys(req.body)) {
     if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(req.body[key].trim())) {
@@ -6220,11 +6267,11 @@ app.post("/generate-massing", async (req, res) => {
     const netW = Math.max(5, envW - 2 * ss);
     const netD = Math.max(5, envD - sf - sb);
     envArea = Math.round(netW * netD);
-    console.log(`[v72.58] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
+    console.log(`[v72.59] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
   }
-  console.log(`[v72.58] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
+  console.log(`[v72.59] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
   if (envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
-    console.log(`[v72.58] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
+    console.log(`[v72.59] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
   }
   // v72.56-57: DÉTECTION ROBUSTE DU LABEL (A/B/C) + COMPTEUR AUTOMATIQUE
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
@@ -6278,7 +6325,7 @@ app.post("/generate-massing", async (req, res) => {
       }
     }
   }
-  console.log(`[v72.58] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
+  console.log(`[v72.59] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
   const dispositionRaw = String(disposition || "").toLowerCase();
   const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
@@ -6300,7 +6347,7 @@ app.post("/generate-massing", async (req, res) => {
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   let has_pilotis = false; // v72.54: déclaration explicite (évite implicit global)
   // ══════════════════════════════════════════════════════════════════════
-  // v72.58: SHEET PASS-THROUGH — PRIORITÉ ABSOLUE
+  // v72.59: SHEET PASS-THROUGH — PRIORITÉ ABSOLUE
   // Make.com envoie A_fp, A_levels, A_sdp, A_split_layout etc. directement
   // depuis /compute-scenarios → on les utilise TELS QUELS → ZÉRO DIVERGENCE
   // ══════════════════════════════════════════════════════════════════════
@@ -6313,7 +6360,7 @@ app.post("/generate-massing", async (req, res) => {
   const sheetAccent = req.body[`${label}_accent_color`] || "";
   const sheetRole = req.body[`${label}_role`] || "";
   const sheetSplitJson = req.body[`${label}_split_layout`] || "";
-  console.log(`[v72.58] SHEET CHECK: ${label}_fp=${sheetFp} ${label}_levels=${sheetLevels} ${label}_sdp=${sheetSdp} ${label}_commerce_levels=${sheetCommLevels} ${label}_split_layout=${sheetSplitJson ? "OUI(" + sheetSplitJson.length + "chars)" : "NON"}`);
+  console.log(`[v72.59] SHEET CHECK: ${label}_fp=${sheetFp} ${label}_levels=${sheetLevels} ${label}_sdp=${sheetSdp} ${label}_commerce_levels=${sheetCommLevels} ${label}_split_layout=${sheetSplitJson ? "OUI(" + sheetSplitJson.length + "chars)" : "NON"}`);
 
   if (sheetFp > 0 && sheetLevels > 0) {
     // ═══ MODE SHEET PASS-THROUGH — GARANTI COHÉRENT AVEC LA SHEET ═══
@@ -6328,17 +6375,19 @@ app.post("/generate-massing", async (req, res) => {
     if (sheetSplitJson) {
       try {
         splitLayout = JSON.parse(sheetSplitJson);
-        console.log(`[v72.58] ★ SPLIT LAYOUT FROM SHEET: mode=${splitLayout.mode} commerce=${splitLayout.volume_commerce?.sdp_m2}m² logement=${splitLayout.volume_logement?.sdp_m2}m²`);
+        console.log(`[v72.59] ★ SPLIT LAYOUT FROM SHEET: mode=${splitLayout.mode} commerce=${splitLayout.volume_commerce?.sdp_m2}m² logement=${splitLayout.volume_logement?.sdp_m2}m²`);
       } catch (e) {
-        console.log(`[v72.58] ⚠️ split_layout JSON invalide: ${e.message}`);
+        console.log(`[v72.59] ⚠️ split_layout JSON invalide: ${e.message}`);
         splitLayout = null;
       }
     }
-    console.log(`[v72.58] ★★★ SHEET PASS-THROUGH: ${label} → fp=${fp}m² levels=${levels} sdp_sheet=${sheetSdp} commerce=${commerceLevels} pilotis=${has_pilotis} split=${splitLayout ? splitLayout.mode : "NON"}`);
+    console.log(`[v72.59] ★★★ SHEET PASS-THROUGH: ${label} → fp=${fp}m² levels=${levels} sdp_sheet=${sheetSdp} commerce=${commerceLevels} pilotis=${has_pilotis} split=${splitLayout ? splitLayout.mode : "NON"}`);
   } else if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // ═══ MODE SMART — recalcul (fallback quand Make.com n'envoie pas les champs {label}_*) ═══
-    console.log(`[v72.58] SMART FALLBACK: pas de champs ${label}_fp/${label}_levels dans le body → recalcul`);
+    console.log(`[v72.59] SMART FALLBACK: pas de champs ${label}_fp/${label}_levels dans le body → recalcul`);
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
+    // ── v72.59: Utiliser la fonction partagée pour calculer les scores ──
+    const masteredScores = computeScoresFromRaw(req.body);
     const scenarios = computeSmartScenarios({
       site_area: _safeFloatM(site_area),
       envelope_w: envW,
@@ -6354,9 +6403,9 @@ app.post("/generate-massing", async (req, res) => {
       target_units: Number(target_units) || 0,
       site_saturation_level: site_saturation_level || "MEDIUM",
       financial_rigidity_score: Number(financial_rigidity_score) || 0,
-      density_band: density_band || "",
-      risk_adjusted: Number(risk_adjusted) || 0,
-      feasibility_posture: feasibility_posture || "BALANCED",
+      density_band: masteredScores.density_band,
+      risk_adjusted: masteredScores.risk_adjusted,
+      feasibility_posture: masteredScores.feasibility_posture,
       scenario_A_role: scenario_A_role || "",
       scenario_B_role: scenario_B_role || "",
       scenario_C_role: scenario_C_role || "",
@@ -6364,20 +6413,20 @@ app.post("/generate-massing", async (req, res) => {
       budget_band: budget_band || "",
       budget_tension: Number(budget_tension) || 0,
       standing_level: standing_level || "STANDARD",
-      rent_score: Number(rent_score) || 0,
-      capacity_score: Number(capacity_score) || 0,
-      mix_score: Number(mix_score) || 0,
-      phase_score: Number(phase_score) || 0,
-      risk_score: Number(risk_score) || 0,
-      density_pressure_factor: Number(density_pressure_factor) || 1,
-      driver_intensity: driver_intensity || "MEDIUM",
-      strategic_position: strategic_position || "",
+      rent_score: masteredScores.rent_score,
+      capacity_score: masteredScores.capacity_score,
+      mix_score: masteredScores.mix_score,
+      phase_score: masteredScores.phase_score,
+      risk_score: masteredScores.risk_score,
+      density_pressure_factor: masteredScores.density_pressure_factor,
+      driver_intensity: masteredScores.driver_intensity,
+      strategic_position: masteredScores.strategic_position,
       layout_mode: effectiveLayoutMode,
       commerce_depth_m: Number(commerce_depth_m) || 6,
       retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
     });
     const sc = scenarios[label] || scenarios.A;
-    console.log(`[v72.58] SMART: ${label} → fp=${sc.fp_m2}m² levels=${sc.levels} sdp=${sc.sdp_m2}`);
+    console.log(`[v72.59] SMART: ${label} → fp=${sc.fp_m2}m² levels=${sc.levels} sdp=${sc.sdp_m2}`);
     fp = sc.fp_m2;
     levels = sc.levels;
     totalH = sc.height_m;
@@ -6422,7 +6471,7 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
   }
   // ══════════════════════════════════════════════════════════════════════
-  // v72.58: SPLIT SYNTHÉTIQUE — COHÉRENT AVEC LE SDP SHEET
+  // v72.59: SPLIT SYNTHÉTIQUE — COHÉRENT AVEC LE SDP SHEET
   // Si le body demande un SPLIT mais splitLayout est null → on le construit.
   // Le SDP total du split DOIT matcher le SDP de la Sheet (sheetSdp ou fp×levels).
   // C (PRUDENT) = TOUJOURS SUPERPOSÉ compact (volume unique).
@@ -6446,7 +6495,7 @@ app.post("/generate-massing", async (req, res) => {
     else if (label === "B") logtLevels = Math.min(maxLogtFloors, Math.max(2, logtLevels));
     // Recalculer SDP logement avec les niveaux ajustés
     const logtSdpFinal = logtFp * logtLevels;
-    console.log(`[v72.58] SPLIT SYNTHÉTIQUE ${label}: sdpTarget=${sdpTarget} → commerce=${commFp}m²×${commerceLevels}niv=${commSdp}m² + logement=${logtFp}m²×${logtLevels}niv=${logtSdpFinal}m² = total ${commSdp + logtSdpFinal}m²`);
+    console.log(`[v72.59] SPLIT SYNTHÉTIQUE ${label}: sdpTarget=${sdpTarget} → commerce=${commFp}m²×${commerceLevels}niv=${commSdp}m² + logement=${logtFp}m²×${logtLevels}niv=${logtSdpFinal}m² = total ${commSdp + logtSdpFinal}m²`);
     splitLayout = {
       mode: "SPLIT_AV_AR",
       volume_commerce: {
@@ -6470,7 +6519,7 @@ app.post("/generate-massing", async (req, res) => {
       retrait_inter_m: Number(retrait_inter_volumes_m) || 4,
     };
     has_pilotis = true; // SPLIT = logement TOUJOURS sur pilotis
-    console.log(`[v72.58] SPLIT CONSTRUIT: 2 volumes séparés — commerce DEVANT + logement DERRIÈRE sur pilotis`);
+    console.log(`[v72.59] SPLIT CONSTRUIT: 2 volumes séparés — commerce DEVANT + logement DERRIÈRE sur pilotis`);
   }
   // v72.32: En SPLIT (moteur ou synthétique), levels doit = niveaux LOGEMENT uniquement
   // Car le rendu 3D utilise: realTotalH = rdcH + levels * etageH (pilotis + N étages)
@@ -6800,7 +6849,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.58-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.59-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6822,7 +6871,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.58-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.59-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
