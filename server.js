@@ -4101,7 +4101,7 @@ app.post("/compute-scenarios", (req, res) => {
       gabarit: gabaritStr,
       unit_summary: unitSummary,
       logement_count: String(totalLogements),
-      commerce_count: String(commerceUnits),
+      commerce_count: String(parsedCommerceCount),
       hab_m2: String(Math.round(habM2)),
       circ_pct: `${circPct}%`,
       circ_m2: String(circM2),
