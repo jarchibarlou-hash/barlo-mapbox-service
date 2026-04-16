@@ -6120,7 +6120,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v72.54 ═══");
+  console.log("═══ /generate-massing v72.56 ═══");
   // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
   for (const key of Object.keys(req.body)) {
     if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(req.body[key].trim())) {
@@ -6184,55 +6184,86 @@ app.post("/generate-massing", async (req, res) => {
   };
   const envW = _safeFloatM(envelope_w);
   const envD = _safeFloatM(envelope_d);
-  const envArea = _safeFloatM(envelope_area_raw); // v72.55: zone constructible réelle (après retraits)
+  let envArea = _safeFloatM(envelope_area_raw); // v72.55: zone constructible réelle (après retraits)
   const floorH = _safeFloatM(fh_raw) || 3.2;
-  console.log(`[v72.55] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}" fh="${fh_raw}")`);
-  if (envArea > 0 && envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
-    console.log(`[v72.55] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart > 30%! Le moteur utilisera envelope_area=${envArea}m² (zone constructible réelle)`);
+  // v72.56: Si envelope_area n'est PAS fourni par Make.com (= 0 ou absent),
+  // on le CALCULE à partir des retraits réglementaires — sinon envW×envD (BRUT) surestime de 50-110%
+  if (!envArea || envArea <= 0) {
+    const RETRAITS_ZONING = {
+      URBAIN: { avant: 5, lateral: 3, arriere: 3 },
+      PERIURBAIN: { avant: 6, lateral: 4, arriere: 4 },
+      MIXTE: { avant: 5, lateral: 3, arriere: 3 },
+      PAVILLON: { avant: 6, lateral: 4, arriere: 4 },
+      RURAL: { avant: 8, lateral: 5, arriere: 5 },
+    };
+    const zoneKey = String(zoning_type || "URBAIN").toUpperCase();
+    const zr = RETRAITS_ZONING[zoneKey] || RETRAITS_ZONING.URBAIN;
+    // Utiliser les setbacks explicites du body si fournis, sinon les retraits réglementaires
+    const sf = _safeFloatM(setback_front) || zr.avant;
+    const ss = _safeFloatM(setback_side) || zr.lateral;
+    const sb = _safeFloatM(setback_back) || zr.arriere;
+    const netW = Math.max(5, envW - 2 * ss);
+    const netD = Math.max(5, envD - sf - sb);
+    envArea = Math.round(netW * netD);
+    console.log(`[v72.56] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
   }
-  // v72.54: DÉTECTION ROBUSTE DU LABEL (A/B/C) — multiple stratégies
+  console.log(`[v72.56] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
+  if (envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
+    console.log(`[v72.56] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
+  }
+  // v72.56: DÉTECTION ROBUSTE DU LABEL (A/B/C) + COMPTEUR AUTOMATIQUE
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
-  // Ordre de priorité : render_label > slide_name > massing_label > body scan
+  // SOLUTION DÉFINITIVE : compteur par lead_id qui cycle A → B → C automatiquement.
   let label = "A"; // défaut
   const slideStr = String(slide_name || "").toUpperCase();
   const rawLabel = String(massing_label || "").toUpperCase().trim();
   const explicitLabel = String(render_label || "").toUpperCase().trim();
+  let labelSource = "default";
   // PRIORITÉ 0: render_label (champ explicite — le plus fiable si Make.com l'envoie)
   if (["A", "B", "C"].includes(explicitLabel)) {
     label = explicitLabel;
-    console.log(`[v72.54] LABEL from render_label: "${label}" (explicit override)`);
+    labelSource = "render_label";
   }
-  // PRIORITÉ 1: slide_name (TOUJOURS fiable car unique par requête)
+  // PRIORITÉ 1: slide_name (regex A/B/C + mots-clés INTENSIF/EQUILIBRE/PRUDENT)
   else {
     const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
       || slideStr.match(/[_\s.-]([ABC])[_\s.-]/)
       || slideStr.match(/[_\s.-]([ABC])$/)
-      || slideStr.match(/([ABC])$/);
+      || slideStr.match(/\b([ABC])\b/);
+    // v72.56: aussi détecter INTENSIF/EQUILIBRE/PRUDENT dans slide_name
+    const slideRole = /INTENSIF/i.test(slideStr) ? "A" : /EQUILIB/i.test(slideStr) ? "B" : /PRUDENT/i.test(slideStr) ? "C" : null;
     if (slideMatch) {
       label = slideMatch[1];
-      console.log(`[v72.54] LABEL from slide_name: "${label}" (slide_name="${slide_name}")`);
-    } else if (["A", "B", "C"].includes(rawLabel)) {
-      // PRIORITÉ 2: massing_label (seulement si slide_name ne contient pas A/B/C)
-      label = rawLabel;
-      console.log(`[v72.54] LABEL from massing_label: "${label}" (slide_name="${slide_name}" had no A/B/C)`);
+      labelSource = "slide_name_regex";
+    } else if (slideRole) {
+      label = slideRole;
+      labelSource = "slide_name_role";
     } else {
-      // PRIORITÉ 3: chercher dans des champs SPÉCIFIQUES (pas tout le body pour éviter faux positifs)
-      // On exclut primary_driver, strategic_position etc. qui contiennent EQUILIBRE/PRUDENT sans lien avec le label
-      const scenarioRole = String(req.body.scenario_role || "").toUpperCase();
-      const computeStr = String(compute_scenario || "").toUpperCase().trim();
-      if (["A", "B", "C"].includes(computeStr)) {
-        label = computeStr;
-      } else if (/PRUDENT/.test(scenarioRole)) {
-        label = "C";
-      } else if (/EQUILIBRE/.test(scenarioRole)) {
-        label = "B";
-      } else if (/INTENSIF/.test(scenarioRole)) {
-        label = "A";
+      // PRIORITÉ 2: COMPTEUR AUTOMATIQUE par lead_id — cycle A → B → C
+      // C'est le FILET DE SÉCURITÉ quand Make.com envoie le même label/slide pour tout
+      if (!global.__massingCallCounter) global.__massingCallCounter = {};
+      const counterKey = String(lead_id).trim();
+      if (!global.__massingCallCounter[counterKey]) {
+        global.__massingCallCounter[counterKey] = { count: 0, ts: Date.now() };
       }
-      console.log(`[v72.54] LABEL from context scan: "${label}" (scenario_role="${scenarioRole}", compute="${computeStr}")`);
+      // Reset le compteur si le dernier appel date de > 5 minutes (nouveau run)
+      const counterEntry = global.__massingCallCounter[counterKey];
+      if (Date.now() - counterEntry.ts > 5 * 60 * 1000) {
+        counterEntry.count = 0;
+      }
+      const labels = ["A", "B", "C"];
+      label = labels[counterEntry.count % 3];
+      counterEntry.count++;
+      counterEntry.ts = Date.now();
+      labelSource = `auto_counter(${counterEntry.count})`;
+      // Nettoyer les vieux compteurs (> 30min) pour éviter fuite mémoire
+      const now = Date.now();
+      for (const k of Object.keys(global.__massingCallCounter)) {
+        if (now - global.__massingCallCounter[k].ts > 30 * 60 * 1000) delete global.__massingCallCounter[k];
+      }
     }
   }
-  console.log(`[v72.54] ═══ LABEL FINAL: "${label}" ═══ (render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
+  console.log(`[v72.56] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
   const dispositionRaw = String(disposition || "").toLowerCase();
   const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
@@ -6715,7 +6746,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.55-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.56-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6737,7 +6768,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.55-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.56-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
