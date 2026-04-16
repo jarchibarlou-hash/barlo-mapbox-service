@@ -1718,9 +1718,9 @@ function computeSmartScenarios({
       // Pré-sélection de la typology AVANT les calculs de SDP/coûts
       // ══════════════════════════════════════════════════════════════════════
       const envAspectCalc = envelope_w / Math.max(1, envelope_d);
-      const fillRatioCalc = (effectiveCES * site_area * (CES_FILL_BY_ROLE[role] || 0.80)) / Math.max(1, envelope_area);
+      const fillRatioCalc = (ces * site_area * (CES_FILL_BY_ROLE[role] || 0.80)) / Math.max(1, envelope_area);
       const preTypology = preSelectTypology({
-        fp_m2: effectiveCES * site_area * (CES_FILL_BY_ROLE[role] || 0.80),
+        fp_m2: ces * site_area * (CES_FILL_BY_ROLE[role] || 0.80),
         envelope_area, site_area, envAspect: envAspectCalc,
         massing_mode: SCENARIO_MASSING_MODE[label] || "BALANCED",
         scenario_role: role, standing_level, program_main, isMixte, fillRatio: fillRatioCalc,
