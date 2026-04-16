@@ -4616,6 +4616,119 @@ Génère EXACTEMENT les champs suivants. Retourne UNIQUEMENT un JSON valide avec
 
   return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, computed_scores, ...flat });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.61: ENDPOINT /generate-texts — LE SERVEUR APPELLE GPT DIRECTEMENT
+// Make.com envoie le MÊME body que /compute-scenarios
+// Le serveur calcule les scénarios, construit les prompts, appelle GPT, renvoie les textes
+// → Make.com n'a PLUS BESOIN du module OpenAI, juste un module HTTP
+// ══════════════════════════════════════════════════════════════════════════════
+app.post("/generate-texts", async (req, res) => {
+  try {
+    console.log("[v72.61] /generate-texts — START");
+
+    // 1) Appeler /compute-scenarios en interne pour obtenir flat + prompts
+    const scenariosResponse = await new Promise((resolve, reject) => {
+      const fakeRes = {
+        statusCode: 200,
+        _json: null,
+        json(data) { this._json = data; resolve(data); return this; },
+        status(code) { this.statusCode = code; return this; },
+      };
+      // Réutiliser le handler existant via une requête interne
+      req.app.handle(
+        Object.assign(Object.create(req), { url: "/compute-scenarios", method: "POST", body: req.body }),
+        fakeRes,
+        (err) => { if (err) reject(err); }
+      );
+    });
+
+    if (!scenariosResponse || !scenariosResponse.ok) {
+      console.error("[v72.61] /compute-scenarios interne a échoué:", scenariosResponse);
+      return res.status(500).json({ ok: false, error: "compute-scenarios failed internally" });
+    }
+
+    const systemPrompt = scenariosResponse.gpt_system_prompt;
+    const userPrompt = scenariosResponse.gpt_user_prompt;
+
+    if (!systemPrompt || !userPrompt) {
+      console.error("[v72.61] gpt_system_prompt ou gpt_user_prompt manquant dans la réponse");
+      return res.status(500).json({ ok: false, error: "prompts not found in scenarios response" });
+    }
+
+    console.log(`[v72.61] Prompts OK: system=${systemPrompt.length} chars, user=${userPrompt.length} chars`);
+    console.log("[v72.61] Appel GPT-4o...");
+
+    // 2) Appeler OpenAI directement
+    const gptStart = Date.now();
+    const gptResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        temperature: 0.4,
+        max_tokens: 8000,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
+    });
+
+    if (!gptResponse.ok) {
+      const errText = await gptResponse.text();
+      console.error(`[v72.61] GPT API error ${gptResponse.status}: ${errText}`);
+      return res.status(502).json({ ok: false, error: `GPT API error: ${gptResponse.status}`, detail: errText });
+    }
+
+    const gptData = await gptResponse.json();
+    const gptElapsed = Date.now() - gptStart;
+    console.log(`[v72.61] GPT réponse reçue en ${gptElapsed}ms — tokens: prompt=${gptData.usage?.prompt_tokens || "?"}, completion=${gptData.usage?.completion_tokens || "?"}`);
+
+    // 3) Extraire le contenu JSON généré par GPT
+    const rawContent = gptData.choices?.[0]?.message?.content;
+    if (!rawContent) {
+      console.error("[v72.61] GPT n'a pas retourné de contenu");
+      return res.status(502).json({ ok: false, error: "GPT returned no content" });
+    }
+
+    let generatedTexts;
+    try {
+      generatedTexts = JSON.parse(rawContent);
+    } catch (parseErr) {
+      console.error("[v72.61] GPT JSON invalide:", parseErr.message);
+      return res.status(502).json({ ok: false, error: "GPT returned invalid JSON", raw: rawContent.substring(0, 500) });
+    }
+
+    const textKeys = Object.keys(generatedTexts);
+    console.log(`[v72.61] ✅ TEXTES GÉNÉRÉS: ${textKeys.length} champs — ${textKeys.join(", ")}`);
+
+    // 4) Retourner les textes + les données scénarios (sans les prompts pour alléger)
+    const { gpt_system_prompt, gpt_user_prompt, ...scenariosFlat } = scenariosResponse;
+
+    return res.json({
+      ok: true,
+      server_version: "72.61-GENERATE-TEXTS",
+      gpt_model: "gpt-4o",
+      gpt_elapsed_ms: gptElapsed,
+      gpt_tokens: gptData.usage || {},
+      generated_texts: generatedTexts,
+      // Aussi renvoyer les données scénarios pour que Make.com puisse les utiliser
+      ...scenariosFlat,
+      // Et les textes en FLAT pour mapping direct dans Make.com
+      ...generatedTexts,
+    });
+
+  } catch (err) {
+    console.error("[v72.61] /generate-texts ERREUR:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
 // Sélection automatique de la forme bâtie selon le contexte :
 //   BLOC     → rectangle compact (~1:1.3), économique, petit terrain
@@ -7324,7 +7437,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.60-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.61-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
