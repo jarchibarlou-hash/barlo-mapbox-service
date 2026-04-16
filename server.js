@@ -4627,25 +4627,26 @@ app.post("/generate-texts", async (req, res) => {
   try {
     console.log("[v72.61] /generate-texts — START");
 
-    // 1) Appeler /compute-scenarios en interne pour obtenir flat + prompts
-    const scenariosResponse = await new Promise((resolve, reject) => {
-      const fakeRes = {
-        statusCode: 200,
-        _json: null,
-        json(data) { this._json = data; resolve(data); return this; },
-        status(code) { this.statusCode = code; return this; },
-      };
-      // Réutiliser le handler existant via une requête interne
-      req.app.handle(
-        Object.assign(Object.create(req), { url: "/compute-scenarios", method: "POST", body: req.body }),
-        fakeRes,
-        (err) => { if (err) reject(err); }
-      );
+    // 1) Appeler /compute-scenarios via HTTP local
+    const localUrl = `http://localhost:${PORT}/compute-scenarios`;
+    console.log(`[v72.61] Appel interne → ${localUrl}`);
+    const intResponse = await fetch(localUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req.body),
     });
 
+    if (!intResponse.ok) {
+      const errText = await intResponse.text();
+      console.error(`[v72.61] /compute-scenarios a échoué (${intResponse.status}):`, errText);
+      return res.status(500).json({ ok: false, error: "compute-scenarios failed", detail: errText });
+    }
+
+    const scenariosResponse = await intResponse.json();
+
     if (!scenariosResponse || !scenariosResponse.ok) {
-      console.error("[v72.61] /compute-scenarios interne a échoué:", scenariosResponse);
-      return res.status(500).json({ ok: false, error: "compute-scenarios failed internally" });
+      console.error("[v72.61] /compute-scenarios réponse invalide:", JSON.stringify(scenariosResponse).substring(0, 200));
+      return res.status(500).json({ ok: false, error: "compute-scenarios returned invalid data" });
     }
 
     const systemPrompt = scenariosResponse.gpt_system_prompt;
