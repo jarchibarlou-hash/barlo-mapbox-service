@@ -2207,7 +2207,11 @@ function computeSmartScenarios({
       }
       // fp principal (pour le rendu 3D) = fpEtages (volume dominant)
       fp = fpEtages;
+      // v72.64: GUARD — en mode SPLIT, les valeurs (levels, totalUseful, unitMixDetail, unitMix)
+      // sont déjà calculées dans le bloc SPLIT ci-dessus. Le bloc ci-dessous (unit calc)
+      // ne doit PAS les écraser, sinon totalUnitsResult ≠ unitMixDetail (ex: 4 vs "1×COMM+2×T3")
       let floorsNeeded, totalUnits;
+      if (!splitLayout) {
       totalUseful = 0;
       const details = [];
       // Helper COS check : SDP = fpRdc + fpEtages × (niv - 1)
@@ -2336,6 +2340,7 @@ function computeSmartScenarios({
         unitMixDetail = details.join(" + ");
         unitMix = mix;
       }
+      } // v72.64: fin du guard !splitLayout pour le bloc unit calc
       // v72.31: En SPLIT, les niveaux sont déjà calculés dans le SPLIT branch (levelsLogt)
       // NE PAS écraser avec floorsNeeded qui vient de la logique SUPERPOSÉ
       if (!splitLayout) levels = floorsNeeded;
@@ -3877,6 +3882,14 @@ app.post("/compute-scenarios", (req, res) => {
       sc.sdp_m2 = fpRdc + fpEt * (sc.levels - 1);
     }
     sc.height_m = Math.round(sc.levels * 3.2 * 10) / 10;
+    // v72.64: recalculer surface_habitable et total_useful après changement de SDP
+    const circRatio = (sc.circulation_ratio_pct || 20) / 100;
+    sc.surface_habitable_m2 = Math.round(sc.sdp_m2 * (1 - circRatio));
+    sc.total_useful_m2 = sc.surface_habitable_m2;
+    // Recalculer m2/logement
+    const nbLogements = Math.max(1, (sc.total_units || 1) - (sc.commerce_levels > 0 ? 1 : 0));
+    sc.m2_habitable_par_logement = Math.round(sc.surface_habitable_m2 / nbLogements);
+    sc.ratio_efficacite_pct = sc.sdp_m2 > 0 ? Math.round(sc.surface_habitable_m2 / sc.sdp_m2 * 100) : 0;
   };
   if (scenarios.A && scenarios.B) {
     const aSdp = Math.round(scenarios.A.sdp_m2);
@@ -4144,7 +4157,10 @@ app.post("/compute-scenarios", (req, res) => {
     const circM2 = Math.round(sc.sdp_m2 * circPct / 100);
 
     // COS compliance
-    const cosMax = Math.round(0.6 * (sc._site_area || Number(p.site_area) || 0));
+    // v72.64: FIX — cosMax = COS × site_area (SDP max autorisée), pas CES × site_area (emprise max)
+    // COS = coefficient d'occupation des sols (ratio SDP/terrain), CES = coefficient d'emprise au sol
+    const cosRegl = (sc.regulatory && sc.regulatory.cos_reglementaire) || 2.5;
+    const cosMax = Math.round(cosRegl * (sc._site_area || Number(p.site_area) || 0));
     const cosDepassement = sc.sdp_m2 > cosMax ? sc.sdp_m2 - cosMax : 0;
 
     return {
@@ -4786,7 +4802,7 @@ app.post("/generate-texts", async (req, res) => {
 
     return res.json({
       ok: true,
-      server_version: "72.63-GENERATE-TEXTS",
+      server_version: "72.64-GENERATE-TEXTS",
       gpt_model: "gpt-4o",
       gpt_elapsed_ms: gptElapsed,
       gpt_tokens: gptData.usage || {},
@@ -7489,7 +7505,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.63-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.64-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -7511,7 +7527,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.63-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.64-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
