@@ -3957,6 +3957,11 @@ app.post("/compute-scenarios", (req, res) => {
     A_fp: String(sA.fp_m2 || 0), A_fp_rdc: String(sA.fp_rdc_m2 || 0),
     A_levels: String(sA.levels || 0), A_height: String(sA.height_m || 0),
     A_sdp: String(sA.sdp_m2 || 0), A_units: String(sA.total_units || 0),
+    A_commerce_levels: String(sA.commerce_levels || 0),
+    A_has_pilotis: String(!!sA.has_pilotis),
+    A_accent_color: sA.accent_color || "#2a5298",
+    A_role: sA.label_fr || "INTENSIFICATION",
+    A_split_layout: sA.split_layout ? JSON.stringify(sA.split_layout) : "",
     A_unit_mix: sA.unit_mix_detail || "", A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
     A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
     A_cost_bas: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M`,
@@ -3995,6 +4000,11 @@ app.post("/compute-scenarios", (req, res) => {
     B_fp: String(sB.fp_m2 || 0), B_fp_rdc: String(sB.fp_rdc_m2 || 0),
     B_levels: String(sB.levels || 0), B_height: String(sB.height_m || 0),
     B_sdp: String(sB.sdp_m2 || 0), B_units: String(sB.total_units || 0),
+    B_commerce_levels: String(sB.commerce_levels || 0),
+    B_has_pilotis: String(!!sB.has_pilotis),
+    B_accent_color: sB.accent_color || "#34a853",
+    B_role: sB.label_fr || "EQUILIBRE",
+    B_split_layout: sB.split_layout ? JSON.stringify(sB.split_layout) : "",
     B_unit_mix: sB.unit_mix_detail || "", B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
     B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
     B_cost_bas: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M`,
@@ -4031,6 +4041,11 @@ app.post("/compute-scenarios", (req, res) => {
     B_ventil_global: `${(sB.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sB.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
     // ── SCENARIO C (champs plats) ──
     C_fp: String(sC.fp_m2 || 0), C_fp_rdc: String(sC.fp_rdc_m2 || 0),
+    C_commerce_levels: String(sC.commerce_levels || 0),
+    C_has_pilotis: String(!!sC.has_pilotis),
+    C_accent_color: sC.accent_color || "#ea4335",
+    C_role: sC.label_fr || "PRUDENT",
+    C_split_layout: sC.split_layout ? JSON.stringify(sC.split_layout) : "",
     C_levels: String(sC.levels || 0), C_height: String(sC.height_m || 0),
     C_sdp: String(sC.sdp_m2 || 0), C_units: String(sC.total_units || 0),
     C_unit_mix: sC.unit_mix_detail || "", C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
@@ -4107,19 +4122,6 @@ app.post("/compute-scenarios", (req, res) => {
     recommended_scenario_calc: calc_recommended_scenario,
     driver_intensity: calc_driver_intensity,
   };
-  // v72.57: CACHE des scénarios par lead_id — /generate-massing les réutilise au lieu de recalculer
-  // C'est CRITIQUE car les 2 endpoints n'ont pas forcément les mêmes paramètres (scores calculés, etc.)
-  if (!global.__scenarioCache) global.__scenarioCache = {};
-  const cacheLeadId = String(p.lead_id || "").trim();
-  if (cacheLeadId) {
-    global.__scenarioCache[cacheLeadId] = { scenarios, ts: Date.now() };
-    console.log(`[v72.57] CACHE WRITE: lead_id="${cacheLeadId}" → A:sdp=${scenarios.A?.sdp_m2} B:sdp=${scenarios.B?.sdp_m2} C:sdp=${scenarios.C?.sdp_m2}`);
-    // Nettoyage des vieilles entrées (> 30min)
-    const now = Date.now();
-    for (const k of Object.keys(global.__scenarioCache)) {
-      if (now - global.__scenarioCache[k].ts > 30 * 60 * 1000) delete global.__scenarioCache[k];
-    }
-  }
   return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, computed_scores, ...flat });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
@@ -6133,7 +6135,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v72.57 ═══");
+  console.log("═══ /generate-massing v72.58 ═══");
   // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
   for (const key of Object.keys(req.body)) {
     if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(req.body[key].trim())) {
@@ -6218,11 +6220,11 @@ app.post("/generate-massing", async (req, res) => {
     const netW = Math.max(5, envW - 2 * ss);
     const netD = Math.max(5, envD - sf - sb);
     envArea = Math.round(netW * netD);
-    console.log(`[v72.57] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
+    console.log(`[v72.58] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
   }
-  console.log(`[v72.57] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
+  console.log(`[v72.58] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
   if (envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
-    console.log(`[v72.57] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
+    console.log(`[v72.58] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
   }
   // v72.56-57: DÉTECTION ROBUSTE DU LABEL (A/B/C) + COMPTEUR AUTOMATIQUE
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
@@ -6276,7 +6278,7 @@ app.post("/generate-massing", async (req, res) => {
       }
     }
   }
-  console.log(`[v72.57] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
+  console.log(`[v72.58] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
   const dispositionRaw = String(disposition || "").toLowerCase();
   const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
@@ -6297,67 +6299,85 @@ app.post("/generate-massing", async (req, res) => {
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   let has_pilotis = false; // v72.54: déclaration explicite (évite implicit global)
-  if (compute_scenario || !fp_m2_raw || !levels_raw) {
-    // v72.57: PRIORITÉ AU CACHE — réutiliser les résultats de /compute-scenarios
-    // C'est la SEULE façon de garantir que les rendus matchent la Sheet
-    if (!global.__scenarioCache) global.__scenarioCache = {};
-    const cacheKey = String(lead_id).trim();
-    const cached = global.__scenarioCache[cacheKey];
-    const cacheValid = cached && (Date.now() - cached.ts < 10 * 60 * 1000); // valide 10 minutes
-    let scenarios;
-    if (cacheValid) {
-      scenarios = cached.scenarios;
-      console.log(`[v72.57] ★ CACHE HIT: lead_id="${cacheKey}" (age=${Math.round((Date.now()-cached.ts)/1000)}s) → A:sdp=${scenarios.A?.sdp_m2} B:sdp=${scenarios.B?.sdp_m2} C:sdp=${scenarios.C?.sdp_m2}`);
-    } else {
-      // FALLBACK : recalculer (pas de cache disponible — première fois ou timeout)
-      console.log(`[v72.57] CACHE MISS: lead_id="${cacheKey}" — recalcul des scénarios`);
-      if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
-      scenarios = computeSmartScenarios({
-        site_area: _safeFloatM(site_area),
-        envelope_w: envW,
-        envelope_d: envD,
-        envelope_area: envArea || undefined,
-        zoning_type: String(zoning_type),
-        floor_height: floorH,
-        primary_driver: primary_driver || "MAX_CAPACITE",
-        max_floors: Number(max_floors) || 99,
-        max_height_m: Number(max_height_m) || 99,
-        program_main: effectiveProgramMain,
-        target_surface_m2: Number(target_surface_m2) || 0,
-        target_units: Number(target_units) || 0,
-        site_saturation_level: site_saturation_level || "MEDIUM",
-        financial_rigidity_score: Number(financial_rigidity_score) || 0,
-        density_band: density_band || "",
-        risk_adjusted: Number(risk_adjusted) || 0,
-        feasibility_posture: feasibility_posture || "BALANCED",
-        scenario_A_role: scenario_A_role || "",
-        scenario_B_role: scenario_B_role || "",
-        scenario_C_role: scenario_C_role || "",
-        budget_range: Number(budget_range) || 0,
-        budget_band: budget_band || "",
-        budget_tension: Number(budget_tension) || 0,
-        standing_level: standing_level || "STANDARD",
-        rent_score: Number(rent_score) || 0,
-        capacity_score: Number(capacity_score) || 0,
-        mix_score: Number(mix_score) || 0,
-        phase_score: Number(phase_score) || 0,
-        risk_score: Number(risk_score) || 0,
-        density_pressure_factor: Number(density_pressure_factor) || 1,
-        driver_intensity: driver_intensity || "MEDIUM",
-        strategic_position: strategic_position || "",
-        layout_mode: effectiveLayoutMode,
-        commerce_depth_m: Number(commerce_depth_m) || 6,
-        retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
-      });
+  // ══════════════════════════════════════════════════════════════════════
+  // v72.58: SHEET PASS-THROUGH — PRIORITÉ ABSOLUE
+  // Make.com envoie A_fp, A_levels, A_sdp, A_split_layout etc. directement
+  // depuis /compute-scenarios → on les utilise TELS QUELS → ZÉRO DIVERGENCE
+  // ══════════════════════════════════════════════════════════════════════
+  const sheetFp = _safeFloatM(req.body[`${label}_fp`]);
+  const sheetLevels = Math.round(_safeFloatM(req.body[`${label}_levels`]));
+  const sheetSdp = _safeFloatM(req.body[`${label}_sdp`]);
+  const sheetHeight = _safeFloatM(req.body[`${label}_height`]);
+  const sheetCommLevels = Math.round(_safeFloatM(req.body[`${label}_commerce_levels`]));
+  const sheetPilotis = /true/i.test(String(req.body[`${label}_has_pilotis`] || ""));
+  const sheetAccent = req.body[`${label}_accent_color`] || "";
+  const sheetRole = req.body[`${label}_role`] || "";
+  const sheetSplitJson = req.body[`${label}_split_layout`] || "";
+  console.log(`[v72.58] SHEET CHECK: ${label}_fp=${sheetFp} ${label}_levels=${sheetLevels} ${label}_sdp=${sheetSdp} ${label}_commerce_levels=${sheetCommLevels} ${label}_split_layout=${sheetSplitJson ? "OUI(" + sheetSplitJson.length + "chars)" : "NON"}`);
+
+  if (sheetFp > 0 && sheetLevels > 0) {
+    // ═══ MODE SHEET PASS-THROUGH — GARANTI COHÉRENT AVEC LA SHEET ═══
+    fp = sheetFp;
+    levels = sheetLevels;
+    totalH = sheetHeight || levels * floorH;
+    commerceLevels = sheetCommLevels;
+    has_pilotis = sheetPilotis;
+    scenarioRole = sheetRole || (label === "A" ? "INTENSIFICATION" : label === "B" ? "ÉQUILIBRE" : "PRUDENT");
+    accentColor = sheetAccent || (label === "A" ? "#2a5298" : label === "B" ? "#34a853" : "#ea4335");
+    // Parse split_layout JSON si présent
+    if (sheetSplitJson) {
+      try {
+        splitLayout = JSON.parse(sheetSplitJson);
+        console.log(`[v72.58] ★ SPLIT LAYOUT FROM SHEET: mode=${splitLayout.mode} commerce=${splitLayout.volume_commerce?.sdp_m2}m² logement=${splitLayout.volume_logement?.sdp_m2}m²`);
+      } catch (e) {
+        console.log(`[v72.58] ⚠️ split_layout JSON invalide: ${e.message}`);
+        splitLayout = null;
+      }
     }
+    console.log(`[v72.58] ★★★ SHEET PASS-THROUGH: ${label} → fp=${fp}m² levels=${levels} sdp_sheet=${sheetSdp} commerce=${commerceLevels} pilotis=${has_pilotis} split=${splitLayout ? splitLayout.mode : "NON"}`);
+  } else if (compute_scenario || !fp_m2_raw || !levels_raw) {
+    // ═══ MODE SMART — recalcul (fallback quand Make.com n'envoie pas les champs {label}_*) ═══
+    console.log(`[v72.58] SMART FALLBACK: pas de champs ${label}_fp/${label}_levels dans le body → recalcul`);
+    if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
+    const scenarios = computeSmartScenarios({
+      site_area: _safeFloatM(site_area),
+      envelope_w: envW,
+      envelope_d: envD,
+      envelope_area: envArea || undefined,
+      zoning_type: String(zoning_type),
+      floor_height: floorH,
+      primary_driver: primary_driver || "MAX_CAPACITE",
+      max_floors: Number(max_floors) || 99,
+      max_height_m: Number(max_height_m) || 99,
+      program_main: effectiveProgramMain,
+      target_surface_m2: Number(target_surface_m2) || 0,
+      target_units: Number(target_units) || 0,
+      site_saturation_level: site_saturation_level || "MEDIUM",
+      financial_rigidity_score: Number(financial_rigidity_score) || 0,
+      density_band: density_band || "",
+      risk_adjusted: Number(risk_adjusted) || 0,
+      feasibility_posture: feasibility_posture || "BALANCED",
+      scenario_A_role: scenario_A_role || "",
+      scenario_B_role: scenario_B_role || "",
+      scenario_C_role: scenario_C_role || "",
+      budget_range: Number(budget_range) || 0,
+      budget_band: budget_band || "",
+      budget_tension: Number(budget_tension) || 0,
+      standing_level: standing_level || "STANDARD",
+      rent_score: Number(rent_score) || 0,
+      capacity_score: Number(capacity_score) || 0,
+      mix_score: Number(mix_score) || 0,
+      phase_score: Number(phase_score) || 0,
+      risk_score: Number(risk_score) || 0,
+      density_pressure_factor: Number(density_pressure_factor) || 1,
+      driver_intensity: driver_intensity || "MEDIUM",
+      strategic_position: strategic_position || "",
+      layout_mode: effectiveLayoutMode,
+      commerce_depth_m: Number(commerce_depth_m) || 6,
+      retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
+    });
     const sc = scenarios[label] || scenarios.A;
-    // v72.28: LOG les 3 scénarios pour vérifier la différenciation
-    console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
-    for (const k of ["A", "B", "C"]) {
-      const s = scenarios[k];
-      if (s) console.log(`[v72.28] ${k}: fp=${s.fp_m2}m² levels=${s.levels} split=${s.split_layout ? s.split_layout.volume_logement.levels + "niv_logt" : "none"} pilotis=${s.has_pilotis}`);
-    }
-    console.log(`[v72.28] USING: label="${label}" → fp=${sc.fp_m2}m² levels=${sc.levels}`);
+    console.log(`[v72.58] SMART: ${label} → fp=${sc.fp_m2}m² levels=${sc.levels} sdp=${sc.sdp_m2}`);
     fp = sc.fp_m2;
     levels = sc.levels;
     totalH = sc.height_m;
@@ -6366,7 +6386,7 @@ app.post("/generate-massing", async (req, res) => {
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
     splitLayout = sc.split_layout || null;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} (${sc.cos_compliance})`);
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"}`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
@@ -6401,47 +6421,56 @@ app.post("/generate-massing", async (req, res) => {
     levels = commerceLevels + 1;
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
   }
-  // v72.23: SPLIT SYNTHÉTIQUE — si le body demande un SPLIT mais splitLayout est null,
-  // on construit un splitLayout synthétique pour que le rendu 3D montre 2 volumes séparés.
-  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact (volume unique).
-  // A et B gardent le SPLIT avec commerce en front + logement sur pilotis derrière.
+  // ══════════════════════════════════════════════════════════════════════
+  // v72.58: SPLIT SYNTHÉTIQUE — COHÉRENT AVEC LE SDP SHEET
+  // Si le body demande un SPLIT mais splitLayout est null → on le construit.
+  // Le SDP total du split DOIT matcher le SDP de la Sheet (sheetSdp ou fp×levels).
+  // C (PRUDENT) = TOUJOURS SUPERPOSÉ compact (volume unique).
+  // ══════════════════════════════════════════════════════════════════════
   if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && label !== "C") {
-    const commDepthEstimate = Number(commerce_depth_m) || 6;
-    const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
-    const logtFpEstimate = fp;  // emprise logement = fp original
-    // v72.32: DIFFÉRENCIATION FORCÉE — même logique que le moteur SPLIT
-    // INTENSIFICATION (A): min 3 niveaux logement (R+3) = pilotis + 3 étages habitables
-    // EQUILIBRE (B): min 2 niveaux logement (R+2) = pilotis + 2 étages habitables
-    // Sans ce forçage, logtLevels = levels - commerceLevels donne trop peu de niveaux
-    // car les niveaux SUPERPOSÉ (total) sont inférieurs aux niveaux SPLIT (logement seul)
+    const commDepth = Number(commerce_depth_m) || 6;
+    // SDP total cible = celui de la Sheet si dispo, sinon fp × levels
+    const sdpTarget = (sheetSdp > 0) ? sheetSdp : Math.round(fp * levels);
+    // Commerce: emprise = largeur_envelope × profondeur_commerce (surface réelle au sol)
+    const commWidth = Math.max(5, Math.round(envW * 0.7));
+    const commFp = Math.round(commWidth * commDepth);
+    const commSdp = commFp * commerceLevels;
+    // Logement: SDP = total - commerce (GARANTI COHÉRENT)
+    const logtSdp = Math.max(0, sdpTarget - commSdp);
+    // Niveaux logement: déduits du SDP logement ÷ emprise
+    const logtFp = fp; // emprise logement = emprise moteur
+    let logtLevels = logtFp > 0 ? Math.max(1, Math.round(logtSdp / logtFp)) : 1;
+    // Forçage minimum: A ≥ 3 niveaux, B ≥ 2 niveaux
     const maxLogtFloors = Math.max(1, (Number(max_floors) || 99) - commerceLevels);
-    let logtLevels = Math.max(1, levels - commerceLevels);
     if (label === "A") logtLevels = Math.min(maxLogtFloors, Math.max(3, logtLevels));
     else if (label === "B") logtLevels = Math.min(maxLogtFloors, Math.max(2, logtLevels));
-    console.log(`[v72.32] SPLIT SYNTHÉTIQUE ${label}: levels_engine=${levels} - commerce=${commerceLevels} → logtLevels=${logtLevels} (maxLogt=${maxLogtFloors})`);
+    // Recalculer SDP logement avec les niveaux ajustés
+    const logtSdpFinal = logtFp * logtLevels;
+    console.log(`[v72.58] SPLIT SYNTHÉTIQUE ${label}: sdpTarget=${sdpTarget} → commerce=${commFp}m²×${commerceLevels}niv=${commSdp}m² + logement=${logtFp}m²×${logtLevels}niv=${logtSdpFinal}m² = total ${commSdp + logtSdpFinal}m²`);
     splitLayout = {
       mode: "SPLIT_AV_AR",
       volume_commerce: {
-        fp_m2: commFpEstimate,
-        width_m: Math.round(envW * 0.8),
-        depth_m: commDepthEstimate,
+        fp_m2: commFp,
+        width_m: commWidth,
+        depth_m: commDepth,
         levels: commerceLevels,
-        sdp_m2: commFpEstimate * commerceLevels,
-        units: Math.max(1, Math.floor(commFpEstimate / 30)),
+        sdp_m2: commSdp,
+        units: Math.max(1, Math.floor(commFp / 30)),
         position: "AVANT (contre clôture)",
       },
       volume_logement: {
-        fp_m2: logtFpEstimate,
-        width_m: Math.round(envW * 0.8),
-        depth_m: Math.round(envD * 0.5),
-        levels: Math.max(1, logtLevels),
-        sdp_m2: logtFpEstimate * Math.max(1, logtLevels),
+        fp_m2: logtFp,
+        width_m: Math.round(envW * 0.7),
+        depth_m: Math.round(envD * 0.45),
+        levels: logtLevels,
+        sdp_m2: logtSdpFinal,
         units: 0,
-        position: "ARRIÈRE",
+        position: "ARRIÈRE (sur pilotis)",
       },
       retrait_inter_m: Number(retrait_inter_volumes_m) || 4,
     };
-    console.log(`[CLASSIC→SPLIT] splitLayout synthétique construit: commerce=${commFpEstimate}m²×${commerceLevels}niv + logement=${logtFpEstimate}m²×${Math.max(1, logtLevels)}niv`);
+    has_pilotis = true; // SPLIT = logement TOUJOURS sur pilotis
+    console.log(`[v72.58] SPLIT CONSTRUIT: 2 volumes séparés — commerce DEVANT + logement DERRIÈRE sur pilotis`);
   }
   // v72.32: En SPLIT (moteur ou synthétique), levels doit = niveaux LOGEMENT uniquement
   // Car le rendu 3D utilise: realTotalH = rdcH + levels * etageH (pilotis + N étages)
@@ -6771,7 +6800,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.57-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.58-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6793,7 +6822,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.57-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.58-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
