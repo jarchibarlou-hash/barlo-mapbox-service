@@ -3625,6 +3625,13 @@ function computeSmartScenarios({
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
+  // v72.54: SANITIZE #VALUE! from Google Sheet — replace all Sheet errors with empty string
+  for (const key of Object.keys(p)) {
+    if (typeof p[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(p[key].trim())) {
+      console.log(`[SANITIZE] ${key}="${p[key]}" → "" (Google Sheet error)`);
+      p[key] = "";
+    }
+  }
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
@@ -6090,8 +6097,15 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v72.29 ═══");
-  console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
+  console.log("═══ /generate-massing v72.54 ═══");
+  // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
+  for (const key of Object.keys(req.body)) {
+    if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(req.body[key].trim())) {
+      console.log(`[SANITIZE] ${key}="${req.body[key]}" → "" (Google Sheet error)`);
+      req.body[key] = "";
+    }
+  }
+  console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}" render_label="${req.body.render_label}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
   console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
   const {
@@ -6129,37 +6143,69 @@ app.post("/generate-massing", async (req, res) => {
     retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
     // ── v72.50 : champ dédié disposition du formulaire Google (colonne BE) ──
     disposition,           // "Commerce devant, logement en retrait" | "Tout dans un seul bâtiment" | vide
+    // ── v72.54 : label explicite pour différencier A/B/C quand Make.com envoie massing_label=A pour tout ──
+    render_label,          // "A" | "B" | "C" — override explicite depuis Make.com
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
-  const envW = Number(envelope_w);
-  const envD = Number(envelope_d);
-  const floorH = Number(fh_raw) || 3.2;
-  // v72.29: DÉTECTION ROBUSTE DU LABEL (A/B/C) — PRIORITÉ À slide_name
+  // v72.54: PARSING ROBUSTE — même logique que /compute-scenarios
+  // Make.com envoie "20 - 6" (formule Sheet comme texte) → Number("20 - 6") = NaN → CRASH SILENCIEUX
+  const _safeFloatM = (v) => {
+    if (v === null || v === undefined || v === "") return 0;
+    if (typeof v === "number") return isNaN(v) ? 0 : v;
+    const s = String(v).trim();
+    const n = Number(s);
+    if (!isNaN(n)) return n;
+    const f = parseFloat(s);
+    return (!isNaN(f)) ? f : 0;
+  };
+  const envW = _safeFloatM(envelope_w);
+  const envD = _safeFloatM(envelope_d);
+  const floorH = _safeFloatM(fh_raw) || 3.2;
+  console.log(`[v72.54] PARSED DIMS: envW=${envW} envD=${envD} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" fh="${fh_raw}")`);
+  // v72.54: DÉTECTION ROBUSTE DU LABEL (A/B/C) — multiple stratégies
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
-  // Le slide_name est TOUJOURS différent (sinon les images s'écrasent) → SOURCE DE VÉRITÉ.
+  // Ordre de priorité : render_label > slide_name > massing_label > body scan
   let label = "A"; // défaut
   const slideStr = String(slide_name || "").toUpperCase();
   const rawLabel = String(massing_label || "").toUpperCase().trim();
-  // PRIORITÉ 1: slide_name (TOUJOURS fiable car unique par requête)
-  const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
-    || slideStr.match(/[_\s.-]([ABC])$/)
-    || slideStr.match(/([ABC])$/);
-  if (slideMatch) {
-    label = slideMatch[1];
-    console.log(`[v72.29] LABEL from slide_name: "${label}" (slide_name="${slide_name}")`);
-  } else if (["A", "B", "C"].includes(rawLabel)) {
-    // PRIORITÉ 2: massing_label (seulement si slide_name ne contient pas A/B/C)
-    label = rawLabel;
-    console.log(`[v72.29] LABEL from massing_label: "${label}" (slide_name="${slide_name}" had no A/B/C)`);
-  } else {
-    // PRIORITÉ 3: chercher dans tout le body
-    const bodyStr = JSON.stringify(req.body).toUpperCase();
-    if (/PRUDENT|[_":]C[_"}\s,]/.test(bodyStr)) label = "C";
-    else if (/EQUILIBRE|[_":]B[_"}\s,]/.test(bodyStr)) label = "B";
-    console.log(`[v72.29] LABEL from body scan: "${label}"`);
+  const explicitLabel = String(render_label || "").toUpperCase().trim();
+  // PRIORITÉ 0: render_label (champ explicite — le plus fiable si Make.com l'envoie)
+  if (["A", "B", "C"].includes(explicitLabel)) {
+    label = explicitLabel;
+    console.log(`[v72.54] LABEL from render_label: "${label}" (explicit override)`);
   }
-  console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
+  // PRIORITÉ 1: slide_name (TOUJOURS fiable car unique par requête)
+  else {
+    const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
+      || slideStr.match(/[_\s.-]([ABC])[_\s.-]/)
+      || slideStr.match(/[_\s.-]([ABC])$/)
+      || slideStr.match(/([ABC])$/);
+    if (slideMatch) {
+      label = slideMatch[1];
+      console.log(`[v72.54] LABEL from slide_name: "${label}" (slide_name="${slide_name}")`);
+    } else if (["A", "B", "C"].includes(rawLabel)) {
+      // PRIORITÉ 2: massing_label (seulement si slide_name ne contient pas A/B/C)
+      label = rawLabel;
+      console.log(`[v72.54] LABEL from massing_label: "${label}" (slide_name="${slide_name}" had no A/B/C)`);
+    } else {
+      // PRIORITÉ 3: chercher dans des champs SPÉCIFIQUES (pas tout le body pour éviter faux positifs)
+      // On exclut primary_driver, strategic_position etc. qui contiennent EQUILIBRE/PRUDENT sans lien avec le label
+      const scenarioRole = String(req.body.scenario_role || "").toUpperCase();
+      const computeStr = String(compute_scenario || "").toUpperCase().trim();
+      if (["A", "B", "C"].includes(computeStr)) {
+        label = computeStr;
+      } else if (/PRUDENT/.test(scenarioRole)) {
+        label = "C";
+      } else if (/EQUILIBRE/.test(scenarioRole)) {
+        label = "B";
+      } else if (/INTENSIF/.test(scenarioRole)) {
+        label = "A";
+      }
+      console.log(`[v72.54] LABEL from context scan: "${label}" (scenario_role="${scenarioRole}", compute="${computeStr}")`);
+    }
+  }
+  console.log(`[v72.54] ═══ LABEL FINAL: "${label}" ═══ (render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
   const dispositionRaw = String(disposition || "").toLowerCase();
   const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
@@ -6179,11 +6225,12 @@ app.post("/generate-massing", async (req, res) => {
   console.log(`[MASSING v72.50] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
+  let has_pilotis = false; // v72.54: déclaration explicite (évite implicit global)
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
     const scenarios = computeSmartScenarios({
-      site_area: Number(site_area),
+      site_area: _safeFloatM(site_area),
       envelope_w: envW,
       envelope_d: envD,
       zoning_type: String(zoning_type),
@@ -6565,8 +6612,8 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
             continue;
           }
           const enhancedBuf = Buffer.from(result.b64, "base64");
-          // Massing uses default threshold (0.25) — light polish
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
+          // v72.54: Massing drift threshold raised to 0.35 (was 0.25 default — too strict, caused ALL variations rejected)
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.35);
           // v72.22: COLOR PRESERVATION CHECK — verify orange and blue floor bands survived
           let colorCheckPassed = true;
           let colorLog = "";
@@ -6640,7 +6687,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.50-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.54-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6662,7 +6709,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.53-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.54-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
