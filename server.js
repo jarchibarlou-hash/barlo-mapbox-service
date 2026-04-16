@@ -2207,6 +2207,8 @@ function computeSmartScenarios({
       }
       // fp principal (pour le rendu 3D) = fpEtages (volume dominant)
       fp = fpEtages;
+      // Helper COS check : SDP = fpRdc + fpEtages × (niv - 1) — déclaré AVANT le guard pour accessibilité
+      const computeSdpDual = (niv) => fpRdc + fpEtages * Math.max(0, niv - 1);
       // v72.64: GUARD — en mode SPLIT, les valeurs (levels, totalUseful, unitMixDetail, unitMix)
       // sont déjà calculées dans le bloc SPLIT ci-dessus. Le bloc ci-dessous (unit calc)
       // ne doit PAS les écraser, sinon totalUnitsResult ≠ unitMixDetail (ex: 4 vs "1×COMM+2×T3")
@@ -2214,8 +2216,6 @@ function computeSmartScenarios({
       if (!splitLayout) {
       totalUseful = 0;
       const details = [];
-      // Helper COS check : SDP = fpRdc + fpEtages × (niv - 1)
-      const computeSdpDual = (niv) => fpRdc + fpEtages * Math.max(0, niv - 1);
       const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
       const maxSdpForRole = Math.floor(max_sdp * cosCap);
       if (isFpFromEnvelope) {
