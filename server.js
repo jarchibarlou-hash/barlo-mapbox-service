@@ -2072,10 +2072,12 @@ function computeSmartScenarios({
         let levelsLogt;
         const baseCalc = Math.max(1, Math.ceil(resiTarget / resiPerFloor));
         if (role === "INTENSIFICATION") {
-          // A = EXACTEMENT le programme client — pas de niveau en plus
-          levelsLogt = Math.min(baseCalc, effectiveMaxFloors);
-          levelsLogt = Math.max(1, levelsLogt);
+          // A = INTENSIFICATION → pousse 1 niveau de plus que le strict minimum
+          // pour maximiser la valeur locative et différencier visuellement de B
+          levelsLogt = Math.min(baseCalc + 1, effectiveMaxFloors);
+          levelsLogt = Math.max(2, levelsLogt);
         } else if (role === "EQUILIBRE") {
+          // B = EQUILIBRE → strict minimum pour le programme (confort modéré)
           levelsLogt = Math.min(baseCalc, effectiveMaxFloors);
           levelsLogt = Math.max(1, levelsLogt);
         } else {
@@ -2083,8 +2085,12 @@ function computeSmartScenarios({
         }
         // Garde-fou COS
         while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
-        // v72.53: Garde-fou PROGRAMME — SDP total ne dépasse pas programme × 1.35
-        const sdpCapSplit = Math.round((resiTarget * effectiveUnitSize / (1 - _safeCirc) + sdpCommerce) * 1.35);
+        // v72.60: Garde-fou PROGRAMME — SDP total plafonné par rôle
+        // A (INTENSIFICATION) = 1.60× → marge pour le niveau supplémentaire (valeur ajoutée)
+        // B (EQUILIBRE) = 1.35× → strict programme, confort modéré
+        // C (PRUDENT) = 1.20× → compact
+        const sdpCapMultiplier = role === "INTENSIFICATION" ? 1.60 : role === "EQUILIBRE" ? 1.35 : 1.20;
+        const sdpCapSplit = Math.round((resiTarget * effectiveUnitSize / (1 - _safeCirc) + sdpCommerce) * sdpCapMultiplier);
         while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > sdpCapSplit) levelsLogt--;
         const totalResiUnits = resiPerFloor * levelsLogt;
         // ══════════════════════════════════════════════════════════════════
@@ -6860,7 +6866,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.59-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.60-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6882,7 +6888,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.59-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.60-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
