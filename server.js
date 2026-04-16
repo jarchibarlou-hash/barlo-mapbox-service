@@ -4735,7 +4735,7 @@ app.post("/generate-texts", async (req, res) => {
 
     return res.json({
       ok: true,
-      server_version: "72.61-GENERATE-TEXTS",
+      server_version: "72.62-GENERATE-TEXTS",
       gpt_model: "gpt-4o",
       gpt_elapsed_ms: gptElapsed,
       gpt_tokens: gptData.usage || {},
@@ -7460,7 +7460,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.61-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.62-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
