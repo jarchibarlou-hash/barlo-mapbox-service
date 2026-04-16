@@ -4107,6 +4107,19 @@ app.post("/compute-scenarios", (req, res) => {
     recommended_scenario_calc: calc_recommended_scenario,
     driver_intensity: calc_driver_intensity,
   };
+  // v72.57: CACHE des scénarios par lead_id — /generate-massing les réutilise au lieu de recalculer
+  // C'est CRITIQUE car les 2 endpoints n'ont pas forcément les mêmes paramètres (scores calculés, etc.)
+  if (!global.__scenarioCache) global.__scenarioCache = {};
+  const cacheLeadId = String(p.lead_id || "").trim();
+  if (cacheLeadId) {
+    global.__scenarioCache[cacheLeadId] = { scenarios, ts: Date.now() };
+    console.log(`[v72.57] CACHE WRITE: lead_id="${cacheLeadId}" → A:sdp=${scenarios.A?.sdp_m2} B:sdp=${scenarios.B?.sdp_m2} C:sdp=${scenarios.C?.sdp_m2}`);
+    // Nettoyage des vieilles entrées (> 30min)
+    const now = Date.now();
+    for (const k of Object.keys(global.__scenarioCache)) {
+      if (now - global.__scenarioCache[k].ts > 30 * 60 * 1000) delete global.__scenarioCache[k];
+    }
+  }
   return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, computed_scores, ...flat });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
@@ -6120,7 +6133,7 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v72.56 ═══");
+  console.log("═══ /generate-massing v72.57 ═══");
   // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
   for (const key of Object.keys(req.body)) {
     if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(req.body[key].trim())) {
@@ -6186,7 +6199,7 @@ app.post("/generate-massing", async (req, res) => {
   const envD = _safeFloatM(envelope_d);
   let envArea = _safeFloatM(envelope_area_raw); // v72.55: zone constructible réelle (après retraits)
   const floorH = _safeFloatM(fh_raw) || 3.2;
-  // v72.56: Si envelope_area n'est PAS fourni par Make.com (= 0 ou absent),
+  // v72.56-57: Si envelope_area n'est PAS fourni par Make.com (= 0 ou absent),
   // on le CALCULE à partir des retraits réglementaires — sinon envW×envD (BRUT) surestime de 50-110%
   if (!envArea || envArea <= 0) {
     const RETRAITS_ZONING = {
@@ -6205,13 +6218,13 @@ app.post("/generate-massing", async (req, res) => {
     const netW = Math.max(5, envW - 2 * ss);
     const netD = Math.max(5, envD - sf - sb);
     envArea = Math.round(netW * netD);
-    console.log(`[v72.56] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
+    console.log(`[v72.57] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
   }
-  console.log(`[v72.56] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
+  console.log(`[v72.57] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
   if (envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
-    console.log(`[v72.56] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
+    console.log(`[v72.57] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
   }
-  // v72.56: DÉTECTION ROBUSTE DU LABEL (A/B/C) + COMPTEUR AUTOMATIQUE
+  // v72.56-57: DÉTECTION ROBUSTE DU LABEL (A/B/C) + COMPTEUR AUTOMATIQUE
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
   // SOLUTION DÉFINITIVE : compteur par lead_id qui cycle A → B → C automatiquement.
   let label = "A"; // défaut
@@ -6230,7 +6243,7 @@ app.post("/generate-massing", async (req, res) => {
       || slideStr.match(/[_\s.-]([ABC])[_\s.-]/)
       || slideStr.match(/[_\s.-]([ABC])$/)
       || slideStr.match(/\b([ABC])\b/);
-    // v72.56: aussi détecter INTENSIF/EQUILIBRE/PRUDENT dans slide_name
+    // v72.56-57: aussi détecter INTENSIF/EQUILIBRE/PRUDENT dans slide_name
     const slideRole = /INTENSIF/i.test(slideStr) ? "A" : /EQUILIB/i.test(slideStr) ? "B" : /PRUDENT/i.test(slideStr) ? "C" : null;
     if (slideMatch) {
       label = slideMatch[1];
@@ -6263,7 +6276,7 @@ app.post("/generate-massing", async (req, res) => {
       }
     }
   }
-  console.log(`[v72.56] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
+  console.log(`[v72.57] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
   const dispositionRaw = String(disposition || "").toLowerCase();
   const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
@@ -6285,46 +6298,58 @@ app.post("/generate-massing", async (req, res) => {
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   let has_pilotis = false; // v72.54: déclaration explicite (évite implicit global)
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
-    // MODE SMART : le moteur calcule tout
-    if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
-    const scenarios = computeSmartScenarios({
-      site_area: _safeFloatM(site_area),
-      envelope_w: envW,
-      envelope_d: envD,
-      envelope_area: envArea || undefined,  // v72.55: CRITIQUE — sans ça, moteur utilise envW×envD qui peut être 2× trop grand
-      zoning_type: String(zoning_type),
-      floor_height: floorH,
-      primary_driver: primary_driver || "MAX_CAPACITE",
-      max_floors: Number(max_floors) || 99,
-      max_height_m: Number(max_height_m) || 99,
-      program_main: effectiveProgramMain,
-      target_surface_m2: Number(target_surface_m2) || 0,
-      target_units: Number(target_units) || 0,
-      site_saturation_level: site_saturation_level || "MEDIUM",
-      financial_rigidity_score: Number(financial_rigidity_score) || 0,
-      density_band: density_band || "",
-      risk_adjusted: Number(risk_adjusted) || 0,
-      feasibility_posture: feasibility_posture || "BALANCED",
-      scenario_A_role: scenario_A_role || "",
-      scenario_B_role: scenario_B_role || "",
-      scenario_C_role: scenario_C_role || "",
-      budget_range: Number(budget_range) || 0,
-      budget_band: budget_band || "",
-      budget_tension: Number(budget_tension) || 0,
-      standing_level: standing_level || "STANDARD",
-      rent_score: Number(rent_score) || 0,
-      capacity_score: Number(capacity_score) || 0,
-      mix_score: Number(mix_score) || 0,
-      phase_score: Number(phase_score) || 0,
-      risk_score: Number(risk_score) || 0,
-      density_pressure_factor: Number(density_pressure_factor) || 1,
-      driver_intensity: driver_intensity || "MEDIUM",
-      strategic_position: strategic_position || "",
-      // v72.22: disposition spatiale commerce/logement
-      layout_mode: effectiveLayoutMode,
-      commerce_depth_m: Number(commerce_depth_m) || 6,
-      retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
-    });
+    // v72.57: PRIORITÉ AU CACHE — réutiliser les résultats de /compute-scenarios
+    // C'est la SEULE façon de garantir que les rendus matchent la Sheet
+    if (!global.__scenarioCache) global.__scenarioCache = {};
+    const cacheKey = String(lead_id).trim();
+    const cached = global.__scenarioCache[cacheKey];
+    const cacheValid = cached && (Date.now() - cached.ts < 10 * 60 * 1000); // valide 10 minutes
+    let scenarios;
+    if (cacheValid) {
+      scenarios = cached.scenarios;
+      console.log(`[v72.57] ★ CACHE HIT: lead_id="${cacheKey}" (age=${Math.round((Date.now()-cached.ts)/1000)}s) → A:sdp=${scenarios.A?.sdp_m2} B:sdp=${scenarios.B?.sdp_m2} C:sdp=${scenarios.C?.sdp_m2}`);
+    } else {
+      // FALLBACK : recalculer (pas de cache disponible — première fois ou timeout)
+      console.log(`[v72.57] CACHE MISS: lead_id="${cacheKey}" — recalcul des scénarios`);
+      if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
+      scenarios = computeSmartScenarios({
+        site_area: _safeFloatM(site_area),
+        envelope_w: envW,
+        envelope_d: envD,
+        envelope_area: envArea || undefined,
+        zoning_type: String(zoning_type),
+        floor_height: floorH,
+        primary_driver: primary_driver || "MAX_CAPACITE",
+        max_floors: Number(max_floors) || 99,
+        max_height_m: Number(max_height_m) || 99,
+        program_main: effectiveProgramMain,
+        target_surface_m2: Number(target_surface_m2) || 0,
+        target_units: Number(target_units) || 0,
+        site_saturation_level: site_saturation_level || "MEDIUM",
+        financial_rigidity_score: Number(financial_rigidity_score) || 0,
+        density_band: density_band || "",
+        risk_adjusted: Number(risk_adjusted) || 0,
+        feasibility_posture: feasibility_posture || "BALANCED",
+        scenario_A_role: scenario_A_role || "",
+        scenario_B_role: scenario_B_role || "",
+        scenario_C_role: scenario_C_role || "",
+        budget_range: Number(budget_range) || 0,
+        budget_band: budget_band || "",
+        budget_tension: Number(budget_tension) || 0,
+        standing_level: standing_level || "STANDARD",
+        rent_score: Number(rent_score) || 0,
+        capacity_score: Number(capacity_score) || 0,
+        mix_score: Number(mix_score) || 0,
+        phase_score: Number(phase_score) || 0,
+        risk_score: Number(risk_score) || 0,
+        density_pressure_factor: Number(density_pressure_factor) || 1,
+        driver_intensity: driver_intensity || "MEDIUM",
+        strategic_position: strategic_position || "",
+        layout_mode: effectiveLayoutMode,
+        commerce_depth_m: Number(commerce_depth_m) || 6,
+        retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
+      });
+    }
     const sc = scenarios[label] || scenarios.A;
     // v72.28: LOG les 3 scénarios pour vérifier la différenciation
     console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
@@ -6746,7 +6771,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.56-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.57-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6768,7 +6793,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.56-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.57-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
