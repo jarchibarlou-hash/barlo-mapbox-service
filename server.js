@@ -3686,8 +3686,10 @@ function computeScoresFromRaw(p) {
   if (rawAY === "RENTABILITE" || rawAY === "RENT_SCORE") driver_intensity = rent_score_norm >= 70 ? "FORTE" : (rent_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
   else if (rawAY === "CAPACITE" || rawAY === "CAPACITY_SCORE") driver_intensity = capacity_score_norm >= 70 ? "FORTE" : (capacity_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
   // useCalc helpers: prefer received value if non-zero, else use calculated
+  // v72.59: useCalc/useCalcStr rejettent les #VALUE! et chaînes corrompues de Google Sheet
+  const _isSheetError = (v) => typeof v === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(String(v).trim());
   const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
-  const useCalcStr = (received, calculated) => (received && String(received).length > 0) ? received : calculated;
+  const useCalcStr = (received, calculated) => (received && String(received).length > 0 && !_isSheetError(received)) ? received : calculated;
   return {
     // Final scores (with useCalc applied — prefer received if present)
     rent_score: useCalc(Number(p.rent_score), rent_score),
@@ -3717,7 +3719,7 @@ app.post("/compute-scenarios", (req, res) => {
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
   // v72.54: SANITIZE #VALUE! from Google Sheet — replace all Sheet errors with empty string
   for (const key of Object.keys(p)) {
-    if (typeof p[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(p[key].trim())) {
+    if (typeof p[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(p[key].trim())) {
       console.log(`[SANITIZE] ${key}="${p[key]}" → "" (Google Sheet error)`);
       p[key] = "";
     }
@@ -3792,9 +3794,10 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`[v72.59] density_band=${calc_density_band} feasibility=${calc_feasibility_posture} strategic=${calc_strategic_position} recommended=${calc_recommended_scenario}`);
   console.log(`[v72.59] program_intent=${calc_program_intent} alignment=${calc_program_alignment} driver_intensity=${calc_driver_intensity}`);
 
-  // Utiliser les scores calculés si ceux reçus sont vides/0
+  // v72.59: useCalc/useCalcStr rejettent les #VALUE! de Google Sheet
+  const _isSheetErr = (v) => typeof v === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(String(v).trim());
   const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
-  const useCalcStr = (received, calculated) => (received && received.length > 0) ? received : calculated;
+  const useCalcStr = (received, calculated) => (received && String(received).length > 0 && !_isSheetErr(received)) ? received : calculated;
 
   // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google, colonne BE) ──
   const dispositionRaw_cs = String(p.disposition || "").toLowerCase();
@@ -6185,7 +6188,7 @@ app.post("/generate-massing", async (req, res) => {
   console.log("═══ /generate-massing v72.59 ═══");
   // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
   for (const key of Object.keys(req.body)) {
-    if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?$/i.test(req.body[key].trim())) {
+    if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(req.body[key].trim())) {
       console.log(`[SANITIZE] ${key}="${req.body[key]}" → "" (Google Sheet error)`);
       req.body[key] = "";
     }
@@ -6326,23 +6329,31 @@ app.post("/generate-massing", async (req, res) => {
     }
   }
   console.log(`[v72.59] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
-  // ── v72.50: DÉTECTION SPLIT via champ "disposition" (formulaire Google) ──
+  // ── v72.59: DÉTECTION SPLIT — ROBUSTE (même logique que v72.34 parfait) ──
+  // Signal 1: layout_mode explicitement SPLIT_AV_AR
+  const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
+  // Signal 2: disposition (formulaire Google) mentionne commerce devant/split
   const dispositionRaw = String(disposition || "").toLowerCase();
   const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
-  const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  const effectiveLayoutMode = (dispositionIsSplit || layoutModeIsSplit) ? "SPLIT_AV_AR" : "SUPERPOSE";
+  // Signal 3: body contient des mots-clés SPLIT dans TOUTES les valeurs
+  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
+  // Signal 4: commerce_depth_m > 0 avec programme mixte → FORCÉMENT du SPLIT
+  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
+  const hasCommerceDepth = Number(commerce_depth_m) > 0;
+  // ── Résolution SPLIT ──
+  const effectiveLayoutMode = (layoutModeIsSplit || dispositionIsSplit || bodyHasSplit || (hasCommerceDepth && bodyHasMixte))
+    ? "SPLIT_AV_AR" : "SUPERPOSE";
   const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
   // ── Détection MIXTE ──
-  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
-  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
   const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v72.50] ┌── DÉTECTION SPLIT ──`);
-  console.log(`[MASSING v72.50] │ disposition="${dispositionRaw}" → ${dispositionIsSplit}`);
-  console.log(`[MASSING v72.50] │ layout_mode="${layout_mode}" → ${layoutModeIsSplit}`);
-  console.log(`[MASSING v72.50] │ → effectiveLayoutMode="${effectiveLayoutMode}" splitActive=${splitActive}`);
-  console.log(`[MASSING v72.50] │ effectiveProgramMain="${effectiveProgramMain}"`);
-  console.log(`[MASSING v72.50] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
-  console.log(`[MASSING v72.50] └── FIN DÉTECTION ──`);
+  console.log(`[MASSING v72.59] ┌── DÉTECTION SPLIT ──`);
+  console.log(`[MASSING v72.59] │ layout_mode="${layout_mode}" → ${layoutModeIsSplit}`);
+  console.log(`[MASSING v72.59] │ disposition="${dispositionRaw}" → ${dispositionIsSplit}`);
+  console.log(`[MASSING v72.59] │ bodyHasSplit=${bodyHasSplit} | commerce_depth=${commerce_depth_m} hasCommerceDepth=${hasCommerceDepth} bodyHasMixte=${bodyHasMixte}`);
+  console.log(`[MASSING v72.59] │ → effectiveLayoutMode="${effectiveLayoutMode}" splitActive=${splitActive}`);
+  console.log(`[MASSING v72.59] │ effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.59] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
   let has_pilotis = false; // v72.54: déclaration explicite (évite implicit global)
