@@ -2158,9 +2158,26 @@ function computeSmartScenarios({
         // Si trop d'unités rési (ex: 3 niveaux × 1/palier = 3 rési + 1 comm = 4 > 3 demandées)
         // → réduire les rési comptées pour coller au programme client
         const resiCountFinal = totalUnitsResult - nbBoutiques;
-        totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
+        // v72.66: FIX — totalUseful = SDP totale × (1-circ) pour cohérence avec _recalcSdp et garde-fou
+        // Avant: sdpCommerce comptait 100% utile (pas de circ), incohérent avec sdp×(1-circ)
+        const sdpSplitTotal = sdpCommerce + fpLogtFinal * levelsLogt;
+        totalUseful = Math.round(sdpSplitTotal * (1 - circRatio));
         unitMix = { COMMERCE: nbBoutiques };
-        const resiMix = rules.default_mix_fn ? rules.default_mix_fn(resiCountFinal) : { T3: resiCountFinal };
+        // v72.66: FIX — default_mix_fn retourne COMMERCE dans le mix (USAGE_MIXTE),
+        // mais en SPLIT le commerce est DÉJÀ géré séparément (vol.1).
+        // → On filtre COMMERCE du resiMix pour ne garder que les logements.
+        const rawResiMix = rules.default_mix_fn ? rules.default_mix_fn(resiCountFinal) : { T3: resiCountFinal };
+        const resiMix = {};
+        let resiMixTotal = 0;
+        for (const [typ, count] of Object.entries(rawResiMix)) {
+          if (typ === "COMMERCE") continue; // v72.66: skip — déjà dans vol.1
+          if (count > 0) { resiMix[typ] = count; resiMixTotal += count; }
+        }
+        // v72.66: si après filtrage il manque des unités (ex: COMMERCE comptait pour 1),
+        // redistribuer sur T3 pour coller à resiCountFinal
+        if (resiMixTotal < resiCountFinal) {
+          resiMix.T3 = (resiMix.T3 || 0) + (resiCountFinal - resiMixTotal);
+        }
         for (const [typ, count] of Object.entries(resiMix)) {
           if (count > 0) unitMix[typ] = count;
         }
@@ -4112,6 +4129,23 @@ app.post("/compute-scenarios", (req, res) => {
       sc.ratio_efficacite_pct = sc.sdp_m2 > 0 ? Math.round(sc.surface_habitable_m2 / sc.sdp_m2 * 100) : 0;
       console.log(`[v72.65] GARDE-FOU HAB≤SDP: ${label} hab=${oldHab} > sdp=${sc.sdp_m2} → corrigé hab=${sc.surface_habitable_m2} (circ=${sc.circulation_ratio_pct}%)`);
     }
+  }
+
+  // v72.66: REFRESH NARRATIVE — après garde-fou + anti-collapse, les m² habitables
+  // dans la narrative peuvent être périmés. On corrige par regex.
+  if (scenarios.diagnostic && scenarios.diagnostic.recommandation && scenarios.diagnostic.recommandation.narrative) {
+    let narr = scenarios.diagnostic.recommandation.narrative;
+    for (const label of ["A", "B", "C"]) {
+      const sc = scenarios[label];
+      if (!sc) continue;
+      // Pattern: "XXXm² de surface de plancher dont YYYm² habitables" → update YYY
+      const sdpStr = String(sc.sdp_m2);
+      const habNew = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
+      const regex = new RegExp(`${sdpStr}m² de surface de plancher dont \\d+m² habitables`);
+      narr = narr.replace(regex, `${sdpStr}m² de surface de plancher dont ${habNew}m² habitables`);
+    }
+    scenarios.diagnostic.recommandation.narrative = narr;
+    console.log(`[v72.66] NARRATIVE REFRESHED with post-garde-fou hab values`);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -7563,7 +7597,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.65-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.66-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
