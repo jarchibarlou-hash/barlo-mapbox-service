@@ -2152,14 +2152,30 @@ function computeSmartScenarios({
         fp = fpLogtFinal;
         fpEtages = fpLogtFinal;
         levels = levelsLogt;
-        totalUnitsResult = nbBoutiques + totalResiUnits;
+        // v72.65: totalUnitsResult plafonné à clientUnits (A = EXACTEMENT la demande)
+        const rawTotalUnits = nbBoutiques + totalResiUnits;
+        totalUnitsResult = Math.min(rawTotalUnits, clientUnits);
+        // Si trop d'unités rési (ex: 3 niveaux × 1/palier = 3 rési + 1 comm = 4 > 3 demandées)
+        // → réduire les rési comptées pour coller au programme client
+        const resiCountFinal = totalUnitsResult - nbBoutiques;
         totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
         unitMix = { COMMERCE: nbBoutiques };
-        const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalResiUnits) : { T3: totalResiUnits };
+        const resiMix = rules.default_mix_fn ? rules.default_mix_fn(resiCountFinal) : { T3: resiCountFinal };
         for (const [typ, count] of Object.entries(resiMix)) {
           if (count > 0) unitMix[typ] = count;
         }
-        unitMixDetail = `SPLIT: ${nbBoutiques} commerce prog (${fpCommerce}m² bande front, ${nbBoutiquesTerrain} locaux possibles) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv sur pilotis arrière)`;
+        // v72.65: unitMixDetail au format PARSABLE "1×COMMERCE(40m²) + 2×T3(72m²)"
+        // Ce format est attendu par le regex dans buildTextInjection
+        const commerceSizePerUnit = nbBoutiques > 0 ? Math.round(sdpCommerce / nbBoutiques) : 0;
+        const splitMixParts = [];
+        splitMixParts.push(`${nbBoutiques}×COMMERCE(${commerceSizePerUnit}m²)`);
+        for (const [typ, count] of Object.entries(resiMix)) {
+          if (count > 0) {
+            const unitSize = sizes[typ] || sizes.T3 || 72;
+            splitMixParts.push(`${count}×${typ}(${unitSize}m²)`);
+          }
+        }
+        unitMixDetail = splitMixParts.join(" + ");
         console.log(`│   🏪 v72.53 SPLIT_AV_AR ${role} PROGRAMME-DRIVEN:`);
         console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} prog / ${nbBoutiquesTerrain} possibles) — collé limite séparative front`);
         console.log(`│     GAP: ${interGap}m (passage véhicule/piéton)`);
@@ -4079,6 +4095,26 @@ app.post("/compute-scenarios", (req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════════════
+  // v72.65: GARDE-FOU FINAL — surface_habitable ≤ sdp (physiquement impossible autrement)
+  // Après anti-collapse + recalc, certains scénarios peuvent avoir hab > sdp
+  // si totalUseful n'a pas été recalculé. Ce garde-fou corrige en dernier recours.
+  // ══════════════════════════════════════════════════════════════════════
+  for (const label of ["A", "B", "C"]) {
+    const sc = scenarios[label];
+    if (!sc) continue;
+    if (sc.surface_habitable_m2 > sc.sdp_m2) {
+      const circRatio = (sc.circulation_ratio_pct || 20) / 100;
+      const oldHab = sc.surface_habitable_m2;
+      sc.surface_habitable_m2 = Math.round(sc.sdp_m2 * (1 - circRatio));
+      sc.total_useful_m2 = sc.surface_habitable_m2;
+      const nbLogements = Math.max(1, (sc.total_units || 1) - (sc.commerce_levels > 0 ? 1 : 0));
+      sc.m2_habitable_par_logement = Math.round(sc.surface_habitable_m2 / nbLogements);
+      sc.ratio_efficacite_pct = sc.sdp_m2 > 0 ? Math.round(sc.surface_habitable_m2 / sc.sdp_m2 * 100) : 0;
+      console.log(`[v72.65] GARDE-FOU HAB≤SDP: ${label} hab=${oldHab} > sdp=${sc.sdp_m2} → corrigé hab=${sc.surface_habitable_m2} (circ=${sc.circulation_ratio_pct}%)`);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
   // v72.60: PRÉ-CALCUL DES CHAMPS INJECTION TEXTE
   // ══════════════════════════════════════════════════════════════════════
   function buildTextInjection(sc, label) {
@@ -4802,7 +4838,7 @@ app.post("/generate-texts", async (req, res) => {
 
     return res.json({
       ok: true,
-      server_version: "72.64-GENERATE-TEXTS",
+      server_version: "72.65-GENERATE-TEXTS",
       gpt_model: "gpt-4o",
       gpt_elapsed_ms: gptElapsed,
       gpt_tokens: gptData.usage || {},
@@ -7505,7 +7541,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.64-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.65-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -7527,7 +7563,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.64-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.65-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
