@@ -4144,8 +4144,107 @@ app.post("/compute-scenarios", (req, res) => {
       const regex = new RegExp(`${sdpStr}m² de surface de plancher dont \\d+m² habitables`);
       narr = narr.replace(regex, `${sdpStr}m² de surface de plancher dont ${habNew}m² habitables`);
     }
+    // v72.66b: aussi corriger "(efficacite XX%)" dans la narrative
+    narr = narr.replace(/\(efficacite \d+%\)/g, (match) => {
+      // Trouver le sdp et hab qui précèdent dans la narrative pour recalculer
+      // On utilise les valeurs du scénario recommandé (C dans ce cas)
+      const recLabel = (scenarios.diagnostic.recommandation || {}).scenario || "C";
+      const recSc = scenarios[recLabel];
+      if (recSc && recSc.sdp_m2 > 0) {
+        const newEff = recSc.ratio_efficacite_pct || Math.round((recSc.surface_habitable_m2 || 0) / recSc.sdp_m2 * 100);
+        return `(efficacite ${newEff}%)`;
+      }
+      return match;
+    });
     scenarios.diagnostic.recommandation.narrative = narr;
     console.log(`[v72.66] NARRATIVE REFRESHED with post-garde-fou hab values`);
+  }
+
+  // v72.66: REFRESH COMPARATIF SNAPSHOT — après garde-fou + anti-collapse + recalc,
+  // le snapshot comparatif (copie des valeurs) est périmé. On le rafraîchit.
+  // ══════════════════════════════════════════════════════════════════════
+  if (scenarios.diagnostic && scenarios.diagnostic.comparatif) {
+    for (const label of ["A", "B", "C"]) {
+      const sc = scenarios[label];
+      const comp = scenarios.diagnostic.comparatif[label];
+      if (!sc || !comp) continue;
+      // Rafraîchir tous les champs qui ont pu changer après anti-collapse/recalc/garde-fou
+      comp.sdp_m2 = sc.sdp_m2;
+      comp.surface_habitable_m2 = sc.surface_habitable_m2 || 0;
+      comp.ratio_efficacite_pct = sc.ratio_efficacite_pct || 0;
+      comp.unites = sc.total_units;
+      comp.m2_par_logement = sc.m2_habitable_par_logement || 0;
+      comp.cout_total_fcfa = sc.cost_total_fcfa || sc.estimated_cost;
+      comp.cout_par_unite = sc.cost_per_unit || 0;
+      comp.cout_par_m2_sdp = sc.cost_per_m2_sdp || 0;
+      comp.cout_par_m2_habitable = sc.cost_per_m2_habitable || 0;
+      comp.emprise_rdc_m2 = sc.fp_rdc_m2 || sc.fp_m2;
+      comp.emprise_etages_m2 = sc.fp_etages_m2 || sc.fp_m2;
+      comp.niveaux = sc.levels;
+      comp.hauteur_m = sc.height_m;
+      comp.budget_fit = sc.budget_fit;
+      comp.cout_fourchette = sc.cout_fourchette || {};
+      comp.cout_ventilation = sc.cout_ventilation || {};
+      comp.score_recommandation = sc.recommendation_score || 0;
+      comp.duree_chantier_mois = sc.duree_chantier_mois || 0;
+      console.log(`[v72.66] COMPARATIF ${label} REFRESHED: hab=${comp.surface_habitable_m2}, cost=${comp.cout_total_fcfa}, eff=${comp.ratio_efficacite_pct}%`);
+    }
+    // Also recompute deltas with fresh comparatif values
+    const _reExtract2 = (label) => {
+      const c = scenarios.diagnostic.comparatif[label];
+      return {
+        sdp_m2: c.sdp_m2 || 0,
+        surface_habitable_m2: c.surface_habitable_m2 || 0,
+        unites: c.unites || 0,
+        cout_total_fcfa: c.cout_total_fcfa || 0,
+        sol_libre_m2: c.sol_libre_m2 || 0,
+      };
+    };
+    const _reDeltas2 = (ref, alt, refLabel, altLabel) => {
+      const dSdp = alt.sdp_m2 - ref.sdp_m2;
+      const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
+      const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
+      const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
+      const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
+      return {
+        label: `${altLabel} vs ${refLabel}`,
+        delta_sdp_m2: dSdp,
+        delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
+        delta_unites: alt.unites - ref.unites,
+        delta_cout_fcfa: dCout,
+        delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
+        delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
+        delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
+        valeur_marginale_fcfa_par_m2: valeurMarginale,
+        commentaire: dSdp < 0
+          ? `L'économie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifié.`
+          : marginaleFavorable
+          ? `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — investissement efficace.`
+          : `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — rendement décroissant.`,
+      };
+    };
+    const rA2 = _reExtract2("A");
+    const rB2 = _reExtract2("B");
+    const rC2 = _reExtract2("C");
+    scenarios.diagnostic.comparatif.deltas = {
+      B_vs_A: _reDeltas2(rA2, rB2, "A", "B"),
+      C_vs_A: _reDeltas2(rA2, rC2, "A", "C"),
+      C_vs_B: _reDeltas2(rB2, rC2, "B", "C"),
+    };
+    console.log(`[v72.66] COMPARATIF+DELTAS FULLY REFRESHED`);
+  }
+
+  // v72.66: REFRESH scenario_identity.description — uses sdp_m2 which may have changed
+  for (const label of ["A", "B", "C"]) {
+    const sc = scenarios[label];
+    if (!sc || !sc.scenario_identity) continue;
+    const desc = sc.scenario_identity.description || "";
+    // Replace "Les XXXm² de SDP" or "developpant XXXm² de SDP" or "XXXm² de SDP" with current sdp
+    const sdpFixed = desc.replace(/\d+m² de SDP/g, `${sc.sdp_m2}m² de SDP`);
+    if (sdpFixed !== desc) {
+      sc.scenario_identity.description = sdpFixed;
+      console.log(`[v72.66] ${label} scenario_identity.description SDP updated to ${sc.sdp_m2}m²`);
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════
