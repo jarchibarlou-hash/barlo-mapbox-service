@@ -6881,13 +6881,32 @@ app.post("/generate-pptx", async (req, res) => {
     const pythonCmd = `cd "${scriptDir}" && python3 generate_pptx.py "${dataPath}" "${templatePath}" "${tmpDir}/output.pptx" 2>&1`;
     console.log(`[GENERATE-PPTX] Running: ${pythonCmd}`);
 
-    const pyOutput = execSync(pythonCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }).toString();
+    // Check prerequisites
+    if (!fs.existsSync(templatePath)) {
+      console.error(`[GENERATE-PPTX] Template not found: ${templatePath}`);
+      return res.status(500).json({ error: `Template not found: ${templatePath}. Deploy template_diagnostic.pptx alongside server_v72.js` });
+    }
+
+    let pyOutput;
+    try {
+      pyOutput = execSync(pythonCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }).toString();
+    } catch (pyErr) {
+      const stderr = pyErr.stderr ? pyErr.stderr.toString() : "";
+      const stdout = pyErr.stdout ? pyErr.stdout.toString() : "";
+      console.error(`[GENERATE-PPTX] Python FAILED:\nSTDOUT: ${stdout}\nSTDERR: ${stderr}`);
+      return res.status(500).json({
+        error: "Python generate_pptx.py failed",
+        stdout: stdout.substring(0, 2000),
+        stderr: stderr.substring(0, 2000),
+        hint: "Check that python3, python-pptx, matplotlib, and lxml are installed on Render"
+      });
+    }
     console.log(`[GENERATE-PPTX] Python output:\n${pyOutput.substring(0, 2000)}`);
 
     const outputPath = path.join(tmpDir, "output.pptx");
     if (!fs.existsSync(outputPath)) {
       console.error(`[GENERATE-PPTX] Output file not found at ${outputPath}`);
-      return res.status(500).json({ error: "PPTX generation failed — output file not found" });
+      return res.status(500).json({ error: "PPTX generation failed — output file not created", python_output: pyOutput.substring(0, 2000) });
     }
 
     // Step 6: Return PPTX file
