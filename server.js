@@ -2329,12 +2329,21 @@ function computeSmartScenarios({
     // Construction = SDP × coût/m²
     // VRD = 10% de SDP × 50% du coût/m²
     // Total = construction + VRD = SDP × costPerM2 × 1.05
-    const COST_PER_M2_FCFA = {
-      PREMIUM: 400000, HAUT: 350000,
-      STANDARD: 250000,
-      ECONOMIQUE: 180000, ECO: 180000
+    // v72.71: COÛT/M² EXPLICITE PAR STANDING × RÔLE
+    // Chaque standing a 3 valeurs : A=fourchette HAUTE, B=MÉDIANE, C=BASSE
+    //   A (INTENSIFICATION) → complexité structurelle (R+N, pilotis, SPLIT) → coût haut
+    //   B (EQUILIBRE)       → référence marché standard
+    //   C (PRUDENT)         → structure simple, moins de niveaux → coût bas
+    const COST_PER_M2_BY_ROLE = {
+      ECONOMIQUE: { A: 250000, B: 215000, C: 175000 },
+      ECO:        { A: 250000, B: 215000, C: 175000 },
+      STANDARD:   { A: 350000, B: 300000, C: 250000 },
+      HAUT:       { A: 450000, B: 385000, C: 325000 },
+      PREMIUM:    { A: 550000, B: 475000, C: 400000 },
     };
-    const costPerM2 = COST_PER_M2_FCFA[String(standing_level).toUpperCase()] || 250000;
+    const standingKey = String(standing_level).toUpperCase();
+    const costTable = COST_PER_M2_BY_ROLE[standingKey] || COST_PER_M2_BY_ROLE.STANDARD;
+    const costPerM2 = costTable[label] || costTable.B;
     const constructionCost = sdp * costPerM2;
     const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
     const estimatedCost = Math.round(constructionCost + vrdCost);
