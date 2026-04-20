@@ -7764,15 +7764,16 @@ app.post("/generate-pptx", async (req, res) => {
       // Extraire les textes du résultat de /generate-texts
       // /generate-texts renvoie les textes sous "generated_texts" ET en flat au top-level
       texts = textsResponse.generated_texts || {};
-      // Si generated_texts est vide, essayer de récupérer les textes flat du top-level
+      // Si generated_texts est vide, récupérer les textes flat du top-level
       if (Object.keys(texts).length === 0) {
         const skipKeys = new Set(["ok", "server_version", "gpt_model", "gpt_elapsed_ms", "gpt_tokens", "A", "B", "C", "computed_budget_band", "computed_scores"]);
         for (const [k, v] of Object.entries(textsResponse)) {
-          if (!skipKeys.has(k) && typeof v === "string" && k.includes("_text")) {
+          if (!skipKeys.has(k) && typeof v === "string") {
             texts[k] = v;
           }
         }
       }
+      console.log(`[v72.67] Texts extracted: ${Object.keys(texts).length} keys — ${Object.keys(texts).join(", ")}`);
       clientName = req.body.client_name || req.body.nom_client || "";
       images = req.body.images || {};
 
