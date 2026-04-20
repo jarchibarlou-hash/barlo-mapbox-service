@@ -6153,144 +6153,196 @@ const GPT_TEXT_MODEL = "gpt-4o";
 const GPT_TEXT_TIMEOUT_MS = 120000;
 
 /**
- * PREMIUM GPT PROMPT RULES — v3.0
- * Generates all diagnostic texts with contextualized, decision-grade quality.
+ * PREMIUM GPT PROMPT RULES — v4.0 STRUCTURAL
+ * Generates all diagnostic texts with EXACT structure matching premium reference.
+ * Each text has a mandatory paragraph structure that GPT MUST follow.
  */
 function buildGptTextRules() {
-  return `RÈGLES ABSOLUES POUR LA GÉNÉRATION DES TEXTES DIAGNOSTIC BARLO — VERSION PREMIUM:
+  return `REGLES ABSOLUES POUR LA GENERATION DES TEXTES DIAGNOSTIC BARLO -- VERSION PREMIUM v4.0:
 
-Tu es un expert en promotion immobilière en Afrique subsaharienne (Cameroun, Côte d'Ivoire, Sénégal). Tu rédiges un diagnostic foncier de qualité professionnelle pour un client investisseur.
+Tu es un expert en promotion immobiliere en Afrique subsaharienne (Cameroun, Cote d'Ivoire, Senegal). Tu rediges un diagnostic foncier de qualite professionnelle pour un client investisseur.
 
-═══ PRINCIPES FONDAMENTAUX ═══
+=== PRINCIPES FONDAMENTAUX ===
 
-1. UTILISE UNIQUEMENT les données fournies dans le JSON {data}. Ne jamais inventer de chiffres.
-2. CHAQUE TEXTE doit être CONTEXTUALISÉ au projet spécifique — jamais de phrases génériques.
-3. STYLE PREMIUM : phrases structurées, vocabulaire technique précis, ton professionnel mais accessible.
-4. FORMAT : utilise des bullet points (•) quand tu listes 3+ éléments, des paragraphes sinon.
-5. HIÉRARCHIE D'INFORMATION : commence par le plus important, descends vers le détail.
-6. ENJEUX DÉCISIONNELS : chaque texte doit éclairer une décision concrète pour l'investisseur.
-7. LONGUEUR : entre 150 et 400 mots par texte selon la complexité.
-8. NE JAMAIS utiliser de placeholder non rempli ({X}) dans le texte final.
-9. NE JAMAIS commencer un texte par "Voici" ou "Ce texte".
-10. TOUJOURS utiliser des chiffres précis du JSON, pas d'arrondis approximatifs sauf indication.
+1. UTILISE UNIQUEMENT les donnees fournies dans le JSON {data}. Ne JAMAIS inventer de chiffres.
+2. CHAQUE TEXTE doit etre CONTEXTUALISE au projet specifique -- jamais de phrases generiques.
+3. STYLE : phrases structurees, vocabulaire technique precis, ton professionnel mais accessible.
+4. FORMAT : utilise des tirets (- ) pour les listes, des paragraphes pour le reste. PAS de bullet points unicode.
+5. NE JAMAIS utiliser de placeholder non rempli ({X}) dans le texte final.
+6. NE JAMAIS commencer un texte par "Voici" ou "Ce texte".
+7. NE PAS utiliser d'accents. Ecrire en francais SANS accents (a au lieu de a, e au lieu de e/e, etc.).
+8. TOUJOURS utiliser les chiffres EXACTS du JSON. Ne pas arrondir differemment.
+9. Utiliser \\n pour les sauts de ligne.
 
-═══ TEXTES À GÉNÉRER ═══
+=== STRUCTURE OBLIGATOIRE PAR TEXTE ===
+
+Chaque texte ci-dessous a une STRUCTURE IMPOSEE que tu DOIS respecter exactement.
+Les paragraphes sont separes par \\n\\n (double saut de ligne).
 
 --- slide_3_intro_text ---
-COMMENCE TOUJOURS par "Ce projet consiste à" SANS METTRE LE NOM DU CLIENT.
-Décris le projet : terrain ({site_area}m² à {city}), programme visé ({program_main}), objectif stratégique.
-Mentionne les contraintes urbanistiques clés (COS={site_cos_regl}, CES={site_ces_regl}%, hauteur max={max_height_m}m).
-Termine par l'enjeu : "La question est de savoir [ENJEU RÉEL ET SPÉCIFIQUE]" — PAS une question générique.
-Exemple d'enjeu réel : "La question est de savoir si un terrain de 500m² en zone urbaine dense peut absorber un programme mixte commerce+logement de 3 unités tout en respectant les retraits réglementaires qui réduisent l'emprise constructible de {retrait_reduction_pct}%."
+STRUCTURE OBLIGATOIRE (4 paragraphes) :
+PARA 1: "Ce projet consiste a valoriser un terrain de {site_area} m2 situe a {city}, dans le cadre d'un programme {program_main}. Le programme cible prevoit {target_units} unites pour un standing {standing_level}, avec un budget de reference de l'ordre de {budget_range} FCFA."
+PARA 2: "L'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de {site_cos_regl}, un CES de {site_ces_regl}%, et des retraits reglementaires qui reduisent significativement l'emprise constructible."
+PARA 3: "Pour repondre a cette question, trois scenarios ont ete elabores :\\n- Le Scenario A ({A_role}) explore [description courte A].\\n- Le Scenario B ({B_role}) recherche [description courte B].\\n- Le Scenario C ({C_role}) privilegie [description courte C]."
+PARA 4: "Le present rapport diagnostic analyse chacun de ces scenarios sous l'angle volumetrique, financier et reglementaire, afin d'orienter le porteur de projet vers le scenario le plus recommande au regard de ses priorites et de son enveloppe budgetaire."
 
 --- slide_3_programme_text ---
-Décris le programme cible : nombre d'unités visées ({target_units}), surface cible ({target_surface_m2}m²), standing ({standing_level}).
-Mentionne le driver principal ({primary_driver}) et son impact sur la stratégie.
-Indique le budget de référence ({budget_range}) et la tension budgétaire ({budget_tension}).
+NE PAS GENERER CE TEXTE. Retourner une chaine vide "".
+Le contenu est fusionne dans slide_3_intro_text.
 
 --- slide_4_text ---
-DÉCRIS UNIQUEMENT LE SITE PHYSIQUE :
-• Dimensions du terrain et de l'enveloppe constructible ({envelope_w}m × {envelope_d}m = {envelope_area}m²)
-• Retraits réglementaires (avant={retrait_avant}, latéral={retrait_lateral}, arrière={retrait_arriere})
-• Impact des retraits : réduction de {retrait_reduction_pct}% → emprise constructible de {retrait_emprise_constructible}
-• Mitoyenneté ({retrait_mitoyennete} côtés) et contraintes géotechniques si pertinent
-• Orientation et zone climatique ({orient_zone})
+STRUCTURE OBLIGATOIRE (5 blocs) :
+PARA 1: "Ce terrain de {site_area} m2 se situe dans un tissu urbain [qualificatif] de {city}. Il presente une geometrie [reguliere/irreguliere] de {envelope_w} m de largeur sur {envelope_d} m de profondeur, offrant une surface brute de {envelope_area} m2."
+PARA 2: "Les contraintes reglementaires imposent les retraits suivants :\\n- Recul avant : {retrait_avant} (par rapport a la voie)\\n- Recul lateral : {retrait_lateral} de chaque cote\\n- Recul arriere : {retrait_arriere}\\n- Mitoyennete : {retrait_mitoyennete} cotes"
+PARA 3: "L'impact de ces retraits est significatif : ils reduisent l'emprise constructible de {retrait_reduction_pct}, la ramenant a environ {retrait_emprise_constructible} exploitables."
+PARA 4: "Le programme envisage prevoit {target_units} unites en usage {program_main}, dans un standing {standing_level}."
+PARA 5: "- Zone climatique : {orient_zone}\\n- COS reglementaire : {site_cos_regl}\\n- CES reglementaire : {site_ces_regl} %"
 
 --- slide_5_text ---
-Analyse de conformité urbanistique comparative des 3 scénarios :
-• COS autorisé vs utilisé par chaque scénario (A={A_cos_pct}%, B={B_cos_pct}%, C={C_cos_pct}%)
-• CES et emprise au sol
-• Nombre de niveaux vs maximum autorisé
-• Conclusion : quel(s) scénario(s) sont conformes, lesquels sont à risque
+STRUCTURE OBLIGATOIRE (5 paragraphes) :
+PARA 1: Description de l'environnement bati (quartier, densite, voisinage). Contextualisee a {city}.
+PARA 2: Rapport a la rue et impact de la mitoyennete ({retrait_mitoyennete} cotes) sur les ouvertures, l'eclairage, la ventilation.
+PARA 3: "La surface de plancher est limitee par plusieurs facteurs cumules :\\n- L'emprise constructible apres retraits est reduite a {retrait_emprise_constructible} (soit {retrait_reduction_pct} de perte)\\n- Le COS de {site_cos_regl} autorise jusqu'a {site_sdp_max} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\\n- Le CES de {site_ces_regl}% n'est pas le facteur limitant ici"
+PARA 4: Impact de la zone climatique {orient_zone} sur le confort thermique, l'orientation, les facades.
+PARA 5: Conclusion sur la densite du voisinage et le gabarit a respecter.
 
---- scenario_X_summary_text (pour A, B, C) ---
-DÉCRIS LA CONSTRUCTION DANS SA TYPOLOGIE. Pour chaque scénario :
-• Rôle du scénario ({X_role}) et sa philosophie (intensification/équilibre/prudence)
-• Configuration physique : R+{X_levels}, emprise {X_fp}m², SDP totale {X_sdp}m²
-• Présence ou non de pilotis ({X_has_pilotis}), disposition du commerce
-• Mix programmatique : {X_unit_summary}
-• Surface habitable par logement ({X_m2_par_logt}m²) — qualifie si c'est compact/confortable/spacieux
-• Parking : {X_parking_places} places ({X_parking_source}), déficit éventuel de {X_parking_deficit}
-• Gabarit et impact visuel sur le voisinage
+--- scenario_A_summary_text ---
+STRUCTURE OBLIGATOIRE (scenario A) :
+PARA 1: "Le Scenario A ({A_role}) [description philosophie] afin de repondre au programme cible du client : {A_units} unites en usage mixte."
+PARA 2 Config: "Configuration retenue :\\n- Gabarit : R+{A_levels} (rez-de-chaussee + {A_levels} etages)\\n- Emprise au sol : {A_fp} m2\\n- SDP totale : {A_sdp} m2\\n- [Pilotis si A_has_pilotis=true, sinon 'Pas de pilotis : commerce dispose directement au RDC']"
+PARA 3 Programme: "Programme :\\n- [detail du mix: {A_unit_summary}]"
+PARA 4: "La surface utile et habitable par logement, hors circulations et parties communes, est estimee a environ {A_m2_par_logt} m2, un niveau [compact/confortable/spacieux] pour des T[X] en standing {standing_level}."
+PARA 5: Description de l'acces et circulation.
+PARA 6: "- Parking : {A_parking_places} places en surface, [deficit/aucun deficit]\\n- Gabarit et impact visuel : [qualificatif] mais conforme\\n- COS utilise : {A_cos_pct} % du COS autorise ({A_sdp} m2 sur {site_sdp_max})"
 
---- scenario_X_financial_text (pour A, B, C) ---
-EXPLIQUE DE FAÇON ACCESSIBLE LE RAISONNEMENT DES CALCULS :
-• Coût total : {X_cost_total} → détaille la ventilation (GO {X_ventil_go}, SO {X_ventil_so}, LT {X_ventil_lt}, VRD {X_ventil_vrd})
-• Coût au m² SDP : {X_cost_m2} — compare au marché local si le standing est {standing_level}
-• Fourchette budgétaire : {X_fourchette_text}
-• Honoraires : entre {X_hono_bas_M}M et {X_hono_haut_M}M ({X_hono_taux_bas}–{X_hono_taux_haut}%)
-• Position budgétaire : {X_budget_fit} — explique ce que ça implique concrètement
-• Si HORS_BUDGET : chiffre le dépassement et propose des leviers de réduction
-• Ratio coût/unité : {X_cost_unit} par unité — qualifie si c'est optimisé ou non
+--- scenario_B_summary_text ---
+MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables B_* et en decrivant la philosophie d'equilibre.
 
---- scenario_X_risk_text (pour A, B, C) ---
-SOIS SPÉCIFIQUE SUR LES RISQUES. Numérote les risques :
-1) Risque urbanistique : conformité COS ({X_cos_compliance}), hauteur, retraits
-2) Risque de compacité : {X_m2_par_logt}m²/logement → si <50m² risque de refus de permis ou d'invendabilité
-3) Risque financier : {X_budget_fit} — tension sur le budget, marge de manoeuvre
-4) Risque de parking : déficit de {X_parking_deficit} places → impact sur le permis
-5) Risque de construction : complexité liée aux pilotis/mitoyenneté/nombre de niveaux
-Pour chaque risque : probabilité (faible/moyenne/élevée) + impact + mitigation possible.
+--- scenario_C_summary_text ---
+MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables C_* et en decrivant la philosophie de prudence.
+
+--- scenario_A_financial_text ---
+STRUCTURE OBLIGATOIRE :
+PARA 1: "Pour un standing {standing_level} a {city}, le cout de construction au m2 de SDP se situerait aux alentours de {A_cost_m2}. Ce positionnement [qualificatif marche local]."
+PARA 2: "Le raisonnement de cout s'articule ainsi :\\n- SDP totale : {A_sdp} m2\\n- Cout estime au m2 : {A_cost_m2}\\n- Cout total estime : environ {A_cost_total}"
+PARA 3: "Ventilation previsionnelle des travaux :\\n- Gros oeuvre et structure : {A_ventil_go} FCFA (XX %)\\n- Second oeuvre et finitions : {A_ventil_so} FCFA (XX %)\\n- Lots techniques (electricite, plomberie, CVC) : {A_ventil_lt} FCFA (XX %)\\n- VRD et amenagements exterieurs : {A_ventil_vrd} FCFA (XX %)"
+PARA 4: "La fourchette budgetaire globale se situerait {A_fourchette_text}."
+PARA 5: "Honoraires de maitrise d'oeuvre : entre {A_hono_bas_M}M et {A_hono_haut_M}M FCFA ({A_hono_taux_bas} a {A_hono_taux_haut})."
+PARA 6: "- Enveloppe budgetaire du client : environ {budget_range} FCFA\\n- Position budgetaire : {A_budget_fit}\\n- Ratio cout par unite : environ {A_cost_unit}/unite"
+
+--- scenario_B_financial_text ---
+MEME STRUCTURE QUE scenario_A_financial_text, avec variables B_*. Mentionner la comparaison avec A.
+
+--- scenario_C_financial_text ---
+MEME STRUCTURE QUE scenario_A_financial_text, avec variables C_*. Insister sur l'optimisation du cout.
+
+--- scenario_A_risk_text ---
+STRUCTURE OBLIGATOIRE :
+PARA 1: "Le scoring evalue le Scenario A selon 7 criteres ponderes, chacun note de 1 a 5. Le score global de [score A]/100 reflete un profil a [qualificatif] :"
+PARA 2: "1) Risque urbanistique : conforme au COS ({A_cos_pct} % utilise sur {site_cos_regl} autorise), hauteurs et retraits respectes.\\n2) Risque de compacite : {A_m2_par_logt} m2/logement de surface utile habitable, [faible/moyen/fort] risque de refus de permis.\\n3) Risque financier : position {A_budget_fit}. [detail depassement si HORS_BUDGET].\\n4) Risque de parking : [deficit ou aucun deficit] ({A_parking_places} places pour {A_units} unites).\\n5) Risque de construction : complexite d'un R+{A_levels} en standing {standing_level}, [qualificatif]."
+PARA 3: "Probabilite [faible/moyenne/elevee], impact [faible/modere/eleve], [mitigation possible]."
+
+--- scenario_B_risk_text ---
+MEME STRUCTURE, variables B_*, comparer avec A si pertinent.
+
+--- scenario_C_risk_text ---
+MEME STRUCTURE, variables C_*. Insister que ce scenario est le plus recommande si c'est le cas.
 
 --- strategic_arbitrage_text ---
-L'arbitrage stratégique entre les 3 scénarios. Structure :
-• Rappel des priorités client : {primary_driver}, programme {program_main}, standing {standing_level}
-• Comparaison sur 4 axes : coût total, surface habitable, nombre d'unités, score de recommandation
-• Deltas clés : B vs A ({delta_BA_sdp}, {delta_BA_cout}), C vs A ({delta_CA_sdp}, {delta_CA_cout})
-• Question stratégique : "La question est de savoir si [ENJEU SPÉCIFIQUE À CE CHOIX]" — par exemple si le surcoût de X M FCFA du scénario A est justifié par les Y m² supplémentaires
-• Recommandation argumentée : pourquoi le scénario {rec_scenario} obtient le meilleur score ({rec_score}/100)
+STRUCTURE OBLIGATOIRE (5 paragraphes) :
+PARA 1: "Le client recherche un programme {program_main} en standing {standing_level}, avec une posture {feasibility_posture}, pour une enveloppe budgetaire de l'ordre de {budget_range} FCFA."
+PARA 2: "Le systeme de scoring evalue chaque scenario selon 7 criteres ponderes : adequation budgetaire (25 %), alignement risque (20 %), conformite COS (12 %), capacite du programme (13 %), efficacite cout (12 %), adequation standing (8 %), flexibilite de phasage (10 %)."
+PARA 3: "Les 3 scenarios livrent tous les {target_units} unites demandees, mais different significativement sur le cout :\\n- Scenario A : {A_cost_total}, [A_hab_m2_total] m2 habitables, score [A_score]/100\\n- Scenario B : {B_cost_total}, [B_hab_m2_total] m2 habitables, score [B_score]/100\\n- Scenario C : {C_cost_total}, [C_hab_m2_total] m2 habitables, score [C_score]/100"
+PARA 4: "L'ecart entre C et A est de [delta_CA_cout] pour [delta_CA_sdp] de surface supplementaire, soit un surcout de [calcul] par m2 gagne, [justifiable ou non] au regard de l'enveloppe disponible."
+PARA 5: "Le Scenario {rec_scenario} obtient le meilleur score ({rec_score}/100) car il offre le meilleur compromis entre [arguments hierarchises]. Il est le scenario recommande."
 
 --- comparatif_intro_text ---
-Introduction au comparatif des 3 scénarios en une phrase structurée avec les chiffres clés de chaque.
+UNE SEULE PHRASE structuree avec les chiffres cles de chaque scenario.
 
 --- invisible_intro_text ---
-Points de vigilance techniques et administratifs à anticiper. Contextualisé au projet spécifique.
+UNE SEULE PHRASE: "Points de vigilance techniques et administratifs a anticiper pour assurer la conformite et l'efficacite du projet."
 
 --- invisible_technical_text ---
-Détails techniques : fondations (adapté au sol et mitoyenneté), structure (R+X), matériaux recommandés selon le standing {standing_level}.
+STRUCTURE OBLIGATOIRE (texte dense pour slide 17) :
+PARA 1: "Les conditions de reussite reposent sur une anticipation rigoureuse des postes de depenses et des delais. Voici la ventilation detaillee pour le scenario {rec_scenario} recommande ({rec_cost_total}) :"
+PARA 2: "Ventilation des couts par lot :\\n- Fondations et infrastructure : environ [montant] FCFA ([%]). Etude geotechnique prealable indispensable. Mitoyennete imposant fondations independantes.\\n- Gros oeuvre et structure : environ [montant] FCFA ([%]). Systeme poteau-poutre en beton arme adapte au R+[niveaux].\\n- Second oeuvre et finitions : environ [montant] FCFA ([%]). Materiaux {standing_level} mais durables.\\n- VRD et amenagements : environ [montant] FCFA ([%]). Raccordements reseaux, assainissement.\\n- Lots techniques : environ [montant] FCFA ([%]). Electricite, plomberie, ventilation naturelle."
+PARA 3: "Strategies de phasage recommandees :\\n- Duree estimee du chantier : {rec_duree_chantier}\\n- Phase 1 (M1-M2) : etudes et permis\\n- Phase 2 (M3) : terrassement et fondations, eviter la saison des pluies (juin-octobre)\\n- Phase 3 (M4-M5) : gros oeuvre\\n- Phase 4 (M6-M7) : second oeuvre\\n- Phase 5 (M8) : finitions et reception"
+PARA 4: "Delais caches a anticiper : obtention du permis (2-4 mois), etude geotechnique (2-3 semaines), raccordements reseaux (variable)."
 
 --- invisible_financial_text ---
-Détails financiers cachés : honoraires architecte, permis, études géotechniques, BET structure, assurances, frais divers.
+STRUCTURE OBLIGATOIRE (texte dense pour slide 17 col 2 et slide 18 col 2) :
+Ce texte sera utilise DEUX FOIS (slide 17 et slide 18). Redige-le pour la slide 18 (budget detaille).
+PARA 1: "Le budget du Scenario {rec_scenario} s'etablit a environ {rec_cost_total}, a comparer au budget initial de {budget_range} FCFA. L'ecart de [X]M est gerable avec une optimisation rigoureuse."
+PARA 2: "Frais complementaires a anticiper :\\n- Honoraires d'architecte : entre {rec_hono_bas}M et {rec_hono_haut}M FCFA ({rec_hono_taux_bas} a {rec_hono_taux_haut})\\n- Frais de permis de construire et taxes : environ 1 a 2 % du montant des travaux\\n- Etudes geotechniques : entre 300 000 et 500 000 FCFA\\n- Frais de notaire et administratifs : variables\\n- Assurance dommage-ouvrage : recommandee, environ 2 % du cout travaux"
+PARA 3: "Budgetiser l'ensemble de ces postes en amont est imperatif pour eviter toute derive financiere."
 
 --- invisible_strategic_text ---
-Stratégie de phasage et décaissements. Intègre le texte de phasage : {phasage_text}. Mentionne la saison des pluies si pertinent.
+STRUCTURE OBLIGATOIRE (phasage financier pour slide 17 col 3 et slide 18 col 3) :
+PARA 1: "Le phasage financier doit tenir compte du climat {orient_zone} de {city}, en particulier de la saison des pluies (juin a octobre)."
+PARA 2: "Recommandations de phasage :\\n- Demarrage ideal des travaux : novembre a janvier (saison seche)\\n- Terrassement et fondations : imperativement hors saison des pluies\\n- Gros oeuvre : peut se poursuivre pendant la saison des pluies avec precautions\\n- Finitions : planifier la reception avant la prochaine saison des pluies"
+PARA 3: "Echelonnement des decaissements :\\n- M1-M2 : 15 % (etudes, permis, installation chantier)\\n- M3-M5 : 50 % (fondations + gros oeuvre)\\n- M6-M7 : 25 % (second oeuvre)\\n- M8 : 10 % (finitions, reception, solde)"
 
 --- success_intro_text ---
-Pourquoi le scénario recommandé ({rec_scenario}) est le meilleur choix. Arguments hiérarchisés.
+UNE SEULE PHRASE: "Le scenario recommande ({rec_scenario}) est le meilleur choix en raison de son cout optimise ({rec_cost_total}), de sa conformite urbanistique (COS a {rec_cos_pct} %), et de sa gestion rigoureuse du budget."
 
 --- success_technical_text ---
-Détails techniques du scénario recommandé : structure, emprise, configuration, avantages constructifs.
+STRUCTURE OBLIGATOIRE (slide 18, colonne technique) :
+PARA 1: "Le Scenario {rec_scenario} propose une structure R+{rec_levels} avec commerce au RDC, compacte mais fonctionnelle. Points techniques a anticiper :"
+PARA 2: "- Structure R+{rec_levels} en beton arme : systeme poteau-poutre classique, maitrise par les entreprises locales\\n- Fondations : etude geotechnique indispensable compte tenu de la mitoyennete sur {retrait_mitoyennete} cotes\\n- Emprise de {rec_fp} m2 : optimisation des circulations verticales necessaire\\n- Ventilation naturelle : essentielle en zone {orient_zone}, ouvertures traversantes sur facades libres\\n- Etancheite toiture terrasse : point critique en climat tropical humide"
 
 --- success_financial_text ---
-Budget du scénario recommandé avec comparaison au budget initial du client. Justification du rapport qualité/prix.
+MEME CONTENU QUE invisible_financial_text. Retourner le MEME texte.
 
 --- success_strategic_text ---
-Stratégie de réalisation : phasage, planning, points d'attention pour la réussite du projet.
+MEME CONTENU QUE invisible_strategic_text. Retourner le MEME texte.
 
 --- next_step_intro_text ---
-Prochaine étape immédiate pour le client. Concrète et actionnable.
+UNE PHRASE: introduction aux prochaines etapes.
 
 --- next_step_scope_text ---
-Périmètre des études à lancer : APS, APD, études géotechniques, dossier de permis, etc.
+STRUCTURE OBLIGATOIRE (5 etudes a lancer) :
+PARA 1: "Perimetre des etudes a lancer pour la phase suivante :"
+PARA 2: "- APS (Avant-Projet Sommaire) : definition des volumes, implantation, choix structurels. Validation de la faisabilite technique et affinage du budget. Delai : 3-4 semaines."
+PARA 3: "- APD (Avant-Projet Definitif) : plans detailles, dimensionnement structure, choix des materiaux. Base pour le chiffrage definitif. Delai : 4-6 semaines."
+PARA 4: "- Etudes geotechniques : sondages et essais de sol pour dimensionner les fondations. Indispensable avant le depot de permis. Delai : 2-3 semaines."
+PARA 5: "- Dossier de permis de construire : constitution du dossier administratif complet. Delai d'instruction : 2-4 mois selon la commune."
+PARA 6: "- Consultation des entreprises : appel d'offres restreint ou consultation directe. Prevoir 3-4 semaines pour reception et analyse des devis."
 
 --- next_step_outcome_text ---
-Livrables attendus : plans détaillés, estimatif actualisé, dossier de permis, planning prévisionnel.
+Livrables attendus en 2-3 phrases.
 
 --- conclusion_summary_text ---
-Résumé exécutif en 3-4 phrases : terrain analysé, 3 scénarios proposés, recommandation, score.
+STRUCTURE OBLIGATOIRE (2 paragraphes) :
+PARA 1: "Ce diagnostic a permis d'analyser le potentiel d'un terrain de {site_area} m2 a {city} sous trois scenarios contrastes : {A_role} (A), {B_role} (B) et {C_role} (C). Chacun repond au programme cible de {target_units} unites en usage {program_main} en standing {standing_level}."
+PARA 2: "Le Scenario {rec_scenario} est recommande avec un score de {rec_score}/100. Il offre le meilleur compromis entre le respect du programme, la proximite avec l'enveloppe budgetaire ({rec_cost_total} vs {budget_range} FCFA vises), la conformite urbanistique, et la simplicite de mise en oeuvre d'un R+{rec_levels}. La prochaine etape consiste a lancer les etudes de faisabilite (APS/APD) et l'etude geotechnique pour confirmer ces hypotheses."
 
 --- conclusion_positioning_text ---
-Positionnement final : pourquoi ce scénario est le meilleur compromis entre coût, conformité, et objectifs du client.
+STRUCTURE OBLIGATOIRE (1 paragraphe dense) :
+"Le scenario {rec_scenario} est le meilleur compromis entre cout maitrise ({rec_cost_total}), conformite urbanistique (COS utilise a {rec_cos_pct} %), et adequation avec les objectifs du client. Il permet de livrer les {target_units} unites demandees dans un gabarit R+{rec_levels} [qualificatif] et realiste."
 
 --- conclusion_projection_text ---
-Projection temporelle : durée du chantier, points d'attention calendaire, horizon de livraison.
+Projection temporelle : duree du chantier ({rec_duree_chantier}), points d'attention calendaire, horizon de livraison.
 
-═══ FORMAT DE RÉPONSE ═══
+=== VARIABLES SUPPLEMENTAIRES DU SCENARIO RECOMMANDE ===
 
-Réponds UNIQUEMENT en JSON valide avec toutes les clés ci-dessus. Pas de markdown, pas de commentaires.
-Chaque valeur est une string contenant le texte rédigé.
+Pour les textes qui mentionnent le scenario recommande, utilise ces variables :
+- rec_scenario = {rec_scenario}
+- rec_score = {rec_score}
+- rec_cost_total = cout total du scenario recommande (A, B ou C)
+- rec_levels = niveaux du scenario recommande
+- rec_fp = emprise du scenario recommande
+- rec_cos_pct = COS utilise du scenario recommande
+- rec_duree_chantier = duree chantier du scenario recommande
+- rec_hono_bas/haut = honoraires du scenario recommande
+Identifie le scenario recommande (A, B ou C) a partir de rec_scenario et utilise ses donnees.
+
+=== FORMAT DE REPONSE ===
+
+Reponds UNIQUEMENT en JSON valide avec toutes les cles ci-dessus. Pas de markdown, pas de commentaires.
+Chaque valeur est une string contenant le texte redige.
 Utilise \\n pour les sauts de ligne dans les strings JSON.
-Utilise • pour les bullet points (pas de tirets -).`;
+Utilise des tirets (- ) pour les listes, PAS de bullet points unicode.
+NE PAS utiliser d'accents dans le texte.`;
 }
 
 /**
@@ -6340,8 +6392,18 @@ function buildGptDataContext(p, scenarios, flat) {
     mix_score: p.mix_score, phase_score: p.phase_score, risk_score: p.risk_score,
     // Phasage
     phasage_text: flat.phasage_text,
-    // Recommendation
+    // Recommendation + recommended scenario details
     rec_scenario: flat.rec_scenario, rec_score: flat.rec_score,
+    rec_cost_total: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_cost_total; if (rs === "B") return flat.B_cost_total; return flat.C_cost_total; })(),
+    rec_levels: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_levels; if (rs === "B") return flat.B_levels; return flat.C_levels; })(),
+    rec_fp: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_fp; if (rs === "B") return flat.B_fp; return flat.C_fp; })(),
+    rec_cos_pct: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_cos_pct; if (rs === "B") return flat.B_cos_pct; return flat.C_cos_pct; })(),
+    rec_duree_chantier: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_duree_chantier; if (rs === "B") return flat.B_duree_chantier; return flat.C_duree_chantier; })(),
+    rec_hono_bas: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_bas_M; if (rs === "B") return flat.B_hono_bas_M; return flat.C_hono_bas_M; })(),
+    rec_hono_haut: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_haut_M; if (rs === "B") return flat.B_hono_haut_M; return flat.C_hono_haut_M; })(),
+    rec_hono_taux_bas: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_taux_bas; if (rs === "B") return flat.B_hono_taux_bas; return flat.C_hono_taux_bas; })(),
+    rec_hono_taux_haut: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_taux_haut; if (rs === "B") return flat.B_hono_taux_haut; return flat.C_hono_taux_haut; })(),
+    rec_hab_m2_total: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hab_m2_total; if (rs === "B") return flat.B_hab_m2_total; return flat.C_hab_m2_total; })(),
     // Scenario A
     A_role: sA.role || flat.A_role || "", A_fp: flat.A_fp, A_levels: flat.A_levels,
     A_height: flat.A_height, A_sdp: flat.A_sdp, A_units: flat.A_units,
@@ -6714,7 +6776,7 @@ app.post("/generate-texts", async (req, res) => {
     gpt_text_rules: rules.substring(0, 200) + "...",
     gpt_elapsed_ms: generatedTexts._gpt_elapsed_ms || 0,
     gpt_model: generatedTexts._gpt_model || GPT_TEXT_MODEL,
-    server_version: "72.70-GENERATE-TEXTS-PREMIUM",
+    server_version: "72.80-PREMIUM-STRUCTURAL-v4",
     total_duration_ms: Date.now() - t0,
   };
 
