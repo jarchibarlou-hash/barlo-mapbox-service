@@ -6847,17 +6847,93 @@ app.post("/generate-pptx", async (req, res) => {
       generatedTexts = await generateDiagnosticTexts(dataContext, rules);
     }
 
-    // Step 4: Prepare data JSON for Python
+    // Step 4: Map server data to EXACT keys expected by Python scripts
+    // ═══════════════════════════════════════════════════════════════
+    // generate_charts.py expects per-scenario:
+    //   RISK (0-100): budget_fit, complexite_structurelle, risque_permis,
+    //                 ratio_efficacite, densite_cos, phasabilite, cout_m2
+    //   GAUGE: recommendation_score
+    //   TABLE: sdp_m2, surface_habitable_m2, niveaux, total_units,
+    //          cost_total_fcfa, recommendation_score, duree_chantier_mois
+    //   ARBITRAGE: cost_total_fcfa, surface_habitable_m2, total_units, recommendation_score
+    //   COST PIE: cost_fondations_infrastructure, cost_gros_oeuvre_structure,
+    //             cost_second_oeuvre_finitions, cost_vrd_amenagements
+    //   TIMELINE: duree_chantier_mois
+    //   RECAP: sdp_m2, surface_habitable_m2, total_units, cost_total_fcfa,
+    //          duree_chantier_mois, recommendation_score
+    // ═══════════════════════════════════════════════════════════════
+    function mapScenarioForPython(sc) {
+      const sd = sc.score_detail || {};
+      const vent = sc.ventilation || {};
+      const costTotal = sc.cost_total_fcfa || 0;
+
+      // Risk metrics: score_detail scores are 0.0–1.0 → convert to 0–100
+      const riskMetrics = {
+        budget_fit: Math.round(((sd.budget_fit || {}).score || 0.5) * 100),
+        complexite_structurelle: Math.round(((sd.risk_alignment || {}).score || 0.5) * 100),
+        risque_permis: Math.round(((sd.cos_conformity || {}).score || 0.5) * 100),
+        ratio_efficacite: Math.round(((sd.cost_efficiency || {}).score || 0.5) * 100),
+        densite_cos: Math.round(((sd.capacity_adequacy || {}).score || 0.5) * 100),
+        phasabilite: Math.round(((sd.phase_flexibility || {}).score || 0.5) * 100),
+        cout_m2: Math.round(((sd.standing_match || {}).score || 0.5) * 100),
+      };
+
+      // Cost breakdown: ventilation → pie chart keys
+      // If no fondations data, derive from gros_oeuvre (20% fondations, 80% structure)
+      const goTotal = vent.gros_oeuvre || 0;
+      const costBreakdown = {
+        cost_fondations_infrastructure: Math.round(goTotal * 0.20),
+        cost_gros_oeuvre_structure: Math.round(goTotal * 0.80),
+        cost_second_oeuvre_finitions: vent.second_oeuvre || 0,
+        cost_vrd_amenagements: (vent.vrd || 0) + (vent.lots_techniques || 0),
+      };
+
+      // Comparative table needs 'niveaux' alias for 'levels'
+      return {
+        ...riskMetrics,
+        ...costBreakdown,
+        recommendation_score: sc.recommendation_score || 50,
+        sdp_m2: sc.sdp_m2 || 0,
+        surface_habitable_m2: sc.surface_habitable_m2 || sc.hab_m2_total || 0,
+        niveaux: sc.levels || 0,
+        levels: sc.levels || 0,
+        total_units: sc.total_units || 0,
+        cost_total_fcfa: costTotal,
+        duree_chantier_mois: sc.duree_chantier_mois || 0,
+        fp_m2: sc.fp_m2 || 0,
+        height_m: sc.height_m || 0,
+        role: sc.role || "",
+        label_fr: sc.label_fr || "",
+        unit_mix_detail: sc.unit_mix_detail || "",
+        m2_habitable_par_logement: sc.m2_habitable_par_logement || 0,
+        has_pilotis: sc.has_pilotis || false,
+        cos_ratio_pct: sc.cos_ratio_pct || 0,
+        cos_compliance: sc.cos_compliance || "",
+        accent_color: sc.accent_color || "#888888",
+        budget_fit_label: sc.budget_fit || "",
+        parking_detail: sc.parking_detail || {},
+        free_ground_m2: sc.free_ground_m2 || 0,
+        circulation_ratio_pct: sc.circulation_ratio_pct || 0,
+        rendement_brut_pct: sc.rendement_brut_pct || 0,
+      };
+    }
+
+    // Step 5: Prepare data JSON for Python
+    // generate_pptx.py reads: data['texts'], data['images'], data['scenarios'],
+    //   data['client_name'], data['recommended']
     const pptxData = {
       ...flat,
-      ...generatedTexts,
       client_name: p.client_name || "",
       site_area: p.site_area,
+      // Texts MUST be nested under 'texts' key (generate_pptx.py line 379)
+      texts: { ...generatedTexts },
+      // Images MUST be nested under 'images' key (generate_pptx.py line 369)
       images: p.images || {},
+      // Scenarios with all keys mapped for charts (generate_charts.py)
       scenarios: {
-        A: { ...sA, accent_color: sA.accent_color || "#2a5298" },
-        B: { ...sB, accent_color: sB.accent_color || "#1e8449" },
-        C: { ...sC, accent_color: sC.accent_color || "#d35400" },
+        A: mapScenarioForPython(sA),
+        B: mapScenarioForPython(sB),
+        C: mapScenarioForPython(sC),
       },
       scores: {
         rent_score: Number(p.rent_score) || 0,
@@ -6868,6 +6944,8 @@ app.post("/generate-pptx", async (req, res) => {
       },
       rec_scenario: flat.rec_scenario,
       rec_score: flat.rec_score,
+      // Top-level 'recommended' key (generate_charts.py line 614)
+      recommended: flat.rec_scenario || "A",
     };
 
     // Step 5: Write data to temp file and call Python
