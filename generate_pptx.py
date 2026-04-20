@@ -362,6 +362,31 @@ def assemble_pptx(data: dict, template_path: str, output_path: str):
     texts = data.get('texts', {})
     client_name = data.get('client_name', '')
 
+    # ─── TEXT KEY REMAPPING ───
+    # GPT generates slide_3_intro_text + slide_3_programme_text, but template expects slide_3_text
+    if 'slide_3_text' not in texts and 'slide_3_intro_text' in texts:
+        parts = [texts.get('slide_3_intro_text', ''), texts.get('slide_3_programme_text', '')]
+        texts['slide_3_text'] = '\n\n'.join(p for p in parts if p)
+
+    # GPT may generate invisible_technical_text etc. without _s17/_s18 suffix
+    # Map them for slides 17 and 18
+    for base_key in ['invisible_technical_text', 'invisible_financial_text', 'invisible_strategic_text']:
+        s17_key = f'{base_key}_s17'
+        s18_key = f'{base_key}_s18'
+        # If suffixed keys don't exist, try to use the base key or success_ variant
+        if s17_key not in texts and base_key in texts:
+            texts[s17_key] = texts[base_key]
+        if s18_key not in texts:
+            # For slide 18, GPT might generate success_technical_text, success_financial_text etc.
+            success_key = base_key.replace('invisible_', 'success_')
+            if success_key in texts:
+                texts[s18_key] = texts[success_key]
+            elif base_key in texts:
+                texts[s18_key] = texts[base_key]
+
+    print(f"Text keys available: {sorted(texts.keys())}", file=sys.stderr)
+    print(f"Chart paths available: {sorted(chart_paths.keys())}", file=sys.stderr)
+
     # 5. Process each slide
     for slide_idx, slide in enumerate(prs.slides):
         slide_num = slide_idx + 1
