@@ -22,7 +22,7 @@ CHART_PLACEHOLDERS = {
     '{{scenario_B_risk_chart}}': ['scenario_B_risk_radar', 'scenario_B_risk_gauge', 'scenario_B_risk_bars'],
     '{{scenario_C_risk_chart}}': ['scenario_C_risk_radar', 'scenario_C_risk_gauge', 'scenario_C_risk_bars'],
     '{{tableau comparative_charts}}': ['tableau_comparative_charts'],
-    '{{arbitrage_graph_}}': ['arbitrage_graph_', 'arbitrage_graph_costs'],
+    '{{arbitrage_graph_}}': ['arbitrage_graph_'],
 }
 
 SLIDE_SPECIFIC_TEXT = {
@@ -80,7 +80,11 @@ def get_font_size_for_slide(slide_num):
     Return the target font size (in points) for a given slide.
     Applies after text replacement.
     """
-    if slide_num == 15:
+    if slide_num == 1:
+        return Pt(16)  # Cover slide — client name prominent
+    elif slide_num == 2:
+        return Pt(12)  # Sommaire
+    elif slide_num == 15:
         return None  # Slide 15 is handled specially
     elif slide_num in [8, 11, 14]:
         # Risk text below charts
@@ -501,7 +505,7 @@ def assemble_pptx(data, template_path, output_path):
                     text_key = SLIDE_SPECIFIC_TEXT[slide_specific_key]
                     text = texts.get(text_key, '')
                     # Special handling for slide 18 phasage text
-                    if slide_num == 18 and 'phasage' in text_key.lower():
+                    if slide_num == 18:
                         text = _clean_phasage_text(text)
                     if text:
                         replace_text_in_shape(shape, placeholder, text)
@@ -534,8 +538,8 @@ def assemble_pptx(data, template_path, output_path):
     cost_chart = chart_paths.get('cost_breakdown')
     if cost_chart and os.path.exists(cost_chart) and len(slides_list) >= 17:
         slide17 = slides_list[16]
-        # Move down to avoid overlapping text columns (3-column layout)
-        slide17.shapes.add_picture(cost_chart, Emu(2500000), Emu(4200000), Emu(4200000), Emu(3000000))
+        # Position below 3-column text layout, within slide bounds (slide height ~6858000 EMU)
+        slide17.shapes.add_picture(cost_chart, Emu(2200000), Emu(3600000), Emu(4800000), Emu(2800000))
         print("Inserted cost breakdown chart on slide 17", file=sys.stderr)
 
     timeline_chart = chart_paths.get('timeline')
@@ -548,8 +552,8 @@ def assemble_pptx(data, template_path, output_path):
     recap_chart = chart_paths.get('recap_card')
     if recap_chart and os.path.exists(recap_chart) and len(slides_list) >= 20:
         slide20 = slides_list[19]
-        # Position at bottom, use more width
-        slide20.shapes.add_picture(recap_chart, Emu(200000), Emu(3800000), Emu(8700000), Emu(2400000))
+        # Position below text, within slide bounds (max ~6858000 EMU height)
+        slide20.shapes.add_picture(recap_chart, Emu(200000), Emu(3200000), Emu(8700000), Emu(3200000))
         print("Inserted recap card on slide 20", file=sys.stderr)
 
     # Apply auto-shrink to text-heavy shapes
