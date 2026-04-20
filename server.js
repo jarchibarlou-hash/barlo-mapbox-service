@@ -6568,15 +6568,16 @@ app.post("/generate-texts", async (req, res) => {
     A_parking_deficit: String((sA.parking_detail || {}).deficit || 0),
     A_parking_source: (sA.parking_detail || {}).source || "",
     A_ventil_global: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
-    A_ventil_go: `${sA.ventilation ? Math.round((sA.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`,
-    A_ventil_so: `${sA.ventilation ? Math.round((sA.ventilation.second_oeuvre || 0) / 1e6) : 0}M`,
-    A_ventil_lt: `${sA.ventilation ? Math.round((sA.ventilation.lots_techniques || 0) / 1e6) : 0}M`,
-    A_ventil_vrd: `${sA.ventilation ? Math.round((sA.ventilation.vrd || 0) / 1e6) : 0}M`,
-    A_ventil_hono: `${sA.honoraires ? Math.round((sA.honoraires.median || 0) / 1e6) : 0}M`,
-    A_hono_bas_M: String(sA.honoraires ? Math.round((sA.honoraires.bas || 0) / 1e6) : 0),
-    A_hono_haut_M: String(sA.honoraires ? Math.round((sA.honoraires.haut || 0) / 1e6) : 0),
-    A_hono_taux_bas: `${sA.honoraires ? sA.honoraires.taux_bas_pct || 10 : 10}%`,
-    A_hono_taux_haut: `${sA.honoraires ? sA.honoraires.taux_haut_pct || 15 : 15}%`,
+    // v72.72: FIX — cout_ventilation + sous-clés _fcfa + honoraires_architecte
+    A_ventil_go: `${Math.round(((sA.cout_ventilation || {}).gros_oeuvre_fcfa || 0) / 1e6)}M`,
+    A_ventil_so: `${Math.round(((sA.cout_ventilation || {}).second_oeuvre_fcfa || 0) / 1e6)}M`,
+    A_ventil_lt: `${Math.round(((sA.cout_ventilation || {}).lots_techniques_fcfa || 0) / 1e6)}M`,
+    A_ventil_vrd: `${Math.round(((sA.cout_ventilation || {}).vrd_fcfa || 0) / 1e6)}M`,
+    A_ventil_hono: `${Math.round((((sA.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa || 0) / 1e6)}M`,
+    A_hono_bas_M: String(Math.round((((sA.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa || 0) / 1e6)),
+    A_hono_haut_M: String(Math.round((((sA.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa || 0) / 1e6)),
+    A_hono_taux_bas: `${((sA.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 10}%`,
+    A_hono_taux_haut: `${((sA.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 15}%`,
     A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
     A_free_ground: `${sA.free_ground_m2 || 0} m²`,
     A_budget_equation: sA.budget_equation || "",
@@ -6603,15 +6604,15 @@ app.post("/generate-texts", async (req, res) => {
     B_parking_deficit: String((sB.parking_detail || {}).deficit || 0),
     B_parking_source: (sB.parking_detail || {}).source || "",
     B_ventil_global: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
-    B_ventil_go: `${sB.ventilation ? Math.round((sB.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`,
-    B_ventil_so: `${sB.ventilation ? Math.round((sB.ventilation.second_oeuvre || 0) / 1e6) : 0}M`,
-    B_ventil_lt: `${sB.ventilation ? Math.round((sB.ventilation.lots_techniques || 0) / 1e6) : 0}M`,
-    B_ventil_vrd: `${sB.ventilation ? Math.round((sB.ventilation.vrd || 0) / 1e6) : 0}M`,
-    B_ventil_hono: `${sB.honoraires ? Math.round((sB.honoraires.median || 0) / 1e6) : 0}M`,
-    B_hono_bas_M: String(sB.honoraires ? Math.round((sB.honoraires.bas || 0) / 1e6) : 0),
-    B_hono_haut_M: String(sB.honoraires ? Math.round((sB.honoraires.haut || 0) / 1e6) : 0),
-    B_hono_taux_bas: `${sB.honoraires ? sB.honoraires.taux_bas_pct || 10 : 10}%`,
-    B_hono_taux_haut: `${sB.honoraires ? sB.honoraires.taux_haut_pct || 15 : 15}%`,
+    B_ventil_go: `${Math.round(((sB.cout_ventilation || {}).gros_oeuvre_fcfa || 0) / 1e6)}M`,
+    B_ventil_so: `${Math.round(((sB.cout_ventilation || {}).second_oeuvre_fcfa || 0) / 1e6)}M`,
+    B_ventil_lt: `${Math.round(((sB.cout_ventilation || {}).lots_techniques_fcfa || 0) / 1e6)}M`,
+    B_ventil_vrd: `${Math.round(((sB.cout_ventilation || {}).vrd_fcfa || 0) / 1e6)}M`,
+    B_ventil_hono: `${Math.round((((sB.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa || 0) / 1e6)}M`,
+    B_hono_bas_M: String(Math.round((((sB.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa || 0) / 1e6)),
+    B_hono_haut_M: String(Math.round((((sB.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa || 0) / 1e6)),
+    B_hono_taux_bas: `${((sB.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 10}%`,
+    B_hono_taux_haut: `${((sB.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 15}%`,
     B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
     B_free_ground: `${sB.free_ground_m2 || 0} m²`,
     B_budget_equation: sB.budget_equation || "",
@@ -6637,15 +6638,15 @@ app.post("/generate-texts", async (req, res) => {
     C_parking_deficit: String((sC.parking_detail || {}).deficit || 0),
     C_parking_source: (sC.parking_detail || {}).source || "",
     C_ventil_global: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
-    C_ventil_go: `${sC.ventilation ? Math.round((sC.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`,
-    C_ventil_so: `${sC.ventilation ? Math.round((sC.ventilation.second_oeuvre || 0) / 1e6) : 0}M`,
-    C_ventil_lt: `${sC.ventilation ? Math.round((sC.ventilation.lots_techniques || 0) / 1e6) : 0}M`,
-    C_ventil_vrd: `${sC.ventilation ? Math.round((sC.ventilation.vrd || 0) / 1e6) : 0}M`,
-    C_ventil_hono: `${sC.honoraires ? Math.round((sC.honoraires.median || 0) / 1e6) : 0}M`,
-    C_hono_bas_M: String(sC.honoraires ? Math.round((sC.honoraires.bas || 0) / 1e6) : 0),
-    C_hono_haut_M: String(sC.honoraires ? Math.round((sC.honoraires.haut || 0) / 1e6) : 0),
-    C_hono_taux_bas: `${sC.honoraires ? sC.honoraires.taux_bas_pct || 10 : 10}%`,
-    C_hono_taux_haut: `${sC.honoraires ? sC.honoraires.taux_haut_pct || 15 : 15}%`,
+    C_ventil_go: `${Math.round(((sC.cout_ventilation || {}).gros_oeuvre_fcfa || 0) / 1e6)}M`,
+    C_ventil_so: `${Math.round(((sC.cout_ventilation || {}).second_oeuvre_fcfa || 0) / 1e6)}M`,
+    C_ventil_lt: `${Math.round(((sC.cout_ventilation || {}).lots_techniques_fcfa || 0) / 1e6)}M`,
+    C_ventil_vrd: `${Math.round(((sC.cout_ventilation || {}).vrd_fcfa || 0) / 1e6)}M`,
+    C_ventil_hono: `${Math.round((((sC.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa || 0) / 1e6)}M`,
+    C_hono_bas_M: String(Math.round((((sC.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa || 0) / 1e6)),
+    C_hono_haut_M: String(Math.round((((sC.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa || 0) / 1e6)),
+    C_hono_taux_bas: `${((sC.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 10}%`,
+    C_hono_taux_haut: `${((sC.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 15}%`,
     C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
     C_free_ground: `${sC.free_ground_m2 || 0} m²`,
     C_budget_equation: sC.budget_equation || "",
@@ -6832,19 +6833,24 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_parking_source`] = (s.parking_detail || {}).source || "";
       flat[`${key}_fourchette_text`] = `entre ${s.cout_fourchette ? Math.round(s.cout_fourchette.bas / 1e6) : 0}M et ${s.cout_fourchette ? Math.round(s.cout_fourchette.haut / 1e6) : 0}M FCFA`;
       flat[`${key}_ventil_global`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
-      flat[`${key}_hono_bas_M`] = String(s.honoraires ? Math.round((s.honoraires.bas || 0) / 1e6) : 0);
-      flat[`${key}_hono_haut_M`] = String(s.honoraires ? Math.round((s.honoraires.haut || 0) / 1e6) : 0);
-      flat[`${key}_hono_taux_bas`] = `${s.honoraires ? s.honoraires.taux_bas_pct || 10 : 10}%`;
-      flat[`${key}_hono_taux_haut`] = `${s.honoraires ? s.honoraires.taux_haut_pct || 15 : 15}%`;
+      // v72.72: FIX — honoraires sont dans cout_ventilation.honoraires_architecte
+      const ha = (s.cout_ventilation || {}).honoraires_architecte || {};
+      flat[`${key}_hono_bas_M`] = String(Math.round((ha.bas_fcfa || 0) / 1e6));
+      flat[`${key}_hono_haut_M`] = String(Math.round((ha.haut_fcfa || 0) / 1e6));
+      flat[`${key}_hono_taux_bas`] = `${ha.taux_bas_pct || 10}%`;
+      flat[`${key}_hono_taux_haut`] = `${ha.taux_haut_pct || 15}%`;
       flat[`${key}_cost_unit`] = `${s.cost_per_unit ? Math.round(s.cost_per_unit / 1e6) : 0}M FCFA`;
       flat[`${key}_free_ground`] = `${s.free_ground_m2 || 0} m²`;
       flat[`${key}_budget_equation`] = s.budget_equation || "";
       flat[`${key}_gabarit`] = s.gabarit_desc || "";
-      flat[`${key}_ventil_go`] = `${s.ventilation ? Math.round((s.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`;
-      flat[`${key}_ventil_so`] = `${s.ventilation ? Math.round((s.ventilation.second_oeuvre || 0) / 1e6) : 0}M`;
-      flat[`${key}_ventil_lt`] = `${s.ventilation ? Math.round((s.ventilation.lots_techniques || 0) / 1e6) : 0}M`;
-      flat[`${key}_ventil_vrd`] = `${s.ventilation ? Math.round((s.ventilation.vrd || 0) / 1e6) : 0}M`;
-      flat[`${key}_ventil_hono`] = `${s.honoraires ? Math.round((s.honoraires.median || 0) / 1e6) : 0}M`;
+      // v72.72: FIX — cout_ventilation (pas ventilation), sous-clés _fcfa
+      const cv = s.cout_ventilation || {};
+      const cvh = cv.honoraires_architecte || {};
+      flat[`${key}_ventil_go`] = `${Math.round((cv.gros_oeuvre_fcfa || 0) / 1e6)}M`;
+      flat[`${key}_ventil_so`] = `${Math.round((cv.second_oeuvre_fcfa || 0) / 1e6)}M`;
+      flat[`${key}_ventil_lt`] = `${Math.round((cv.lots_techniques_fcfa || 0) / 1e6)}M`;
+      flat[`${key}_ventil_vrd`] = `${Math.round((cv.vrd_fcfa || 0) / 1e6)}M`;
+      flat[`${key}_ventil_hono`] = `${Math.round((cvh.median_fcfa || 0) / 1e6)}M`;
     }
 
     // Step 3: Generate premium texts
@@ -6873,8 +6879,10 @@ app.post("/generate-pptx", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════
     function mapScenarioForPython(sc) {
       const sd = sc.score_detail || {};
-      const vent = sc.ventilation || {};
-      const costTotal = sc.cost_total_fcfa || 0;
+      // v72.72: FIX — la clé est cout_ventilation (pas ventilation)
+      // et les sous-clés ont le suffixe _fcfa
+      const vent = sc.cout_ventilation || {};
+      const costTotal = sc.cost_total_fcfa || sc.estimated_cost || 0;
 
       // Risk metrics: score_detail scores are 0.0–1.0 → convert to 0–100
       const riskMetrics = {
@@ -6887,21 +6895,20 @@ app.post("/generate-pptx", async (req, res) => {
         cout_m2: Math.round(((sd.standing_match || {}).score || 0.5) * 100),
       };
 
-      // Cost breakdown: ventilation → pie chart keys
-      // If no fondations data, derive from gros_oeuvre (20% fondations, 80% structure)
-      const goTotal = vent.gros_oeuvre || 0;
+      // Cost breakdown: ventilation → pie chart keys (clés _fcfa)
+      const goTotal = vent.gros_oeuvre_fcfa || 0;
       const costBreakdown = {
         cost_fondations_infrastructure: Math.round(goTotal * 0.20),
         cost_gros_oeuvre_structure: Math.round(goTotal * 0.80),
-        cost_second_oeuvre_finitions: vent.second_oeuvre || 0,
-        cost_vrd_amenagements: (vent.vrd || 0) + (vent.lots_techniques || 0),
+        cost_second_oeuvre_finitions: vent.second_oeuvre_fcfa || 0,
+        cost_vrd_amenagements: (vent.vrd_fcfa || 0) + (vent.lots_techniques_fcfa || 0),
       };
 
-      // Comparative table needs 'niveaux' alias for 'levels'
+      // v72.72: FIX — recommendation_score est 0.0–1.0 dans le moteur → convertir en 0–100
       return {
         ...riskMetrics,
         ...costBreakdown,
-        recommendation_score: sc.recommendation_score || 50,
+        recommendation_score: Math.round((sc.recommendation_score || 0.5) * 100),
         sdp_m2: sc.sdp_m2 || 0,
         surface_habitable_m2: sc.surface_habitable_m2 || sc.hab_m2_total || 0,
         niveaux: sc.levels || 0,
