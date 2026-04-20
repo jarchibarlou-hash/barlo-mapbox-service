@@ -338,7 +338,8 @@ def _clean_phasage_text(text):
     """
     if not text:
         return ''
-    if 'Phasage:' in text or 'MONOPHASEE' in text or 'TRIPHASEE' in text or 'BIPHASEE' in text:
+    text_upper = text.upper()
+    if 'PHASAGE' in text_upper or 'MONOPHASEE' in text_upper or 'TRIPHASEE' in text_upper or 'BIPHASEE' in text_upper or 'MONOPHASÉE' in text_upper:
         return ''
     return text
 
