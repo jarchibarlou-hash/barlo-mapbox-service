@@ -4,10 +4,6 @@ const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
-const { execFile } = require("child_process");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
 const app = express();
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
@@ -138,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.50-SUPERVISOR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.34-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -788,30 +784,6 @@ const VACANCY_RATE_BY_ZONING = {
 // Fourchette de coûts construction : le costPerM2 du standing est le MEDIAN
 // BAS = -15%, HAUT = +20% (aléas chantier, fondations, accès)
 const COST_RANGE_MULT = { bas: 0.85, median: 1.0, haut: 1.20 };
-// v72.53 — COÛT/m² EXPLICITE par STANDING × RÔLE (A/B/C)
-// Valeurs calées sur le marché Cameroun (Douala/Yaoundé)
-// A = coût CIBLE du programme (haut de la fourchette du standing)
-// B = coût MÉDIAN (milieu de la fourchette)
-// C = coût PLANCHER (bas de la fourchette — construction la plus économique)
-// Chaque standing a ses propres bornes réelles, pas des % génériques
-const COST_PER_M2_BY_ROLE = {
-  //                          A (cible)    B (médian)   C (plancher)
-  ECONOMIQUE: { A: 250000,  B: 212500,  C: 175000 },  // 175k–250k FCFA/m²
-  ECO:        { A: 250000,  B: 212500,  C: 175000 },  // alias ECONOMIQUE
-  STANDARD:   { A: 350000,  B: 300000,  C: 250000 },  // 250k–350k FCFA/m²
-  HAUT:       { A: 450000,  B: 387500,  C: 325000 },  // 325k–450k FCFA/m²
-  PREMIUM:    { A: 550000,  B: 475000,  C: 400000 },  // 400k–550k FCFA/m²
-};
-// Ajustement optionnel par driver : le driver peut décaler légèrement le coût cible
-// RENTABILITE → A plus haut (+5%) car finitions supérieures pour meilleurs loyers
-// SECURISATION → A plus bas (-3%) car prudence budgétaire
-const COST_DRIVER_ADJUST = {
-  MAX_CAPACITE:         0.00,
-  RENTABILITE:         +0.05,  // +5% sur A pour qualité locative
-  SECURISATION_RISQUE: -0.03,  // -3% prudence
-  MIXTE_PROGRAMME:      0.00,
-  PHASAGE_FONCIER:     -0.02,  // -2% construction phasée
-};
 // ══════════════════════════════════════════════════════════════════════════════
 // v57.7 — RETRAITS RÉGLEMENTAIRES (SETBACKS) par zonage
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1432,20 +1404,6 @@ function computeSmartScenarios({
   // ≈24×24 au lieu du vrai bbox ≈49×47), ce qui causait fp_A=342 au lieu de ~1100.
   // La contrainte physique (bâtiment dans l'enveloppe) est gérée par
   // computeMassingPolygon au moment du rendu, avec cross-section + containment check.
-
-  // v72.52: GARDE ANTI-NaN sur envelope_w et envelope_d
-  // Si les valeurs sont NaN/0, on déduit depuis envelope_area (polygone) ou site_area
-  if (isNaN(envelope_w) || envelope_w <= 0) {
-    const fallbackArea = env_area_override || site_area * 0.6;
-    envelope_w = Math.round(Math.sqrt(fallbackArea) * 1.1); // slightly wider than square
-    console.warn(`[v72.52] ⚠️ envelope_w was NaN/0 → fallback=${envelope_w}m (from area=${fallbackArea}m²)`);
-  }
-  if (isNaN(envelope_d) || envelope_d <= 0) {
-    const fallbackArea = env_area_override || site_area * 0.6;
-    envelope_d = Math.round(Math.sqrt(fallbackArea) * 0.9); // slightly narrower
-    console.warn(`[v72.52] ⚠️ envelope_d was NaN/0 → fallback=${envelope_d}m (from area=${fallbackArea}m²)`);
-  }
-
   const envelope_bbox = envelope_w * envelope_d;
   const envelope_area = env_area_override || envelope_bbox;
   const ces = ZONING_CES[zoning_type] || 0.50;
@@ -1698,9 +1656,6 @@ function computeSmartScenarios({
     // v57.20 SPLIT : volumes séparés (commerce + logement)
     let splitLayout = null; // sera rempli si layout_mode === "SPLIT_AV_AR"
     let target_sdp_programme = 0; // ancre client : target_units × refSize / (1-circ)
-    // v72.53 TYPOLOGY — déclaré ici pour être accessible dans TOUS les chemins (CES-driven ou legacy)
-    let preTypology = "BLOC";
-    let typoImpact = TYPOLOGY_IMPACT.BLOC;
     // v57.13 EXPERT RATIOS — lookup pour ce programme × zonage × scénario
     const scenarioKey = label; // A, B, C
     const expertZone = EXPERT_RATIOS[programKey]?.[zoning_type] || EXPERT_RATIOS[programKey]?.Z_DEFAULT;
@@ -1720,24 +1675,6 @@ function computeSmartScenarios({
       bodyDepth = resolveField(rules.body_depth_m, stdKey);
       maxPerFloor = resolveField(rules.max_units_per_floor, stdKey);
       groundReserve = resolveField(rules.ground_reserve, label) || 0.25;
-      // ══════════════════════════════════════════════════════════════════════
-      // v72.53: TYPOLOGY IMPACT — la forme du bâtiment modifie les calculs
-      // Pré-sélection de la typology AVANT les calculs de SDP/coûts
-      // ══════════════════════════════════════════════════════════════════════
-      const envAspectCalc = envelope_w / Math.max(1, envelope_d);
-      const fillRatioCalc = (ces * site_area * (CES_FILL_BY_ROLE[role] || 0.80)) / Math.max(1, envelope_area);
-      preTypology = preSelectTypology({
-        fp_m2: ces * site_area * (CES_FILL_BY_ROLE[role] || 0.80),
-        envelope_area, site_area, envAspect: envAspectCalc,
-        massing_mode: SCENARIO_MASSING_MODE[label] || "BALANCED",
-        scenario_role: role, standing_level, program_main, isMixte, fillRatio: fillRatioCalc,
-      });
-      typoImpact = TYPOLOGY_IMPACT[preTypology] || TYPOLOGY_IMPACT.BLOC;
-      // Appliquer les modifiers typologiques
-      circRatio = Math.max(0.08, Math.min(0.35, circRatio + typoImpact.circ_modifier));
-      bodyDepth = Math.round(bodyDepth * typoImpact.body_depth_mult);
-      console.log(`│   🏛️ v72.53 TYPOLOGY: ${preTypology} → circ+${(typoImpact.circ_modifier*100).toFixed(0)}%=${(circRatio*100).toFixed(0)}%, body×${typoImpact.body_depth_mult}=${bodyDepth}m, coût×${typoImpact.cost_mult}`);
-      console.log(`│     ${typoImpact.description}`);
       let maxFloorsProg = rules.max_floors || 99;
       // ── CAS SPÉCIAUX ──
       const isBungalow = programKey === "MAISON_INDIVIDUELLE" && target_units > 1;
@@ -1762,10 +1699,8 @@ function computeSmartScenarios({
         * capacityBoost                   // capacité élevée → +6% max
         * densityBandMult;                // zone dense → CES poussé (+10% max)
       // Bornes : jamais en dessous de 40% du CES réglementaire, jamais au-dessus de 105%
-      // v72.51: garde anti-NaN sur le CES client
-      const _safeClientCesMod = (isNaN(clientCesMod) || clientCesMod <= 0) ? 0.80 : clientCesMod;
       const effectiveCES = Math.max(ces * 0.40, Math.min(ces * 1.05,
-        ces * _safeClientCesMod
+        ces * clientCesMod
       ));
       effectiveCESOutput = effectiveCES;
       const effectiveMaxFp = Math.round(effectiveCES * site_area);
@@ -1899,11 +1834,7 @@ function computeSmartScenarios({
       // ÉTAPE 3 : Nombre de niveaux = CONSÉQUENCE
       const levelsFromProgram = Math.max(1, Math.ceil(clientUnits / Math.max(1, adaptiveUnitsPerFloor)));
       // fpProgramme = dimensionné pour les unités qui rentrent réellement
-      // v72.51: garde anti-NaN — si un facteur est invalide, fallback sur valeurs sûres
-      const _safeAdaptive = isNaN(adaptiveUnitsPerFloor) ? 1 : adaptiveUnitsPerFloor;
-      const _safeEffSize = isNaN(effectiveUnitSize) ? (sizes.T3 || 80) : effectiveUnitSize;
-      const _safeCirc = (isNaN(circRatio) || circRatio >= 1) ? 0.20 : circRatio;
-      const fpProgramme = Math.round(_safeAdaptive * _safeEffSize / (1 - _safeCirc));
+      const fpProgramme = Math.round(adaptiveUnitsPerFloor * effectiveUnitSize / (1 - circRatio));
       // Plancher : minimum 1 appartement compressé
       const fpMinViable = Math.round(Math.max(100, 1 * compressedSize / (1 - circRatio)));
       console.log(`│   🏠 v72.33 PLATEAU ADAPTATIF (parcelle → unités → niveaux):`);
@@ -1941,21 +1872,16 @@ function computeSmartScenarios({
       // Avant : fpRdc = fpProgramme (identique pour A, B, C)
       // → quand fpProgramme < tous les plafonds, les 3 scénarios sont identiques.
       //
-      // ══════════════════════════════════════════════════════════════════
-      // v72.53 PHILOSOPHIE DES 3 SCÉNARIOS :
-      //   A = EXACTEMENT LA DEMANDE DU CLIENT
-      //       → fpProgramme × 1.00 = programme complet, tailles généreuses
-      //       → Ni plus, ni moins que ce que le client a demandé
-      //   B = ALTERNATIVE ÉQUILIBRÉE
-      //       → fpProgramme × 0.85 = même programme, surfaces/coûts moindres
-      //       → Tailles d'unités réduites (~15%), budget plus accessible
-      //   C = PRUDENT — IMPLANTATION DIFFÉRENTE + COMPACTE SI OPTIMAL
-      //       → fpProgramme × 0.70 = emprise compacte, volume unique SUPERPOSÉ
-      //       → Possibilité d'une implantation alternative (ex: SUPERPOSÉ au lieu de SPLIT)
-      //       → Coûts minimisés, programme livré en version économique
+      // PHILOSOPHIE ARCHITECTE-CONSEIL :
+      //   A = LE PROGRAMME DU CLIENT tel quel (budget + contraintes + priorités)
+      //       → fpProgramme × 1.00 = on livre exactement le plateau optimal
+      //   B = VERSION ÉQUILIBRÉE si A coince (budget serré, risques)
+      //       → fpProgramme × 0.85 = plateau réduit de 15%, plus de marge
+      //   C = VERSION PRUDENTE / PHASABLE
+      //       → fpProgramme × 0.65 = emprise minimale, max espace libre
       // Le terrain plafonne toujours (CES, enveloppe, retraits).
       // ══════════════════════════════════════════════════════════════════
-      const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.85, PRUDENT: 0.70 };
+      const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.75, PRUDENT: 0.55 };
       const roleFpFactor = ROLE_FP_FACTOR[role] || 1.0;
       // ══════════════════════════════════════════════════════════════════
       // v57.20 SPLIT_AV_AR : COMMERCE DEVANT (clôture) + LOGEMENT DERRIÈRE
@@ -1983,19 +1909,9 @@ function computeSmartScenarios({
         const _parcD = envelope_d || Math.round(site_area / (envelope_w || 20));
         const _commD = Math.min(Number(commerce_depth_m) || 6, _parcD * 0.30);
         const _gapD = Number(retrait_inter_volumes_m) || 4;
-        // v72.63: FIX CRITIQUE — envelope_d est DÉJÀ après retraits (land_depth - rAvant - rArrière)
-        // NE PAS re-soustraire rAvant et rArrière, sinon double-comptage → SPLIT toujours "non viable"
-        const _logtD = _parcD - _commD - _gapD;
-        const _gapDViability = Math.min(_gapD, 2);
-        const _logtDRelaxed = _parcD - _commD - _gapDViability;
-        _splitViable = _logtDRelaxed >= 5 && _parcD >= 12;
-        console.log(`│   v72.63 SPLIT VIABILITY: parcD=${_parcD}m commD=${_commD.toFixed(1)}m gap=${_gapD}m → logtD=${_logtD.toFixed(1)}m (relaxed=${_logtDRelaxed.toFixed(1)}m) → ${_splitViable ? "✅ VIABLE" : "❌ NON VIABLE"}`);
-        if (!_splitViable) console.log(`│   ⚠️ SPLIT NON VIABLE: logtDepth=${_logtDRelaxed.toFixed(1)}m (min 5m) parcD=${_parcD}m (min 12m)`);
+        const _logtD = _parcD - rAvant - _commD - _gapD - rArriere;
+        _splitViable = _logtD >= 8 && _parcD >= 20;
       }
-      // v72.53: RÈGLES SPLIT_AV_AR :
-      // - Commerce collé à la LIMITE SÉPARATIVE côté front (ligne de setback avant)
-      // - Logement EN RETRAIT sur PILOTIS (habitable à partir de R+1)
-      // - Pilotis obligatoire quand : SPLIT_AV_AR OU terrain étroit (< 10m constructible)
       // v72.30: PRUDENT → TOUJOURS SUPERPOSÉ (choix stratégique de compacité)
       const useSplitForRole = _splitRequested && role !== "PRUDENT" && _splitViable;
       if (role === "PRUDENT" && _splitRequested) {
@@ -2004,121 +1920,70 @@ function computeSmartScenarios({
       if (useSplitForRole) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
-        // Volume 1 : COMMERCE (bande avant) — collé à la LIMITE SÉPARATIVE FRONT
-        // v72.53: le commerce colle au setback avant (retrait_avant = position du commerce)
-        // Pleine largeur : couvre toute la façade côté rue (identique pour A/B)
+        // Volume 1 : COMMERCE (bande avant) — identique pour les 3 scénarios
         const commDepth = Math.min(Number(commerce_depth_m) || 6, parcDepth * 0.30);
-        // v72.53: respecter la mitoyenneté (2 mitoyens → pas de retrait latéral)
-        const commWidth = Math.round(parcWidth - retraitLatEffectif);
+        const commWidth = Math.round(parcWidth - rLateral * 2);
         const fpCommerce = Math.round(commWidth * commDepth);
         const levelsCommerce = 1;
         const sdpCommerce = fpCommerce;
-        // ══════════════════════════════════════════════════════════════════
-        // v72.53: PROGRAMME-DRIVEN — le mix client donne les unités VOULUES
-        // Le nombre d'unités commerce + résidentiel vient du PROGRAMME,
-        // pas de la capacité physique de la bande commerciale.
-        // ══════════════════════════════════════════════════════════════════
-        const estMixSplit = rules.default_mix_fn ? rules.default_mix_fn(clientUnits) : { COMMERCE: 1 };
-        const programmeCommerceUnits = estMixSplit.COMMERCE || 1;
-        // v72.53: Résidentiel cible = PROGRAMME CLIENT (SACRÉ, identique A/B/C)
-        const resiTarget = Math.max(1, clientUnits - programmeCommerceUnits);
-        // Volume 2 : LOGEMENT (en retrait sur pilotis) — v72.53 PROGRAMME-DRIVEN
+        // Volume 2 : LOGEMENT (en retrait) — v72.27: DIFFÉRENCIÉ PAR RÔLE
         const interGap = Number(retrait_inter_volumes_m) || 4;
-        // v72.63: FIX — parcDepth = envelope_d = DÉJÀ après retraits (rAvant/rArriere exclus)
-        // Ne PAS re-soustraire rAvant/rArriere ici
-        const logtDepthDispo = Math.round(parcDepth - commDepth - interGap);
-        // v72.53: Le RÔLE affecte les dimensions physiques (différenciation architecturale)
-        const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
-        const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.90 : 0.75;
-        const logtWidth = Math.round((parcWidth - retraitLatEffectif) * roleWidthFactor);
+        const logtDepthDispo = Math.round(parcDepth - rAvant - commDepth - interGap - rArriere);
+        // v72.27: Le RÔLE affecte la largeur ET la profondeur du logement
+        // INTENSIFICATION: utilise toute la largeur disponible
+        // EQUILIBRE: 80% de la largeur → emprise plus compacte
+        // PRUDENT: 65% de la largeur → emprise réduite
+        const roleWidthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.80 : 0.65;
+        const roleDepthFactor = role === "INTENSIFICATION" ? 1.00 : role === "EQUILIBRE" ? 0.85 : 0.70;
+        const logtWidth = Math.round(commWidth * roleWidthFactor);
         const logtDepthUsed = Math.round(Math.min(logtDepthDispo, bodyDepth * 1.5) * roleDepthFactor);
         const fpLogtRaw = Math.round(logtWidth * logtDepthUsed);
-        // ══════════════════════════════════════════════════════════════════
-        // v72.53: FLOOR PLATE DIMENSIONNÉE PAR LE PROGRAMME
-        // Au lieu de maximiser la surface terrain (fpProgramme = adaptiveUnitsPerFloor),
-        // on dimensionne pour le nombre d'unités résidentielles NÉCESSAIRES par étage.
-        // ══════════════════════════════════════════════════════════════════
-        const maxResiPerFloorSplit = Math.max(1, Math.floor(
-          fpLogtRaw * (1 - circRatio) / Math.max(40, effectiveUnitSize)
-        ));
-        const idealResiPerFloor = Math.min(resiTarget, maxResiPerFloorSplit);
-        const fpLogtFromProgramme = Math.round(idealResiPerFloor * effectiveUnitSize / (1 - _safeCirc));
-        console.log(`│   v72.53 PROGRAMME-SPLIT: ${clientUnits}u → ${programmeCommerceUnits} commerce + ${resiTarget} rési | max ${maxResiPerFloorSplit}/étage → idéal ${idealResiPerFloor}/étage → fpLogtProg=${fpLogtFromProgramme}m²`);
-        // Cap par les contraintes terrain (le terrain PLAFONNE, le programme DIMENSIONNE)
         const fpLogt = Math.min(
           fpLogtRaw,
-          fpLogtFromProgramme,
+          Math.round(fpProgramme * roleFpFactor),
           fpMaxCes - fpCommerce,
           fpMaxRetraits - fpCommerce
         );
-        // Plancher viable (au moins 1 logement compressé)
-        const splitMinViable = Math.round(Math.max(80, 1 * compressedSize / (1 - _safeCirc)));
+        // v72.27: fpMinViable réduit par le rôle pour que PRUDENT soit vraiment plus petit
+        const splitMinViable = role === "INTENSIFICATION" ? fpMinViable : Math.round(fpMinViable * (role === "EQUILIBRE" ? 0.80 : 0.60));
         const fpLogtFinal = Math.max(splitMinViable, fpLogt);
         // CES total
         const fpTotal = fpCommerce + fpLogtFinal;
         const cesTotalPct = Math.round(fpTotal / site_area * 100);
         // Boutiques
-        // v72.53: Commerce band = pleine largeur (colle à la limite séparative front)
-        // Mais le PROGRAMME détermine le nombre d'unités commerciales reportées
         const commerceUnitSize = 30;
-        const nbBoutiquesTerrain = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
-        const nbBoutiques = programmeCommerceUnits; // PROGRAMME, pas terrain
-        // v72.53: resiTarget déjà calculé ci-dessus (programme-driven)
+        const nbBoutiques = Math.max(1, Math.floor(sdpCommerce / commerceUnitSize));
+        // Niveaux logement — v72.27: DIFFÉRENCIÉ PAR RÔLE
+        const resiTarget = Math.max(1, target_units - nbBoutiques);
+        const resiRoleTarget = Math.max(1, Math.round(resiTarget * roleFpFactor));
         const usefulLogt = Math.round(fpLogtFinal * (1 - circRatio));
         const avgResiSize = refUnitSize;
         const resiPerFloor = Math.max(1, Math.min(maxPerFloor, Math.floor(usefulLogt / avgResiSize)));
-        // ══════════════════════════════════════════════════════════════════
-        // v72.53: NIVEAUX = CONSÉQUENCE DU PROGRAMME (target_units SACRÉ)
-        // A (INTENSIFICATION) = EXACTEMENT la demande client, ni plus ni moins
-        //   → Le client demande N logements, on livre N logements au juste dimensionnement
-        // B (EQUILIBRE) = même nombre d'unités, tailles légèrement réduites
-        //   → Surfaces et coûts moindres, mais programme complet
-        // C (PRUDENT) = SUPERPOSÉ compact (géré ailleurs)
-        //   → Implantation différente si plus optimal
-        // ══════════════════════════════════════════════════════════════════
+        // v72.28: Niveaux FORCÉMENT DIFFÉRENTS par rôle
+        // INTENSIFICATION: max floors (R+2 min), EQUILIBRE: max-1 (R+1 min), PRUDENT: 1 seul (RDC)
+        // En SPLIT, "levels" = niveaux de LOGEMENT (commerce est séparé)
         let levelsLogt;
-        const baseCalc = Math.max(1, Math.ceil(resiTarget / resiPerFloor));
+        const baseCalc = Math.max(1, Math.ceil(resiRoleTarget / resiPerFloor));
         if (role === "INTENSIFICATION") {
-          // A = INTENSIFICATION → pousse 1 niveau de plus que le strict minimum
-          // pour maximiser la valeur locative et différencier visuellement de B
-          levelsLogt = Math.min(baseCalc + 1, effectiveMaxFloors);
-          levelsLogt = Math.max(2, levelsLogt);
+          levelsLogt = Math.max(3, baseCalc);               // R+2 minimum
+          levelsLogt = Math.min(levelsLogt, effectiveMaxFloors);
+          if (levelsLogt < 3 && effectiveMaxFloors >= 3) levelsLogt = 3;
+          if (levelsLogt < 2) levelsLogt = 2;               // au moins R+1
         } else if (role === "EQUILIBRE") {
-          // B = EQUILIBRE → strict minimum pour le programme (confort modéré)
-          levelsLogt = Math.min(baseCalc, effectiveMaxFloors);
-          levelsLogt = Math.max(1, levelsLogt);
-        } else {
-          levelsLogt = 1; // PRUDENT = SUPERPOSÉ
+          levelsLogt = Math.max(2, baseCalc);               // R+1 minimum
+          levelsLogt = Math.min(levelsLogt, Math.max(2, effectiveMaxFloors - 1));
+        } else { // PRUDENT
+          levelsLogt = 1;                                    // RDC uniquement
         }
-        // Garde-fou COS
+        // COS check
         while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > max_sdp) levelsLogt--;
-        // v72.60: Garde-fou PROGRAMME — SDP total plafonné par rôle
-        // A (INTENSIFICATION) = 1.60× → marge pour le niveau supplémentaire (valeur ajoutée)
-        // B (EQUILIBRE) = 1.35× → strict programme, confort modéré
-        // C (PRUDENT) = 1.20× → compact
-        const sdpCapMultiplier = role === "INTENSIFICATION" ? 1.60 : role === "EQUILIBRE" ? 1.35 : 1.20;
-        const sdpCapSplit = Math.round((resiTarget * effectiveUnitSize / (1 - _safeCirc) + sdpCommerce) * sdpCapMultiplier);
-        while (levelsLogt > 1 && (sdpCommerce + fpLogtFinal * levelsLogt) > sdpCapSplit) levelsLogt--;
         const totalResiUnits = resiPerFloor * levelsLogt;
-        // ══════════════════════════════════════════════════════════════════
-        // v72.53: RÈGLE DES PILOTIS — logement habitable à partir de R+1
-        // Pilotis OBLIGATOIRE quand :
-        //   1. SPLIT_AV_AR : commerce en front + logement en retrait → pilotis
-        //   2. Terrain trop étroit : constructibleWidth < 10m → pilotis pour libérer le sol
-        // Le RDC du volume logement = pilotis (parking, accès, local technique)
-        // Les logements démarrent à R+1 (ventilation, intimité, sécurité)
-        // ══════════════════════════════════════════════════════════════════
-        const constructibleWidthSplit = parcWidth - retraitLatEffectif;
-        const isTerrainEtroit = constructibleWidthSplit < 10;
-        hasPilotis = true; // SPLIT = toujours pilotis
+        // v72.28: PILOTIS OBLIGATOIRE en SPLIT — logement sur pilotis, habitable à partir de R+1
+        hasPilotis = true;
         pilotisLevels = 1;
-        if (isTerrainEtroit) {
-          console.log(`│   ⚡ v72.53 PILOTIS: terrain étroit (${constructibleWidthSplit}m < 10m) → pilotis obligatoire`);
-        }
         // Sol libre
         const freeGroundSplit = Math.round(site_area - fpTotal);
-        // v72.63: FIX — même correction, parcDepth déjà net de retraits
-        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - commDepth - interGap - logtDepthUsed) : 0);
+        const espaceArriere = Math.round(logtDepthDispo > 0 ? logtWidth * Math.max(0, parcDepth - rAvant - commDepth - interGap - logtDepthUsed - rArriere) : 0);
         splitLayout = {
           mode: "SPLIT_AV_AR",
           volume_commerce: {
@@ -2128,7 +1993,7 @@ function computeSmartScenarios({
             levels: levelsCommerce,
             sdp_m2: sdpCommerce,
             units: nbBoutiques,
-            position: "AVANT (collé à la limite séparative front, aligné sur ligne de setback)",
+            position: "AVANT (contre limite séparative)",
           },
           volume_logement: {
             fp_m2: fpLogtFinal,
@@ -2144,94 +2009,42 @@ function computeSmartScenarios({
           espace_arriere_m2: espaceArriere,
           ces_total_pct: cesTotalPct,
         };
-        // v72.53: SUPPRESSION du v72.29 DIFF — la différenciation est DÉJÀ faite par :
-        //   - roleWidthFactor / roleDepthFactor (dimensions physiques du volume)
-        //   - roleFpFactor (cap sur fpProgramme)
-        //   - le nombre de niveaux (INTENSIFICATION=3+, EQUILIBRE=2, PRUDENT=SUPERPOSÉ)
-        // Appliquer un facteur SUPPLÉMENTAIRE de 0.75/0.50 crée un triple-compounding
-        // qui rend B et C absurdement petits (B=36% de A au lieu de ~80%).
-        console.log(`│   v72.53 SPLIT: fpLogtFinal=${fpLogtFinal} (role=${role}, pas de double-réduction)`);
+        // v72.29: FORCER LA DIFFÉRENCIATION — même si les contraintes convergent
+        // Le fp du logement DOIT être réduit par le rôle (visible sur le rendu)
+        const fpLogtDiff = role === "INTENSIFICATION" ? fpLogtFinal
+          : role === "EQUILIBRE" ? Math.round(fpLogtFinal * 0.75)
+          : Math.round(fpLogtFinal * 0.50); // PRUDENT = moitié
+        console.log(`│   v72.29 DIFF: fpLogtFinal=${fpLogtFinal} → fpLogtDiff=${fpLogtDiff} (role=${role})`);
+        // Mettre à jour le splitLayout avec les valeurs différenciées
+        splitLayout.volume_logement.fp_m2 = fpLogtDiff;
+        splitLayout.volume_logement.sdp_m2 = fpLogtDiff * levelsLogt;
+        splitLayout.volume_logement.width_m = Math.round(splitLayout.volume_logement.width_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.85 : 0.70));
+        splitLayout.volume_logement.depth_m = Math.round(splitLayout.volume_logement.depth_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.88 : 0.72));
         // Valeurs principales = LOGEMENT
-        fpRdc = fpLogtFinal;
-        fp = fpLogtFinal;
-        fpEtages = fpLogtFinal;
+        fpRdc = fpLogtDiff;
+        fp = fpLogtDiff;
+        fpEtages = fpLogtDiff;
         levels = levelsLogt;
-        // v72.65: totalUnitsResult plafonné à clientUnits (A = EXACTEMENT la demande)
-        const rawTotalUnits = nbBoutiques + totalResiUnits;
-        totalUnitsResult = Math.min(rawTotalUnits, clientUnits);
-        // Si trop d'unités rési (ex: 3 niveaux × 1/palier = 3 rési + 1 comm = 4 > 3 demandées)
-        // → réduire les rési comptées pour coller au programme client
-        const resiCountFinal = totalUnitsResult - nbBoutiques;
-        // v72.66c: FIX — mettre à jour split_layout.volume_logement.units après le cap
-        if (splitLayout && splitLayout.volume_logement) {
-          splitLayout.volume_logement.units = resiCountFinal;
-        }
-        // v72.66: FIX — totalUseful = SDP totale × (1-circ) pour cohérence avec _recalcSdp et garde-fou
-        // Avant: sdpCommerce comptait 100% utile (pas de circ), incohérent avec sdp×(1-circ)
-        const sdpSplitTotal = sdpCommerce + fpLogtFinal * levelsLogt;
-        totalUseful = Math.round(sdpSplitTotal * (1 - circRatio));
+        totalUnitsResult = nbBoutiques + totalResiUnits;
+        totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
         unitMix = { COMMERCE: nbBoutiques };
-        // v72.66: FIX — default_mix_fn retourne COMMERCE dans le mix (USAGE_MIXTE),
-        // mais en SPLIT le commerce est DÉJÀ géré séparément (vol.1).
-        // → On filtre COMMERCE du resiMix pour ne garder que les logements.
-        const rawResiMix = rules.default_mix_fn ? rules.default_mix_fn(resiCountFinal) : { T3: resiCountFinal };
-        const resiMix = {};
-        let resiMixTotal = 0;
-        for (const [typ, count] of Object.entries(rawResiMix)) {
-          if (typ === "COMMERCE") continue; // v72.66: skip — déjà dans vol.1
-          if (count > 0) { resiMix[typ] = count; resiMixTotal += count; }
-        }
-        // v72.66: si après filtrage il manque des unités (ex: COMMERCE comptait pour 1),
-        // redistribuer sur T3 pour coller à resiCountFinal
-        if (resiMixTotal < resiCountFinal) {
-          resiMix.T3 = (resiMix.T3 || 0) + (resiCountFinal - resiMixTotal);
-        }
+        const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalResiUnits) : { T3: totalResiUnits };
         for (const [typ, count] of Object.entries(resiMix)) {
           if (count > 0) unitMix[typ] = count;
         }
-        // v72.65: unitMixDetail au format PARSABLE "1×COMMERCE(40m²) + 2×T3(72m²)"
-        // Ce format est attendu par le regex dans buildTextInjection
-        const commerceSizePerUnit = nbBoutiques > 0 ? Math.round(sdpCommerce / nbBoutiques) : 0;
-        const splitMixParts = [];
-        splitMixParts.push(`${nbBoutiques}×COMMERCE(${commerceSizePerUnit}m²)`);
-        for (const [typ, count] of Object.entries(resiMix)) {
-          if (count > 0) {
-            const unitSize = sizes[typ] || sizes.T3 || 72;
-            splitMixParts.push(`${count}×${typ}(${unitSize}m²)`);
-          }
-        }
-        unitMixDetail = splitMixParts.join(" + ");
-        console.log(`│   🏪 v72.53 SPLIT_AV_AR ${role} PROGRAMME-DRIVEN:`);
-        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} prog / ${nbBoutiquesTerrain} possibles) — collé limite séparative front`);
+        unitMixDetail = `SPLIT: ${nbBoutiques} boutiques (${fpCommerce}m² RDC avant) + ${totalResiUnits} logts (${fpLogtFinal}m²×${levelsLogt}niv arrière)`;
+        console.log(`│   🏪 v72.27 SPLIT_AV_AR ${role} (roleWidthFactor=${roleWidthFactor}, roleDepthFactor=${roleDepthFactor}):`);
+        console.log(`│     VOL.1 COMMERCE: ${commWidth}m×${Math.round(commDepth)}m = ${fpCommerce}m² (${nbBoutiques} boutiques) — contre limite séparative`);
         console.log(`│     GAP: ${interGap}m (passage véhicule/piéton)`);
-        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv sur PILOTIS R+1 (${totalResiUnits} logts pour ${resiTarget} cibles)`);
+        console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
         console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
-        console.log(`│     ${isTerrainEtroit ? '⚡TERRAIN ÉTROIT' : '✓largeur OK'} (${constructibleWidthSplit}m constructible)`);
       } else {
-      // ── MODE SUPERPOSÉ (défaut) — v72.53: PROGRAMME-DRIVEN ──
+      // ── MODE SUPERPOSÉ (défaut) — logique existante ──
       fpRdc = Math.round(fpProgramme * roleFpFactor);
-      // v72.51: garde anti-NaN sur fpRdc
-      if (isNaN(fpRdc)) fpRdc = Math.round(Math.min(empriseEffective, envelope_area * 0.60));
-      // ══════════════════════════════════════════════════════════════════
-      // v72.53: PROGRAMME-DRIVEN CAP — ne pas surdimensionner le plateau
-      // fpProgramme est basé sur adaptiveUnitsPerFloor (capacité TERRAIN).
-      // Pour un petit programme (ex: 3 unités), le terrain peut en caser 4-6/étage
-      // → fpProgramme = 4×72/0.82 = 351m² quand le programme ne demande que 2 rési.
-      // CAP: le plateau ne dépasse pas ce dont le PROGRAMME a besoin par étage.
-      // ══════════════════════════════════════════════════════════════════
-      const estMixSuper = rules.default_mix_fn ? rules.default_mix_fn(clientUnits) : {};
-      const commerceUnitsSuper = isMixte ? (estMixSuper.COMMERCE || 1) : 0;
-      const resiUnitsSuper = Math.max(1, clientUnits - commerceUnitsSuper);
-      // Combien d'unités par étage au maximum (capé par le programme)
-      const resiPerFloorProg = Math.min(resiUnitsSuper, _safeAdaptive || 2);
-      const fpCapProgramme = Math.round(resiPerFloorProg * _safeEffSize / (1 - _safeCirc));
-      fpRdc = Math.min(fpRdc, fpCapProgramme);
-      console.log(`│   v72.53 SUPERPOSÉ PROGRAMME-CAP: rési=${resiUnitsSuper}u, perFloor=${resiPerFloorProg}, fpCap=${fpCapProgramme}m² → fpRdc=${fpRdc}m²`);
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
       fpRdc = Math.max(fpRdc, fpMinViable);
       fpRdc = Math.round(fpRdc);
-      if (isNaN(fpRdc)) fpRdc = Math.max(100, Math.round(envelope_area * 0.40)); // ultime fallback
       }
       const cesPctResult = Math.round((splitLayout ? (splitLayout.volume_commerce.fp_m2 + fpRdc) : fpRdc) / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
@@ -2248,15 +2061,11 @@ function computeSmartScenarios({
       }
       // fp principal (pour le rendu 3D) = fpEtages (volume dominant)
       fp = fpEtages;
-      // Helper COS check : SDP = fpRdc + fpEtages × (niv - 1) — déclaré AVANT le guard pour accessibilité
-      const computeSdpDual = (niv) => fpRdc + fpEtages * Math.max(0, niv - 1);
-      // v72.64: GUARD — en mode SPLIT, les valeurs (levels, totalUseful, unitMixDetail, unitMix)
-      // sont déjà calculées dans le bloc SPLIT ci-dessus. Le bloc ci-dessous (unit calc)
-      // ne doit PAS les écraser, sinon totalUnitsResult ≠ unitMixDetail (ex: 4 vs "1×COMM+2×T3")
       let floorsNeeded, totalUnits;
-      if (!splitLayout) {
       totalUseful = 0;
       const details = [];
+      // Helper COS check : SDP = fpRdc + fpEtages × (niv - 1)
+      const computeSdpDual = (niv) => fpRdc + fpEtages * Math.max(0, niv - 1);
       const cosCap = COS_CAP_BY_ROLE[role] || 1.0;
       const maxSdpForRole = Math.floor(max_sdp * cosCap);
       if (isFpFromEnvelope) {
@@ -2381,7 +2190,6 @@ function computeSmartScenarios({
         unitMixDetail = details.join(" + ");
         unitMix = mix;
       }
-      } // v72.64: fin du guard !splitLayout pour le bloc unit calc
       // v72.31: En SPLIT, les niveaux sont déjà calculés dans le SPLIT branch (levelsLogt)
       // NE PAS écraser avec floorsNeeded qui vient de la logique SUPERPOSÉ
       if (!splitLayout) levels = floorsNeeded;
@@ -2406,10 +2214,7 @@ function computeSmartScenarios({
       // v57.16: ratio parking/vert — si le parking requis dépasse 40% du sol libre,
       // le ratio 1/3 parking - 2/3 vert est impossible → pilotis auto
       const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
-      // v72.53: PILOTIS — terrain trop étroit (constructible < 10m)
-      const constructibleWidthSuper = (envelope_w || 0) - retraitLatEffectif;
-      const isTerrainEtroitSuper = constructibleWidthSuper > 0 && constructibleWidthSuper < 10;
-      if (!isBungalow && (pilotisRule === true || isTerrainEtroitSuper || (pilotisRule === "auto" && (
+      if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" && (
         // ancien seuil : sol libre insuffisant en absolu
         ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
           && freeGround < parkingM2Needed)
@@ -2418,9 +2223,6 @@ function computeSmartScenarios({
       )))) {
         hasPilotis = true;
         pilotisLevels = 1;
-        if (isTerrainEtroitSuper) {
-          console.log(`│   ⚡ v72.53 PILOTIS: terrain étroit (${Math.round(constructibleWidthSuper)}m constructible < 10m) → pilotis R+1 obligatoire`);
-        }
         if (parkingRatioExceeded) {
           console.log(`│   🅿️→🏗️ v57.16: parking ${Math.round(parkingM2Needed)}m² > 40% sol libre ${Math.round(freeGround)}m² → PILOTIS AUTO (ratio 1/3-2/3 impossible sans pilotis)`);
         }
@@ -2515,47 +2317,27 @@ function computeSmartScenarios({
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
     // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
-    // v72.53: en SPLIT, le SDP TOTAL = commerce + logement (pas juste logement)
-    const sdpLogement = (fpRdc && fpEtages && levels > 1)
+    const sdp = (fpRdc && fpEtages && levels > 1)
       ? fpRdc + fpEtages * (levels - 1)
       : fp * levels;
-    const sdpCommerce = splitLayout ? (splitLayout.volume_commerce.sdp_m2 || 0) : 0;
-    const sdp = sdpLogement + sdpCommerce;
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
     let compliance;
     if (cosRatio <= 1.05) compliance = "CONFORME";
     else if (cosRatio <= 1.30) compliance = "DEROGATION_POSSIBLE";
     else compliance = "AMBITIEUX_HORS_COS";
-    // v72.53: Coût estimé FCFA (Cameroun) — DIFFÉRENCIÉ commerce vs bâti
-    // Commerce = construction plus simple (pas de cuisine/SdB) → 80% du coût bâti
-    // Bâti résidentiel = coût standard standing
+    // v57.6: Coût estimé FCFA (Cameroun) = Construction + VRD
+    // Construction = SDP × coût/m²
     // VRD = 10% de SDP × 50% du coût/m²
-    const COMMERCE_COST_RATIO = 0.80; // commerce = 80% du coût bâti (20% moins cher)
-    // v72.53: Coût/m² EXPLICITE par standing × rôle (valeurs marché Cameroun)
-    const standingKey = String(standing_level).toUpperCase();
-    const roleRange = COST_PER_M2_BY_ROLE[standingKey] || COST_PER_M2_BY_ROLE.STANDARD;
-    const costPerM2Standing = roleRange[label] || roleRange.B; // A=cible, B=médian, C=plancher
-    // Ajustement driver optionnel (±quelques % selon la stratégie client)
-    const driverAdj = COST_DRIVER_ADJUST[primary_driver] || 0;
-    const costPerM2Base = label === "A" ? Math.round(costPerM2Standing * (1 + driverAdj)) : costPerM2Standing;
-    // v72.53 TYPOLOGY: appliquer cost_mult de la typologie au coût/m² positionné
-    const costPerM2 = Math.round(costPerM2Base * (typoImpact ? typoImpact.cost_mult : 1.0));
-    const costPerM2Commerce = Math.round(costPerM2 * COMMERCE_COST_RATIO);
-    // Coût construction différencié + surcharges typologiques
-    const constructionCostBati = sdpLogement * costPerM2;
-    const constructionCostCommerce = sdpCommerce * costPerM2Commerce;
-    const constructionCost = constructionCostBati + constructionCostCommerce;
-    // v72.53 TYPOLOGY: surcharges fondations et toiture (proportionnelles à l'empreinte)
-    const _typoFondMult = typoImpact ? typoImpact.fondation_mult : 1.0;
-    const _typoToitMult = typoImpact ? typoImpact.toiture_mult : 1.0;
-    const _fpForSurcharges = fpRdc || fp;
-    const fondationSurcharge = Math.round(_fpForSurcharges * costPerM2Base * (_typoFondMult - 1.0) * 0.15);
-    const toitureSurcharge = Math.round(_fpForSurcharges * costPerM2Base * (_typoToitMult - 1.0) * 0.10);
-    // v72.53 VRD avec multiplicateur zoning (basé sur le coût standing brut, pas le positionné)
-    const vrdZoningMult = VRD_MULT_BY_ZONING[String(zoning_type).toUpperCase()] || VRD_MULT_BY_ZONING.Z_DEFAULT || 1.0;
-    const vrdCost = Math.round(((sdpLogement + sdpCommerce) * 0.10) * (costPerM2Standing * 0.50) * vrdZoningMult);
-    const estimatedCost = Math.round(constructionCost + fondationSurcharge + toitureSurcharge + vrdCost);
-    console.log(`│   💰 COÛT ${label}: ${standingKey}[${label}]=${costPerM2Standing} driverAdj=${driverAdj > 0 ? '+' : ''}${(driverAdj*100).toFixed(0)}% → base=${costPerM2Base} × typo(${preTypology})=${typoImpact ? typoImpact.cost_mult : 1} → ${costPerM2}/m² | fond=+${fondationSurcharge} toit=+${toitureSurcharge} | VRD×${vrdZoningMult}=${vrdCost} | TOTAL=${Math.round(estimatedCost/1e6)}M`);
+    // Total = construction + VRD = SDP × costPerM2 × 1.05
+    const COST_PER_M2_FCFA = {
+      PREMIUM: 400000, HAUT: 350000,
+      STANDARD: 250000,
+      ECONOMIQUE: 180000, ECO: 180000
+    };
+    const costPerM2 = COST_PER_M2_FCFA[String(standing_level).toUpperCase()] || 250000;
+    const constructionCost = sdp * costPerM2;
+    const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
+    const estimatedCost = Math.round(constructionCost + vrdCost);
     // budgetMax is already computed before the loop
     const budgetFit = budgetMax > 0
       ? (estimatedCost <= budgetMax ? "DANS_BUDGET" : estimatedCost <= budgetMax * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
@@ -2657,29 +2439,6 @@ function computeSmartScenarios({
       accent_color: accents[label],
       estimated_cost: estimatedCost,
       budget_fit: budgetFit,
-      // v72.53 TYPOLOGY impact
-      typology: preTypology || "BLOC",
-      typology_impact: typoImpact ? {
-        cost_mult: typoImpact.cost_mult,
-        fondation_mult: typoImpact.fondation_mult,
-        toiture_mult: typoImpact.toiture_mult,
-        circ_modifier: typoImpact.circ_modifier,
-        efficiency: typoImpact.efficiency,
-        description: typoImpact.description,
-      } : null,
-      cost_detail: {
-        cost_per_m2_standing: costPerM2Standing,
-        cost_driver_adjust: driverAdj,
-        cost_per_m2_base: costPerM2Base,
-        cost_per_m2_typo: costPerM2,
-        cost_per_m2_commerce: costPerM2Commerce,
-        construction_bati: Math.round(constructionCostBati),
-        construction_commerce: Math.round(constructionCostCommerce),
-        fondation_surcharge: fondationSurcharge || 0,
-        toiture_surcharge: toitureSurcharge || 0,
-        vrd: vrdCost,
-        vrd_zoning_mult: vrdZoningMult || 1.0,
-      },
       // v57.0 CES-driven extras
       program_driven: isProgramDriven,
       program_key: programKey || "NONE",
@@ -3683,103 +3442,9 @@ function computeSmartScenarios({
   console.log(`└── end SCENARIO ENGINE v57.20 ──`);
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
-// ══════════════════════════════════════════════════════════════════════════════
-// v72.59: FONCTION GLOBALE — calcul des scores depuis les champs bruts du body
-// Utilisée par /compute-scenarios ET /generate-massing pour GARANTIR la cohérence
-// ══════════════════════════════════════════════════════════════════════════════
-function computeScoresFromRaw(p) {
-  const _n = (v) => { const n = Number(v); return isNaN(n) ? 0 : n; };
-  const rawBF = _n(p.setback_side_m || p.setback_side);
-  const rawBG = _n(p.setback_back_m || p.setback_back);
-  const rawBH = _n(p.envelope_w);
-  const rawBD = _n(p.plot_d_m || p.plot_d || p.site_depth || p.envelope_d);
-  const rawL  = _n(p.site_area);
-  const rawS  = _n(p.target_units);
-  const rawR  = _n(p.target_surface_m2);
-  const rawZ  = _n(p.financial_rigidity_score);
-  const rawAY = String(p.primary_driver || "").toUpperCase();
-  const rawCI = String(p.budget_band || "").toUpperCase();
-  // Scores normalisés
-  const rent_score_norm     = Math.round((rawBF / 50) * 100);
-  const capacity_score_norm = Math.round((rawBG / 50) * 100);
-  const risk_score_norm     = Math.round((rawBH / 50) * 100);
-  // Scores principaux
-  const rent_score     = rawL ? Math.min(100, Math.max(0, rawBF + (rawBG * 1.5) + rawBH)) : 0;
-  const capacity_score = rawL ? Math.min(100, Math.max(0, (rent_score_norm + capacity_score_norm + risk_score_norm) / 3)) : 0;
-  const mix_score_norm = Math.round((rent_score / 50) * 100);
-  const phase_score_norm = Math.round((capacity_score / 50) * 100);
-  const phase_score    = rawL ? 35 : 0;
-  const risk_score     = rawL ? 45 : 0;
-  // Density & pressure
-  const density_band = rawBD >= 15 ? "HIGH" : (rawBD >= 8 ? "MEDIUM" : "LOW");
-  const density_pressure_factor = density_band === "HIGH" ? 15 : (density_band === "MEDIUM" ? 7 : 0);
-  const risk_adjusted = Math.min(100, risk_score_norm + density_pressure_factor);
-  // Second best & dominance
-  const scoreArray = [rent_score_norm, capacity_score_norm, risk_score_norm, mix_score_norm].sort((a, b) => b - a);
-  const second_best_score = scoreArray[1] || 0;
-  const dominance_gap = (scoreArray[0] || 0) - second_best_score;
-  // Decision columns
-  const density_band_calc = rawL < 800 ? "LOW DENSITY" : (rawL < 1500 ? "MEDIUM DENSITY" : "HIGH DENSITY");
-  let budget_tension_calc = "LOW_TENSION";
-  if (rawCI === "LOW_BUDGET" && (rawS >= 10 || rawR >= 900)) budget_tension_calc = "HIGH_TENSION";
-  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 14 || rawR >= 1400)) budget_tension_calc = "HIGH_TENSION";
-  else if (rawCI === "MEDIUM_BUDGET" && (rawS >= 8 || rawR >= 900)) budget_tension_calc = "MEDIUM_TENSION";
-  const feasibility_posture = risk_score_norm >= 75 ? "DEFENSIVE" : ((risk_score_norm <= 40 && density_band_calc === "HIGH DENSITY") ? "OFFENSIVE" : "BALANCED");
-  let program_intent = "BALANCED_RESIDENTIAL";
-  if (rawAY === "RENT_SCORE" || rawAY === "CAPACITY_SCORE" || rawAY === "RENTABILITE" || rawAY === "CAPACITE") program_intent = "MAX_YIELD";
-  else if (rawAY === "MIX_SCORE" || rawAY === "MIXTE" || rawAY === "EQUILIBRE") program_intent = "MIXED_PROGRAM";
-  else if (rawAY === "PHASE_SCORE" || rawAY === "PHASAGE") program_intent = "PHASED_STRATEGY";
-  else if (rawAY === "RISK_SCORE" || rawAY === "RISQUE") program_intent = "LOW_RISK_STRATEGY";
-  else if (rawZ >= 8) program_intent = "DEFENSIVE_PROGRAM";
-  let program_alignment = "MEDIUM_ALIGNMENT";
-  if ((program_intent === "MAX_YIELD" || program_intent === "MIXED_PROGRAM") && (density_band_calc === "LOW DENSITY" || budget_tension_calc === "HIGH_TENSION" || feasibility_posture === "DEFENSIVE")) program_alignment = "LOW_ALIGNMENT";
-  else if ((program_intent === "LOW_RISK_STRATEGY" || program_intent === "DEFENSIVE_PROGRAM") && (budget_tension_calc === "LOW_TENSION" || feasibility_posture === "BALANCED")) program_alignment = "HIGH_ALIGNMENT";
-  else if (program_intent === "BALANCED_RESIDENTIAL" && (feasibility_posture === "BALANCED" || feasibility_posture === "OFFENSIVE")) program_alignment = "HIGH_ALIGNMENT";
-  const strategic_position = program_alignment === "HIGH_ALIGNMENT" ? "ALIGNED_STRATEGY" : (program_alignment === "MEDIUM_ALIGNMENT" ? "NEGOTIATED_STRATEGY" : (program_alignment === "LOW_ALIGNMENT" ? "CORRECTIVE_STRATEGY" : "BALANCED_POSITION"));
-  const recommended_scenario = feasibility_posture === "OFFENSIVE" ? "A" : (feasibility_posture === "BALANCED" ? "B" : "C");
-  // Driver intensity
-  let driver_intensity = "MOYENNE";
-  if (rawAY === "RENTABILITE" || rawAY === "RENT_SCORE") driver_intensity = rent_score_norm >= 70 ? "FORTE" : (rent_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
-  else if (rawAY === "CAPACITE" || rawAY === "CAPACITY_SCORE") driver_intensity = capacity_score_norm >= 70 ? "FORTE" : (capacity_score_norm >= 40 ? "MOYENNE" : "FAIBLE");
-  // useCalc helpers: prefer received value if non-zero, else use calculated
-  // v72.59: useCalc/useCalcStr rejettent les #VALUE! et chaînes corrompues de Google Sheet
-  const _isSheetError = (v) => typeof v === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(String(v).trim());
-  const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
-  const useCalcStr = (received, calculated) => (received && String(received).length > 0 && !_isSheetError(received)) ? received : calculated;
-  return {
-    // Final scores (with useCalc applied — prefer received if present)
-    rent_score: useCalc(Number(p.rent_score), rent_score),
-    capacity_score: useCalc(Number(p.capacity_score), capacity_score),
-    mix_score: Number(p.mix_score) || 0,
-    phase_score: useCalc(Number(p.phase_score), phase_score),
-    risk_score: useCalc(Number(p.risk_score), risk_score),
-    density_band: useCalcStr(p.density_band, density_band),
-    risk_adjusted: useCalc(Number(p.risk_adjusted), risk_adjusted),
-    feasibility_posture: useCalcStr(p.feasibility_posture, feasibility_posture),
-    density_pressure_factor: useCalc(Number(p.density_pressure_factor), density_pressure_factor),
-    driver_intensity: useCalcStr(p.driver_intensity, driver_intensity),
-    strategic_position: useCalcStr(p.strategic_position, strategic_position),
-    // Raw calculated values (for computed_scores response)
-    rent_score_norm, capacity_score_norm, risk_score_norm,
-    mix_score_norm, phase_score_norm,
-    second_best_score, dominance_gap,
-    density_band_calc, budget_tension_calc,
-    program_intent_calc: program_intent,
-    program_alignment_calc: program_alignment,
-    recommended_scenario,
-    feasibility_posture_calc: feasibility_posture,
-  };
-}
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
-  // v72.54: SANITIZE #VALUE! from Google Sheet — replace all Sheet errors with empty string
-  for (const key of Object.keys(p)) {
-    if (typeof p[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(p[key].trim())) {
-      console.log(`[SANITIZE] ${key}="${p[key]}" → "" (Google Sheet error)`);
-      p[key] = "";
-    }
-  }
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
@@ -3791,91 +3456,12 @@ app.post("/compute-scenarios", (req, res) => {
   console.log(`║ max_floors=${p.max_floors} max_height=${p.max_height_m} floor_h=${p.floor_height}`);
   console.log(`║ budget_tension=${p.budget_tension} budget_band=${p.budget_band}`);
   console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
-  console.log(`║ disposition="${p.disposition}" layout_mode="${p.layout_mode}"`);
   console.log(`╚════════════════════════════════════════╝\n`);
-
-  // ── v72.53: PARSING ROBUSTE des dimensions ──────────────────────────────────
-  // Make.com peut envoyer "20 - 6" (formule Sheet comme texte) au lieu d'un nombre.
-  // Number("20 - 6") = NaN → CRASH.
-  // parseFloat("20 - 6") = 20 → CORRECT car le serveur attend les dimensions BRUTES.
-  // Le serveur applique lui-même les retraits avec la bonne logique de mitoyenneté.
-  // Évaluer l'arithmétique (20-6=14) serait FAUX car ça donnerait des dimensions NETTES
-  // que le serveur re-soustrairait → double soustraction.
-  const _safeFloat = (v) => {
-    if (v === null || v === undefined || v === "") return 0;
-    if (typeof v === "number") return isNaN(v) ? 0 : v;
-    const s = String(v).trim();
-    const n = Number(s);
-    if (!isNaN(n)) return n;
-    // Prendre le premier nombre de la chaîne (= dimension BRUTE du terrain)
-    const f = parseFloat(s);
-    return (!isNaN(f)) ? f : 0;
-  };
-
-  // v72.59: Appel de la fonction GLOBALE computeScoresFromRaw (définie avant ce endpoint)
-
-  // v72.52: Appliquer parseFloat sur envelope_w et envelope_d AVANT tout calcul
-  const parsed_envelope_w = _safeFloat(p.envelope_w);
-  const parsed_envelope_d = _safeFloat(p.envelope_d);
-  const parsed_site_area  = _safeFloat(p.site_area);
-  const parsed_envelope_area = _safeFloat(p.envelope_area);
-  console.log(`[v72.52] PARSED DIMS: envelope_w=${parsed_envelope_w} envelope_d=${parsed_envelope_d} site_area=${parsed_site_area} envelope_area=${parsed_envelope_area} (raw: w="${p.envelope_w}" d="${p.envelope_d}")`);
-
-  // ── v72.59: APPEL DE LA FONCTION PARTAGÉE POUR CALCULER LES SCORES ──
-  const scores = computeScoresFromRaw(p);
-  const calc_rent_score = scores.rent_score;
-  const calc_capacity_score = scores.capacity_score;
-  const calc_phase_score = scores.phase_score;
-  const calc_risk_score = scores.risk_score;
-  const calc_density_band = scores.density_band;
-  const calc_risk_adjusted = scores.risk_adjusted;
-  const calc_feasibility_posture = scores.feasibility_posture;
-  const calc_density_pressure_factor = scores.density_pressure_factor;
-  const calc_driver_intensity = scores.driver_intensity;
-  const calc_strategic_position = scores.strategic_position;
-  const calc_rent_score_norm = scores.rent_score_norm;
-  const calc_capacity_score_norm = scores.capacity_score_norm;
-  const calc_risk_score_norm = scores.risk_score_norm;
-  const calc_mix_score_norm = scores.mix_score_norm;
-  const calc_phase_score_norm = scores.phase_score_norm;
-  const calc_second_best_score = scores.second_best_score;
-  const calc_dominance_gap = scores.dominance_gap;
-  const calc_density_band_calc = scores.density_band_calc;
-  const calc_budget_tension_calc = scores.budget_tension_calc;
-  const calc_program_intent = scores.program_intent_calc;
-  const calc_program_alignment = scores.program_alignment_calc;
-  const calc_recommended_scenario = scores.recommended_scenario;
-
-  console.log(`[v72.59] SCORES CALCULÉS SERVEUR: rent_score=${calc_rent_score} capacity=${calc_capacity_score} risk_norm=${calc_risk_score_norm}`);
-  console.log(`[v72.59] density_band=${calc_density_band} feasibility=${calc_feasibility_posture} strategic=${calc_strategic_position} recommended=${calc_recommended_scenario}`);
-  console.log(`[v72.59] program_intent=${calc_program_intent} alignment=${calc_program_alignment} driver_intensity=${calc_driver_intensity}`);
-
-  // v72.59: useCalc/useCalcStr rejettent les #VALUE! de Google Sheet
-  const _isSheetErr = (v) => typeof v === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(String(v).trim());
-  const useCalc = (received, calculated) => (received && received !== 0 && !isNaN(received)) ? received : calculated;
-  const useCalcStr = (received, calculated) => (received && String(received).length > 0 && !_isSheetErr(received)) ? received : calculated;
-
-  // ── v72.62: DÉTECTION SPLIT — ALIGNÉE avec /generate-massing (4 signaux identiques) ──
-  // Signal 1: layout_mode explicitement SPLIT_AV_AR
-  const layoutModeIsSplit_cs = String(p.layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  // Signal 2: disposition (formulaire Google) mentionne commerce devant/split
-  const dispositionRaw_cs = String(p.disposition || "").toLowerCase();
-  const dispositionIsSplit_cs = /commerce devant|retrait|split/i.test(dispositionRaw_cs);
-  // Signal 3: body contient des mots-clés SPLIT dans les valeurs
-  const fieldValues_cs = Object.values(p).map(v => String(v).toLowerCase()).join(" ");
-  const bodyHasSplit_cs = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues_cs);
-  // Signal 4: commerce_depth_m > 0 avec programme mixte → FORCÉMENT du SPLIT
-  const bodyHasMixte_cs = /mixte|mixed|usage.?mixte/i.test(fieldValues_cs);
-  const hasCommerceDepth_cs = Number(p.commerce_depth_m) > 0;
-  // ── Résolution SPLIT (IDENTIQUE au massing endpoint) ──
-  const effectiveLayoutMode_cs = (layoutModeIsSplit_cs || dispositionIsSplit_cs || bodyHasSplit_cs || (hasCommerceDepth_cs && bodyHasMixte_cs))
-    ? "SPLIT_AV_AR" : "SUPERPOSE";
-  console.log(`[v72.62] SPLIT DETECTION: layout_mode="${p.layout_mode}"→${layoutModeIsSplit_cs} | disposition="${dispositionRaw_cs}"→${dispositionIsSplit_cs} | bodyHasSplit=${bodyHasSplit_cs} | commerceDepth=${p.commerce_depth_m} hasMixte=${bodyHasMixte_cs} | RESULT=${effectiveLayoutMode_cs}`);
   const scenarios = computeSmartScenarios({
-    site_area: parsed_site_area,
-    envelope_w: parsed_envelope_w,
-    envelope_d: parsed_envelope_d,
-    envelope_area: parsed_envelope_area || undefined,
+    site_area: Number(p.site_area),
+    envelope_w: Number(p.envelope_w),
+    envelope_d: Number(p.envelope_d),
+    envelope_area: Number(p.envelope_area) || undefined,
     zoning_type: p.zoning_type || "URBAIN",
     floor_height: Number(p.floor_height) || 3.2,
     primary_driver: p.primary_driver || "MAX_CAPACITE",
@@ -3885,10 +3471,9 @@ app.post("/compute-scenarios", (req, res) => {
     target_surface_m2: Number(p.target_surface_m2) || 0,
     site_saturation_level: p.site_saturation_level || "MEDIUM",
     financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
-    // v72.59: scores.* contient DÉJÀ les valeurs useCalc'd (pref received, sinon calculated)
-    density_band: scores.density_band,
-    risk_adjusted: scores.risk_adjusted,
-    feasibility_posture: scores.feasibility_posture,
+    density_band: p.density_band || "",
+    risk_adjusted: Number(p.risk_adjusted) || 0,
+    feasibility_posture: p.feasibility_posture || "BALANCED",
     scenario_A_role: p.scenario_A_role || "",
     scenario_B_role: p.scenario_B_role || "",
     scenario_C_role: p.scenario_C_role || "",
@@ -3898,479 +3483,19 @@ app.post("/compute-scenarios", (req, res) => {
     budget_tension: Number(p.budget_tension) || 0,
     standing_level: p.standing_level || "STANDARD",
     target_units: Number(p.target_units) || 0,
-    rent_score: scores.rent_score,
-    capacity_score: scores.capacity_score,
-    mix_score: scores.mix_score,
-    phase_score: scores.phase_score,
-    risk_score: scores.risk_score,
-    density_pressure_factor: scores.density_pressure_factor,
-    driver_intensity: scores.driver_intensity,
-    strategic_position: scores.strategic_position,
-    // v72.50 : disposition spatiale — détecté depuis le champ "disposition" du formulaire
-    layout_mode: effectiveLayoutMode_cs,
+    rent_score: Number(p.rent_score) || 0,
+    capacity_score: Number(p.capacity_score) || 0,
+    mix_score: Number(p.mix_score) || 0,
+    phase_score: Number(p.phase_score) || 0,
+    risk_score: Number(p.risk_score) || 0,
+    density_pressure_factor: Number(p.density_pressure_factor) || 1,
+    driver_intensity: p.driver_intensity || "MEDIUM",
+    strategic_position: p.strategic_position || "",
+    // v57.20 : disposition spatiale
+    layout_mode: p.layout_mode || "SUPERPOSE",
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
-  // ── v72.50: ANTI-COLLAPSE — garantir A > B > C en SDP ──
-  // Sur petites parcelles avec scores vides, le moteur peut produire A ≈ B.
-  // On force la différenciation en post-processing.
-  const _recalcSdp = (sc) => {
-    if (sc.split_layout && sc.split_layout.volume_commerce && sc.split_layout.volume_logement) {
-      sc.sdp_m2 = (sc.split_layout.volume_commerce.sdp_m2 || 0) + (sc.split_layout.volume_logement.sdp_m2 || 0);
-    } else {
-      const fpRdc = sc.fp_rdc_m2 || sc.fp_m2;
-      const fpEt = sc.fp_etages_m2 || sc.fp_m2;
-      sc.sdp_m2 = fpRdc + fpEt * (sc.levels - 1);
-    }
-    sc.height_m = Math.round(sc.levels * 3.2 * 10) / 10;
-    // v72.64: recalculer surface_habitable et total_useful après changement de SDP
-    const circRatio = (sc.circulation_ratio_pct || 20) / 100;
-    sc.surface_habitable_m2 = Math.round(sc.sdp_m2 * (1 - circRatio));
-    sc.total_useful_m2 = sc.surface_habitable_m2;
-    // Recalculer m2/logement
-    const nbLogements = Math.max(1, (sc.total_units || 1) - (sc.commerce_levels > 0 ? 1 : 0));
-    sc.m2_habitable_par_logement = Math.round(sc.surface_habitable_m2 / nbLogements);
-    sc.ratio_efficacite_pct = sc.sdp_m2 > 0 ? Math.round(sc.surface_habitable_m2 / sc.sdp_m2 * 100) : 0;
-  };
-  if (scenarios.A && scenarios.B) {
-    const aSdp = Math.round(scenarios.A.sdp_m2);
-    const bSdp = Math.round(scenarios.B.sdp_m2);
-    const diffAB = aSdp > 0 ? Math.abs(aSdp - bSdp) / aSdp : 0;
-    if (diffAB < 0.08) {
-      console.log(`[v72.50] ⚠️ ANTI-COLLAPSE A/B: A.sdp=${aSdp} B.sdp=${bSdp} diff=${(diffAB*100).toFixed(1)}% < 8% → FORÇAGE`);
-      if (scenarios.B.levels >= 2) {
-        scenarios.B.levels = scenarios.B.levels - 1;
-        if (scenarios.B.split_layout && scenarios.B.split_layout.volume_logement) {
-          scenarios.B.split_layout.volume_logement.levels = Math.max(1, scenarios.B.split_layout.volume_logement.levels - 1);
-          scenarios.B.split_layout.volume_logement.sdp_m2 = scenarios.B.split_layout.volume_logement.fp_m2 * scenarios.B.split_layout.volume_logement.levels;
-        }
-        _recalcSdp(scenarios.B);
-        console.log(`[v72.50] → B.levels réduit → B.sdp=${scenarios.B.sdp_m2}`);
-      } else {
-        scenarios.B.fp_m2 = Math.round(scenarios.B.fp_m2 * 0.80);
-        scenarios.B.fp_rdc_m2 = Math.round((scenarios.B.fp_rdc_m2 || scenarios.B.fp_m2) * 0.80);
-        scenarios.B.fp_etages_m2 = Math.round((scenarios.B.fp_etages_m2 || scenarios.B.fp_m2) * 0.80);
-        _recalcSdp(scenarios.B);
-        console.log(`[v72.50] → B.fp réduit 80% → B.sdp=${scenarios.B.sdp_m2}`);
-      }
-    }
-  }
-  if (scenarios.B && scenarios.C) {
-    const bSdp2 = Math.round(scenarios.B.sdp_m2);
-    const cSdp = Math.round(scenarios.C.sdp_m2);
-    if (bSdp2 <= cSdp && scenarios.C.levels >= 2) {
-      scenarios.C.levels = scenarios.C.levels - 1;
-      _recalcSdp(scenarios.C);
-      console.log(`[v72.50] → C.levels réduit car B.sdp(${bSdp2}) ≤ C.sdp(${cSdp}) → C.sdp=${scenarios.C.sdp_m2}`);
-    }
-  }
-  // ── v72.53: RECALCUL DES COÛTS après anti-collapse ──
-  // L'anti-collapse modifie les SDP/levels/fp → les coûts doivent être recalculés
-  // v72.53: commerce = 80% du coût bâti (construction plus simple)
-  const COMMERCE_COST_RATIO_RECALC = 0.80;
-  const COST_RANGE_MULT_RECALC = { bas: 0.85, haut: 1.20 };
-  const standingRecalc = String(p.standing_level || "STANDARD").toUpperCase();
-  const roleRangeRecalc = COST_PER_M2_BY_ROLE[standingRecalc] || COST_PER_M2_BY_ROLE.STANDARD;
-  const zoningRecalc = String(p.zoning_type || "URBAIN").toUpperCase();
-  const vrdMultRecalc = VRD_MULT_BY_ZONING[zoningRecalc] || VRD_MULT_BY_ZONING.Z_DEFAULT || 1.0;
-  const driverRecalc = String(p.primary_driver || "MAX_CAPACITE").toUpperCase();
-  const driverAdjRecalc = COST_DRIVER_ADJUST[driverRecalc] || 0;
-  for (const label of ["A", "B", "C"]) {
-    const sc = scenarios[label];
-    if (!sc) continue;
-    const newSdp = sc.sdp_m2;
-    if (!newSdp || isNaN(newSdp) || newSdp <= 0) continue;
-    // v72.53: récupérer la typologie stockée dans le scénario
-    const scTypo = TYPOLOGY_IMPACT[sc.typology] || TYPOLOGY_IMPACT.BLOC;
-    // v72.53: coût/m² explicite par rôle + ajustement driver
-    const rcCostPerM2Standing = roleRangeRecalc[label] || roleRangeRecalc.B;
-    const rcCostPerM2Base = label === "A" ? Math.round(rcCostPerM2Standing * (1 + driverAdjRecalc)) : rcCostPerM2Standing;
-    const costPerM2Recalc = Math.round(rcCostPerM2Base * scTypo.cost_mult);
-    const costPerM2CommerceRecalc = Math.round(costPerM2Recalc * COMMERCE_COST_RATIO_RECALC);
-    // v72.53: coût différencié commerce vs bâti
-    const scCommerceSdp = (sc.split_layout && sc.split_layout.volume_commerce) ? (sc.split_layout.volume_commerce.sdp_m2 || 0) : 0;
-    const scBatiSdp = newSdp - scCommerceSdp;
-    const newCostConstruction = scBatiSdp * costPerM2Recalc + scCommerceSdp * costPerM2CommerceRecalc;
-    // v72.53: surcharges fondations + toiture (proportionnelles à l'empreinte)
-    const scFp = sc.fp_rdc_m2 || sc.fp_m2 || 0;
-    const rcFondSurcharge = Math.round(scFp * rcCostPerM2Base * (scTypo.fondation_mult - 1.0) * 0.15);
-    const rcToitSurcharge = Math.round(scFp * rcCostPerM2Base * (scTypo.toiture_mult - 1.0) * 0.10);
-    // v72.53: VRD avec multiplicateur zoning (basé sur coût médian du standing)
-    const rcVrdBase = roleRangeRecalc.B; // médian du standing pour VRD
-    const newCostVrd = Math.round((newSdp * 0.10) * (rcVrdBase * 0.50) * vrdMultRecalc);
-    const newEstimatedCost = Math.round(newCostConstruction + rcFondSurcharge + rcToitSurcharge + newCostVrd);
-    sc.estimated_cost = newEstimatedCost;
-    sc.cost_total_fcfa = newEstimatedCost;
-    sc.cost_construction_fcfa = Math.round(newCostConstruction);
-    sc.cost_fondation_surcharge = rcFondSurcharge;
-    sc.cost_toiture_surcharge = rcToitSurcharge;
-    sc.cost_vrd_fcfa = newCostVrd;
-    sc.cost_per_m2_sdp = Math.round(newEstimatedCost / Math.max(1, newSdp));
-    sc.cost_per_unit = sc.total_units > 0 ? Math.round(newEstimatedCost / sc.total_units) : 0;
-    sc.cout_fourchette = { bas: Math.round(newEstimatedCost * COST_RANGE_MULT_RECALC.bas), median: newEstimatedCost, haut: Math.round(newEstimatedCost * COST_RANGE_MULT_RECALC.haut) };
-    // Mettre à jour cost_detail aussi
-    if (sc.cost_detail) {
-      sc.cost_detail.cost_per_m2_standing = rcCostPerM2Standing;
-      sc.cost_detail.cost_driver_adjust = driverAdjRecalc;
-      sc.cost_detail.cost_per_m2_base = rcCostPerM2Base;
-      sc.cost_detail.cost_per_m2_typo = costPerM2Recalc;
-      sc.cost_detail.cost_per_m2_commerce = costPerM2CommerceRecalc;
-      sc.cost_detail.construction_bati = Math.round(scBatiSdp * costPerM2Recalc);
-      sc.cost_detail.construction_commerce = Math.round(scCommerceSdp * costPerM2CommerceRecalc);
-      sc.cost_detail.fondation_surcharge = rcFondSurcharge;
-      sc.cost_detail.toiture_surcharge = rcToitSurcharge;
-      sc.cost_detail.vrd = newCostVrd;
-    }
-    console.log(`[v72.53] RECALC COÛTS ${label}(${sc.typology}): ${standingRecalc}[${label}]=${rcCostPerM2Standing} adj=${driverAdjRecalc} → base=${rcCostPerM2Base} × typo=${scTypo.cost_mult} → ${costPerM2Recalc}/m² | bâti=${scBatiSdp}m² comm=${scCommerceSdp}m² | fond=+${rcFondSurcharge} toit=+${rcToitSurcharge} VRD=${newCostVrd} → ${Math.round(newEstimatedCost/1e6)}M`);
-
-    // ══════════════════════════════════════════════════════════════════════
-    // v72.60: RECALC VENTILATION — maintenir la cohérence GO+SO+LT = construction
-    // CRITIQUE: sans ce recalcul, les flat fields A_ventil_go etc. reflètent
-    // les ANCIENNES valeurs alors que A_cost_total reflète le NOUVEAU coût
-    // → GPT reçoit des chiffres qui ne s'additionnent pas
-    // ══════════════════════════════════════════════════════════════════════
-    const rcGO = Math.round(newCostConstruction * COST_VENTILATION_PCT.gros_oeuvre);
-    const rcSO = Math.round(newCostConstruction * COST_VENTILATION_PCT.second_oeuvre);
-    const rcLT = Math.round(newCostConstruction * COST_VENTILATION_PCT.lots_techniques);
-    const rcAmenExt = Math.round(newCostConstruction * COST_VENTILATION_PCT.amenagements_ext);
-    const rcHonoraires = calcHonorairesDegressifs(newEstimatedCost);
-    const rcHonoMedian = rcHonoraires.median || Math.round((rcHonoraires.bas + rcHonoraires.haut) / 2);
-    const rcFraisPermis = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.permis_construire);
-    const rcFraisAssurance = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.assurance_dommage_ouvrage);
-    const rcFraisEtudes = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.etudes_techniques);
-    const rcFraisDivers = Math.round(newEstimatedCost * FRAIS_ANNEXES_PCT.divers_imprevus);
-    const rcTotalFrais = rcFraisPermis + rcFraisAssurance + rcFraisEtudes + rcFraisDivers;
-    const rcMalusSolaire = sc.malus_orientation_solaire_fcfa || 0;
-    const rcGlobalProjet = newEstimatedCost + rcHonoMedian + rcTotalFrais + rcMalusSolaire;
-    sc.cout_ventilation = {
-      gros_oeuvre_fcfa: rcGO,
-      second_oeuvre_fcfa: rcSO,
-      lots_techniques_fcfa: rcLT,
-      amenagements_ext_fcfa: rcAmenExt,
-      vrd_fcfa: newCostVrd,
-      sous_total_construction_fcfa: newEstimatedCost,
-      honoraires_architecte: {
-        bas_fcfa: rcHonoraires.bas,
-        median_fcfa: rcHonoMedian,
-        haut_fcfa: rcHonoraires.haut,
-        taux_bas_pct: newEstimatedCost > 0 ? Math.round(rcHonoraires.bas / newEstimatedCost * 10000) / 100 : 0,
-        taux_median_pct: newEstimatedCost > 0 ? Math.round(rcHonoMedian / newEstimatedCost * 10000) / 100 : 0,
-        taux_haut_pct: newEstimatedCost > 0 ? Math.round(rcHonoraires.haut / newEstimatedCost * 10000) / 100 : 0,
-      },
-      frais_annexes: {
-        permis_construire_fcfa: rcFraisPermis,
-        assurance_dommage_ouvrage_fcfa: rcFraisAssurance,
-        etudes_techniques_fcfa: rcFraisEtudes,
-        divers_imprevus_fcfa: rcFraisDivers,
-        total_frais_annexes_fcfa: rcTotalFrais,
-      },
-      malus_orientation_solaire_fcfa: rcMalusSolaire,
-      cout_global_projet_fcfa: rcGlobalProjet,
-    };
-    sc.cout_global_projet_fcfa = rcGlobalProjet;
-    sc.honoraires_architecte_fcfa = rcHonoMedian;
-    console.log(`[v72.60] RECALC VENTILATION ${label}: GO=${Math.round(rcGO/1e6)}M SO=${Math.round(rcSO/1e6)}M LT=${Math.round(rcLT/1e6)}M VRD=${Math.round(newCostVrd/1e6)}M | hono=${Math.round(rcHonoMedian/1e6)}M frais=${Math.round(rcTotalFrais/1e6)}M → global=${Math.round(rcGlobalProjet/1e6)}M`);
-  }
-
-  // ══════════════════════════════════════════════════════════════════════
-  // v72.63: RECOMPUTE DELTAS — après anti-collapse + recalc coûts
-  // Les deltas dans diagnostic.comparatif étaient calculés AVANT anti-collapse
-  // → ils reflètent A ≈ B (d'où delta ≈ 0). On les recalcule maintenant.
-  // ══════════════════════════════════════════════════════════════════════
-  if (scenarios.diagnostic && scenarios.diagnostic.comparatif) {
-    const _reExtract = (sc) => ({
-      sdp_m2: sc.sdp_m2 || 0,
-      surface_habitable_m2: sc.surface_habitable_m2 || 0,
-      unites: sc.total_units || 0,
-      cout_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost || 0,
-      sol_libre_m2: sc.free_ground_m2 || 0,
-    });
-    const _reDeltas = (ref, alt, refLabel, altLabel) => {
-      const dSdp = alt.sdp_m2 - ref.sdp_m2;
-      const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
-      const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
-      const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
-      const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
-      return {
-        label: `${altLabel} vs ${refLabel}`,
-        delta_sdp_m2: dSdp,
-        delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
-        delta_unites: alt.unites - ref.unites,
-        delta_cout_fcfa: dCout,
-        delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
-        delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
-        delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
-        valeur_marginale_fcfa_par_m2: valeurMarginale,
-        commentaire: marginaleFavorable
-          ? `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — inférieur au coût moyen (${Math.round(coutM2Ref / 1000)}k/m²), investissement efficace.`
-          : dSdp > 0
-          ? `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — supérieur au coût moyen (${Math.round(coutM2Ref / 1000)}k/m²), rendement décroissant.`
-          : `L'économie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifié.`,
-      };
-    };
-    const rA = _reExtract(scenarios.A);
-    const rB = _reExtract(scenarios.B);
-    const rC = _reExtract(scenarios.C);
-    scenarios.diagnostic.comparatif.deltas = {
-      B_vs_A: _reDeltas(rA, rB, "A", "B"),
-      C_vs_A: _reDeltas(rA, rC, "A", "C"),
-      C_vs_B: _reDeltas(rB, rC, "B", "C"),
-    };
-    console.log(`[v72.63] DELTAS RECOMPUTED: B_vs_A SDP=${scenarios.diagnostic.comparatif.deltas.B_vs_A.delta_sdp_m2}m² (${scenarios.diagnostic.comparatif.deltas.B_vs_A.delta_sdp_pct}%) | C_vs_A SDP=${scenarios.diagnostic.comparatif.deltas.C_vs_A.delta_sdp_m2}m²`);
-  }
-
-  // ══════════════════════════════════════════════════════════════════════
-  // v72.65: GARDE-FOU FINAL — surface_habitable ≤ sdp (physiquement impossible autrement)
-  // Après anti-collapse + recalc, certains scénarios peuvent avoir hab > sdp
-  // si totalUseful n'a pas été recalculé. Ce garde-fou corrige en dernier recours.
-  // ══════════════════════════════════════════════════════════════════════
-  for (const label of ["A", "B", "C"]) {
-    const sc = scenarios[label];
-    if (!sc) continue;
-    if (sc.surface_habitable_m2 > sc.sdp_m2) {
-      const circRatio = (sc.circulation_ratio_pct || 20) / 100;
-      const oldHab = sc.surface_habitable_m2;
-      sc.surface_habitable_m2 = Math.round(sc.sdp_m2 * (1 - circRatio));
-      sc.total_useful_m2 = sc.surface_habitable_m2;
-      const nbLogements = Math.max(1, (sc.total_units || 1) - (sc.commerce_levels > 0 ? 1 : 0));
-      sc.m2_habitable_par_logement = Math.round(sc.surface_habitable_m2 / nbLogements);
-      sc.ratio_efficacite_pct = sc.sdp_m2 > 0 ? Math.round(sc.surface_habitable_m2 / sc.sdp_m2 * 100) : 0;
-      console.log(`[v72.65] GARDE-FOU HAB≤SDP: ${label} hab=${oldHab} > sdp=${sc.sdp_m2} → corrigé hab=${sc.surface_habitable_m2} (circ=${sc.circulation_ratio_pct}%)`);
-    }
-  }
-
-  // v72.66: REFRESH NARRATIVE — après garde-fou + anti-collapse, les m² habitables
-  // dans la narrative peuvent être périmés. On corrige par regex.
-  if (scenarios.diagnostic && scenarios.diagnostic.recommandation && scenarios.diagnostic.recommandation.narrative) {
-    let narr = scenarios.diagnostic.recommandation.narrative;
-    for (const label of ["A", "B", "C"]) {
-      const sc = scenarios[label];
-      if (!sc) continue;
-      // Pattern: "XXXm² de surface de plancher dont YYYm² habitables" → update YYY
-      const sdpStr = String(sc.sdp_m2);
-      const habNew = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
-      const regex = new RegExp(`${sdpStr}m² de surface de plancher dont \\d+m² habitables`);
-      narr = narr.replace(regex, `${sdpStr}m² de surface de plancher dont ${habNew}m² habitables`);
-    }
-    // v72.66b: aussi corriger "(efficacite XX%)" dans la narrative
-    const recLabel = (scenarios.diagnostic.recommandation || {}).scenario || "C";
-    const recSc = scenarios[recLabel];
-    narr = narr.replace(/\(efficacite \d+%\)/g, () => {
-      if (recSc && recSc.sdp_m2 > 0) {
-        const newEff = recSc.ratio_efficacite_pct || Math.round((recSc.surface_habitable_m2 || 0) / recSc.sdp_m2 * 100);
-        return `(efficacite ${newEff}%)`;
-      }
-      return `(efficacite 0%)`;
-    });
-    // v72.66c: corriger "XXm² habitables par logement" dans la narrative
-    if (recSc && recSc.m2_habitable_par_logement) {
-      narr = narr.replace(/\d+m² habitables par logement/, `${recSc.m2_habitable_par_logement}m² habitables par logement`);
-    }
-    scenarios.diagnostic.recommandation.narrative = narr;
-    console.log(`[v72.66] NARRATIVE REFRESHED with post-garde-fou hab values`);
-  }
-
-  // v72.66: REFRESH COMPARATIF SNAPSHOT — après garde-fou + anti-collapse + recalc,
-  // le snapshot comparatif (copie des valeurs) est périmé. On le rafraîchit.
-  // ══════════════════════════════════════════════════════════════════════
-  if (scenarios.diagnostic && scenarios.diagnostic.comparatif) {
-    for (const label of ["A", "B", "C"]) {
-      const sc = scenarios[label];
-      const comp = scenarios.diagnostic.comparatif[label];
-      if (!sc || !comp) continue;
-      // Rafraîchir tous les champs qui ont pu changer après anti-collapse/recalc/garde-fou
-      comp.sdp_m2 = sc.sdp_m2;
-      comp.surface_habitable_m2 = sc.surface_habitable_m2 || 0;
-      comp.ratio_efficacite_pct = sc.ratio_efficacite_pct || 0;
-      comp.unites = sc.total_units;
-      comp.m2_par_logement = sc.m2_habitable_par_logement || 0;
-      comp.cout_total_fcfa = sc.cost_total_fcfa || sc.estimated_cost;
-      comp.cout_par_unite = sc.cost_per_unit || 0;
-      comp.cout_par_m2_sdp = sc.cost_per_m2_sdp || 0;
-      comp.cout_par_m2_habitable = sc.cost_per_m2_habitable || 0;
-      comp.emprise_rdc_m2 = sc.fp_rdc_m2 || sc.fp_m2;
-      comp.emprise_etages_m2 = sc.fp_etages_m2 || sc.fp_m2;
-      comp.niveaux = sc.levels;
-      comp.hauteur_m = sc.height_m;
-      comp.budget_fit = sc.budget_fit;
-      comp.cout_fourchette = sc.cout_fourchette || {};
-      comp.cout_ventilation = sc.cout_ventilation || {};
-      comp.score_recommandation = sc.recommendation_score || 0;
-      comp.duree_chantier_mois = sc.duree_chantier_mois || 0;
-      console.log(`[v72.66] COMPARATIF ${label} REFRESHED: hab=${comp.surface_habitable_m2}, cost=${comp.cout_total_fcfa}, eff=${comp.ratio_efficacite_pct}%`);
-    }
-    // Also recompute deltas with fresh comparatif values
-    const _reExtract2 = (label) => {
-      const c = scenarios.diagnostic.comparatif[label];
-      return {
-        sdp_m2: c.sdp_m2 || 0,
-        surface_habitable_m2: c.surface_habitable_m2 || 0,
-        unites: c.unites || 0,
-        cout_total_fcfa: c.cout_total_fcfa || 0,
-        sol_libre_m2: c.sol_libre_m2 || 0,
-      };
-    };
-    const _reDeltas2 = (ref, alt, refLabel, altLabel) => {
-      const dSdp = alt.sdp_m2 - ref.sdp_m2;
-      const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
-      const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
-      const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
-      const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
-      return {
-        label: `${altLabel} vs ${refLabel}`,
-        delta_sdp_m2: dSdp,
-        delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
-        delta_unites: alt.unites - ref.unites,
-        delta_cout_fcfa: dCout,
-        delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
-        delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
-        delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
-        valeur_marginale_fcfa_par_m2: valeurMarginale,
-        commentaire: dSdp < 0
-          ? `L'économie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifié.`
-          : marginaleFavorable
-          ? `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — investissement efficace.`
-          : `Chaque m² supplémentaire coûte ${Math.round(valeurMarginale / 1000)}k FCFA — rendement décroissant.`,
-      };
-    };
-    const rA2 = _reExtract2("A");
-    const rB2 = _reExtract2("B");
-    const rC2 = _reExtract2("C");
-    scenarios.diagnostic.comparatif.deltas = {
-      B_vs_A: _reDeltas2(rA2, rB2, "A", "B"),
-      C_vs_A: _reDeltas2(rA2, rC2, "A", "C"),
-      C_vs_B: _reDeltas2(rB2, rC2, "B", "C"),
-    };
-    console.log(`[v72.66] COMPARATIF+DELTAS FULLY REFRESHED`);
-  }
-
-  // v72.66: REFRESH scenario_identity.description — uses sdp_m2 which may have changed
-  for (const label of ["A", "B", "C"]) {
-    const sc = scenarios[label];
-    if (!sc || !sc.scenario_identity) continue;
-    const desc = sc.scenario_identity.description || "";
-    // Replace "Les XXXm² de SDP" or "developpant XXXm² de SDP" or "XXXm² de SDP" with current sdp
-    const sdpFixed = desc.replace(/\d+m² de SDP/g, `${sc.sdp_m2}m² de SDP`);
-    if (sdpFixed !== desc) {
-      sc.scenario_identity.description = sdpFixed;
-      console.log(`[v72.66] ${label} scenario_identity.description SDP updated to ${sc.sdp_m2}m²`);
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════════
-  // v72.60: PRÉ-CALCUL DES CHAMPS INJECTION TEXTE
-  // ══════════════════════════════════════════════════════════════════════
-  function buildTextInjection(sc, label) {
-    if (!sc || !sc.sdp_m2) return {};
-    // R+ notation
-    const totalLevels = (sc.has_pilotis ? 1 : 0) + (sc.levels || 0) + (sc.commerce_levels || 0);
-    const rPlus = sc.split_layout
-      ? sc.levels  // SPLIT: levels = logement only, pilotis is RDC
-      : (totalLevels - 1); // SUPERPOSÉ: RDC + N = R+N
-    const rPlusStr = `R+${rPlus}`;
-    const gabaritStr = sc.split_layout
-      ? `${rPlusStr} sur pilotis (commerce devant + logement arrière)`
-      : (sc.commerce_levels > 0 ? `${rPlusStr} (commerce RDC + logement dessus)` : rPlusStr);
-
-    // Unit summary — parse unit_mix_detail string (ex: "1×COMMERCE(40m²) + 2×T3(72m²)")
-    const mixDetail = sc.unit_mix_detail || "";
-    const parsedParts = [];
-    let parsedCommerceCount = 0;
-    const mixRegex = /(\d+)×(\w+)\((\d+)m²\)/g;
-    let m;
-    while ((m = mixRegex.exec(mixDetail)) !== null) {
-      const count = parseInt(m[1]);
-      const typ = m[2];
-      const size = m[3];
-      if (typ === "COMMERCE") {
-        parsedCommerceCount += count;
-        parsedParts.push(`${count} commerce (${size}m²)`);
-      } else {
-        parsedParts.push(`${count} logement${count > 1 ? 's' : ''} ${typ} (${size}m²)`);
-      }
-    }
-    const totalLogements = (sc.total_units || 0) - parsedCommerceCount;
-    const unitSummary = parsedParts.length > 0
-      ? `${sc.total_units || 0} unités : ${parsedParts.join(' + ')}`
-      : `${sc.total_units || 0} unités (${sc.unit_mix_detail || "détail non disponible"})`;
-
-    // Financial — VERIFIED arithmetic
-    const vent = sc.cout_ventilation || {};
-    const goM = vent.gros_oeuvre_fcfa ? Math.round(vent.gros_oeuvre_fcfa / 1e6) : 0;
-    const soM = vent.second_oeuvre_fcfa ? Math.round(vent.second_oeuvre_fcfa / 1e6) : 0;
-    const ltM = vent.lots_techniques_fcfa ? Math.round(vent.lots_techniques_fcfa / 1e6) : 0;
-    const constructionM = Math.round((sc.cost_construction_fcfa || sc.estimated_cost || 0) / 1e6);
-    const vrdM = vent.vrd_fcfa ? Math.round(vent.vrd_fcfa / 1e6) : 0;
-    const travauxM = Math.round((sc.estimated_cost || 0) / 1e6);
-    const honoObj = vent.honoraires_architecte || {};
-    const honoBasM = honoObj.bas_fcfa ? Math.round(honoObj.bas_fcfa / 1e6) : 0;
-    const honoMedianM = honoObj.median_fcfa ? Math.round(honoObj.median_fcfa / 1e6) : 0;
-    const honoHautM = honoObj.haut_fcfa ? Math.round(honoObj.haut_fcfa / 1e6) : 0;
-    const fraisM = vent.frais_annexes ? Math.round(vent.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0;
-    const globalM = vent.cout_global_projet_fcfa ? Math.round(vent.cout_global_projet_fcfa / 1e6) : 0;
-    // VERIFIED equation: sum MUST equal global
-    const sumCheck = travauxM + honoMedianM + fraisM;
-    const budgetEquation = `${travauxM}M travaux + ${honoMedianM}M honoraires + ${fraisM}M frais annexes = ${sumCheck}M FCFA`;
-    const ventilEquation = `gros oeuvre ${goM}M (55%) + second oeuvre ${soM}M (25%) + lots techniques ${ltM}M (15%) = ${goM + soM + ltM}M FCFA de construction`;
-
-    // Cost per m²
-    const costPerM2 = sc.cost_per_m2_sdp ? Math.round(sc.cost_per_m2_sdp / 1000) : 0;
-    const costPerM2Full = sc.cost_per_m2_sdp || 0;
-
-    // Commerce cost info
-    const commCostPerM2 = (sc.cost_detail || {}).cost_per_m2_commerce || 0;
-    const batiCostPerM2 = (sc.cost_detail || {}).cost_per_m2_typo || 0;
-    const commerceCostInfo = commCostPerM2 > 0
-      ? `Commerce construit à 80% du coût bâtiment : ${Math.round(commCostPerM2/1000)}k/m² contre ${Math.round(batiCostPerM2/1000)}k/m² pour le bâtiment`
-      : "";
-
-    // Budget fit
-    const budgetClientFcsa = sc.budget_client_fcsa || 0;
-    const fourchette = sc.cout_fourchette || {};
-    const fourchetteBasM = fourchette.bas ? Math.round(fourchette.bas / 1e6) : 0;
-    const fourchetteHautM = fourchette.haut ? Math.round(fourchette.haut / 1e6) : 0;
-
-    // Habitable surface — utiliser le ratio moteur (circulation architecturale par étage)
-    const habM2 = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
-    const circPct = sc.circulation_ratio_pct || (sc.sdp_m2 > 0 ? Math.round((1 - habM2 / sc.sdp_m2) * 100) : 0);
-    const circM2 = Math.round(sc.sdp_m2 * circPct / 100);
-
-    // COS compliance
-    // v72.64: FIX — cosMax = COS × site_area (SDP max autorisée), pas CES × site_area (emprise max)
-    // COS = coefficient d'occupation des sols (ratio SDP/terrain), CES = coefficient d'emprise au sol
-    const cosRegl = (sc.regulatory && sc.regulatory.cos_reglementaire) || 2.5;
-    const cosMax = Math.round(cosRegl * (sc._site_area || Number(p.site_area) || 0));
-    const cosDepassement = sc.sdp_m2 > cosMax ? sc.sdp_m2 - cosMax : 0;
-
-    return {
-      R_plus: rPlusStr,
-      gabarit: gabaritStr,
-      unit_summary: unitSummary,
-      logement_count: String(totalLogements),
-      commerce_count: String(parsedCommerceCount),
-      hab_m2: String(Math.round(habM2)),
-      circ_pct: `${circPct}%`,
-      circ_m2: String(circM2),
-      m2_hab_par_unite: String(sc.m2_habitable_par_logement || Math.round(habM2 / Math.max(1, sc.total_units || 1))),
-      budget_equation: budgetEquation,
-      ventil_equation: ventilEquation,
-      cost_per_m2_fcfa: String(costPerM2Full),
-      cost_per_m2_text: `${costPerM2}k FCFA/m² (${Math.round(costPerM2Full)} FCFA/m²)`,
-      commerce_cost_info: commerceCostInfo,
-      travaux_M: String(travauxM),
-      vrd_M: String(vrdM),
-      hono_median_M: String(honoMedianM),
-      hono_bas_M: String(honoBasM),
-      hono_haut_M: String(honoHautM),
-      frais_M: String(fraisM),
-      global_M: String(globalM),
-      fourchette_text: `entre ${fourchetteBasM}M et ${fourchetteHautM}M FCFA`,
-      cos_max_m2: String(cosMax),
-      cos_depassement_m2: String(cosDepassement),
-      cos_depassement_text: cosDepassement > 0 ? `Dépassement de ${cosDepassement}m² par rapport au COS (${cosMax}m² autorisés)` : `Conforme au COS (${sc.sdp_m2}m² sur ${cosMax}m² autorisés)`,
-    };
-  }
-
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
   const comp = diag.comparatif || {};
@@ -4386,15 +3511,6 @@ app.post("/compute-scenarios", (req, res) => {
   const sA = scenarios.A || {};
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
-
-  // Store site_area in scenarios for buildTextInjection to access
-  for (const l of ["A", "B", "C"]) {
-    if (scenarios[l]) scenarios[l]._site_area = Number(p.site_area) || 0;
-  }
-
-  const txtA = buildTextInjection(sA, "A");
-  const txtB = buildTextInjection(sB, "B");
-  const txtC = buildTextInjection(sC, "C");
   const flat = {
     // ── NARRATIVE ──
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
@@ -4437,11 +3553,6 @@ app.post("/compute-scenarios", (req, res) => {
     A_fp: String(sA.fp_m2 || 0), A_fp_rdc: String(sA.fp_rdc_m2 || 0),
     A_levels: String(sA.levels || 0), A_height: String(sA.height_m || 0),
     A_sdp: String(sA.sdp_m2 || 0), A_units: String(sA.total_units || 0),
-    A_commerce_levels: String(sA.commerce_levels || 0),
-    A_has_pilotis: String(!!sA.has_pilotis),
-    A_accent_color: sA.accent_color || "#2a5298",
-    A_role: sA.label_fr || "INTENSIFICATION",
-    A_split_layout: sA.split_layout ? JSON.stringify(sA.split_layout) : "",
     A_unit_mix: sA.unit_mix_detail || "", A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
     A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
     A_cost_bas: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M`,
@@ -4449,8 +3560,6 @@ app.post("/compute-scenarios", (req, res) => {
     A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
     A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
     A_budget_fit: sA.budget_fit || "",
-    A_typology: sA.typology || "BLOC",
-    A_typology_desc: (sA.typology_impact || {}).description || "",
     A_ces_pct: String(sA.ces_fill_pct || 0), A_cos_pct: String(sA.cos_ratio_pct || 0),
     A_cos_compliance: sA.cos_compliance || "",
     A_free_ground: `${sA.free_ground_m2 || 0} m²`,
@@ -4480,11 +3589,6 @@ app.post("/compute-scenarios", (req, res) => {
     B_fp: String(sB.fp_m2 || 0), B_fp_rdc: String(sB.fp_rdc_m2 || 0),
     B_levels: String(sB.levels || 0), B_height: String(sB.height_m || 0),
     B_sdp: String(sB.sdp_m2 || 0), B_units: String(sB.total_units || 0),
-    B_commerce_levels: String(sB.commerce_levels || 0),
-    B_has_pilotis: String(!!sB.has_pilotis),
-    B_accent_color: sB.accent_color || "#34a853",
-    B_role: sB.label_fr || "EQUILIBRE",
-    B_split_layout: sB.split_layout ? JSON.stringify(sB.split_layout) : "",
     B_unit_mix: sB.unit_mix_detail || "", B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
     B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
     B_cost_bas: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M`,
@@ -4492,8 +3596,6 @@ app.post("/compute-scenarios", (req, res) => {
     B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
     B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
     B_budget_fit: sB.budget_fit || "",
-    B_typology: sB.typology || "BLOC",
-    B_typology_desc: (sB.typology_impact || {}).description || "",
     B_ces_pct: String(sB.ces_fill_pct || 0), B_cos_pct: String(sB.cos_ratio_pct || 0),
     B_cos_compliance: sB.cos_compliance || "",
     B_free_ground: `${sB.free_ground_m2 || 0} m²`,
@@ -4521,11 +3623,6 @@ app.post("/compute-scenarios", (req, res) => {
     B_ventil_global: `${(sB.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sB.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
     // ── SCENARIO C (champs plats) ──
     C_fp: String(sC.fp_m2 || 0), C_fp_rdc: String(sC.fp_rdc_m2 || 0),
-    C_commerce_levels: String(sC.commerce_levels || 0),
-    C_has_pilotis: String(!!sC.has_pilotis),
-    C_accent_color: sC.accent_color || "#ea4335",
-    C_role: sC.label_fr || "PRUDENT",
-    C_split_layout: sC.split_layout ? JSON.stringify(sC.split_layout) : "",
     C_levels: String(sC.levels || 0), C_height: String(sC.height_m || 0),
     C_sdp: String(sC.sdp_m2 || 0), C_units: String(sC.total_units || 0),
     C_unit_mix: sC.unit_mix_detail || "", C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
@@ -4535,8 +3632,6 @@ app.post("/compute-scenarios", (req, res) => {
     C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
     C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
     C_budget_fit: sC.budget_fit || "",
-    C_typology: sC.typology || "BLOC",
-    C_typology_desc: (sC.typology_impact || {}).description || "",
     C_ces_pct: String(sC.ces_fill_pct || 0), C_cos_pct: String(sC.cos_ratio_pct || 0),
     C_cos_compliance: sC.cos_compliance || "",
     C_free_ground: `${sC.free_ground_m2 || 0} m²`,
@@ -4562,88 +3657,6 @@ app.post("/compute-scenarios", (req, res) => {
     C_frais_etudes: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.etudes_techniques_fcfa / 1e6) : 0}M`,
     C_frais_divers: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.divers_imprevus_fcfa / 1e6) : 0}M`,
     C_ventil_global: `${(sC.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sC.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
-    // ══ v72.60: TEXT INJECTION — champs pré-calculés pour GPT ══
-    A_R_plus: txtA.R_plus || "R+0",
-    A_gabarit: txtA.gabarit || "",
-    A_unit_summary: txtA.unit_summary || "",
-    A_logement_count: txtA.logement_count || "0",
-    A_commerce_count: txtA.commerce_count || "0",
-    A_hab_m2_total: txtA.hab_m2 || "0",
-    A_circ_pct: txtA.circ_pct || "0%",
-    A_circ_m2: txtA.circ_m2 || "0",
-    A_m2_hab_par_unite: txtA.m2_hab_par_unite || "0",
-    A_budget_equation: txtA.budget_equation || "",
-    A_ventil_equation: txtA.ventil_equation || "",
-    A_cost_per_m2_text: txtA.cost_per_m2_text || "",
-    A_commerce_cost_info: txtA.commerce_cost_info || "",
-    A_travaux_M: txtA.travaux_M || "0",
-    A_vrd_M: txtA.vrd_M || "0",
-    A_hono_median_M: txtA.hono_median_M || "0",
-    A_hono_bas_M: txtA.hono_bas_M || "0",
-    A_hono_haut_M: txtA.hono_haut_M || "0",
-    A_frais_M: txtA.frais_M || "0",
-    A_global_M: txtA.global_M || "0",
-    A_fourchette_text: txtA.fourchette_text || "",
-    A_cos_depassement_text: txtA.cos_depassement_text || "",
-    B_R_plus: txtB.R_plus || "R+0",
-    B_gabarit: txtB.gabarit || "",
-    B_unit_summary: txtB.unit_summary || "",
-    B_logement_count: txtB.logement_count || "0",
-    B_commerce_count: txtB.commerce_count || "0",
-    B_hab_m2_total: txtB.hab_m2 || "0",
-    B_circ_pct: txtB.circ_pct || "0%",
-    B_circ_m2: txtB.circ_m2 || "0",
-    B_m2_hab_par_unite: txtB.m2_hab_par_unite || "0",
-    B_budget_equation: txtB.budget_equation || "",
-    B_ventil_equation: txtB.ventil_equation || "",
-    B_cost_per_m2_text: txtB.cost_per_m2_text || "",
-    B_commerce_cost_info: txtB.commerce_cost_info || "",
-    B_travaux_M: txtB.travaux_M || "0",
-    B_vrd_M: txtB.vrd_M || "0",
-    B_hono_median_M: txtB.hono_median_M || "0",
-    B_hono_bas_M: txtB.hono_bas_M || "0",
-    B_hono_haut_M: txtB.hono_haut_M || "0",
-    B_frais_M: txtB.frais_M || "0",
-    B_global_M: txtB.global_M || "0",
-    B_fourchette_text: txtB.fourchette_text || "",
-    B_cos_depassement_text: txtB.cos_depassement_text || "",
-    C_R_plus: txtC.R_plus || "R+0",
-    C_gabarit: txtC.gabarit || "",
-    C_unit_summary: txtC.unit_summary || "",
-    C_logement_count: txtC.logement_count || "0",
-    C_commerce_count: txtC.commerce_count || "0",
-    C_hab_m2_total: txtC.hab_m2 || "0",
-    C_circ_pct: txtC.circ_pct || "0%",
-    C_circ_m2: txtC.circ_m2 || "0",
-    C_m2_hab_par_unite: txtC.m2_hab_par_unite || "0",
-    C_budget_equation: txtC.budget_equation || "",
-    C_ventil_equation: txtC.ventil_equation || "",
-    C_cost_per_m2_text: txtC.cost_per_m2_text || "",
-    C_commerce_cost_info: txtC.commerce_cost_info || "",
-    C_travaux_M: txtC.travaux_M || "0",
-    C_vrd_M: txtC.vrd_M || "0",
-    C_hono_median_M: txtC.hono_median_M || "0",
-    C_hono_bas_M: txtC.hono_bas_M || "0",
-    C_hono_haut_M: txtC.hono_haut_M || "0",
-    C_frais_M: txtC.frais_M || "0",
-    C_global_M: txtC.global_M || "0",
-    C_fourchette_text: txtC.fourchette_text || "",
-    C_cos_depassement_text: txtC.cos_depassement_text || "",
-    // ══ v72.60: PROMPT INJECTION — directives strictes pour GPT ══
-    gpt_text_rules: `RÈGLES ABSOLUES POUR LA GÉNÉRATION DES TEXTES DIAGNOSTIC BARLO:
-1. UTILISE UNIQUEMENT les champs {X}_budget_equation, {X}_ventil_equation, {X}_unit_summary, {X}_R_plus, {X}_gabarit TELS QUELS. NE JAMAIS recalculer, inventer ou arrondir différemment.
-2. Notation gabarit: utilise TOUJOURS le champ {X}_R_plus (ex: R+3, R+2, R+1). Ne JAMAIS deviner la notation R+.
-3. Unités: utilise {X}_unit_summary tel quel. Ne JAMAIS changer le nombre d'unités ou les types.
-4. Financier: TOUJOURS au conditionnel ("s'élèverait à", "atteindrait"). TOUJOURS présenter la fourchette {X}_fourchette_text.
-5. Surface: parler de "surface habitable hors circulations" ({X}_hab_m2_total m²), JAMAIS de "surface nette".
-6. Budget equation: {X}_budget_equation est la SEULE décomposition autorisée. Les sous-totaux DOIVENT additionner au global.
-7. Ventilation: {X}_ventil_equation est la SEULE ventilation autorisée.
-8. Commerce: {X}_commerce_cost_info doit être mentionné pour expliquer le différentiel de coût.
-9. COS: {X}_cos_depassement_text est la seule formulation autorisée pour le dépassement réglementaire.
-10. Scenario A = EXACTEMENT la demande client (pas d'intensification idiote). B = équilibre justifié. C = prudent compact.
-11. Ne JAMAIS poser de question directe au client. Utiliser "La question qui se pose ici sera de savoir si... ou si..."
-12. Commencer slide_3 (intro) par "Ce projet consiste" SANS mentionner le nom du client.
-13. PAS DE CONCLUSION sur le respect budgétaire en slide_3. Juste expliquer le rôle de chaque scénario.`,
     // ── PROFIL CLIENT (echo) ──
     profil_posture: profil.posture || "",
     profil_budget_band: profil.budget_band || "",
@@ -4659,345 +3672,8 @@ app.post("/compute-scenarios", (req, res) => {
     site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
     site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
   };
-  // ── v72.51: Inclure les scores calculés dans la réponse pour que Make.com les écrive dans le Sheet ──
-  const computed_scores = {
-    rent_score_norm: calc_rent_score_norm,
-    capacity_score_norm: calc_capacity_score_norm,
-    risk_score_norm: calc_risk_score_norm,
-    rent_score: Math.round(calc_rent_score),
-    capacity_score: Math.round(calc_capacity_score),
-    mix_score_norm: calc_mix_score_norm,
-    phase_score_norm: calc_phase_score_norm,
-    phase_score: calc_phase_score,
-    risk_score: calc_risk_score,
-    density_band: calc_density_band,
-    density_pressure_factor: calc_density_pressure_factor,
-    risk_adjusted: calc_risk_adjusted,
-    second_best_score: calc_second_best_score,
-    dominance_gap: calc_dominance_gap,
-    density_band_calc: calc_density_band_calc,
-    budget_tension_calc: calc_budget_tension_calc,
-    feasibility_posture_calc: calc_feasibility_posture,
-    program_intent_calc: calc_program_intent,
-    program_alignment_calc: calc_program_alignment,
-    strategic_position_calc: calc_strategic_position,
-    recommended_scenario_calc: calc_recommended_scenario,
-    driver_intensity: calc_driver_intensity,
-  };
-  // ══════════════════════════════════════════════════════════════════════
-  // v72.60: PROMPTS GPT PRÉ-CONSTRUITS — Make.com mappe SEULEMENT 2 champs
-  // gpt_system_prompt → Message 1 (system) dans le module OpenAI
-  // gpt_user_prompt   → Message 2 (user) dans le module OpenAI
-  // Toutes les valeurs sont DÉJÀ injectées → zéro mapping de variables
-  // ══════════════════════════════════════════════════════════════════════
-  const _f = flat; // alias court
-  const _quartier = String(p.quartier || p.localisation || p.city || "Douala");
-  const _clientName = String(p.client_name || p.nom_client || "");
-
-  flat.gpt_system_prompt = `Tu es un architecte-urbaniste expert en diagnostic immobilier au Cameroun, avec 20 ans d'expérience sur des projets résidentiels et mixtes à Douala. Tu rédiges les textes d'un rapport diagnostic professionnel pour un client investisseur.
-
-${_f.gpt_text_rules}
-
-IDENTITÉ DU TON :
-Tu écris comme un architecte conseil qui s'adresse à son client en face-à-face : professionnel, naturel, rassurant mais honnête. Tu expliques les choix comme si tu dessinais sur une nappe — pas de jargon gratuit, pas de phrases creuses, pas de copier-coller administratif.
-- Chaque phrase doit APPORTER une information ou un raisonnement. Pas de remplissage.
-- Tu guides le client dans sa réflexion, tu ne lui assènes pas des vérités.
-- Quand tu parles d'un risque, tu l'expliques concrètement ET tu donnes la solution ou l'atténuation.
-
-RÈGLES DE RÉDACTION STRICTES :
-- TOUJOURS au conditionnel pour tout montant ("s'élèverait à", "se situerait autour de", "représenterait").
-- JAMAIS de question directe au client. Formulation : "La question qui se pose ici sera de savoir si… ou si…"
-- Dire "surface habitable hors circulations", JAMAIS "surface nette" ni "surface utile nette".
-- Ne JAMAIS inventer un chiffre. Si un champ est vide ou 0, ignorer le point silencieusement.
-- Ne JAMAIS faire d'addition, multiplication ou division — UNIQUEMENT utiliser les valeurs pré-calculées.
-- JAMAIS de phrase générique applicable à n'importe quel projet. Chaque phrase doit être SPÉCIFIQUE à ce terrain, ce programme, ce budget.
-
-LOGIQUE DES SCÉNARIOS :
-- A = la réponse FIDÈLE à la demande du client. Dimensionnement optimal pour SON programme, SON nombre d'unités. Pas une intensification délirante.
-- B = alternative équilibrée : même objectif mais avec des compromis justifiés (moins de niveaux, emprise réduite, coût maîtrisé). B est TOUJOURS moins cher que A.
-- C = prudent/compact : enveloppe réduite, budget maîtrisé, conformité réglementaire sécurisée. Le filet de sécurité.
-
-FINANCIER :
-- DÉMONTRER le raisonnement étape par étape : d'abord le coût unitaire au m² (contexte local + standing), puis la surface totale, puis les postes complémentaires (VRD, honoraires, frais).
-- TOUJOURS donner la fourchette réaliste, pas juste un chiffre.
-- Le commerce est construit à 80% du coût du bâtiment — mentionner systématiquement quand l'info est fournie.
-- Chaque somme citée doit correspondre EXACTEMENT aux données fournies. Zéro arrondi personnel.
-
-RISQUES :
-- SPÉCIFIQUES et CHIFFRÉS. Pas "il y a un risque de dépassement" mais "une hausse de 10% des matériaux ajouterait XM au budget".
-- Chaque risque est suivi d'une piste de mitigation ou d'une conséquence concrète.
-
-SPLIT / PILOTIS :
-- Quand un scénario est en SPLIT (commerce devant + logement arrière sur pilotis), EXPLIQUER le choix : intimité résidentielle, accès séparés, ventilation naturelle optimisée, RDC sur pilotis = parking couvert ou local technique.
-- Bien distinguer les 2 volumes : volume commercial (RDC clôture) et volume logement (sur pilotis derrière).`;
-
-  flat.gpt_user_prompt = `Génère les textes du diagnostic immobilier. Respecte STRICTEMENT les données — NE RECALCULE RIEN.
-
-═══ CONTEXTE PROJET ═══
-Client : ${_clientName}
-Localisation : ${_quartier}, Douala
-Terrain : ${p.site_area || 0} m² (${_f.retrait_emprise_constructible} constructibles après retraits)
-Retraits : avant ${_f.retrait_avant}, latéral ${_f.retrait_lateral}, arrière ${_f.retrait_arriere}
-Mitoyenneté : ${_f.retrait_mitoyennete} côté(s)
-Zoning : ${p.zoning_type || "URBAIN"}
-Programme : ${_f.profil_programme} — ${_f.profil_cible_unites} unités, standing ${_f.profil_standing}
-Budget client : ${_f.profil_budget_max}
-Enveloppe bâtie : ${p.envelope_w || 0} × ${p.envelope_d || 0} m
-COS réglementaire : ${_f.site_cos_regl} → SDP max autorisée : ${_f.site_sdp_max}
-Orientation : façade optimale ${_f.orient_facade_optimale}, façade à protéger ${_f.orient_facade_proteger}
-Ventilation traversante : ${_f.orient_ventilation} | Brise-soleil : ${_f.orient_brise_soleil}
-Scénario recommandé : ${_f.rec_scenario} (score ${_f.rec_score}/100)
-
-═══ SCÉNARIO A — ${_f.A_role} ═══
-Gabarit : ${_f.A_R_plus} — ${_f.A_gabarit}
-Emprise : ${_f.A_fp} m² (CES ${_f.A_ces_pct}%)
-SDP totale : ${_f.A_sdp} m²
-Programme : ${_f.A_unit_summary}
-Surface habitable hors circulations : ${_f.A_hab_m2_total} m² | Circulations : ${_f.A_circ_pct} (${_f.A_circ_m2} m²)
-Surface habitable moyenne par unité : ${_f.A_m2_hab_par_unite} m²
-Typologie : ${_f.A_typology} — ${_f.A_typology_desc}
-COS : ${_f.A_cos_depassement_text}
-Coût/m² : ${_f.A_cost_per_m2_text}
-${_f.A_commerce_cost_info}
-Ventilation construction : ${_f.A_ventil_equation}
-Budget : ${_f.A_budget_equation}
-Fourchette : ${_f.A_fourchette_text}
-Budget global : ${_f.A_global_M}M FCFA
-Honoraires : entre ${_f.A_hono_bas_M}M et ${_f.A_hono_haut_M}M (${_f.A_hono_taux_bas} à ${_f.A_hono_taux_haut})
-Frais annexes : ${_f.A_frais_M}M
-Durée chantier : ${_f.A_duree_chantier}
-Mix détaillé : ${_f.A_unit_mix}
-
-═══ SCÉNARIO B — ${_f.B_role} ═══
-Gabarit : ${_f.B_R_plus} — ${_f.B_gabarit}
-Emprise : ${_f.B_fp} m² (CES ${_f.B_ces_pct}%)
-SDP totale : ${_f.B_sdp} m²
-Programme : ${_f.B_unit_summary}
-Surface habitable hors circulations : ${_f.B_hab_m2_total} m² | Circulations : ${_f.B_circ_pct} (${_f.B_circ_m2} m²)
-Surface habitable moyenne par unité : ${_f.B_m2_hab_par_unite} m²
-Typologie : ${_f.B_typology} — ${_f.B_typology_desc}
-COS : ${_f.B_cos_depassement_text}
-Coût/m² : ${_f.B_cost_per_m2_text}
-${_f.B_commerce_cost_info}
-Ventilation construction : ${_f.B_ventil_equation}
-Budget : ${_f.B_budget_equation}
-Fourchette : ${_f.B_fourchette_text}
-Budget global : ${_f.B_global_M}M FCFA
-Honoraires : entre ${_f.B_hono_bas_M}M et ${_f.B_hono_haut_M}M (${_f.B_hono_taux_bas} à ${_f.B_hono_taux_haut})
-Frais annexes : ${_f.B_frais_M}M
-Durée chantier : ${_f.B_duree_chantier}
-Mix détaillé : ${_f.B_unit_mix}
-
-═══ SCÉNARIO C — ${_f.C_role} ═══
-Gabarit : ${_f.C_R_plus} — ${_f.C_gabarit}
-Emprise : ${_f.C_fp} m² (CES ${_f.C_ces_pct}%)
-SDP totale : ${_f.C_sdp} m²
-Programme : ${_f.C_unit_summary}
-Surface habitable hors circulations : ${_f.C_hab_m2_total} m² | Circulations : ${_f.C_circ_pct} (${_f.C_circ_m2} m²)
-Surface habitable moyenne par unité : ${_f.C_m2_hab_par_unite} m²
-Typologie : ${_f.C_typology} — ${_f.C_typology_desc}
-COS : ${_f.C_cos_depassement_text}
-Coût/m² : ${_f.C_cost_per_m2_text}
-${_f.C_commerce_cost_info}
-Ventilation construction : ${_f.C_ventil_equation}
-Budget : ${_f.C_budget_equation}
-Fourchette : ${_f.C_fourchette_text}
-Budget global : ${_f.C_global_M}M FCFA
-Honoraires : entre ${_f.C_hono_bas_M}M et ${_f.C_hono_haut_M}M (${_f.C_hono_taux_bas} à ${_f.C_hono_taux_haut})
-Frais annexes : ${_f.C_frais_M}M
-Durée chantier : ${_f.C_duree_chantier}
-Mix détaillé : ${_f.C_unit_mix}
-
-═══ COMPARATIFS ═══
-Delta B vs A : SDP ${_f.delta_BA_sdp}, coût ${_f.delta_BA_cout}
-Delta C vs A : SDP ${_f.delta_CA_sdp}, coût ${_f.delta_CA_cout}
-Delta C vs B : SDP ${_f.delta_CB_sdp}, coût ${_f.delta_CB_cout}
-Phasage : ${_f.phasage_text}
-Durée totale : ${_f.phasage_duree_mois} mois en ${_f.phasage_nb_phases} phase(s)
-
-═══ TEXTES À GÉNÉRER ═══
-Génère EXACTEMENT les champs suivants. Retourne UNIQUEMENT un JSON valide avec ces clés :
-
-{
-  "slide_3_intro_text": "[Commence par 'Ce projet consiste à valoriser un terrain de ${p.site_area || 0} m² à ${_quartier}, Douala'. NE PAS mentionner le nom du client. Présenter le programme (mixte, standing, budget). Nommer les 3 scénarios (A=${_f.A_role}, B=${_f.B_role}, C=${_f.C_role}) et expliquer leur rôle. NE PAS donner de conclusion budgétaire ici. Dire que le diagnostic éclairera le choix. 4-6 phrases.]",
-
-  "slide_3_programme_text": "[Programme : ${_f.profil_cible_unites} unités, standing ${_f.profil_standing}. SDP max ${_f.site_sdp_max}. Retraits → emprise ${_f.retrait_emprise_constructible}. NE PAS détailler les scénarios. Plans en APS. 3-4 phrases.]",
-
-  "slide_4_text": "[Terrain ${p.site_area || 0} m², ~${p.envelope_w || 0}m × ${p.envelope_d || 0}m. Retraits → ${_f.retrait_emprise_constructible}. Accès voie publique. Mitoyenneté ${_f.retrait_mitoyennete} côté(s). Impact ouvertures, ventilation. 4-5 phrases.]",
-
-  "slide_5_text": "[COS limite SDP à ${_f.site_sdp_max}. A: ${_f.A_cos_depassement_text}. B: ${_f.B_cos_depassement_text}. C: ${_f.C_cos_depassement_text}. Rapport à la rue, mitoyenneté. 4-6 phrases.]",
-
-  "scenario_A_summary_text": "[${_f.A_role}. ${_f.A_R_plus}, ${_f.A_gabarit}. SDP ${_f.A_sdp} m² sur ${_f.A_fp} m². Si SPLIT/pilotis: expliquer intimité, accès séparé, pilotis=parking. ${_f.A_unit_summary}. Habitable: ${_f.A_hab_m2_total} m² hors circ (${_f.A_circ_pct}). Moyenne ${_f.A_m2_hab_par_unite} m²/unité. Répond EXACTEMENT à la demande. 5-7 phrases. Finir par 'La question qui se pose...']",
-
-  "scenario_A_financial_text": "[Standing ${_f.profil_standing}. Coût ${_f.A_cost_per_m2_text} pour ${_f.A_sdp} m². ${_f.A_commerce_cost_info}. Ventilation: ${_f.A_ventil_equation}. VRD ${_f.A_vrd_M}M. Honoraires ${_f.A_hono_bas_M}M-${_f.A_hono_haut_M}M. Frais ${_f.A_frais_M}M. TOTAL: ${_f.A_budget_equation}. Fourchette: ${_f.A_fourchette_text}. Vs budget ${_f.profil_budget_max}. CONDITIONNEL. 6-8 phrases.]",
-
-  "scenario_A_risk_text": "[1) ${_f.A_cos_depassement_text} → refus permis possible. 2) Hausse 10% = +${Math.round(Number(_f.A_global_M) * 0.1)}M. 3) Complexité ${_f.A_R_plus}. 4) Circulations ${_f.A_circ_pct}. CHAQUE risque chiffré. 4-5 phrases.]",
-
-  "scenario_B_summary_text": "[${_f.B_role}. ${_f.B_R_plus}, ${_f.B_gabarit}. SDP ${_f.B_sdp} m² sur ${_f.B_fp} m². ${_f.B_unit_summary}. Habitable: ${_f.B_hab_m2_total} m² (${_f.B_circ_pct}). Moyenne ${_f.B_m2_hab_par_unite} m²/unité. JUSTIFIER en quoi B est plus équilibré que A: moins de niveaux, emprise réduite, coût moindre. 5-7 phrases. 'La question qui se pose...']",
-
-  "scenario_B_financial_text": "[Coût ${_f.B_cost_per_m2_text} pour ${_f.B_sdp} m². ${_f.B_commerce_cost_info}. Ventilation: ${_f.B_ventil_equation}. TOTAL: ${_f.B_budget_equation}. Fourchette: ${_f.B_fourchette_text}. B toujours moins cher que A. CONDITIONNEL. 6-8 phrases.]",
-
-  "scenario_B_risk_text": "[COS: ${_f.B_cos_depassement_text}. Compacité ${_f.B_m2_hab_par_unite} m²/unité. Hausse 10% = +${Math.round(Number(_f.B_global_M) * 0.1)}M. Structure simplifiée vs A. 3-4 phrases.]",
-
-  "scenario_C_summary_text": "[${_f.C_role}. ${_f.C_R_plus}, ${_f.C_gabarit}. SDP ${_f.C_sdp} m² sur ${_f.C_fp} m². ${_f.C_unit_summary}. Habitable: ${_f.C_hab_m2_total} m² (${_f.C_circ_pct}). Moyenne ${_f.C_m2_hab_par_unite} m²/unité. Compact, maîtrise budget. 5-7 phrases. 'La question qui se pose...']",
-
-  "scenario_C_financial_text": "[Coût ${_f.C_cost_per_m2_text} pour ${_f.C_sdp} m². ${_f.C_commerce_cost_info}. Ventilation: ${_f.C_ventil_equation}. TOTAL: ${_f.C_budget_equation}. Fourchette: ${_f.C_fourchette_text}. Le plus proche du budget client. CONDITIONNEL. 6-8 phrases.]",
-
-  "scenario_C_risk_text": "[COS: ${_f.C_cos_depassement_text}. Compacité ${_f.C_m2_hab_par_unite} m²/unité. Hausse 10% = +${Math.round(Number(_f.C_global_M) * 0.1)}M. Faible emprise. 3-4 phrases.]",
-
-  "comparatif_intro_text": "[A(${_f.A_sdp}m², ${_f.A_R_plus}), B(${_f.B_sdp}m², ${_f.B_R_plus}), C(${_f.C_sdp}m², ${_f.C_R_plus}). Écart A↔C: ${_f.delta_CA_sdp}/${_f.delta_CA_cout}. B entre les deux: ${_f.delta_CB_sdp}/${_f.delta_CB_cout}. 4-5 phrases.]",
-  "comparatif_A_label": "${_f.A_role} — ${_f.A_R_plus}",
-  "comparatif_B_label": "${_f.B_role} — ${_f.B_R_plus}",
-  "comparatif_C_label": "${_f.C_role} — ${_f.C_R_plus}",
-  "comparatif_A_sdp": "${_f.A_sdp} m²",
-  "comparatif_B_sdp": "${_f.B_sdp} m²",
-  "comparatif_C_sdp": "${_f.C_sdp} m²",
-  "comparatif_A_cost": "${_f.A_global_M}M FCFA",
-  "comparatif_B_cost": "${_f.B_global_M}M FCFA",
-  "comparatif_C_cost": "${_f.C_global_M}M FCFA",
-  "comparatif_A_units": "${_f.A_unit_summary}",
-  "comparatif_B_units": "${_f.B_unit_summary}",
-  "comparatif_C_units": "${_f.C_unit_summary}",
-
-  "strategic_arbitrage_text": "[Arbitrage. Priorités client: programme ${_f.profil_programme}, budget ${_f.profil_budget_max}. Recommandation: ${_f.rec_scenario}. Pourquoi les autres sont moins adaptés. 5-7 phrases.]",
-
-  "success_intro_text": "[Le scénario ${_f.rec_scenario} constitue la base la plus solide. 1-2 phrases.]",
-  "success_technical_text": "[Technique du scénario recommandé. 4-5 phrases.]",
-  "success_financial_text": "[Budget du recommandé. Position vs budget client. 4-5 phrases.]",
-  "success_strategic_text": "[Phasage: ${_f.phasage_text}. Durée ${_f.phasage_duree_mois} mois. Saison des pluies. 4-5 phrases.]",
-
-  "invisible_intro_text": "[Aspects techniques et administratifs à anticiper. 1-2 phrases.]",
-  "invisible_technical_text": "[Fondations, ventilation mitoyenneté, accès chantier zone dense. 4-5 phrases.]",
-  "invisible_financial_text": "[Honoraires, permis, études géotechniques, bureau contrôle. 4-5 phrases.]",
-  "invisible_strategic_text": "[Phasage décaissements. Saison pluies. Logistique quartier dense. 4-5 phrases.]",
-
-  "next_step_intro_text": "[Business plan et faisabilité sur le scénario recommandé. 2-3 phrases.]",
-  "next_step_scope_text": "[APS, APD, permis, études exécution, consultation entreprises, chantier. 5-7 phrases.]",
-  "next_step_outcome_text": "[Plans détaillés, estimatif actualisé, dossier permis. 2-3 phrases.]",
-
-  "conclusion_summary_text": "[Résumé: terrain analysé, 3 scénarios, ${_f.rec_scenario} recommandé. 3-4 phrases.]",
-  "conclusion_positioning_text": "[Pourquoi le recommandé est le meilleur compromis. 3-4 phrases.]",
-  "conclusion_projection_text": "[Durée chantier, saison pluies, livraison. 2-3 phrases.]"
-}`;
-
-  console.log(`[v72.60] GPT PROMPTS PRÉ-CONSTRUITS: system=${flat.gpt_system_prompt.length} chars, user=${flat.gpt_user_prompt.length} chars`);
-
-  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, computed_scores, ...flat });
+  return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, ...flat });
 });
-
-// ══════════════════════════════════════════════════════════════════════════════
-// v72.61: ENDPOINT /generate-texts — LE SERVEUR APPELLE GPT DIRECTEMENT
-// Make.com envoie le MÊME body que /compute-scenarios
-// Le serveur calcule les scénarios, construit les prompts, appelle GPT, renvoie les textes
-// → Make.com n'a PLUS BESOIN du module OpenAI, juste un module HTTP
-// ══════════════════════════════════════════════════════════════════════════════
-app.post("/generate-texts", async (req, res) => {
-  try {
-    console.log("[v72.61] /generate-texts — START");
-
-    // 1) Appeler /compute-scenarios via HTTP local
-    const localUrl = `http://localhost:${PORT}/compute-scenarios`;
-    console.log(`[v72.61] Appel interne → ${localUrl}`);
-    const intResponse = await fetch(localUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
-    });
-
-    if (!intResponse.ok) {
-      const errText = await intResponse.text();
-      console.error(`[v72.61] /compute-scenarios a échoué (${intResponse.status}):`, errText);
-      return res.status(500).json({ ok: false, error: "compute-scenarios failed", detail: errText });
-    }
-
-    const scenariosResponse = await intResponse.json();
-
-    if (!scenariosResponse || !scenariosResponse.ok) {
-      console.error("[v72.61] /compute-scenarios réponse invalide:", JSON.stringify(scenariosResponse).substring(0, 200));
-      return res.status(500).json({ ok: false, error: "compute-scenarios returned invalid data" });
-    }
-
-    const systemPrompt = scenariosResponse.gpt_system_prompt;
-    const userPrompt = scenariosResponse.gpt_user_prompt;
-
-    if (!systemPrompt || !userPrompt) {
-      console.error("[v72.61] gpt_system_prompt ou gpt_user_prompt manquant dans la réponse");
-      return res.status(500).json({ ok: false, error: "prompts not found in scenarios response" });
-    }
-
-    console.log(`[v72.61] Prompts OK: system=${systemPrompt.length} chars, user=${userPrompt.length} chars`);
-    console.log("[v72.61] Appel GPT-4o...");
-
-    // 2) Appeler OpenAI directement
-    const gptStart = Date.now();
-    const gptResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        temperature: 0.4,
-        max_tokens: 8000,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      }),
-    });
-
-    if (!gptResponse.ok) {
-      const errText = await gptResponse.text();
-      console.error(`[v72.61] GPT API error ${gptResponse.status}: ${errText}`);
-      return res.status(502).json({ ok: false, error: `GPT API error: ${gptResponse.status}`, detail: errText });
-    }
-
-    const gptData = await gptResponse.json();
-    const gptElapsed = Date.now() - gptStart;
-    console.log(`[v72.61] GPT réponse reçue en ${gptElapsed}ms — tokens: prompt=${gptData.usage?.prompt_tokens || "?"}, completion=${gptData.usage?.completion_tokens || "?"}`);
-
-    // 3) Extraire le contenu JSON généré par GPT
-    const rawContent = gptData.choices?.[0]?.message?.content;
-    if (!rawContent) {
-      console.error("[v72.61] GPT n'a pas retourné de contenu");
-      return res.status(502).json({ ok: false, error: "GPT returned no content" });
-    }
-
-    let generatedTexts;
-    try {
-      generatedTexts = JSON.parse(rawContent);
-    } catch (parseErr) {
-      console.error("[v72.61] GPT JSON invalide:", parseErr.message);
-      return res.status(502).json({ ok: false, error: "GPT returned invalid JSON", raw: rawContent.substring(0, 500) });
-    }
-
-    const textKeys = Object.keys(generatedTexts);
-    console.log(`[v72.61] ✅ TEXTES GÉNÉRÉS: ${textKeys.length} champs — ${textKeys.join(", ")}`);
-
-    // 4) Retourner les textes + les données scénarios (sans les prompts pour alléger)
-    const { gpt_system_prompt, gpt_user_prompt, ...scenariosFlat } = scenariosResponse;
-
-    return res.json({
-      ok: true,
-      server_version: "72.65-GENERATE-TEXTS",
-      gpt_model: "gpt-4o",
-      gpt_elapsed_ms: gptElapsed,
-      gpt_tokens: gptData.usage || {},
-      generated_texts: generatedTexts,
-      // Aussi renvoyer les données scénarios pour que Make.com puisse les utiliser
-      ...scenariosFlat,
-      // Et les textes en FLAT pour mapping direct dans Make.com
-      ...generatedTexts,
-    });
-
-  } catch (err) {
-    console.error("[v72.61] /generate-texts ERREUR:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
 // Sélection automatique de la forme bâtie selon le contexte :
 //   BLOC     → rectangle compact (~1:1.3), économique, petit terrain
@@ -5005,116 +3681,6 @@ app.post("/generate-texts", async (req, res) => {
 //   EN_U     → 3 ailes + cour intérieure, programme mixte, standing élevé
 //   EN_L     → 2 ailes, terrain d'angle, extension/rénovation
 //   EXTENSION→ barre accolée à un côté (parcelle déjà occupée)
-//
-// ══════════════════════════════════════════════════════════════════════════════
-// v72.53: IMPACT DES TYPOLOGIES SUR LES CALCULS
-// Chaque forme a un impact RÉEL sur : circulation, coûts, efficacité, profondeur
-// Ces modifiers sont appliqués dans computeSmartScenarios (pas juste le rendu 3D)
-// ══════════════════════════════════════════════════════════════════════════════
-const TYPOLOGY_IMPACT = {
-  BLOC: {
-    // Rectangle compact : fondations simples, toiture rectangulaire, circulation minimale
-    // Le plus économique à construire — référence de coût
-    circ_modifier: 0,        // pas de surcoût circulation (couloir central simple)
-    cost_mult: 1.00,         // référence coût construction
-    body_depth_mult: 1.00,   // profondeur standard
-    efficiency: 0.84,        // ratio surface utile / SDP (bon)
-    fondation_mult: 1.00,    // fondations simples (rectangle)
-    toiture_mult: 1.00,      // toiture simple (2 pans ou terrasse)
-    description: "Volume compact rectangulaire — coût optimisé, fondations simples",
-  },
-  BARRE: {
-    // Lamelle allongée : double orientation, ventilation traversante, couloirs latéraux
-    // Éclairage naturel optimal — légèrement plus cher (linéaire de façade)
-    circ_modifier: +0.02,    // +2% circulation (couloir latéral + escaliers en bouts)
-    cost_mult: 1.08,         // +8% (plus de linéaire de façade, étanchéité, finitions)
-    body_depth_mult: 0.75,   // corps de bâti plus mince (ventilation traversante)
-    efficiency: 0.82,        // ratio utile/SDP (bon, grâce à la double orientation)
-    fondation_mult: 1.05,    // fondations linéaires (plus longues)
-    toiture_mult: 1.05,      // toiture allongée
-    description: "Lamelle allongée — double orientation, ventilation traversante, éclairage optimal",
-  },
-  EN_U: {
-    // 3 ailes autour d'une cour : circulation plus complexe (3 cages d'escalier)
-    // Premium — cour intérieure créant un microclimat, mais fondations complexes
-    circ_modifier: +0.06,    // +6% circulation (3 cages d'escalier, coursives, hall)
-    cost_mult: 1.15,         // +15% (3 ailes, joints de dilatation, cour, fondations en U)
-    body_depth_mult: 0.80,   // ailes plus minces (éclairage sur cour + extérieur)
-    efficiency: 0.78,        // ratio utile/SDP (perdu en circulation, mais cour = valeur)
-    fondation_mult: 1.20,    // fondations complexes (3 directions, angles)
-    toiture_mult: 1.15,      // 3 toitures + noues intérieures
-    description: "3 ailes en U avec cour intérieure — prestige, microclimat, mixité optimale",
-  },
-  EN_L: {
-    // 2 ailes en angle : compromis entre BLOC et EN_U
-    // Bon éclairage, angle crée un espace semi-protégé
-    circ_modifier: +0.03,    // +3% (2 cages, angle de circulation)
-    cost_mult: 1.10,         // +10% (angle, 2 ailes, joint de dilatation)
-    body_depth_mult: 0.85,   // ailes légèrement plus minces
-    efficiency: 0.80,        // ratio utile/SDP (bon compromis)
-    fondation_mult: 1.10,    // fondations en angle
-    toiture_mult: 1.08,      // 2 toitures + noue à l'angle
-    description: "2 ailes en L — bon compromis lumière/coût, espace semi-protégé en angle",
-  },
-  EXTENSION: {
-    // Accolée à l'existant : 1 mur mitoyen partagé, fondations partielles
-    // Économique car 1 façade en moins, mais contraintes structurelles existant
-    circ_modifier: +0.01,    // +1% (raccordement à l'existant)
-    cost_mult: 1.05,         // +5% (raccordement structurel, reprise fondations)
-    body_depth_mult: 0.90,   // légèrement contraint par l'existant
-    efficiency: 0.82,        // bon (1 mur partagé = moins de déperditions)
-    fondation_mult: 1.08,    // reprise fondations existantes
-    toiture_mult: 1.02,      // raccord toiture existante
-    description: "Extension accolée — raccordement à l'existant, 1 façade partagée",
-  },
-};
-// ══════════════════════════════════════════════════════════════════════════════
-// v72.53: VRD PAR ZONAGE — le coût des réseaux varie selon la zone
-// URBAIN: réseaux existants, raccordement court → VRD bas
-// PERIURBAIN: réseaux proches, quelques extensions → VRD moyen
-// RURAL/PAVILLON: pas de réseaux, tout à créer → VRD élevé
-// ══════════════════════════════════════════════════════════════════════════════
-const VRD_MULT_BY_ZONING = {
-  URBAIN: 0.80,      // réseaux existants, raccordement court
-  MIXTE: 0.90,       // zone mixte, réseaux partiels
-  PERIURBAIN: 1.00,  // référence — quelques extensions nécessaires
-  PAVILLON: 1.20,    // zone résidentielle, extensions significatives
-  RURAL: 1.50,       // tout à créer (routes, eau, électricité, assainissement)
-  Z_DEFAULT: 1.00,   // fallback
-};
-// ══════════════════════════════════════════════════════════════════════════════
-// v72.53: PRÉ-SÉLECTION TYPOLOGIQUE POUR LE CALCUL
-// Version simplifiée de selectTypology() utilisable DANS computeSmartScenarios
-// (la version complète avec bearing/solaire est pour le rendu 3D)
-// ══════════════════════════════════════════════════════════════════════════════
-function preSelectTypology({ fp_m2, envelope_area, site_area, envAspect, massing_mode,
-  scenario_role, standing_level, program_main, isMixte, fillRatio }) {
-  const isPremium = /PREMIUM|HAUT/i.test(standing_level || "");
-  // Contrainte géométrique dure
-  if (fillRatio > 0.80) return "BLOC";
-  // PRUDENT → BLOC (simple, économique)
-  if (scenario_role === "PRUDENT" && fillRatio > 0.30) return "BLOC";
-  // INTENSIFICATION + grand terrain mixte → EN_U
-  if (scenario_role === "INTENSIFICATION" && isMixte && envelope_area > 400 && fillRatio > 0.30) return "EN_U";
-  // INTENSIFICATION + terrain allongé → BARRE
-  if (scenario_role === "INTENSIFICATION" && envAspect > 1.8) return "BARRE";
-  // COMPACT → BLOC ou EN_U
-  if (massing_mode === "COMPACT") {
-    if (isPremium && isMixte && envelope_area > 400) return "EN_U";
-    return "BLOC";
-  }
-  // SPREAD → BARRE ou EN_L
-  if (massing_mode === "SPREAD") {
-    if (envAspect > 1.5) return "BARRE";
-    if (isPremium && envelope_area > 350) return "EN_L";
-    return "BARRE";
-  }
-  // BALANCED → selon contexte
-  if (isPremium && isMixte && envelope_area > 500) return "EN_U";
-  if (envAspect > 2.0) return "BARRE";
-  if (fillRatio > 0.35 && fillRatio < 0.65 && envelope_area > 350) return "EN_L";
-  return "BLOC";
-}
 // ─── SÉLECTION TYPOLOGIQUE v56.2 ─────────────────────────────────────────────
 // Chaque scénario (A/B/C) peut avoir une typologie DIFFÉRENTE.
 // Le choix tient compte de :
@@ -6727,48 +5293,30 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.fillStyle = "#000000";
     ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
   } else {
-    // ══ MODE SUPERPOSÉ : annotations par étage ══
-    // v72.55: Annotations MIXTE = commerce (orange) pour les niveaux commerce + logement (bleu) pour le reste
-    const commLev = commerce_levels || 0;
+    // ══ MODE SUPERPOSÉ : annotations classiques ══
+    const realTotalH = rdcH_m + (levels - 1) * etageH_m;
     const sdpTotale = fp_m2 * levels;
-    const sdpCommerce = commLev > 0 ? fp_m2 * commLev : 0;
-    const sdpLogement = sdpTotale - sdpCommerce;
     const annX = W * 0.62;
     const annBaseY = H * 0.58;
     const annStepY = -32 * s;
     for (let f = 0; f < levels; f++) {
       const y = annBaseY + f * annStepY;
       const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-      const isCommerce = f < commLev;
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
-      ctx.strokeStyle = isCommerce ? "#e07830" : "#3a7ac0"; ctx.lineWidth = 2*s; ctx.stroke();
-      const floorText = isCommerce ? `${floorLabel} : ${fp_m2} m² (commerce)` : `${floorLabel} : ${fp_m2} m²`;
+      ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
       ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(floorText, annX + lineLen + 6*s, y + 4*s);
-      ctx.fillStyle = isCommerce ? "#e07830" : "#3a7ac0";
-      ctx.fillText(floorText, annX + lineLen + 6*s, y + 4*s);
+      ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillStyle = "#000000";
+      ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
     }
-    // Résumé commerce + logement + total
-    let summaryY = annBaseY + 24*s;
-    if (commLev > 0) {
-      ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
-      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`Commerce: ${sdpCommerce.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
-      ctx.fillStyle = "#e07830";
-      ctx.fillText(`Commerce: ${sdpCommerce.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
-      summaryY += 18*s;
-      ctx.strokeText(`Logement: ${sdpLogement.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
-      ctx.fillStyle = "#3a7ac0";
-      ctx.fillText(`Logement: ${sdpLogement.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
-      summaryY += 18*s;
-    }
-    ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "left";
+    // Total SDP en bas — NOIR avec contour blanc
+    ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
+    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, summaryY);
+    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
   }
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
@@ -7009,21 +5557,14 @@ app.post("/generate", async (req, res) => {
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
-  console.log("═══ /generate-massing v72.59 ═══");
-  // v72.54: SANITIZE #VALUE! from Google Sheet — replace all #VALUE!, #REF!, #N/A, #ERROR! with empty string
-  for (const key of Object.keys(req.body)) {
-    if (typeof req.body[key] === "string" && /^#(VALUE|REF|N\/A|ERROR|NAME|NULL|DIV\/0)!?/i.test(req.body[key].trim())) {
-      console.log(`[SANITIZE] ${key}="${req.body[key]}" → "" (Google Sheet error)`);
-      req.body[key] = "";
-    }
-  }
-  console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}" render_label="${req.body.render_label}"`);
+  console.log("═══ /generate-massing v72.29 ═══");
+  console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
   console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
   const {
     lead_id, client_name, polygon_points,
     site_area, setback_front, setback_side, setback_back,
-    envelope_w, envelope_d, envelope_area: envelope_area_raw,  // v72.55: CRITIQUE — manquait, causait SDP ×2
+    envelope_w, envelope_d,
     massing_label = "A", slide_name,
     style_ref_url = null,
     // ── Mode classique (valeurs pré-calculées par la sheet) ──
@@ -7053,181 +5594,75 @@ app.post("/generate-massing", async (req, res) => {
     layout_mode,           // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
     commerce_depth_m,      // profondeur bande commerciale (défaut 6m)
     retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
-    // ── v72.50 : champ dédié disposition du formulaire Google (colonne BE) ──
-    disposition,           // "Commerce devant, logement en retrait" | "Tout dans un seul bâtiment" | vide
-    // ── v72.54 : label explicite pour différencier A/B/C quand Make.com envoie massing_label=A pour tout ──
-    render_label,          // "A" | "B" | "C" — override explicite depuis Make.com
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
-  // v72.54: PARSING ROBUSTE — même logique que /compute-scenarios
-  // Make.com envoie "20 - 6" (formule Sheet comme texte) → Number("20 - 6") = NaN → CRASH SILENCIEUX
-  const _safeFloatM = (v) => {
-    if (v === null || v === undefined || v === "") return 0;
-    if (typeof v === "number") return isNaN(v) ? 0 : v;
-    const s = String(v).trim();
-    const n = Number(s);
-    if (!isNaN(n)) return n;
-    const f = parseFloat(s);
-    return (!isNaN(f)) ? f : 0;
-  };
-  const envW = _safeFloatM(envelope_w);
-  const envD = _safeFloatM(envelope_d);
-  let envArea = _safeFloatM(envelope_area_raw); // v72.55: zone constructible réelle (après retraits)
-  const floorH = _safeFloatM(fh_raw) || 3.2;
-  // v72.56-57: Si envelope_area n'est PAS fourni par Make.com (= 0 ou absent),
-  // on le CALCULE à partir des retraits réglementaires — sinon envW×envD (BRUT) surestime de 50-110%
-  if (!envArea || envArea <= 0) {
-    const RETRAITS_ZONING = {
-      URBAIN: { avant: 5, lateral: 3, arriere: 3 },
-      PERIURBAIN: { avant: 6, lateral: 4, arriere: 4 },
-      MIXTE: { avant: 5, lateral: 3, arriere: 3 },
-      PAVILLON: { avant: 6, lateral: 4, arriere: 4 },
-      RURAL: { avant: 8, lateral: 5, arriere: 5 },
-    };
-    const zoneKey = String(zoning_type || "URBAIN").toUpperCase();
-    const zr = RETRAITS_ZONING[zoneKey] || RETRAITS_ZONING.URBAIN;
-    // Utiliser les setbacks explicites du body si fournis, sinon les retraits réglementaires
-    const sf = _safeFloatM(setback_front) || zr.avant;
-    const ss = _safeFloatM(setback_side) || zr.lateral;
-    const sb = _safeFloatM(setback_back) || zr.arriere;
-    const netW = Math.max(5, envW - 2 * ss);
-    const netD = Math.max(5, envD - sf - sb);
-    envArea = Math.round(netW * netD);
-    console.log(`[v72.59] ⚠️ envelope_area NON FOURNI → calculé depuis retraits: (${envW}-2×${ss}) × (${envD}-${sf}-${sb}) = ${netW}×${netD} = ${envArea}m²`);
-  }
-  console.log(`[v72.59] PARSED DIMS: envW=${envW} envD=${envD} envArea=${envArea} floorH=${floorH} (raw: w="${envelope_w}" d="${envelope_d}" area="${envelope_area_raw}")`);
-  if (envW * envD > 0 && Math.abs(envW * envD - envArea) > envArea * 0.3) {
-    console.log(`[v72.59] ⚠️ ALERTE: envW×envD=${envW*envD}m² vs envelope_area=${envArea}m² — écart ${Math.round((envW*envD/envArea-1)*100)}%`);
-  }
-  // v72.56-57: DÉTECTION ROBUSTE DU LABEL (A/B/C) + COMPTEUR AUTOMATIQUE
+  const envW = Number(envelope_w);
+  const envD = Number(envelope_d);
+  const floorH = Number(fh_raw) || 3.2;
+  // v72.29: DÉTECTION ROBUSTE DU LABEL (A/B/C) — PRIORITÉ À slide_name
   // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
-  // SOLUTION DÉFINITIVE : compteur par lead_id qui cycle A → B → C automatiquement.
+  // Le slide_name est TOUJOURS différent (sinon les images s'écrasent) → SOURCE DE VÉRITÉ.
   let label = "A"; // défaut
   const slideStr = String(slide_name || "").toUpperCase();
   const rawLabel = String(massing_label || "").toUpperCase().trim();
-  const explicitLabel = String(render_label || "").toUpperCase().trim();
-  let labelSource = "default";
-  // PRIORITÉ 0: render_label (champ explicite — le plus fiable si Make.com l'envoie)
-  if (["A", "B", "C"].includes(explicitLabel)) {
-    label = explicitLabel;
-    labelSource = "render_label";
+  // PRIORITÉ 1: slide_name (TOUJOURS fiable car unique par requête)
+  const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
+    || slideStr.match(/[_\s.-]([ABC])$/)
+    || slideStr.match(/([ABC])$/);
+  if (slideMatch) {
+    label = slideMatch[1];
+    console.log(`[v72.29] LABEL from slide_name: "${label}" (slide_name="${slide_name}")`);
+  } else if (["A", "B", "C"].includes(rawLabel)) {
+    // PRIORITÉ 2: massing_label (seulement si slide_name ne contient pas A/B/C)
+    label = rawLabel;
+    console.log(`[v72.29] LABEL from massing_label: "${label}" (slide_name="${slide_name}" had no A/B/C)`);
+  } else {
+    // PRIORITÉ 3: chercher dans tout le body
+    const bodyStr = JSON.stringify(req.body).toUpperCase();
+    if (/PRUDENT|[_":]C[_"}\s,]/.test(bodyStr)) label = "C";
+    else if (/EQUILIBRE|[_":]B[_"}\s,]/.test(bodyStr)) label = "B";
+    console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
-  // PRIORITÉ 1: slide_name (regex A/B/C + mots-clés INTENSIF/EQUILIBRE/PRUDENT)
-  else {
-    const slideMatch = slideStr.match(/(?:MASSING|SCENARIO|SC)[_\s.-]*([ABC])\b/)
-      || slideStr.match(/[_\s.-]([ABC])[_\s.-]/)
-      || slideStr.match(/[_\s.-]([ABC])$/)
-      || slideStr.match(/\b([ABC])\b/);
-    // v72.56-57: aussi détecter INTENSIF/EQUILIBRE/PRUDENT dans slide_name
-    const slideRole = /INTENSIF/i.test(slideStr) ? "A" : /EQUILIB/i.test(slideStr) ? "B" : /PRUDENT/i.test(slideStr) ? "C" : null;
-    if (slideMatch) {
-      label = slideMatch[1];
-      labelSource = "slide_name_regex";
-    } else if (slideRole) {
-      label = slideRole;
-      labelSource = "slide_name_role";
-    } else {
-      // PRIORITÉ 2: COMPTEUR AUTOMATIQUE par lead_id — cycle A → B → C
-      // C'est le FILET DE SÉCURITÉ quand Make.com envoie le même label/slide pour tout
-      if (!global.__massingCallCounter) global.__massingCallCounter = {};
-      const counterKey = String(lead_id).trim();
-      if (!global.__massingCallCounter[counterKey]) {
-        global.__massingCallCounter[counterKey] = { count: 0, ts: Date.now() };
-      }
-      // Reset le compteur si le dernier appel date de > 5 minutes (nouveau run)
-      const counterEntry = global.__massingCallCounter[counterKey];
-      if (Date.now() - counterEntry.ts > 5 * 60 * 1000) {
-        counterEntry.count = 0;
-      }
-      const labels = ["A", "B", "C"];
-      label = labels[counterEntry.count % 3];
-      counterEntry.count++;
-      counterEntry.ts = Date.now();
-      labelSource = `auto_counter(${counterEntry.count})`;
-      // Nettoyer les vieux compteurs (> 30min) pour éviter fuite mémoire
-      const now = Date.now();
-      for (const k of Object.keys(global.__massingCallCounter)) {
-        if (now - global.__massingCallCounter[k].ts > 30 * 60 * 1000) delete global.__massingCallCounter[k];
-      }
-    }
-  }
-  console.log(`[v72.59] ═══ LABEL FINAL: "${label}" ═══ (source=${labelSource}, render_label="${render_label}", massing_label="${massing_label}", slide_name="${slide_name}")`);
-  // ── v72.59: DÉTECTION SPLIT — ROBUSTE (même logique que v72.34 parfait) ──
+  console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
+  // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
+  // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
+  // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
+  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
+  // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
+  // ── Détection MIXTE ──
+  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
+  // ── Détection SPLIT ──
   // Signal 1: layout_mode explicitement SPLIT_AV_AR
   const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  // Signal 2: disposition (formulaire Google) mentionne commerce devant/split
-  const dispositionRaw = String(disposition || "").toLowerCase();
-  const dispositionIsSplit = /commerce devant|retrait|split/i.test(dispositionRaw);
-  // Signal 3: body contient des mots-clés SPLIT dans TOUTES les valeurs
-  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
+  // Signal 2: une valeur du body mentionne clairement la séparation
   const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
-  // Signal 4: commerce_depth_m > 0 avec programme mixte → FORCÉMENT du SPLIT
-  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
+  // Signal 3: commerce_depth_m est envoyé avec une valeur > 0 → c'est forcément du SPLIT
   const hasCommerceDepth = Number(commerce_depth_m) > 0;
-  // ── Résolution SPLIT ──
-  const effectiveLayoutMode = (layoutModeIsSplit || dispositionIsSplit || bodyHasSplit || (hasCommerceDepth && bodyHasMixte))
+  // ── Résolution ──
+  const effectiveLayoutMode = (layoutModeIsSplit || bodyHasSplit || hasCommerceDepth)
     ? "SPLIT_AV_AR" : "SUPERPOSE";
   const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
-  // ── Détection MIXTE ──
+  // ── Programme effectif ──
   const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
-  console.log(`[MASSING v72.59] ┌── DÉTECTION SPLIT ──`);
-  console.log(`[MASSING v72.59] │ layout_mode="${layout_mode}" → ${layoutModeIsSplit}`);
-  console.log(`[MASSING v72.59] │ disposition="${dispositionRaw}" → ${dispositionIsSplit}`);
-  console.log(`[MASSING v72.59] │ bodyHasSplit=${bodyHasSplit} | commerce_depth=${commerce_depth_m} hasCommerceDepth=${hasCommerceDepth} bodyHasMixte=${bodyHasMixte}`);
-  console.log(`[MASSING v72.59] │ → effectiveLayoutMode="${effectiveLayoutMode}" splitActive=${splitActive}`);
-  console.log(`[MASSING v72.59] │ effectiveProgramMain="${effectiveProgramMain}"`);
-  console.log(`[MASSING v72.59] └── FIN DÉTECTION ──`);
+  console.log(`[MASSING v72.25] ┌── DÉTECTION MIXTE/SPLIT ──`);
+  console.log(`[MASSING v72.25] │ program_main="${program_main}" project_type="${project_type}"`);
+  console.log(`[MASSING v72.25] │ layout_mode_raw="${layout_mode}" commerce_depth_m="${commerce_depth_m}" retrait="${retrait_inter_volumes_m}"`);
+  console.log(`[MASSING v72.25] │ bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit} splitActive=${splitActive}`);
+  console.log(`[MASSING v72.25] │ effectiveLayoutMode="${effectiveLayoutMode}" effectiveProgramMain="${effectiveProgramMain}"`);
+  console.log(`[MASSING v72.25] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
+  console.log(`[MASSING v72.25] │ field_values_sample="${fieldValues.slice(0, 500)}"`);
+  console.log(`[MASSING v72.25] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
-  let has_pilotis = false; // v72.54: déclaration explicite (évite implicit global)
-  // ══════════════════════════════════════════════════════════════════════
-  // v72.59: SHEET PASS-THROUGH — PRIORITÉ ABSOLUE
-  // Make.com envoie A_fp, A_levels, A_sdp, A_split_layout etc. directement
-  // depuis /compute-scenarios → on les utilise TELS QUELS → ZÉRO DIVERGENCE
-  // ══════════════════════════════════════════════════════════════════════
-  const sheetFp = _safeFloatM(req.body[`${label}_fp`]);
-  const sheetLevels = Math.round(_safeFloatM(req.body[`${label}_levels`]));
-  const sheetSdp = _safeFloatM(req.body[`${label}_sdp`]);
-  const sheetHeight = _safeFloatM(req.body[`${label}_height`]);
-  const sheetCommLevels = Math.round(_safeFloatM(req.body[`${label}_commerce_levels`]));
-  const sheetPilotis = /true/i.test(String(req.body[`${label}_has_pilotis`] || ""));
-  const sheetAccent = req.body[`${label}_accent_color`] || "";
-  const sheetRole = req.body[`${label}_role`] || "";
-  const sheetSplitJson = req.body[`${label}_split_layout`] || "";
-  console.log(`[v72.59] SHEET CHECK: ${label}_fp=${sheetFp} ${label}_levels=${sheetLevels} ${label}_sdp=${sheetSdp} ${label}_commerce_levels=${sheetCommLevels} ${label}_split_layout=${sheetSplitJson ? "OUI(" + sheetSplitJson.length + "chars)" : "NON"}`);
-
-  if (sheetFp > 0 && sheetLevels > 0) {
-    // ═══ MODE SHEET PASS-THROUGH — GARANTI COHÉRENT AVEC LA SHEET ═══
-    fp = sheetFp;
-    levels = sheetLevels;
-    totalH = sheetHeight || levels * floorH;
-    commerceLevels = sheetCommLevels;
-    has_pilotis = sheetPilotis;
-    scenarioRole = sheetRole || (label === "A" ? "INTENSIFICATION" : label === "B" ? "ÉQUILIBRE" : "PRUDENT");
-    accentColor = sheetAccent || (label === "A" ? "#2a5298" : label === "B" ? "#34a853" : "#ea4335");
-    // Parse split_layout JSON si présent
-    if (sheetSplitJson) {
-      try {
-        splitLayout = JSON.parse(sheetSplitJson);
-        console.log(`[v72.59] ★ SPLIT LAYOUT FROM SHEET: mode=${splitLayout.mode} commerce=${splitLayout.volume_commerce?.sdp_m2}m² logement=${splitLayout.volume_logement?.sdp_m2}m²`);
-      } catch (e) {
-        console.log(`[v72.59] ⚠️ split_layout JSON invalide: ${e.message}`);
-        splitLayout = null;
-      }
-    }
-    console.log(`[v72.59] ★★★ SHEET PASS-THROUGH: ${label} → fp=${fp}m² levels=${levels} sdp_sheet=${sheetSdp} commerce=${commerceLevels} pilotis=${has_pilotis} split=${splitLayout ? splitLayout.mode : "NON"}`);
-  } else if (compute_scenario || !fp_m2_raw || !levels_raw) {
-    // ═══ MODE SMART — recalcul (fallback quand Make.com n'envoie pas les champs {label}_*) ═══
-    console.log(`[v72.59] SMART FALLBACK: pas de champs ${label}_fp/${label}_levels dans le body → recalcul`);
+  if (compute_scenario || !fp_m2_raw || !levels_raw) {
+    // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
-    // ── v72.59: Utiliser la fonction partagée pour calculer les scores ──
-    const masteredScores = computeScoresFromRaw(req.body);
     const scenarios = computeSmartScenarios({
-      site_area: _safeFloatM(site_area),
+      site_area: Number(site_area),
       envelope_w: envW,
       envelope_d: envD,
-      envelope_area: envArea || undefined,
       zoning_type: String(zoning_type),
       floor_height: floorH,
       primary_driver: primary_driver || "MAX_CAPACITE",
@@ -7238,9 +5673,9 @@ app.post("/generate-massing", async (req, res) => {
       target_units: Number(target_units) || 0,
       site_saturation_level: site_saturation_level || "MEDIUM",
       financial_rigidity_score: Number(financial_rigidity_score) || 0,
-      density_band: masteredScores.density_band,
-      risk_adjusted: masteredScores.risk_adjusted,
-      feasibility_posture: masteredScores.feasibility_posture,
+      density_band: density_band || "",
+      risk_adjusted: Number(risk_adjusted) || 0,
+      feasibility_posture: feasibility_posture || "BALANCED",
       scenario_A_role: scenario_A_role || "",
       scenario_B_role: scenario_B_role || "",
       scenario_C_role: scenario_C_role || "",
@@ -7248,20 +5683,27 @@ app.post("/generate-massing", async (req, res) => {
       budget_band: budget_band || "",
       budget_tension: Number(budget_tension) || 0,
       standing_level: standing_level || "STANDARD",
-      rent_score: masteredScores.rent_score,
-      capacity_score: masteredScores.capacity_score,
-      mix_score: masteredScores.mix_score,
-      phase_score: masteredScores.phase_score,
-      risk_score: masteredScores.risk_score,
-      density_pressure_factor: masteredScores.density_pressure_factor,
-      driver_intensity: masteredScores.driver_intensity,
-      strategic_position: masteredScores.strategic_position,
+      rent_score: Number(rent_score) || 0,
+      capacity_score: Number(capacity_score) || 0,
+      mix_score: Number(mix_score) || 0,
+      phase_score: Number(phase_score) || 0,
+      risk_score: Number(risk_score) || 0,
+      density_pressure_factor: Number(density_pressure_factor) || 1,
+      driver_intensity: driver_intensity || "MEDIUM",
+      strategic_position: strategic_position || "",
+      // v72.22: disposition spatiale commerce/logement
       layout_mode: effectiveLayoutMode,
       commerce_depth_m: Number(commerce_depth_m) || 6,
       retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
     });
     const sc = scenarios[label] || scenarios.A;
-    console.log(`[v72.59] SMART: ${label} → fp=${sc.fp_m2}m² levels=${sc.levels} sdp=${sc.sdp_m2}`);
+    // v72.28: LOG les 3 scénarios pour vérifier la différenciation
+    console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
+    for (const k of ["A", "B", "C"]) {
+      const s = scenarios[k];
+      if (s) console.log(`[v72.28] ${k}: fp=${s.fp_m2}m² levels=${s.levels} split=${s.split_layout ? s.split_layout.volume_logement.levels + "niv_logt" : "none"} pilotis=${s.has_pilotis}`);
+    }
+    console.log(`[v72.28] USING: label="${label}" → fp=${sc.fp_m2}m² levels=${sc.levels}`);
     fp = sc.fp_m2;
     levels = sc.levels;
     totalH = sc.height_m;
@@ -7270,7 +5712,7 @@ app.post("/generate-massing", async (req, res) => {
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
     splitLayout = sc.split_layout || null;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"}`);
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
@@ -7305,56 +5747,47 @@ app.post("/generate-massing", async (req, res) => {
     levels = commerceLevels + 1;
     console.log(`[OVERRIDE] levels=${oldLevels} ≤ commerce=${commerceLevels} → forcé à ${levels} (minimum 1 logement au-dessus du commerce)`);
   }
-  // ══════════════════════════════════════════════════════════════════════
-  // v72.59: SPLIT SYNTHÉTIQUE — COHÉRENT AVEC LE SDP SHEET
-  // Si le body demande un SPLIT mais splitLayout est null → on le construit.
-  // Le SDP total du split DOIT matcher le SDP de la Sheet (sheetSdp ou fp×levels).
-  // C (PRUDENT) = TOUJOURS SUPERPOSÉ compact (volume unique).
-  // ══════════════════════════════════════════════════════════════════════
+  // v72.23: SPLIT SYNTHÉTIQUE — si le body demande un SPLIT mais splitLayout est null,
+  // on construit un splitLayout synthétique pour que le rendu 3D montre 2 volumes séparés.
+  // v72.31: JAMAIS pour C (PRUDENT) → C est TOUJOURS SUPERPOSÉ compact (volume unique).
+  // A et B gardent le SPLIT avec commerce en front + logement sur pilotis derrière.
   if (!splitLayout && effectiveLayoutMode === "SPLIT_AV_AR" && commerceLevels > 0 && label !== "C") {
-    const commDepth = Number(commerce_depth_m) || 6;
-    // SDP total cible = celui de la Sheet si dispo, sinon fp × levels
-    const sdpTarget = (sheetSdp > 0) ? sheetSdp : Math.round(fp * levels);
-    // Commerce: emprise = largeur_envelope × profondeur_commerce (surface réelle au sol)
-    const commWidth = Math.max(5, Math.round(envW * 0.7));
-    const commFp = Math.round(commWidth * commDepth);
-    const commSdp = commFp * commerceLevels;
-    // Logement: SDP = total - commerce (GARANTI COHÉRENT)
-    const logtSdp = Math.max(0, sdpTarget - commSdp);
-    // Niveaux logement: déduits du SDP logement ÷ emprise
-    const logtFp = fp; // emprise logement = emprise moteur
-    let logtLevels = logtFp > 0 ? Math.max(1, Math.round(logtSdp / logtFp)) : 1;
-    // Forçage minimum: A ≥ 3 niveaux, B ≥ 2 niveaux
+    const commDepthEstimate = Number(commerce_depth_m) || 6;
+    const commFpEstimate = Math.round(fp * 0.4); // ~40% de l'emprise pour le commerce devant
+    const logtFpEstimate = fp;  // emprise logement = fp original
+    // v72.32: DIFFÉRENCIATION FORCÉE — même logique que le moteur SPLIT
+    // INTENSIFICATION (A): min 3 niveaux logement (R+3) = pilotis + 3 étages habitables
+    // EQUILIBRE (B): min 2 niveaux logement (R+2) = pilotis + 2 étages habitables
+    // Sans ce forçage, logtLevels = levels - commerceLevels donne trop peu de niveaux
+    // car les niveaux SUPERPOSÉ (total) sont inférieurs aux niveaux SPLIT (logement seul)
     const maxLogtFloors = Math.max(1, (Number(max_floors) || 99) - commerceLevels);
+    let logtLevels = Math.max(1, levels - commerceLevels);
     if (label === "A") logtLevels = Math.min(maxLogtFloors, Math.max(3, logtLevels));
     else if (label === "B") logtLevels = Math.min(maxLogtFloors, Math.max(2, logtLevels));
-    // Recalculer SDP logement avec les niveaux ajustés
-    const logtSdpFinal = logtFp * logtLevels;
-    console.log(`[v72.59] SPLIT SYNTHÉTIQUE ${label}: sdpTarget=${sdpTarget} → commerce=${commFp}m²×${commerceLevels}niv=${commSdp}m² + logement=${logtFp}m²×${logtLevels}niv=${logtSdpFinal}m² = total ${commSdp + logtSdpFinal}m²`);
+    console.log(`[v72.32] SPLIT SYNTHÉTIQUE ${label}: levels_engine=${levels} - commerce=${commerceLevels} → logtLevels=${logtLevels} (maxLogt=${maxLogtFloors})`);
     splitLayout = {
       mode: "SPLIT_AV_AR",
       volume_commerce: {
-        fp_m2: commFp,
-        width_m: commWidth,
-        depth_m: commDepth,
+        fp_m2: commFpEstimate,
+        width_m: Math.round(envW * 0.8),
+        depth_m: commDepthEstimate,
         levels: commerceLevels,
-        sdp_m2: commSdp,
-        units: Math.max(1, Math.floor(commFp / 30)),
+        sdp_m2: commFpEstimate * commerceLevels,
+        units: Math.max(1, Math.floor(commFpEstimate / 30)),
         position: "AVANT (contre clôture)",
       },
       volume_logement: {
-        fp_m2: logtFp,
-        width_m: Math.round(envW * 0.7),
-        depth_m: Math.round(envD * 0.45),
-        levels: logtLevels,
-        sdp_m2: logtSdpFinal,
+        fp_m2: logtFpEstimate,
+        width_m: Math.round(envW * 0.8),
+        depth_m: Math.round(envD * 0.5),
+        levels: Math.max(1, logtLevels),
+        sdp_m2: logtFpEstimate * Math.max(1, logtLevels),
         units: 0,
-        position: "ARRIÈRE (sur pilotis)",
+        position: "ARRIÈRE",
       },
       retrait_inter_m: Number(retrait_inter_volumes_m) || 4,
     };
-    has_pilotis = true; // SPLIT = logement TOUJOURS sur pilotis
-    console.log(`[v72.59] SPLIT CONSTRUIT: 2 volumes séparés — commerce DEVANT + logement DERRIÈRE sur pilotis`);
+    console.log(`[CLASSIC→SPLIT] splitLayout synthétique construit: commerce=${commFpEstimate}m²×${commerceLevels}niv + logement=${logtFpEstimate}m²×${Math.max(1, logtLevels)}niv`);
   }
   // v72.32: En SPLIT (moteur ou synthétique), levels doit = niveaux LOGEMENT uniquement
   // Car le rendu 3D utilise: realTotalH = rdcH + levels * etageH (pilotis + N étages)
@@ -7609,8 +6042,8 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
             continue;
           }
           const enhancedBuf = Buffer.from(result.b64, "base64");
-          // v72.54: Massing drift threshold raised to 0.35 (was 0.25 default — too strict, caused ALL variations rejected)
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.35);
+          // Massing uses default threshold (0.25) — light polish
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
           // v72.22: COLOR PRESERVATION CHECK — verify orange and blue floor bands survived
           let colorCheckPassed = true;
           let colorLog = "";
@@ -7684,7 +6117,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.65-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.34-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -7704,250 +6137,778 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     if (browser) { try { browser.disconnect(); } catch (_) {} }
   }
 });
-// ══════════════════════════════════════════════════════════════════════════════
-// v72.67: ENDPOINT /generate-pptx — GÉNÉRATION POWERPOINT CÔTÉ SERVEUR
-// Reçoit le même body que /compute-scenarios (données client)
-// + optionnel: images URLs (massing, terrain) et textes pré-générés
-// Le serveur:
-//   1) Appelle /generate-texts en interne pour obtenir scénarios + textes
-//   2) Construit le JSON pour le script Python
-//   3) Appelle generate_pptx.py via child_process
-//   4) Retourne le fichier PPTX en base64
-// ══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── ENDPOINT /generate-texts — PREMIUM TEXT ENGINE v3.0 ─────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+const GPT_TEXT_MODEL = "gpt-4o";
+const GPT_TEXT_TIMEOUT_MS = 120000;
 
-// Template PPTX path — stocké à côté du server.js
-const PPTX_TEMPLATE_PATH = process.env.PPTX_TEMPLATE_PATH || path.join(__dirname, "template_diagnostic.pptx");
-const PYTHON_SCRIPTS_DIR = process.env.PYTHON_SCRIPTS_DIR || __dirname;
+/**
+ * PREMIUM GPT PROMPT RULES — v3.0
+ * Generates all diagnostic texts with contextualized, decision-grade quality.
+ */
+function buildGptTextRules() {
+  return `RÈGLES ABSOLUES POUR LA GÉNÉRATION DES TEXTES DIAGNOSTIC BARLO — VERSION PREMIUM:
+
+Tu es un expert en promotion immobilière en Afrique subsaharienne (Cameroun, Côte d'Ivoire, Sénégal). Tu rédiges un diagnostic foncier de qualité professionnelle pour un client investisseur.
+
+═══ PRINCIPES FONDAMENTAUX ═══
+
+1. UTILISE UNIQUEMENT les données fournies dans le JSON {data}. Ne jamais inventer de chiffres.
+2. CHAQUE TEXTE doit être CONTEXTUALISÉ au projet spécifique — jamais de phrases génériques.
+3. STYLE PREMIUM : phrases structurées, vocabulaire technique précis, ton professionnel mais accessible.
+4. FORMAT : utilise des bullet points (•) quand tu listes 3+ éléments, des paragraphes sinon.
+5. HIÉRARCHIE D'INFORMATION : commence par le plus important, descends vers le détail.
+6. ENJEUX DÉCISIONNELS : chaque texte doit éclairer une décision concrète pour l'investisseur.
+7. LONGUEUR : entre 150 et 400 mots par texte selon la complexité.
+8. NE JAMAIS utiliser de placeholder non rempli ({X}) dans le texte final.
+9. NE JAMAIS commencer un texte par "Voici" ou "Ce texte".
+10. TOUJOURS utiliser des chiffres précis du JSON, pas d'arrondis approximatifs sauf indication.
+
+═══ TEXTES À GÉNÉRER ═══
+
+--- slide_3_intro_text ---
+COMMENCE TOUJOURS par "Ce projet consiste à" SANS METTRE LE NOM DU CLIENT.
+Décris le projet : terrain ({site_area}m² à {city}), programme visé ({program_main}), objectif stratégique.
+Mentionne les contraintes urbanistiques clés (COS={site_cos_regl}, CES={site_ces_regl}%, hauteur max={max_height_m}m).
+Termine par l'enjeu : "La question est de savoir [ENJEU RÉEL ET SPÉCIFIQUE]" — PAS une question générique.
+Exemple d'enjeu réel : "La question est de savoir si un terrain de 500m² en zone urbaine dense peut absorber un programme mixte commerce+logement de 3 unités tout en respectant les retraits réglementaires qui réduisent l'emprise constructible de {retrait_reduction_pct}%."
+
+--- slide_3_programme_text ---
+Décris le programme cible : nombre d'unités visées ({target_units}), surface cible ({target_surface_m2}m²), standing ({standing_level}).
+Mentionne le driver principal ({primary_driver}) et son impact sur la stratégie.
+Indique le budget de référence ({budget_range}) et la tension budgétaire ({budget_tension}).
+
+--- slide_4_text ---
+DÉCRIS UNIQUEMENT LE SITE PHYSIQUE :
+• Dimensions du terrain et de l'enveloppe constructible ({envelope_w}m × {envelope_d}m = {envelope_area}m²)
+• Retraits réglementaires (avant={retrait_avant}, latéral={retrait_lateral}, arrière={retrait_arriere})
+• Impact des retraits : réduction de {retrait_reduction_pct}% → emprise constructible de {retrait_emprise_constructible}
+• Mitoyenneté ({retrait_mitoyennete} côtés) et contraintes géotechniques si pertinent
+• Orientation et zone climatique ({orient_zone})
+
+--- slide_5_text ---
+Analyse de conformité urbanistique comparative des 3 scénarios :
+• COS autorisé vs utilisé par chaque scénario (A={A_cos_pct}%, B={B_cos_pct}%, C={C_cos_pct}%)
+• CES et emprise au sol
+• Nombre de niveaux vs maximum autorisé
+• Conclusion : quel(s) scénario(s) sont conformes, lesquels sont à risque
+
+--- scenario_X_summary_text (pour A, B, C) ---
+DÉCRIS LA CONSTRUCTION DANS SA TYPOLOGIE. Pour chaque scénario :
+• Rôle du scénario ({X_role}) et sa philosophie (intensification/équilibre/prudence)
+• Configuration physique : R+{X_levels}, emprise {X_fp}m², SDP totale {X_sdp}m²
+• Présence ou non de pilotis ({X_has_pilotis}), disposition du commerce
+• Mix programmatique : {X_unit_summary}
+• Surface habitable par logement ({X_m2_par_logt}m²) — qualifie si c'est compact/confortable/spacieux
+• Parking : {X_parking_places} places ({X_parking_source}), déficit éventuel de {X_parking_deficit}
+• Gabarit et impact visuel sur le voisinage
+
+--- scenario_X_financial_text (pour A, B, C) ---
+EXPLIQUE DE FAÇON ACCESSIBLE LE RAISONNEMENT DES CALCULS :
+• Coût total : {X_cost_total} → détaille la ventilation (GO {X_ventil_go}, SO {X_ventil_so}, LT {X_ventil_lt}, VRD {X_ventil_vrd})
+• Coût au m² SDP : {X_cost_m2} — compare au marché local si le standing est {standing_level}
+• Fourchette budgétaire : {X_fourchette_text}
+• Honoraires : entre {X_hono_bas_M}M et {X_hono_haut_M}M ({X_hono_taux_bas}–{X_hono_taux_haut}%)
+• Position budgétaire : {X_budget_fit} — explique ce que ça implique concrètement
+• Si HORS_BUDGET : chiffre le dépassement et propose des leviers de réduction
+• Ratio coût/unité : {X_cost_unit} par unité — qualifie si c'est optimisé ou non
+
+--- scenario_X_risk_text (pour A, B, C) ---
+SOIS SPÉCIFIQUE SUR LES RISQUES. Numérote les risques :
+1) Risque urbanistique : conformité COS ({X_cos_compliance}), hauteur, retraits
+2) Risque de compacité : {X_m2_par_logt}m²/logement → si <50m² risque de refus de permis ou d'invendabilité
+3) Risque financier : {X_budget_fit} — tension sur le budget, marge de manoeuvre
+4) Risque de parking : déficit de {X_parking_deficit} places → impact sur le permis
+5) Risque de construction : complexité liée aux pilotis/mitoyenneté/nombre de niveaux
+Pour chaque risque : probabilité (faible/moyenne/élevée) + impact + mitigation possible.
+
+--- strategic_arbitrage_text ---
+L'arbitrage stratégique entre les 3 scénarios. Structure :
+• Rappel des priorités client : {primary_driver}, programme {program_main}, standing {standing_level}
+• Comparaison sur 4 axes : coût total, surface habitable, nombre d'unités, score de recommandation
+• Deltas clés : B vs A ({delta_BA_sdp}, {delta_BA_cout}), C vs A ({delta_CA_sdp}, {delta_CA_cout})
+• Question stratégique : "La question est de savoir si [ENJEU SPÉCIFIQUE À CE CHOIX]" — par exemple si le surcoût de X M FCFA du scénario A est justifié par les Y m² supplémentaires
+• Recommandation argumentée : pourquoi le scénario {rec_scenario} obtient le meilleur score ({rec_score}/100)
+
+--- comparatif_intro_text ---
+Introduction au comparatif des 3 scénarios en une phrase structurée avec les chiffres clés de chaque.
+
+--- invisible_intro_text ---
+Points de vigilance techniques et administratifs à anticiper. Contextualisé au projet spécifique.
+
+--- invisible_technical_text ---
+Détails techniques : fondations (adapté au sol et mitoyenneté), structure (R+X), matériaux recommandés selon le standing {standing_level}.
+
+--- invisible_financial_text ---
+Détails financiers cachés : honoraires architecte, permis, études géotechniques, BET structure, assurances, frais divers.
+
+--- invisible_strategic_text ---
+Stratégie de phasage et décaissements. Intègre le texte de phasage : {phasage_text}. Mentionne la saison des pluies si pertinent.
+
+--- success_intro_text ---
+Pourquoi le scénario recommandé ({rec_scenario}) est le meilleur choix. Arguments hiérarchisés.
+
+--- success_technical_text ---
+Détails techniques du scénario recommandé : structure, emprise, configuration, avantages constructifs.
+
+--- success_financial_text ---
+Budget du scénario recommandé avec comparaison au budget initial du client. Justification du rapport qualité/prix.
+
+--- success_strategic_text ---
+Stratégie de réalisation : phasage, planning, points d'attention pour la réussite du projet.
+
+--- next_step_intro_text ---
+Prochaine étape immédiate pour le client. Concrète et actionnable.
+
+--- next_step_scope_text ---
+Périmètre des études à lancer : APS, APD, études géotechniques, dossier de permis, etc.
+
+--- next_step_outcome_text ---
+Livrables attendus : plans détaillés, estimatif actualisé, dossier de permis, planning prévisionnel.
+
+--- conclusion_summary_text ---
+Résumé exécutif en 3-4 phrases : terrain analysé, 3 scénarios proposés, recommandation, score.
+
+--- conclusion_positioning_text ---
+Positionnement final : pourquoi ce scénario est le meilleur compromis entre coût, conformité, et objectifs du client.
+
+--- conclusion_projection_text ---
+Projection temporelle : durée du chantier, points d'attention calendaire, horizon de livraison.
+
+═══ FORMAT DE RÉPONSE ═══
+
+Réponds UNIQUEMENT en JSON valide avec toutes les clés ci-dessus. Pas de markdown, pas de commentaires.
+Chaque valeur est une string contenant le texte rédigé.
+Utilise \\n pour les sauts de ligne dans les strings JSON.
+Utilise • pour les bullet points (pas de tirets -).`;
+}
+
+/**
+ * Build the data context string for GPT from computed scenarios
+ */
+function buildGptDataContext(p, scenarios, flat) {
+  const sA = scenarios.A || {};
+  const sB = scenarios.B || {};
+  const sC = scenarios.C || {};
+  const diag = scenarios.diagnostic || {};
+  const retr = diag.retraits_reglementaires || {};
+  const orient = diag.orientation_solaire || {};
+  const phasage = diag.strategie_phasage || {};
+  const profil = diag.profil_client || {};
+  const siteDiag = diag.site || {};
+  const rec = diag.recommandation || {};
+
+  return JSON.stringify({
+    // Site
+    site_area: p.site_area, city: p.city || "Douala",
+    envelope_w: p.envelope_w, envelope_d: p.envelope_d,
+    envelope_area: flat.site_emprise_max || `${Number(p.envelope_w) * Number(p.envelope_d)} m²`,
+    zoning_type: p.zoning_type,
+    max_floors: p.max_floors, max_height_m: p.max_height_m,
+    site_cos_regl: flat.site_cos_regl || "2.5",
+    site_ces_regl: flat.site_ces_regl || "60%",
+    site_sdp_max: flat.site_sdp_max || "",
+    // Retraits
+    retrait_avant: flat.retrait_avant, retrait_lateral: flat.retrait_lateral,
+    retrait_arriere: flat.retrait_arriere,
+    retrait_mitoyennete: flat.retrait_mitoyennete,
+    retrait_emprise_constructible: flat.retrait_emprise_constructible,
+    retrait_reduction_pct: flat.retrait_reduction_pct,
+    // Orientation
+    orient_zone: flat.orient_zone,
+    orient_facade_optimale: flat.orient_facade_optimale,
+    orient_recommandation: flat.orient_recommandation,
+    // Client profile
+    program_main: p.program_main, primary_driver: p.primary_driver,
+    standing_level: p.standing_level,
+    target_surface_m2: p.target_surface_m2, target_units: p.target_units,
+    budget_range: p.budget_range, budget_band: p.budget_band,
+    budget_tension: p.budget_tension,
+    feasibility_posture: flat.profil_posture || p.feasibility_posture,
+    // Scores
+    rent_score: p.rent_score, capacity_score: p.capacity_score,
+    mix_score: p.mix_score, phase_score: p.phase_score, risk_score: p.risk_score,
+    // Phasage
+    phasage_text: flat.phasage_text,
+    // Recommendation
+    rec_scenario: flat.rec_scenario, rec_score: flat.rec_score,
+    // Scenario A
+    A_role: sA.role || flat.A_role || "", A_fp: flat.A_fp, A_levels: flat.A_levels,
+    A_height: flat.A_height, A_sdp: flat.A_sdp, A_units: flat.A_units,
+    A_unit_summary: flat.A_unit_summary, A_m2_par_logt: flat.A_m2_par_logt,
+    A_has_pilotis: flat.A_has_pilotis, A_cost_total: flat.A_cost_total,
+    A_cost_m2: flat.A_cost_m2, A_fourchette_text: flat.A_fourchette_text,
+    A_budget_fit: flat.A_budget_fit, A_cos_pct: flat.A_cos_pct,
+    A_cos_compliance: flat.A_cos_compliance, A_duree_chantier: flat.A_duree_chantier,
+    A_parking_places: flat.A_parking_places, A_parking_deficit: flat.A_parking_deficit,
+    A_parking_source: flat.A_parking_source, A_ventil_global: flat.A_ventil_global,
+    A_ventil_go: flat.A_ventil_go || "", A_ventil_so: flat.A_ventil_so || "",
+    A_ventil_lt: flat.A_ventil_lt || "", A_ventil_vrd: flat.A_ventil_vrd || "",
+    A_ventil_hono: flat.A_ventil_hono || "",
+    A_hono_bas_M: flat.A_hono_bas_M || "", A_hono_haut_M: flat.A_hono_haut_M || "",
+    A_hono_taux_bas: flat.A_hono_taux_bas || "", A_hono_taux_haut: flat.A_hono_taux_haut || "",
+    A_cost_unit: flat.A_cost_unit || "", A_free_ground: flat.A_free_ground,
+    A_budget_equation: flat.A_budget_equation || "",
+    A_gabarit: sA.gabarit_desc || flat.A_gabarit || "",
+    // Scenario B
+    B_role: sB.role || flat.B_role || "", B_fp: flat.B_fp, B_levels: flat.B_levels,
+    B_height: flat.B_height, B_sdp: flat.B_sdp, B_units: flat.B_units,
+    B_unit_summary: flat.B_unit_summary, B_m2_par_logt: flat.B_m2_par_logt,
+    B_has_pilotis: flat.B_has_pilotis, B_cost_total: flat.B_cost_total,
+    B_cost_m2: flat.B_cost_m2, B_fourchette_text: flat.B_fourchette_text,
+    B_budget_fit: flat.B_budget_fit, B_cos_pct: flat.B_cos_pct,
+    B_cos_compliance: flat.B_cos_compliance, B_duree_chantier: flat.B_duree_chantier,
+    B_parking_places: flat.B_parking_places, B_parking_deficit: flat.B_parking_deficit,
+    B_parking_source: flat.B_parking_source, B_ventil_global: flat.B_ventil_global,
+    B_ventil_go: flat.B_ventil_go || "", B_ventil_so: flat.B_ventil_so || "",
+    B_ventil_lt: flat.B_ventil_lt || "", B_ventil_vrd: flat.B_ventil_vrd || "",
+    B_ventil_hono: flat.B_ventil_hono || "",
+    B_hono_bas_M: flat.B_hono_bas_M || "", B_hono_haut_M: flat.B_hono_haut_M || "",
+    B_hono_taux_bas: flat.B_hono_taux_bas || "", B_hono_taux_haut: flat.B_hono_taux_haut || "",
+    B_cost_unit: flat.B_cost_unit || "", B_free_ground: flat.B_free_ground,
+    B_budget_equation: flat.B_budget_equation || "",
+    B_gabarit: sB.gabarit_desc || flat.B_gabarit || "",
+    // Scenario C
+    C_role: sC.role || flat.C_role || "", C_fp: flat.C_fp, C_levels: flat.C_levels,
+    C_height: flat.C_height, C_sdp: flat.C_sdp, C_units: flat.C_units,
+    C_unit_summary: flat.C_unit_summary, C_m2_par_logt: flat.C_m2_par_logt,
+    C_has_pilotis: flat.C_has_pilotis, C_cost_total: flat.C_cost_total,
+    C_cost_m2: flat.C_cost_m2, C_fourchette_text: flat.C_fourchette_text,
+    C_budget_fit: flat.C_budget_fit, C_cos_pct: flat.C_cos_pct,
+    C_cos_compliance: flat.C_cos_compliance, C_duree_chantier: flat.C_duree_chantier,
+    C_parking_places: flat.C_parking_places, C_parking_deficit: flat.C_parking_deficit,
+    C_parking_source: flat.C_parking_source, C_ventil_global: flat.C_ventil_global,
+    C_ventil_go: flat.C_ventil_go || "", C_ventil_so: flat.C_ventil_so || "",
+    C_ventil_lt: flat.C_ventil_lt || "", C_ventil_vrd: flat.C_ventil_vrd || "",
+    C_ventil_hono: flat.C_ventil_hono || "",
+    C_hono_bas_M: flat.C_hono_bas_M || "", C_hono_haut_M: flat.C_hono_haut_M || "",
+    C_hono_taux_bas: flat.C_hono_taux_bas || "", C_hono_taux_haut: flat.C_hono_taux_haut || "",
+    C_cost_unit: flat.C_cost_unit || "", C_free_ground: flat.C_free_ground,
+    C_budget_equation: flat.C_budget_equation || "",
+    C_gabarit: sC.gabarit_desc || flat.C_gabarit || "",
+    // Deltas
+    delta_BA_sdp: flat.delta_BA_sdp, delta_BA_cout: flat.delta_BA_cout,
+    delta_CA_sdp: flat.delta_CA_sdp, delta_CA_cout: flat.delta_CA_cout,
+    delta_CB_sdp: flat.delta_CB_sdp || "", delta_CB_cout: flat.delta_CB_cout || "",
+  }, null, 0);
+}
+
+/**
+ * Call GPT-4o to generate all diagnostic texts
+ */
+async function generateDiagnosticTexts(dataContext, rules) {
+  const t0 = Date.now();
+  const controller = new (typeof AbortController !== "undefined" ? AbortController : require("abort-controller"))();
+  const timer = setTimeout(() => controller.abort(), GPT_TEXT_TIMEOUT_MS);
+
+  try {
+    console.log(`[GENERATE-TEXTS] Calling GPT-4o...`);
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: GPT_TEXT_MODEL,
+        temperature: 0.4,
+        max_tokens: 8000,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: rules },
+          { role: "user", content: `Voici les données du projet. Génère TOUS les textes demandés en JSON.\n\n{data} = ${dataContext}` }
+        ]
+      })
+    });
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error(`[GENERATE-TEXTS] GPT error ${resp.status}: ${errText.substring(0, 500)}`);
+      return { error: `GPT ${resp.status}`, elapsed_ms: Date.now() - t0 };
+    }
+
+    const json = await resp.json();
+    const content = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || "{}";
+    const elapsed = Date.now() - t0;
+    console.log(`[GENERATE-TEXTS] GPT responded in ${elapsed}ms, ${content.length} chars`);
+
+    try {
+      const texts = JSON.parse(content);
+      texts._gpt_elapsed_ms = elapsed;
+      texts._gpt_model = GPT_TEXT_MODEL;
+      return texts;
+    } catch (parseErr) {
+      console.error(`[GENERATE-TEXTS] JSON parse error: ${parseErr.message}`);
+      return { error: "JSON parse failed", raw: content.substring(0, 1000), elapsed_ms: elapsed };
+    }
+  } catch (err) {
+    clearTimeout(timer);
+    console.error(`[GENERATE-TEXTS] Error: ${err.message}`);
+    return { error: err.message, elapsed_ms: Date.now() - t0 };
+  }
+}
+
+app.post("/generate-texts", async (req, res) => {
+  const t0 = Date.now();
+  console.log(`\n═══ /generate-texts v3.0-PREMIUM ═══`);
+  const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
+
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
+    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
+  }
+
+  // Step 1: Compute scenarios (reuse existing engine)
+  const scenarios = computeSmartScenarios({
+    site_area: Number(p.site_area),
+    envelope_w: Number(p.envelope_w),
+    envelope_d: Number(p.envelope_d),
+    envelope_area: Number(p.envelope_area) || undefined,
+    zoning_type: p.zoning_type || "URBAIN",
+    floor_height: Number(p.floor_height) || 3.2,
+    primary_driver: p.primary_driver || "MAX_CAPACITE",
+    max_floors: Number(p.max_floors) || 99,
+    max_height_m: Number(p.max_height_m) || 99,
+    program_main: p.program_main || p.project_type || "",
+    target_surface_m2: Number(p.target_surface_m2) || 0,
+    site_saturation_level: p.site_saturation_level || "MEDIUM",
+    financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
+    density_band: p.density_band || "",
+    risk_adjusted: Number(p.risk_adjusted) || 0,
+    feasibility_posture: p.feasibility_posture || "BALANCED",
+    scenario_A_role: p.scenario_A_role || "",
+    scenario_B_role: p.scenario_B_role || "",
+    scenario_C_role: p.scenario_C_role || "",
+    budget_range: Number(p.budget_range) || 0,
+    budget_range_raw: String(p.budget_range || ""),
+    budget_band: p.budget_band || "",
+    budget_tension: Number(p.budget_tension) || 0,
+    standing_level: p.standing_level || "STANDARD",
+    target_units: Number(p.target_units) || 0,
+    rent_score: Number(p.rent_score) || 0,
+    capacity_score: Number(p.capacity_score) || 0,
+    mix_score: Number(p.mix_score) || 0,
+    phase_score: Number(p.phase_score) || 0,
+    risk_score: Number(p.risk_score) || 0,
+    density_pressure_factor: Number(p.density_pressure_factor) || 1,
+    driver_intensity: p.driver_intensity || "MEDIUM",
+    strategic_position: p.strategic_position || "",
+    layout_mode: p.layout_mode || "SUPERPOSE",
+    commerce_depth_m: Number(p.commerce_depth_m) || 6,
+    retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
+  });
+
+  // Step 2: Flatten scenario data (reuse existing flatten logic)
+  const diag = scenarios.diagnostic || {};
+  const comp = diag.comparatif || {};
+  const deltas = comp.deltas || {};
+  const dBA = deltas.B_vs_A || {};
+  const dCA = deltas.C_vs_A || {};
+  const dCB = deltas.C_vs_B || {};
+  const phasage = diag.strategie_phasage || {};
+  const orient = diag.orientation_solaire || {};
+  const retr = diag.retraits_reglementaires || {};
+  const profil = diag.profil_client || {};
+  const siteDiag = diag.site || {};
+  const sA = scenarios.A || {};
+  const sB = scenarios.B || {};
+  const sC = scenarios.C || {};
+
+  const flat = {
+    diagnostic_narrative: (diag.recommandation || {}).narrative || "",
+    rec_scenario: (diag.recommandation || {}).scenario || "",
+    rec_score: (diag.recommandation || {}).score || 0,
+    delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
+    delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
+    delta_BA_unites: `${dBA.delta_unites || 0} logements`,
+    delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
+    delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
+    delta_CA_unites: `${dCA.delta_unites || 0} logements`,
+    delta_CB_sdp: `${dCB.delta_sdp_m2 || 0} m² (${dCB.delta_sdp_pct || 0}%)`,
+    delta_CB_cout: `${dCB.delta_cout_fcfa ? Math.round(dCB.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCB.delta_cout_pct || 0}%)`,
+    phasage_text: phasage.text || "",
+    orient_zone: orient.zone_climatique || "",
+    orient_facade_optimale: orient.facade_optimale || "",
+    orient_recommandation: orient.recommandation || "",
+    retrait_avant: `${retr.avant_m || 0}m`,
+    retrait_lateral: `${retr.lateral_m || 0}m`,
+    retrait_arriere: `${retr.arriere_m || 0}m`,
+    retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
+    retrait_emprise_constructible: `${retr.emprise_constructible_m2 || 0} m²`,
+    retrait_reduction_pct: `${retr.reduction_pct || 0}%`,
+    site_cos_regl: String(siteDiag.cos_regl || "2.5"),
+    site_ces_regl: String(siteDiag.ces_regl_pct || "60"),
+    site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
+    site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
+    profil_posture: profil.posture || p.feasibility_posture || "BALANCED",
+    profil_standing: profil.standing || p.standing_level || "STANDARD",
+    profil_programme: profil.programme || "",
+    A_role: sA.role || "", A_fp: String(sA.fp_m2 || 0), A_levels: String(sA.levels || 0),
+    A_height: String(sA.height_m || 0), A_sdp: String(sA.sdp_m2 || 0),
+    A_units: String(sA.total_units || 0), A_unit_summary: sA.unit_mix_detail || "",
+    A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
+    A_has_pilotis: String(sA.has_pilotis || false),
+    A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    A_fourchette_text: `entre ${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M et ${sA.cout_fourchette ? Math.round(sA.cout_fourchette.haut / 1e6) : 0}M FCFA`,
+    A_budget_fit: sA.budget_fit || "", A_cos_pct: String(sA.cos_ratio_pct || 0),
+    A_cos_compliance: sA.cos_compliance || "", A_duree_chantier: `${sA.duree_chantier_mois || 0} mois`,
+    A_parking_places: String((sA.parking_detail || {}).places_disponibles || 0),
+    A_parking_deficit: String((sA.parking_detail || {}).deficit || 0),
+    A_parking_source: (sA.parking_detail || {}).source || "",
+    A_ventil_global: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    A_ventil_go: `${sA.ventilation ? Math.round((sA.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`,
+    A_ventil_so: `${sA.ventilation ? Math.round((sA.ventilation.second_oeuvre || 0) / 1e6) : 0}M`,
+    A_ventil_lt: `${sA.ventilation ? Math.round((sA.ventilation.lots_techniques || 0) / 1e6) : 0}M`,
+    A_ventil_vrd: `${sA.ventilation ? Math.round((sA.ventilation.vrd || 0) / 1e6) : 0}M`,
+    A_ventil_hono: `${sA.honoraires ? Math.round((sA.honoraires.median || 0) / 1e6) : 0}M`,
+    A_hono_bas_M: String(sA.honoraires ? Math.round((sA.honoraires.bas || 0) / 1e6) : 0),
+    A_hono_haut_M: String(sA.honoraires ? Math.round((sA.honoraires.haut || 0) / 1e6) : 0),
+    A_hono_taux_bas: `${sA.honoraires ? sA.honoraires.taux_bas_pct || 10 : 10}%`,
+    A_hono_taux_haut: `${sA.honoraires ? sA.honoraires.taux_haut_pct || 15 : 15}%`,
+    A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
+    A_free_ground: `${sA.free_ground_m2 || 0} m²`,
+    A_budget_equation: sA.budget_equation || "",
+    A_gabarit: sA.gabarit_desc || "",
+    A_accent_color: sA.accent_color || "#2a5298",
+    A_efficacite: `${sA.efficacite_pct || 0}%`,
+    A_hab_m2_total: String(sA.hab_m2_total || 0),
+    A_commerce_count: String(sA.commerce_count || 0),
+    A_logement_count: String(sA.logement_count || 0),
+    A_typology_desc: sA.typology_desc || "",
+    A_split_layout: sA.split_layout ? JSON.stringify(sA.split_layout) : "",
+    A_frais_M: `${sA.frais_annexes ? Math.round(sA.frais_annexes / 1e6) : 0}M`,
+    B_role: sB.role || "", B_fp: String(sB.fp_m2 || 0), B_levels: String(sB.levels || 0),
+    B_height: String(sB.height_m || 0), B_sdp: String(sB.sdp_m2 || 0),
+    B_units: String(sB.total_units || 0), B_unit_summary: sB.unit_mix_detail || "",
+    B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
+    B_has_pilotis: String(sB.has_pilotis || false),
+    B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    B_fourchette_text: `entre ${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M et ${sB.cout_fourchette ? Math.round(sB.cout_fourchette.haut / 1e6) : 0}M FCFA`,
+    B_budget_fit: sB.budget_fit || "", B_cos_pct: String(sB.cos_ratio_pct || 0),
+    B_cos_compliance: sB.cos_compliance || "", B_duree_chantier: `${sB.duree_chantier_mois || 0} mois`,
+    B_parking_places: String((sB.parking_detail || {}).places_disponibles || 0),
+    B_parking_deficit: String((sB.parking_detail || {}).deficit || 0),
+    B_parking_source: (sB.parking_detail || {}).source || "",
+    B_ventil_global: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    B_ventil_go: `${sB.ventilation ? Math.round((sB.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`,
+    B_ventil_so: `${sB.ventilation ? Math.round((sB.ventilation.second_oeuvre || 0) / 1e6) : 0}M`,
+    B_ventil_lt: `${sB.ventilation ? Math.round((sB.ventilation.lots_techniques || 0) / 1e6) : 0}M`,
+    B_ventil_vrd: `${sB.ventilation ? Math.round((sB.ventilation.vrd || 0) / 1e6) : 0}M`,
+    B_ventil_hono: `${sB.honoraires ? Math.round((sB.honoraires.median || 0) / 1e6) : 0}M`,
+    B_hono_bas_M: String(sB.honoraires ? Math.round((sB.honoraires.bas || 0) / 1e6) : 0),
+    B_hono_haut_M: String(sB.honoraires ? Math.round((sB.honoraires.haut || 0) / 1e6) : 0),
+    B_hono_taux_bas: `${sB.honoraires ? sB.honoraires.taux_bas_pct || 10 : 10}%`,
+    B_hono_taux_haut: `${sB.honoraires ? sB.honoraires.taux_haut_pct || 15 : 15}%`,
+    B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
+    B_free_ground: `${sB.free_ground_m2 || 0} m²`,
+    B_budget_equation: sB.budget_equation || "",
+    B_gabarit: sB.gabarit_desc || "",
+    B_accent_color: sB.accent_color || "#1e8449",
+    B_efficacite: `${sB.efficacite_pct || 0}%`,
+    B_hab_m2_total: String(sB.hab_m2_total || 0),
+    B_commerce_count: String(sB.commerce_count || 0),
+    B_logement_count: String(sB.logement_count || 0),
+    B_typology_desc: sB.typology_desc || "",
+    B_frais_M: `${sB.frais_annexes ? Math.round(sB.frais_annexes / 1e6) : 0}M`,
+    C_role: sC.role || "", C_fp: String(sC.fp_m2 || 0), C_levels: String(sC.levels || 0),
+    C_height: String(sC.height_m || 0), C_sdp: String(sC.sdp_m2 || 0),
+    C_units: String(sC.total_units || 0), C_unit_summary: sC.unit_mix_detail || "",
+    C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
+    C_has_pilotis: String(sC.has_pilotis || false),
+    C_cost_total: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    C_fourchette_text: `entre ${sC.cout_fourchette ? Math.round(sC.cout_fourchette.bas / 1e6) : 0}M et ${sC.cout_fourchette ? Math.round(sC.cout_fourchette.haut / 1e6) : 0}M FCFA`,
+    C_budget_fit: sC.budget_fit || "", C_cos_pct: String(sC.cos_ratio_pct || 0),
+    C_cos_compliance: sC.cos_compliance || "", C_duree_chantier: `${sC.duree_chantier_mois || 0} mois`,
+    C_parking_places: String((sC.parking_detail || {}).places_disponibles || 0),
+    C_parking_deficit: String((sC.parking_detail || {}).deficit || 0),
+    C_parking_source: (sC.parking_detail || {}).source || "",
+    C_ventil_global: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
+    C_ventil_go: `${sC.ventilation ? Math.round((sC.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`,
+    C_ventil_so: `${sC.ventilation ? Math.round((sC.ventilation.second_oeuvre || 0) / 1e6) : 0}M`,
+    C_ventil_lt: `${sC.ventilation ? Math.round((sC.ventilation.lots_techniques || 0) / 1e6) : 0}M`,
+    C_ventil_vrd: `${sC.ventilation ? Math.round((sC.ventilation.vrd || 0) / 1e6) : 0}M`,
+    C_ventil_hono: `${sC.honoraires ? Math.round((sC.honoraires.median || 0) / 1e6) : 0}M`,
+    C_hono_bas_M: String(sC.honoraires ? Math.round((sC.honoraires.bas || 0) / 1e6) : 0),
+    C_hono_haut_M: String(sC.honoraires ? Math.round((sC.honoraires.haut || 0) / 1e6) : 0),
+    C_hono_taux_bas: `${sC.honoraires ? sC.honoraires.taux_bas_pct || 10 : 10}%`,
+    C_hono_taux_haut: `${sC.honoraires ? sC.honoraires.taux_haut_pct || 15 : 15}%`,
+    C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
+    C_free_ground: `${sC.free_ground_m2 || 0} m²`,
+    C_budget_equation: sC.budget_equation || "",
+    C_gabarit: sC.gabarit_desc || "",
+    C_accent_color: sC.accent_color || "#d35400",
+    C_efficacite: `${sC.efficacite_pct || 0}%`,
+    C_hab_m2_total: String(sC.hab_m2_total || 0),
+    C_commerce_count: String(sC.commerce_count || 0),
+    C_logement_count: String(sC.logement_count || 0),
+    C_typology_desc: sC.typology_desc || "",
+    C_frais_M: `${sC.frais_annexes ? Math.round(sC.frais_annexes / 1e6) : 0}M`,
+  };
+
+  // Step 3: Generate texts via GPT-4o
+  const rules = buildGptTextRules();
+  const dataContext = buildGptDataContext(p, scenarios, flat);
+  let generatedTexts = {};
+
+  if (OPENAI_API_KEY) {
+    generatedTexts = await generateDiagnosticTexts(dataContext, rules);
+    console.log(`[GENERATE-TEXTS] GPT returned ${Object.keys(generatedTexts).length} keys`);
+  } else {
+    console.warn(`[GENERATE-TEXTS] OPENAI_API_KEY missing — returning empty texts`);
+  }
+
+  // Step 4: Build comparatif data from scenarios
+  const comparatif = {
+    comparatif_A_label: `Scenario ${sA.role || "A"} — R+${sA.levels || 0}`,
+    comparatif_B_label: `Scenario ${sB.role || "B"} — R+${sB.levels || 0}`,
+    comparatif_C_label: `Scenario ${sC.role || "C"} — R+${sC.levels || 0}`,
+    comparatif_A_sdp: `${sA.sdp_m2 || 0} m²`,
+    comparatif_B_sdp: `${sB.sdp_m2 || 0} m²`,
+    comparatif_C_sdp: `${sC.sdp_m2 || 0} m²`,
+    comparatif_A_cost: flat.A_cost_total,
+    comparatif_B_cost: flat.B_cost_total,
+    comparatif_C_cost: flat.C_cost_total,
+    comparatif_A_units: flat.A_unit_summary,
+    comparatif_B_units: flat.B_unit_summary,
+    comparatif_C_units: flat.C_unit_summary,
+  };
+
+  // Step 5: Merge all into response
+  const response = {
+    ...flat,
+    ...comparatif,
+    generated_texts: { ...comparatif, ...generatedTexts },
+    // Top-level text fields for backward compat with Google Sheets
+    slide_4_text: generatedTexts.slide_4_text || "",
+    slide_5_text: generatedTexts.slide_5_text || "",
+    scenario_A_summary_text: generatedTexts.scenario_A_summary_text || "",
+    scenario_B_summary_text: generatedTexts.scenario_B_summary_text || "",
+    scenario_C_summary_text: generatedTexts.scenario_C_summary_text || "",
+    scenario_A_financial_text: generatedTexts.scenario_A_financial_text || "",
+    scenario_B_financial_text: generatedTexts.scenario_B_financial_text || "",
+    scenario_C_financial_text: generatedTexts.scenario_C_financial_text || "",
+    scenario_A_risk_text: generatedTexts.scenario_A_risk_text || "",
+    scenario_B_risk_text: generatedTexts.scenario_B_risk_text || "",
+    scenario_C_risk_text: generatedTexts.scenario_C_risk_text || "",
+    strategic_arbitrage_text: generatedTexts.strategic_arbitrage_text || "",
+    conclusion_summary_text: generatedTexts.conclusion_summary_text || "",
+    conclusion_positioning_text: generatedTexts.conclusion_positioning_text || "",
+    conclusion_projection_text: generatedTexts.conclusion_projection_text || "",
+    // Computed scores for charts
+    computed_scores: scenarios.meta || {},
+    gpt_text_rules: rules.substring(0, 200) + "...",
+    gpt_elapsed_ms: generatedTexts._gpt_elapsed_ms || 0,
+    gpt_model: generatedTexts._gpt_model || GPT_TEXT_MODEL,
+    server_version: "72.70-GENERATE-TEXTS-PREMIUM",
+    total_duration_ms: Date.now() - t0,
+  };
+
+  console.log(`═══ /generate-texts DONE in ${Date.now() - t0}ms ═══\n`);
+  return res.json(response);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── ENDPOINT /generate-pptx — PPTX ASSEMBLY v3.0 ───────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+const { execSync, exec } = require("child_process");
+const path = require("path");
+const fs = require("fs");
 
 app.post("/generate-pptx", async (req, res) => {
   const t0 = Date.now();
-  let tmpDir = null;
+  console.log(`\n═══ /generate-pptx v3.0-PREMIUM ═══`);
+  const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
+
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
+    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
+  }
 
   try {
-    console.log("[v72.67] /generate-pptx — START");
-
-    // ─── 1) RÉCUPÉRER LES TEXTES + SCÉNARIOS ───
-    // Si le body contient déjà 'texts' et 'scenarios', on les utilise directement
-    // Sinon on appelle /generate-texts en interne
-    let texts, scenarios, clientName, images;
-
-    if (req.body.texts && req.body.scenarios) {
-      // Mode direct: le caller fournit tout
-      console.log("[v72.67] Mode direct — textes et scénarios fournis dans le body");
-      texts = req.body.texts;
-      scenarios = req.body.scenarios;
-      clientName = req.body.client_name || "";
-      images = req.body.images || {};
-    } else {
-      // Mode pipeline: on appelle /generate-texts puis on extrait
-      console.log("[v72.67] Mode pipeline — appel interne /generate-texts");
-      const localUrl = `http://localhost:${PORT}/generate-texts`;
-      const intResponse = await fetch(localUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req.body),
-      });
-
-      if (!intResponse.ok) {
-        const errText = await intResponse.text();
-        console.error(`[v72.67] /generate-texts a échoué (${intResponse.status}):`, errText);
-        return res.status(500).json({ ok: false, error: "generate-texts failed", detail: errText });
-      }
-
-      const textsResponse = await intResponse.json();
-
-      if (!textsResponse || !textsResponse.ok) {
-        console.error("[v72.67] /generate-texts réponse invalide");
-        return res.status(500).json({ ok: false, error: "generate-texts returned invalid data" });
-      }
-
-      // Extraire les textes du résultat de /generate-texts
-      // /generate-texts renvoie les textes sous "generated_texts" ET en flat au top-level
-      texts = textsResponse.generated_texts || {};
-      // Si generated_texts est vide, récupérer les textes flat du top-level
-      if (Object.keys(texts).length === 0) {
-        const skipKeys = new Set(["ok", "server_version", "gpt_model", "gpt_elapsed_ms", "gpt_tokens", "A", "B", "C", "computed_budget_band", "computed_scores"]);
-        for (const [k, v] of Object.entries(textsResponse)) {
-          if (!skipKeys.has(k) && typeof v === "string") {
-            texts[k] = v;
-          }
-        }
-      }
-      console.log(`[v72.67] Texts extracted: ${Object.keys(texts).length} keys — ${Object.keys(texts).join(", ")}`);
-      clientName = req.body.client_name || req.body.nom_client || "";
-      images = req.body.images || {};
-
-      // Récupérer les scénarios depuis /compute-scenarios directement
-      console.log("[v72.67] Appel interne /compute-scenarios pour données scénarios");
-      const scenResponse = await fetch(`http://localhost:${PORT}/compute-scenarios`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req.body),
-      });
-
-      if (!scenResponse.ok) {
-        return res.status(500).json({ ok: false, error: "compute-scenarios failed for pptx" });
-      }
-
-      const scenData = await scenResponse.json();
-
-      // Construire l'objet scenarios pour les graphiques
-      scenarios = {};
-      for (const label of ["A", "B", "C"]) {
-        const sc = scenData[label];
-        if (!sc) continue;
-        scenarios[label] = {
-          sdp_m2: sc.sdp_m2 || 0,
-          surface_habitable_m2: sc.surface_habitable_m2 || sc.total_useful_m2 || 0,
-          ratio_efficacite_pct: sc.ratio_efficacite_pct || 0,
-          total_units: sc.total_units || 0,
-          levels: sc.levels || 0,
-          cost_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost || 0,
-          cost_per_m2_sdp: sc.cost_per_m2_sdp || 0,
-          budget_fit: sc.budget_fit || 0,
-          recommendation_score: sc.recommendation_score || 0,
-          duree_chantier_mois: sc.duree_chantier_mois || 0,
-          risk_scores: _computeRiskScores(sc, scenData),
-        };
-      }
-    }
-
-    // ─── 2) CONSTRUIRE LE JSON POUR PYTHON ───
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "barlo-pptx-"));
-    const inputJsonPath = path.join(tmpDir, "input.json");
-    const outputPptxPath = path.join(tmpDir, "diagnostic_output.pptx");
-
-    const pptxData = {
-      client_name: clientName,
-      images: images,
-      texts: texts,
-      scenarios: scenarios,
-      recommended_scenario: _findRecommendedScenario(scenarios),
-    };
-
-    fs.writeFileSync(inputJsonPath, JSON.stringify(pptxData, null, 2), "utf-8");
-    console.log(`[v72.67] JSON écrit: ${inputJsonPath} (${(JSON.stringify(pptxData).length / 1024).toFixed(1)} KB)`);
-
-    // ─── 3) VÉRIFIER QUE LE TEMPLATE EXISTE ───
-    if (!fs.existsSync(PPTX_TEMPLATE_PATH)) {
-      console.error(`[v72.67] Template PPTX introuvable: ${PPTX_TEMPLATE_PATH}`);
-      return res.status(500).json({ ok: false, error: `Template PPTX not found: ${PPTX_TEMPLATE_PATH}` });
-    }
-
-    // ─── 4) APPELER LE SCRIPT PYTHON ───
-    const pythonScript = path.join(PYTHON_SCRIPTS_DIR, "generate_pptx.py");
-    console.log(`[v72.67] Lancement Python: ${pythonScript}`);
-
-    const pptxBuffer = await new Promise((resolve, reject) => {
-      const proc = execFile("python3", [
-        pythonScript,
-        inputJsonPath,
-        PPTX_TEMPLATE_PATH,
-        outputPptxPath,
-      ], {
-        cwd: PYTHON_SCRIPTS_DIR,
-        timeout: 120000,  // 2 minutes max
-        maxBuffer: 10 * 1024 * 1024,  // 10MB stdout buffer
-      }, (error, stdout, stderr) => {
-        if (stderr) console.log(`[v72.67] Python stderr:\n${stderr}`);
-        if (stdout) console.log(`[v72.67] Python stdout:\n${stdout}`);
-
-        if (error) {
-          console.error(`[v72.67] Python error:`, error.message);
-          return reject(new Error(`Python script failed: ${error.message}`));
-        }
-
-        // Lire le fichier PPTX généré
-        if (!fs.existsSync(outputPptxPath)) {
-          return reject(new Error("Python script did not produce output file"));
-        }
-
-        const buffer = fs.readFileSync(outputPptxPath);
-        resolve(buffer);
-      });
+    // Step 1: Compute scenarios
+    const scenarios = computeSmartScenarios({
+      site_area: Number(p.site_area),
+      envelope_w: Number(p.envelope_w),
+      envelope_d: Number(p.envelope_d),
+      envelope_area: Number(p.envelope_area) || undefined,
+      zoning_type: p.zoning_type || "URBAIN",
+      floor_height: Number(p.floor_height) || 3.2,
+      primary_driver: p.primary_driver || "MAX_CAPACITE",
+      max_floors: Number(p.max_floors) || 99,
+      max_height_m: Number(p.max_height_m) || 99,
+      program_main: p.program_main || p.project_type || "",
+      target_surface_m2: Number(p.target_surface_m2) || 0,
+      site_saturation_level: p.site_saturation_level || "MEDIUM",
+      financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
+      density_band: p.density_band || "",
+      risk_adjusted: Number(p.risk_adjusted) || 0,
+      feasibility_posture: p.feasibility_posture || "BALANCED",
+      scenario_A_role: p.scenario_A_role || "",
+      scenario_B_role: p.scenario_B_role || "",
+      scenario_C_role: p.scenario_C_role || "",
+      budget_range: Number(p.budget_range) || 0,
+      budget_range_raw: String(p.budget_range || ""),
+      budget_band: p.budget_band || "",
+      budget_tension: Number(p.budget_tension) || 0,
+      standing_level: p.standing_level || "STANDARD",
+      target_units: Number(p.target_units) || 0,
+      rent_score: Number(p.rent_score) || 0,
+      capacity_score: Number(p.capacity_score) || 0,
+      mix_score: Number(p.mix_score) || 0,
+      phase_score: Number(p.phase_score) || 0,
+      risk_score: Number(p.risk_score) || 0,
+      density_pressure_factor: Number(p.density_pressure_factor) || 1,
+      driver_intensity: p.driver_intensity || "MEDIUM",
+      strategic_position: p.strategic_position || "",
+      layout_mode: p.layout_mode || "SUPERPOSE",
+      commerce_depth_m: Number(p.commerce_depth_m) || 6,
+      retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
     });
 
-    const durationMs = Date.now() - t0;
-    console.log(`[v72.67] PPTX généré en ${durationMs}ms (${(pptxBuffer.length / 1024).toFixed(0)} KB)`);
+    // Step 2: Flatten + generate texts (same as /generate-texts)
+    const diag = scenarios.diagnostic || {};
+    const comp = diag.comparatif || {};
+    const deltas = comp.deltas || {};
+    const dBA = deltas.B_vs_A || {};
+    const dCA = deltas.C_vs_A || {};
+    const phasageD = diag.strategie_phasage || {};
+    const orientD = diag.orientation_solaire || {};
+    const retrD = diag.retraits_reglementaires || {};
+    const sA = scenarios.A || {};
+    const sB = scenarios.B || {};
+    const sC = scenarios.C || {};
 
-    // ─── 5) RETOURNER LE RÉSULTAT ───
-    // Par défaut: retourner le fichier PPTX directement
-    // Si ?format=base64, retourner en JSON avec base64
-    if (req.query.format === "base64") {
-      return res.json({
-        ok: true,
-        filename: `diagnostic_${clientName.replace(/\s+/g, "_") || "client"}.pptx`,
-        pptx_base64: pptxBuffer.toString("base64"),
-        size_bytes: pptxBuffer.length,
-        duration_ms: durationMs,
-      });
+    // Build flat data (abbreviated — reuse same logic)
+    const flat = {
+      rec_scenario: (diag.recommandation || {}).scenario || "",
+      rec_score: (diag.recommandation || {}).score || 0,
+      phasage_text: phasageD.text || "",
+      retrait_avant: `${retrD.avant_m || 0}m`,
+      retrait_lateral: `${retrD.lateral_m || 0}m`,
+      retrait_arriere: `${retrD.arriere_m || 0}m`,
+      retrait_mitoyennete: String(retrD.mitoyennete_cotes || 0),
+      retrait_emprise_constructible: `${retrD.emprise_constructible_m2 || 0} m²`,
+      retrait_reduction_pct: `${retrD.reduction_pct || 0}%`,
+      site_cos_regl: String((diag.site || {}).cos_regl || "2.5"),
+      site_ces_regl: String((diag.site || {}).ces_regl_pct || "60"),
+      orient_zone: orientD.zone_climatique || "",
+      delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
+      delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
+      delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
+      delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
+      profil_posture: (diag.profil_client || {}).posture || "BALANCED",
+    };
+    // Add per-scenario flat fields
+    for (const [key, s] of [["A", sA], ["B", sB], ["C", sC]]) {
+      flat[`${key}_role`] = s.role || "";
+      flat[`${key}_fp`] = String(s.fp_m2 || 0);
+      flat[`${key}_levels`] = String(s.levels || 0);
+      flat[`${key}_sdp`] = String(s.sdp_m2 || 0);
+      flat[`${key}_units`] = String(s.total_units || 0);
+      flat[`${key}_unit_summary`] = s.unit_mix_detail || "";
+      flat[`${key}_m2_par_logt`] = String(s.m2_habitable_par_logement || 0);
+      flat[`${key}_has_pilotis`] = String(s.has_pilotis || false);
+      flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
+      flat[`${key}_cost_m2`] = `${s.cost_per_m2_sdp ? Math.round(s.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`;
+      flat[`${key}_budget_fit`] = s.budget_fit || "";
+      flat[`${key}_cos_pct`] = String(s.cos_ratio_pct || 0);
+      flat[`${key}_cos_compliance`] = s.cos_compliance || "";
+      flat[`${key}_duree_chantier`] = `${s.duree_chantier_mois || 0} mois`;
+      flat[`${key}_parking_places`] = String((s.parking_detail || {}).places_disponibles || 0);
+      flat[`${key}_parking_deficit`] = String((s.parking_detail || {}).deficit || 0);
+      flat[`${key}_parking_source`] = (s.parking_detail || {}).source || "";
+      flat[`${key}_fourchette_text`] = `entre ${s.cout_fourchette ? Math.round(s.cout_fourchette.bas / 1e6) : 0}M et ${s.cout_fourchette ? Math.round(s.cout_fourchette.haut / 1e6) : 0}M FCFA`;
+      flat[`${key}_ventil_global`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
+      flat[`${key}_hono_bas_M`] = String(s.honoraires ? Math.round((s.honoraires.bas || 0) / 1e6) : 0);
+      flat[`${key}_hono_haut_M`] = String(s.honoraires ? Math.round((s.honoraires.haut || 0) / 1e6) : 0);
+      flat[`${key}_hono_taux_bas`] = `${s.honoraires ? s.honoraires.taux_bas_pct || 10 : 10}%`;
+      flat[`${key}_hono_taux_haut`] = `${s.honoraires ? s.honoraires.taux_haut_pct || 15 : 15}%`;
+      flat[`${key}_cost_unit`] = `${s.cost_per_unit ? Math.round(s.cost_per_unit / 1e6) : 0}M FCFA`;
+      flat[`${key}_free_ground`] = `${s.free_ground_m2 || 0} m²`;
+      flat[`${key}_budget_equation`] = s.budget_equation || "";
+      flat[`${key}_gabarit`] = s.gabarit_desc || "";
+      flat[`${key}_ventil_go`] = `${s.ventilation ? Math.round((s.ventilation.gros_oeuvre || 0) / 1e6) : 0}M`;
+      flat[`${key}_ventil_so`] = `${s.ventilation ? Math.round((s.ventilation.second_oeuvre || 0) / 1e6) : 0}M`;
+      flat[`${key}_ventil_lt`] = `${s.ventilation ? Math.round((s.ventilation.lots_techniques || 0) / 1e6) : 0}M`;
+      flat[`${key}_ventil_vrd`] = `${s.ventilation ? Math.round((s.ventilation.vrd || 0) / 1e6) : 0}M`;
+      flat[`${key}_ventil_hono`] = `${s.honoraires ? Math.round((s.honoraires.median || 0) / 1e6) : 0}M`;
     }
 
-    // Retour binaire (pour téléchargement direct ou upload Google Drive)
-    const filename = `diagnostic_${clientName.replace(/\s+/g, "_") || "client"}.pptx`;
+    // Step 3: Generate premium texts
+    const rules = buildGptTextRules();
+    const dataContext = buildGptDataContext(p, scenarios, flat);
+    let generatedTexts = {};
+
+    if (OPENAI_API_KEY) {
+      generatedTexts = await generateDiagnosticTexts(dataContext, rules);
+    }
+
+    // Step 4: Prepare data JSON for Python
+    const pptxData = {
+      ...flat,
+      ...generatedTexts,
+      client_name: p.client_name || "",
+      site_area: p.site_area,
+      images: p.images || {},
+      scenarios: {
+        A: { ...sA, accent_color: sA.accent_color || "#2a5298" },
+        B: { ...sB, accent_color: sB.accent_color || "#1e8449" },
+        C: { ...sC, accent_color: sC.accent_color || "#d35400" },
+      },
+      scores: {
+        rent_score: Number(p.rent_score) || 0,
+        capacity_score: Number(p.capacity_score) || 0,
+        mix_score: Number(p.mix_score) || 0,
+        phase_score: Number(p.phase_score) || 0,
+        risk_score: Number(p.risk_score) || 0,
+      },
+      rec_scenario: flat.rec_scenario,
+      rec_score: flat.rec_score,
+    };
+
+    // Step 5: Write data to temp file and call Python
+    const tmpDir = `/tmp/pptx_${Date.now()}`;
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const dataPath = path.join(tmpDir, "data.json");
+    fs.writeFileSync(dataPath, JSON.stringify(pptxData, null, 2));
+
+    const scriptDir = __dirname;
+    const templatePath = path.join(scriptDir, "template_diagnostic.pptx");
+    const pythonCmd = `cd "${scriptDir}" && python3 generate_pptx.py "${dataPath}" "${templatePath}" "${tmpDir}/output.pptx" 2>&1`;
+    console.log(`[GENERATE-PPTX] Running: ${pythonCmd}`);
+
+    const pyOutput = execSync(pythonCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 }).toString();
+    console.log(`[GENERATE-PPTX] Python output:\n${pyOutput.substring(0, 2000)}`);
+
+    const outputPath = path.join(tmpDir, "output.pptx");
+    if (!fs.existsSync(outputPath)) {
+      console.error(`[GENERATE-PPTX] Output file not found at ${outputPath}`);
+      return res.status(500).json({ error: "PPTX generation failed — output file not found" });
+    }
+
+    // Step 6: Return PPTX file
+    const pptxBuffer = fs.readFileSync(outputPath);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Content-Length", pptxBuffer.length);
-    res.setHeader("X-BARLO-Duration-Ms", String(durationMs));
-    return res.send(pptxBuffer);
+    res.setHeader("Content-Disposition", `attachment; filename="diagnostic_${p.client_name || "barlo"}.pptx"`);
+    res.send(pptxBuffer);
 
-  } catch (e) {
-    console.error("[v72.67] /generate-pptx ERROR:", e.message);
-    return res.status(500).json({ ok: false, error: e.message });
-  } finally {
-    // Cleanup temp files
-    if (tmpDir) {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    }
+    // Cleanup
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    console.log(`═══ /generate-pptx DONE in ${Date.now() - t0}ms ═══\n`);
+
+  } catch (err) {
+    console.error(`[GENERATE-PPTX] Error: ${err.message}\n${err.stack}`);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// ─── HELPERS pour /generate-pptx ─────────────────────────────────────────────
-
-/**
- * Calcule les risk_scores (1-5) pour un scénario, utilisés par les graphiques radar/barres.
- * Dérivés directement des données numériques du scénario.
- */
-function _computeRiskScores(sc, allData) {
-  const budgetFit = sc.budget_fit || 0;
-  const effRatio = sc.ratio_efficacite_pct || 0;
-  const levels = sc.levels || 1;
-  const cosMax = (allData.terrain || {}).cos_max || 1;
-  const sdp = sc.sdp_m2 || 0;
-  const terrainArea = (allData.terrain || {}).area_m2 || 200;
-  const cosUsed = sdp / terrainArea;
-  const cosDensity = cosMax > 0 ? cosUsed / cosMax : 0;
-
-  return {
-    budget_fit: budgetFit >= 0.95 ? 5 : budgetFit >= 0.8 ? 4 : budgetFit >= 0.6 ? 3 : budgetFit >= 0.4 ? 2 : 1,
-    complexite_structurelle: levels <= 2 ? 1 : levels <= 3 ? 2 : levels <= 4 ? 3 : levels <= 5 ? 4 : 5,
-    risque_permis: cosDensity <= 0.5 ? 1 : cosDensity <= 0.7 ? 2 : cosDensity <= 0.85 ? 3 : cosDensity <= 0.95 ? 4 : 5,
-    ratio_efficacite: effRatio >= 80 ? 4 : effRatio >= 70 ? 3 : effRatio >= 60 ? 2 : 1,
-    densite_cos: cosDensity <= 0.5 ? 1 : cosDensity <= 0.65 ? 2 : cosDensity <= 0.8 ? 3 : cosDensity <= 0.9 ? 4 : 5,
-    phasabilite: levels <= 2 ? 5 : levels <= 3 ? 3 : levels <= 4 ? 2 : 1,
-    cout_m2: (sc.cost_per_m2_sdp || 0) <= 400000 ? 1 : (sc.cost_per_m2_sdp || 0) <= 500000 ? 2 : (sc.cost_per_m2_sdp || 0) <= 600000 ? 3 : 4,
-  };
-}
-
-/**
- * Trouve le scénario recommandé (celui avec le plus haut recommendation_score).
- */
-function _findRecommendedScenario(scenarios) {
-  let best = "C";
-  let bestScore = -1;
-  for (const [label, sc] of Object.entries(scenarios || {})) {
-    const score = sc.recommendation_score || 0;
-    if (score > bestScore) {
-      bestScore = score;
-      best = label;
-    }
-  }
-  return best;
-}
-
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.67-PPTX on port ${PORT}`);
+  console.log(`BARLO v72.70-PREMIUM on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
