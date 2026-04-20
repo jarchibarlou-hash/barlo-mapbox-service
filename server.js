@@ -4,6 +4,10 @@ const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
+const { execFile } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 const app = express();
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
@@ -2158,6 +2162,10 @@ function computeSmartScenarios({
         // Si trop d'unités rési (ex: 3 niveaux × 1/palier = 3 rési + 1 comm = 4 > 3 demandées)
         // → réduire les rési comptées pour coller au programme client
         const resiCountFinal = totalUnitsResult - nbBoutiques;
+        // v72.66c: FIX — mettre à jour split_layout.volume_logement.units après le cap
+        if (splitLayout && splitLayout.volume_logement) {
+          splitLayout.volume_logement.units = resiCountFinal;
+        }
         // v72.66: FIX — totalUseful = SDP totale × (1-circ) pour cohérence avec _recalcSdp et garde-fou
         // Avant: sdpCommerce comptait 100% utile (pas de circ), incohérent avec sdp×(1-circ)
         const sdpSplitTotal = sdpCommerce + fpLogtFinal * levelsLogt;
@@ -4145,17 +4153,19 @@ app.post("/compute-scenarios", (req, res) => {
       narr = narr.replace(regex, `${sdpStr}m² de surface de plancher dont ${habNew}m² habitables`);
     }
     // v72.66b: aussi corriger "(efficacite XX%)" dans la narrative
-    narr = narr.replace(/\(efficacite \d+%\)/g, (match) => {
-      // Trouver le sdp et hab qui précèdent dans la narrative pour recalculer
-      // On utilise les valeurs du scénario recommandé (C dans ce cas)
-      const recLabel = (scenarios.diagnostic.recommandation || {}).scenario || "C";
-      const recSc = scenarios[recLabel];
+    const recLabel = (scenarios.diagnostic.recommandation || {}).scenario || "C";
+    const recSc = scenarios[recLabel];
+    narr = narr.replace(/\(efficacite \d+%\)/g, () => {
       if (recSc && recSc.sdp_m2 > 0) {
         const newEff = recSc.ratio_efficacite_pct || Math.round((recSc.surface_habitable_m2 || 0) / recSc.sdp_m2 * 100);
         return `(efficacite ${newEff}%)`;
       }
-      return match;
+      return `(efficacite 0%)`;
     });
+    // v72.66c: corriger "XXm² habitables par logement" dans la narrative
+    if (recSc && recSc.m2_habitable_par_logement) {
+      narr = narr.replace(/\d+m² habitables par logement/, `${recSc.m2_habitable_par_logement}m² habitables par logement`);
+    }
     scenarios.diagnostic.recommandation.narrative = narr;
     console.log(`[v72.66] NARRATIVE REFRESHED with post-garde-fou hab values`);
   }
@@ -7694,9 +7704,239 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     if (browser) { try { browser.disconnect(); } catch (_) {} }
   }
 });
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.67: ENDPOINT /generate-pptx — GÉNÉRATION POWERPOINT CÔTÉ SERVEUR
+// Reçoit le même body que /compute-scenarios (données client)
+// + optionnel: images URLs (massing, terrain) et textes pré-générés
+// Le serveur:
+//   1) Appelle /generate-texts en interne pour obtenir scénarios + textes
+//   2) Construit le JSON pour le script Python
+//   3) Appelle generate_pptx.py via child_process
+//   4) Retourne le fichier PPTX en base64
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Template PPTX path — stocké à côté du server.js
+const PPTX_TEMPLATE_PATH = process.env.PPTX_TEMPLATE_PATH || path.join(__dirname, "template_diagnostic.pptx");
+const PYTHON_SCRIPTS_DIR = process.env.PYTHON_SCRIPTS_DIR || __dirname;
+
+app.post("/generate-pptx", async (req, res) => {
+  const t0 = Date.now();
+  let tmpDir = null;
+
+  try {
+    console.log("[v72.67] /generate-pptx — START");
+
+    // ─── 1) RÉCUPÉRER LES TEXTES + SCÉNARIOS ───
+    // Si le body contient déjà 'texts' et 'scenarios', on les utilise directement
+    // Sinon on appelle /generate-texts en interne
+    let texts, scenarios, clientName, images;
+
+    if (req.body.texts && req.body.scenarios) {
+      // Mode direct: le caller fournit tout
+      console.log("[v72.67] Mode direct — textes et scénarios fournis dans le body");
+      texts = req.body.texts;
+      scenarios = req.body.scenarios;
+      clientName = req.body.client_name || "";
+      images = req.body.images || {};
+    } else {
+      // Mode pipeline: on appelle /generate-texts puis on extrait
+      console.log("[v72.67] Mode pipeline — appel interne /generate-texts");
+      const localUrl = `http://localhost:${PORT}/generate-texts`;
+      const intResponse = await fetch(localUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+
+      if (!intResponse.ok) {
+        const errText = await intResponse.text();
+        console.error(`[v72.67] /generate-texts a échoué (${intResponse.status}):`, errText);
+        return res.status(500).json({ ok: false, error: "generate-texts failed", detail: errText });
+      }
+
+      const textsResponse = await intResponse.json();
+
+      if (!textsResponse || !textsResponse.ok) {
+        console.error("[v72.67] /generate-texts réponse invalide");
+        return res.status(500).json({ ok: false, error: "generate-texts returned invalid data" });
+      }
+
+      // Extraire les textes du résultat de /generate-texts
+      texts = textsResponse.texts || {};
+      clientName = req.body.client_name || req.body.nom_client || "";
+      images = req.body.images || {};
+
+      // Récupérer les scénarios depuis /compute-scenarios directement
+      console.log("[v72.67] Appel interne /compute-scenarios pour données scénarios");
+      const scenResponse = await fetch(`http://localhost:${PORT}/compute-scenarios`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+
+      if (!scenResponse.ok) {
+        return res.status(500).json({ ok: false, error: "compute-scenarios failed for pptx" });
+      }
+
+      const scenData = await scenResponse.json();
+
+      // Construire l'objet scenarios pour les graphiques
+      scenarios = {};
+      for (const label of ["A", "B", "C"]) {
+        const sc = scenData[label];
+        if (!sc) continue;
+        scenarios[label] = {
+          sdp_m2: sc.sdp_m2 || 0,
+          surface_habitable_m2: sc.surface_habitable_m2 || sc.total_useful_m2 || 0,
+          ratio_efficacite_pct: sc.ratio_efficacite_pct || 0,
+          total_units: sc.total_units || 0,
+          levels: sc.levels || 0,
+          cost_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost || 0,
+          cost_per_m2_sdp: sc.cost_per_m2_sdp || 0,
+          budget_fit: sc.budget_fit || 0,
+          recommendation_score: sc.recommendation_score || 0,
+          duree_chantier_mois: sc.duree_chantier_mois || 0,
+          risk_scores: _computeRiskScores(sc, scenData),
+        };
+      }
+    }
+
+    // ─── 2) CONSTRUIRE LE JSON POUR PYTHON ───
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "barlo-pptx-"));
+    const inputJsonPath = path.join(tmpDir, "input.json");
+    const outputPptxPath = path.join(tmpDir, "diagnostic_output.pptx");
+
+    const pptxData = {
+      client_name: clientName,
+      images: images,
+      texts: texts,
+      scenarios: scenarios,
+      recommended_scenario: _findRecommendedScenario(scenarios),
+    };
+
+    fs.writeFileSync(inputJsonPath, JSON.stringify(pptxData, null, 2), "utf-8");
+    console.log(`[v72.67] JSON écrit: ${inputJsonPath} (${(JSON.stringify(pptxData).length / 1024).toFixed(1)} KB)`);
+
+    // ─── 3) VÉRIFIER QUE LE TEMPLATE EXISTE ───
+    if (!fs.existsSync(PPTX_TEMPLATE_PATH)) {
+      console.error(`[v72.67] Template PPTX introuvable: ${PPTX_TEMPLATE_PATH}`);
+      return res.status(500).json({ ok: false, error: `Template PPTX not found: ${PPTX_TEMPLATE_PATH}` });
+    }
+
+    // ─── 4) APPELER LE SCRIPT PYTHON ───
+    const pythonScript = path.join(PYTHON_SCRIPTS_DIR, "generate_pptx.py");
+    console.log(`[v72.67] Lancement Python: ${pythonScript}`);
+
+    const pptxBuffer = await new Promise((resolve, reject) => {
+      const proc = execFile("python3", [
+        pythonScript,
+        inputJsonPath,
+        PPTX_TEMPLATE_PATH,
+        outputPptxPath,
+      ], {
+        cwd: PYTHON_SCRIPTS_DIR,
+        timeout: 120000,  // 2 minutes max
+        maxBuffer: 10 * 1024 * 1024,  // 10MB stdout buffer
+      }, (error, stdout, stderr) => {
+        if (stderr) console.log(`[v72.67] Python stderr:\n${stderr}`);
+        if (stdout) console.log(`[v72.67] Python stdout:\n${stdout}`);
+
+        if (error) {
+          console.error(`[v72.67] Python error:`, error.message);
+          return reject(new Error(`Python script failed: ${error.message}`));
+        }
+
+        // Lire le fichier PPTX généré
+        if (!fs.existsSync(outputPptxPath)) {
+          return reject(new Error("Python script did not produce output file"));
+        }
+
+        const buffer = fs.readFileSync(outputPptxPath);
+        resolve(buffer);
+      });
+    });
+
+    const durationMs = Date.now() - t0;
+    console.log(`[v72.67] PPTX généré en ${durationMs}ms (${(pptxBuffer.length / 1024).toFixed(0)} KB)`);
+
+    // ─── 5) RETOURNER LE RÉSULTAT ───
+    // Par défaut: retourner le fichier PPTX directement
+    // Si ?format=base64, retourner en JSON avec base64
+    if (req.query.format === "base64") {
+      return res.json({
+        ok: true,
+        filename: `diagnostic_${clientName.replace(/\s+/g, "_") || "client"}.pptx`,
+        pptx_base64: pptxBuffer.toString("base64"),
+        size_bytes: pptxBuffer.length,
+        duration_ms: durationMs,
+      });
+    }
+
+    // Retour binaire (pour téléchargement direct ou upload Google Drive)
+    const filename = `diagnostic_${clientName.replace(/\s+/g, "_") || "client"}.pptx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", pptxBuffer.length);
+    res.setHeader("X-BARLO-Duration-Ms", String(durationMs));
+    return res.send(pptxBuffer);
+
+  } catch (e) {
+    console.error("[v72.67] /generate-pptx ERROR:", e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    // Cleanup temp files
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+});
+
+// ─── HELPERS pour /generate-pptx ─────────────────────────────────────────────
+
+/**
+ * Calcule les risk_scores (1-5) pour un scénario, utilisés par les graphiques radar/barres.
+ * Dérivés directement des données numériques du scénario.
+ */
+function _computeRiskScores(sc, allData) {
+  const budgetFit = sc.budget_fit || 0;
+  const effRatio = sc.ratio_efficacite_pct || 0;
+  const levels = sc.levels || 1;
+  const cosMax = (allData.terrain || {}).cos_max || 1;
+  const sdp = sc.sdp_m2 || 0;
+  const terrainArea = (allData.terrain || {}).area_m2 || 200;
+  const cosUsed = sdp / terrainArea;
+  const cosDensity = cosMax > 0 ? cosUsed / cosMax : 0;
+
+  return {
+    budget_fit: budgetFit >= 0.95 ? 5 : budgetFit >= 0.8 ? 4 : budgetFit >= 0.6 ? 3 : budgetFit >= 0.4 ? 2 : 1,
+    complexite_structurelle: levels <= 2 ? 1 : levels <= 3 ? 2 : levels <= 4 ? 3 : levels <= 5 ? 4 : 5,
+    risque_permis: cosDensity <= 0.5 ? 1 : cosDensity <= 0.7 ? 2 : cosDensity <= 0.85 ? 3 : cosDensity <= 0.95 ? 4 : 5,
+    ratio_efficacite: effRatio >= 80 ? 4 : effRatio >= 70 ? 3 : effRatio >= 60 ? 2 : 1,
+    densite_cos: cosDensity <= 0.5 ? 1 : cosDensity <= 0.65 ? 2 : cosDensity <= 0.8 ? 3 : cosDensity <= 0.9 ? 4 : 5,
+    phasabilite: levels <= 2 ? 5 : levels <= 3 ? 3 : levels <= 4 ? 2 : 1,
+    cout_m2: (sc.cost_per_m2_sdp || 0) <= 400000 ? 1 : (sc.cost_per_m2_sdp || 0) <= 500000 ? 2 : (sc.cost_per_m2_sdp || 0) <= 600000 ? 3 : 4,
+  };
+}
+
+/**
+ * Trouve le scénario recommandé (celui avec le plus haut recommendation_score).
+ */
+function _findRecommendedScenario(scenarios) {
+  let best = "C";
+  let bestScore = -1;
+  for (const [label, sc] of Object.entries(scenarios || {})) {
+    const score = sc.recommendation_score || 0;
+    if (score > bestScore) {
+      bestScore = score;
+      best = label;
+    }
+  }
+  return best;
+}
+
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.66-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.67-PPTX on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
