@@ -230,40 +230,55 @@ def generate_comparative_table(scenarios_data, output_path):
 # ─────────────────────────────────────────────────────────────
 # ARBITRAGE GRAPH (Cost comparison bars)
 # ─────────────────────────────────────────────────────────────
-def generate_arbitrage_graph(scenarios_costs, output_path):
+def generate_arbitrage_graph(scenarios_data, output_path):
     """
-    Bar chart comparing total costs across scenarios.
-    scenarios_costs: dict with keys 'A', 'B', 'C' mapping to cost values (in FCFA)
+    4-panel bar chart comparing key criteria across scenarios.
+    Matches reference: Coût total, Surface habitable, Nombre d'unités, Score recommandation.
+    scenarios_data: dict with keys 'A', 'B', 'C' mapping to scenario dicts.
     """
-    fig, ax = plt.subplots(figsize=(11, 7))
+    fig, axes = plt.subplots(1, 4, figsize=(16, 5))
 
-    scenarios = ['Scénario A', 'Scénario B', 'Scénario C']
     keys = ['A', 'B', 'C']
-    costs = [scenarios_costs.get(k, 0) for k in keys]
+    labels = ['A', 'B', 'C']
     colors_list = [COLORS[k] for k in keys]
 
-    # Normalize costs to millions for display
-    costs_millions = [c / 1_000_000 for c in costs]
+    # Extract data for each criterion
+    costs_m = [scenarios_data.get(k, {}).get('cost_total_fcfa', 0) / 1_000_000 for k in keys]
+    surfaces = [scenarios_data.get(k, {}).get('surface_habitable_m2', 0) for k in keys]
+    units = [scenarios_data.get(k, {}).get('total_units', 0) for k in keys]
+    scores = [scenarios_data.get(k, {}).get('recommendation_score', 0) for k in keys]
 
-    bars = ax.bar(scenarios, costs_millions, color=colors_list, alpha=0.85, edgecolor=COLORS['dark'], linewidth=1.5)
+    criteria = [
+        ('Coût total (M FCFA)', costs_m, '{:.0f}M', ''),
+        ('Surface habitable (m²)', surfaces, '{:.0f}m²', ''),
+        ("Nombre d'unités", units, '{:.0f}', ''),
+        ('Score recommandation', scores, '{:.0f}/100', ''),
+    ]
 
-    # Add value labels on bars
-    for bar, cost_m in zip(bars, costs_millions):
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, height + max(costs_millions) * 0.02,
-                f'{int(cost_m)}M FCFA', ha='center', va='bottom', fontsize=12, weight='bold', color=COLORS['dark'])
+    for ax, (title, values, fmt, _) in zip(axes, criteria):
+        bars = ax.bar(labels, values, color=colors_list, alpha=0.85,
+                      edgecolor=COLORS['dark'], linewidth=1.2, width=0.6)
+        # Value labels on top of bars
+        max_val = max(values) if max(values) > 0 else 1
+        for bar, val in zip(bars, values):
+            h = bar.get_height()
+            label = fmt.format(val)
+            ax.text(bar.get_x() + bar.get_width() / 2, h + max_val * 0.03,
+                    label, ha='center', va='bottom', fontsize=10, weight='bold',
+                    color=COLORS['dark'])
+        ax.set_title(title, fontsize=11, weight='bold', color=COLORS['dark'], pad=10)
+        ax.set_ylim(0, max_val * 1.25)
+        ax.grid(axis='y', color=COLORS['grid'], alpha=0.5, linestyle='--')
+        ax.set_axisbelow(True)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_facecolor(COLORS['light'])
+        ax.tick_params(axis='y', labelsize=9)
 
-    ax.set_ylabel('Coût Total (Millions FCFA)', fontsize=12, weight='bold', color=COLORS['text'])
-    ax.set_ylim(0, max(costs_millions) * 1.15)
-    ax.grid(axis='y', color=COLORS['grid'], alpha=0.5, linestyle='--')
-    ax.set_axisbelow(True)
-
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.set_facecolor(COLORS['light'])
+    fig.suptitle("Critères d'arbitrage stratégique", fontsize=14, weight='bold',
+                 color=COLORS['dark'], y=0.98)
     fig.patch.set_facecolor(COLORS['bg'])
-
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
     _save(fig, output_path)
 
 # ─────────────────────────────────────────────────────────────
@@ -517,16 +532,10 @@ def generate_all_charts(scenario_data, output_dir):
     generate_comparative_table(all_risk_metrics, table_path)
     chart_paths['tableau_comparative_charts'] = table_path
 
-    # Arbitrage graph (costs)
-    scenarios_costs = {
-        'A': scenarios.get('A', {}).get('cost_total_fcfa', 0),
-        'B': scenarios.get('B', {}).get('cost_total_fcfa', 0),
-        'C': scenarios.get('C', {}).get('cost_total_fcfa', 0),
-    }
-    arbitrage_path = os.path.join(output_dir, 'arbitrage_graph_costs.png')
-    generate_arbitrage_graph(scenarios_costs, arbitrage_path)
-    chart_paths['arbitrage_graph_costs'] = arbitrage_path
-    chart_paths['arbitrage_graph_'] = arbitrage_path  # backward compat
+    # Arbitrage graph (4-panel: cost, surface, units, score)
+    arbitrage_path = os.path.join(output_dir, 'arbitrage_graph_.png')
+    generate_arbitrage_graph(scenarios, arbitrage_path)
+    chart_paths['arbitrage_graph_'] = arbitrage_path
 
     # Cost breakdown (from recommended scenario)
     recommended_scenario = scenarios.get(recommended_key, {})
