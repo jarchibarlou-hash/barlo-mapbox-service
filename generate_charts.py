@@ -4,7 +4,6 @@ BARLO — Chart generation for diagnostic PPTX
 Generates: radar, gauge, horizontal bars (per scenario) + comparatif table + arbitrage graphs
 All charts exported as PNG for insertion into PPTX template.
 """
-
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -12,6 +11,9 @@ import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch
 import numpy as np
 import os, json, sys
+
+# Font consistency
+plt.rcParams['font.family'] = 'DejaVu Sans'
 
 # ─── BARLO color palette ───
 COLORS = {
@@ -39,612 +41,562 @@ RISK_LABELS_FR = {
     'cout_m2': 'Coût\nau m²',
 }
 
-DPI = 200
-
+DPI = 300
 
 def _save(fig, path):
     fig.savefig(path, dpi=DPI, bbox_inches='tight', facecolor='white', transparent=False)
     plt.close(fig)
 
-
-# ═══════════════════════════════════════════════════════════════
-# 1. RADAR CHART — profil de risque par scénario
-# ═══════════════════════════════════════════════════════════════
-def generate_radar(risk_scores: dict, scenario_label: str, output_path: str):
+# ─────────────────────────────────────────────────────────────
+# RADAR CHART
+# ─────────────────────────────────────────────────────────────
+def generate_risk_radar(scenario_data, scenario_key, output_path):
     """
-    risk_scores: {"budget_fit": 3, "complexite_structurelle": 4, ...} (1-5 scale)
+    Radar chart for one scenario's risk metrics.
+    scenario_data: dict with keys like 'budget_fit', 'complexite_structurelle', etc. (0–100)
+    scenario_key: 'A', 'B', or 'C'
     """
-    categories = list(risk_scores.keys())
-    values = [risk_scores[k] for k in categories]
-    labels = [RISK_LABELS_FR.get(k, k) for k in categories]
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
 
-    N = len(categories)
-    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    metrics = list(RISK_LABELS_FR.keys())
+    values = [scenario_data.get(m, 50) for m in metrics]
+    angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
     values += values[:1]
     angles += angles[:1]
 
-    fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
-    fig.patch.set_facecolor('white')
+    color = COLORS[scenario_key]
+    ax.plot(angles, values, 'o-', linewidth=2.5, color=color, markersize=6)
+    ax.fill(angles, values, alpha=0.25, color=color)
 
-    color = COLORS.get(scenario_label, COLORS['accent'])
-
-    ax.fill(angles, values, color=color, alpha=0.2)
-    ax.plot(angles, values, color=color, linewidth=2.5, marker='o', markersize=6)
-
-    ax.set_ylim(0, 5)
-    ax.set_yticks([1, 2, 3, 4, 5])
-    ax.set_yticklabels(['1', '2', '3', '4', '5'], fontsize=7, color='#999')
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, fontsize=8, fontweight='bold', color=COLORS['text'])
+    ax.set_xticklabels([RISK_LABELS_FR[m] for m in metrics], size=10, weight='bold')
+    ax.set_ylim(0, 100)
+    ax.set_yticks([20, 40, 60, 80, 100])
+    ax.set_yticklabels(['20', '40', '60', '80', '100'], size=8, color=COLORS['text'], alpha=0.7)
+    ax.grid(True, color=COLORS['grid'], alpha=0.5)
 
-    ax.spines['polar'].set_visible(False)
-    ax.grid(color=COLORS['grid'], linewidth=0.8)
-    ax.set_facecolor('white')
-
-    ax.set_title(f'Profil de risque — Scénario {scenario_label}',
-                 fontsize=12, fontweight='bold', color=COLORS['dark'], pad=20)
+    ax.set_facecolor(COLORS['bg'])
+    fig.patch.set_facecolor(COLORS['bg'])
 
     _save(fig, output_path)
 
-
-# ═══════════════════════════════════════════════════════════════
-# 2. GAUGE — score global de recommandation
-# ═══════════════════════════════════════════════════════════════
-def generate_gauge(score: float, max_score: float, scenario_label: str, output_path: str):
+# ─────────────────────────────────────────────────────────────
+# GAUGE CHART (Arc Gauge)
+# ─────────────────────────────────────────────────────────────
+def generate_gauge(score, scenario_key, output_path):
     """
-    score: recommendation_score (0-100)
+    Gauge chart showing a single score (0–100).
+    Score positioning: LEFT (low/red) → MIDDLE (orange) → RIGHT (high/green).
+    Arc goes from 180° (left) to 0° (right).
     """
-    pct = min(score / max_score, 1.0) if max_score > 0 else 0
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    fig, ax = plt.subplots(figsize=(4, 2.8))
-    fig.patch.set_facecolor('white')
-    ax.set_xlim(-1.3, 1.3)
-    ax.set_ylim(-0.3, 1.3)
+    # Normalize score to 0-1 for arc positioning
+    # t=0 is left (180°), t=1 is right (0°)
+    t = score / 100.0
+
+    # Draw background arc (gray)
+    theta_bg = np.linspace(np.pi, 0, 100)
+    ax.plot(np.cos(theta_bg), np.sin(theta_bg), 'k-', linewidth=20, color='#CCCCCC', solid_capstyle='round')
+
+    # Draw colored arc segments
+    # RED: low scores (t < 0.33, left side)
+    theta_red = np.linspace(np.pi, np.pi - (np.pi / 3), 50)
+    ax.plot(np.cos(theta_red), np.sin(theta_red), 'o-', linewidth=20, color=COLORS['red'], solid_capstyle='round')
+
+    # ORANGE: medium scores (0.33 <= t < 0.66, middle)
+    theta_orange = np.linspace(np.pi - (np.pi / 3), np.pi - (2 * np.pi / 3), 50)
+    ax.plot(np.cos(theta_orange), np.sin(theta_orange), 'o-', linewidth=20, color=COLORS['orange'], solid_capstyle='round')
+
+    # GREEN: high scores (t >= 0.66, right side)
+    theta_green = np.linspace(np.pi - (2 * np.pi / 3), 0, 50)
+    ax.plot(np.cos(theta_green), np.sin(theta_green), 'o-', linewidth=20, color=COLORS['green'], solid_capstyle='round')
+
+    # Draw needle at the score position
+    angle = np.pi - (t * np.pi)
+    ax.arrow(0, 0, 0.8 * np.cos(angle), 0.8 * np.sin(angle), head_width=0.1, head_length=0.1, fc=COLORS['dark'], ec=COLORS['dark'])
+
+    # Center circle
+    circle = plt.Circle((0, 0), 0.1, color=COLORS['dark'], zorder=10)
+    ax.add_patch(circle)
+
+    # Labels
+    ax.text(-1.1, 0, 'Faible', fontsize=12, weight='bold', ha='center', color=COLORS['red'])
+    ax.text(0, -0.4, 'Moyen', fontsize=12, weight='bold', ha='center', color=COLORS['orange'])
+    ax.text(1.1, 0, 'Élevé', fontsize=12, weight='bold', ha='center', color=COLORS['green'])
+
+    # Score display in center
+    ax.text(0, -0.7, f'{int(score)}', fontsize=48, weight='bold', ha='center', color=COLORS['dark'])
+
+    ax.set_xlim(-1.5, 1.5)
+    ax.set_ylim(-1.2, 1.2)
     ax.set_aspect('equal')
     ax.axis('off')
-
-    # Background arc segments (green -> orange -> red)
-    n_segments = 100
-    for i in range(n_segments):
-        t = i / n_segments
-        angle = np.pi * (1 - t)
-        if t < 0.4:
-            c = COLORS['green']
-        elif t < 0.7:
-            c = COLORS['orange']
-        else:
-            c = COLORS['red']
-
-        a1 = np.pi * (1 - (i / n_segments))
-        a2 = np.pi * (1 - ((i + 1) / n_segments))
-        theta = np.linspace(a1, a2, 5)
-
-        for r_inner, r_outer in [(0.7, 1.0)]:
-            x_outer = r_outer * np.cos(theta)
-            y_outer = r_outer * np.sin(theta)
-            x_inner = r_inner * np.cos(theta[::-1])
-            y_inner = r_inner * np.sin(theta[::-1])
-            ax.fill(np.concatenate([x_outer, x_inner]),
-                    np.concatenate([y_outer, y_inner]),
-                    color=c, alpha=0.8)
-
-    # Needle
-    needle_angle = np.pi * (1 - pct)
-    nx = 0.9 * np.cos(needle_angle)
-    ny = 0.9 * np.sin(needle_angle)
-    ax.annotate('', xy=(nx, ny), xytext=(0, 0),
-                arrowprops=dict(arrowstyle='->', color=COLORS['dark'], lw=2.5))
-    ax.plot(0, 0, 'o', color=COLORS['dark'], markersize=8, zorder=5)
-
-    # Score text
-    ax.text(0, -0.15, f'{int(score)}/100', fontsize=20, fontweight='bold',
-            ha='center', va='center', color=COLORS['dark'])
-
-    # Label
-    if pct >= 0.7:
-        label = 'Recommandé'
-        lcolor = COLORS['green']
-    elif pct >= 0.4:
-        label = 'Acceptable'
-        lcolor = COLORS['orange']
-    else:
-        label = 'Risqué'
-        lcolor = COLORS['red']
-
-    ax.text(0, -0.35, label, fontsize=11, fontweight='bold',
-            ha='center', va='center', color=lcolor)
-
-    ax.set_title(f'Score global — Scénario {scenario_label}',
-                 fontsize=12, fontweight='bold', color=COLORS['dark'], pad=10)
+    fig.patch.set_facecolor(COLORS['bg'])
 
     _save(fig, output_path)
 
-
-# ═══════════════════════════════════════════════════════════════
-# 3. HORIZONTAL BARS — facteurs de risque
-# ═══════════════════════════════════════════════════════════════
-def generate_risk_bars(risk_scores: dict, scenario_label: str, output_path: str):
+# ─────────────────────────────────────────────────────────────
+# HORIZONTAL BARS CHART
+# ─────────────────────────────────────────────────────────────
+def generate_horizontal_bars(scenario_data, scenario_key, output_path):
     """
-    Horizontal bar chart with color-coded severity (1-2 green, 3 orange, 4-5 red)
+    Horizontal bar chart for scenario metrics.
+    scenario_data: dict with metric keys mapping to 0–100 values
     """
-    categories = list(risk_scores.keys())
-    values = [risk_scores[k] for k in categories]
-    labels = [RISK_LABELS_FR.get(k, k).replace('\n', ' ') for k in categories]
+    fig, ax = plt.subplots(figsize=(11, 7))
 
-    colors = []
-    for v in values:
-        if v <= 2:
-            colors.append(COLORS['green'])
-        elif v <= 3:
-            colors.append(COLORS['orange'])
-        else:
-            colors.append(COLORS['red'])
+    metrics = list(RISK_LABELS_FR.keys())
+    values = [scenario_data.get(m, 50) for m in metrics]
+    labels = [RISK_LABELS_FR[m] for m in metrics]
 
-    fig, ax = plt.subplots(figsize=(4.5, 3.5))
-    fig.patch.set_facecolor('white')
+    color = COLORS[scenario_key]
+    y_pos = np.arange(len(labels))
 
-    y_pos = np.arange(len(categories))
-    bars = ax.barh(y_pos, values, color=colors, height=0.6, edgecolor='white', linewidth=0.5)
+    bars = ax.barh(y_pos, values, color=color, alpha=0.85, edgecolor=COLORS['dark'], linewidth=1.5)
+
+    # Add value labels on bars
+    for i, (bar, val) in enumerate(zip(bars, values)):
+        ax.text(val + 2, bar.get_y() + bar.get_height() / 2, f'{int(val)}',
+                va='center', fontsize=11, weight='bold', color=COLORS['dark'])
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels, fontsize=9, color=COLORS['text'])
-    ax.set_xlim(0, 5.5)
-    ax.set_xticks([1, 2, 3, 4, 5])
-    ax.set_xticklabels(['1', '2', '3', '4', '5'], fontsize=8, color='#999')
+    ax.set_yticklabels(labels, fontsize=11, weight='bold')
+    ax.set_xlabel('Score (0–100)', fontsize=12, weight='bold', color=COLORS['text'])
+    ax.set_xlim(0, 110)
+    ax.grid(axis='x', color=COLORS['grid'], alpha=0.5, linestyle='--')
+    ax.set_axisbelow(True)
 
-    # Value labels
-    for bar, v in zip(bars, values):
-        ax.text(bar.get_width() + 0.15, bar.get_y() + bar.get_height()/2,
-                f'{v}/5', va='center', fontsize=9, fontweight='bold', color=COLORS['text'])
-
-    ax.invert_yaxis()
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_color(COLORS['grid'])
-    ax.spines['left'].set_color(COLORS['grid'])
-    ax.grid(axis='x', color=COLORS['grid'], linewidth=0.5)
+    ax.set_facecolor(COLORS['light'])
+    fig.patch.set_facecolor(COLORS['bg'])
 
-    ax.set_title(f'Facteurs de risque — Scénario {scenario_label}',
-                 fontsize=12, fontweight='bold', color=COLORS['dark'], pad=15)
-
+    plt.tight_layout()
     _save(fig, output_path)
 
-
-# ═══════════════════════════════════════════════════════════════
-# 4. COMPARATIF TABLE — slide 15
-# ═══════════════════════════════════════════════════════════════
-def generate_comparatif_table(scenarios: dict, output_path: str):
+# ─────────────────────────────────────────────────────────────
+# COMPARATIVE TABLE (Tableau Comparatif)
+# ─────────────────────────────────────────────────────────────
+def generate_comparative_table(scenarios_data, output_path):
     """
-    Generates a visual comparison table as an image.
-    scenarios: {"A": {...}, "B": {...}, "C": {...}}
+    Table comparing all three scenarios (A, B, C).
+    scenarios_data: dict with keys 'A', 'B', 'C' each containing risk metric dicts
     """
-    criteria = [
-        ('SDP (m²)', 'sdp_m2'),
-        ('Surface habitable (m²)', 'surface_habitable_m2'),
-        ('Efficacité (%)', 'ratio_efficacite_pct'),
-        ('Nombre d\'unités', 'total_units'),
-        ('Niveaux', 'levels'),
-        ('Coût total (FCFA)', 'cost_total_fcfa'),
-        ('Coût/m² SDP', 'cost_per_m2_sdp'),
-        ('Score recommandation', 'recommendation_score'),
-        ('Durée chantier (mois)', 'duree_chantier_mois'),
-    ]
-
-    labels_order = ['A', 'B', 'C']
-    n_rows = len(criteria)
-    n_cols = 4  # Critère + A + B + C
-
-    fig, ax = plt.subplots(figsize=(10, 0.6 * n_rows + 1.2))
-    fig.patch.set_facecolor('white')
+    fig, ax = plt.subplots(figsize=(14, 8))
+    ax.axis('tight')
     ax.axis('off')
 
-    # Header
-    col_widths = [0.32, 0.22, 0.22, 0.22]
-    col_x = [0]
-    for w in col_widths[:-1]:
-        col_x.append(col_x[-1] + w)
+    # Build table data
+    metrics = list(RISK_LABELS_FR.keys())
+    headers = ['Métrique', 'Scénario A', 'Scénario B', 'Scénario C']
 
-    header_y = 1.0 - (0.8 / (n_rows + 1))
-    row_h = 0.8 / (n_rows + 1)
+    table_data = []
+    for metric in metrics:
+        row = [
+            RISK_LABELS_FR[metric],
+            f"{scenarios_data.get('A', {}).get(metric, 50):.0f}",
+            f"{scenarios_data.get('B', {}).get(metric, 50):.0f}",
+            f"{scenarios_data.get('C', {}).get(metric, 50):.0f}",
+        ]
+        table_data.append(row)
 
-    # Draw header
-    headers = ['Critère', 'Scénario A', 'Scénario B', 'Scénario C']
-    header_colors = [COLORS['dark'], COLORS['A'], COLORS['B'], COLORS['C']]
+    table = ax.table(cellText=table_data, colLabels=headers, cellLoc='center', loc='center',
+                     colWidths=[0.3, 0.23, 0.23, 0.23])
 
-    for j, (hdr, hcol) in enumerate(zip(headers, header_colors)):
-        rect = FancyBboxPatch((col_x[j], header_y), col_widths[j] - 0.005, row_h * 0.9,
-                              boxstyle="round,pad=0.005", facecolor=hcol, edgecolor='white', linewidth=1)
-        ax.add_patch(rect)
-        ax.text(col_x[j] + col_widths[j] / 2, header_y + row_h * 0.45,
-                hdr, ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 2.5)
 
-    # Draw rows
-    for i, (crit_name, crit_key) in enumerate(criteria):
-        y = header_y - (i + 1) * row_h
-        bg = 'white' if i % 2 == 0 else COLORS['light']
+    # Header styling
+    for i in range(len(headers)):
+        cell = table[(0, i)]
+        cell.set_facecolor(COLORS['dark'])
+        cell.set_text_props(weight='bold', color='white')
 
-        # Criteria label
-        rect = FancyBboxPatch((col_x[0], y), col_widths[0] - 0.005, row_h * 0.9,
-                              boxstyle="round,pad=0.005", facecolor=bg, edgecolor=COLORS['grid'], linewidth=0.5)
-        ax.add_patch(rect)
-        ax.text(col_x[0] + 0.01, y + row_h * 0.45, crit_name,
-                ha='left', va='center', fontsize=9, fontweight='bold', color=COLORS['text'])
-
-        # Values for A, B, C
-        vals = []
-        for label in labels_order:
-            sc = scenarios.get(label, {})
-            v = sc.get(crit_key, '-')
-            vals.append(v)
-
-        # Find best value for highlighting
-        numeric_vals = [(idx, v) for idx, v in enumerate(vals) if isinstance(v, (int, float))]
-        best_idx = None
-        if numeric_vals and crit_key in ('recommendation_score', 'surface_habitable_m2', 'ratio_efficacite_pct', 'total_units'):
-            best_idx = max(numeric_vals, key=lambda x: x[1])[0]
-        elif numeric_vals and crit_key in ('cost_total_fcfa', 'cost_per_m2_sdp', 'duree_chantier_mois'):
-            best_idx = min(numeric_vals, key=lambda x: x[1])[0]
-
-        for j, (label, v) in enumerate(zip(labels_order, vals)):
-            col_idx = j + 1
-            is_best = (j == best_idx) if best_idx is not None else False
-            cell_bg = '#E8F5E9' if is_best else bg
-
-            rect = FancyBboxPatch((col_x[col_idx], y), col_widths[col_idx] - 0.005, row_h * 0.9,
-                                  boxstyle="round,pad=0.005", facecolor=cell_bg, edgecolor=COLORS['grid'], linewidth=0.5)
-            ax.add_patch(rect)
-
-            # Format value
-            if isinstance(v, (int, float)):
-                if crit_key in ('cost_total_fcfa',):
-                    txt = f'{v:,.0f}'.replace(',', ' ')
-                elif crit_key in ('cost_per_m2_sdp',):
-                    txt = f'{v:,.0f}'.replace(',', ' ')
-                else:
-                    txt = str(int(v)) if v == int(v) else f'{v:.1f}'
+    # Alternate row colors
+    for i in range(1, len(table_data) + 1):
+        for j in range(len(headers)):
+            cell = table[(i, j)]
+            if i % 2 == 0:
+                cell.set_facecolor(COLORS['light'])
             else:
-                txt = str(v)
+                cell.set_facecolor(COLORS['bg'])
+            cell.set_text_props(weight='bold' if j == 0 else 'normal')
 
-            fw = 'bold' if is_best else 'normal'
-            ax.text(col_x[col_idx] + col_widths[col_idx] / 2, y + row_h * 0.45,
-                    txt, ha='center', va='center', fontsize=9, fontweight=fw, color=COLORS['text'])
-
-    ax.set_xlim(-0.02, 1.02)
-    ax.set_ylim(header_y - n_rows * row_h - 0.02, header_y + row_h + 0.02)
-
-    ax.set_title('Comparatif stratégique — Scénarios A / B / C',
-                 fontsize=14, fontweight='bold', color=COLORS['dark'], pad=15)
-
+    fig.patch.set_facecolor(COLORS['bg'])
     _save(fig, output_path)
 
-
-# ═══════════════════════════════════════════════════════════════
-# 5. ARBITRAGE GRAPHS — slide 16 (4 mini-charts)
-# ═══════════════════════════════════════════════════════════════
-def generate_arbitrage_graphs(scenarios: dict, output_path: str):
+# ─────────────────────────────────────────────────────────────
+# ARBITRAGE GRAPH (Cost comparison bars)
+# ─────────────────────────────────────────────────────────────
+def generate_arbitrage_graph(scenarios_costs, output_path):
     """
-    4 grouped bar charts: prix, surface, unités, standing
+    Bar chart comparing total costs across scenarios.
+    scenarios_costs: dict with keys 'A', 'B', 'C' mapping to cost values (in FCFA)
     """
-    labels = ['A', 'B', 'C']
-    colors = [COLORS['A'], COLORS['B'], COLORS['C']]
+    fig, ax = plt.subplots(figsize=(11, 7))
 
-    criteria = [
-        ('Coût total (M FCFA)', 'cost_total_fcfa', 1_000_000, 'M'),
-        ('Surface habitable (m²)', 'surface_habitable_m2', 1, 'm²'),
-        ('Nombre d\'unités', 'total_units', 1, ''),
-        ('Score recommandation', 'recommendation_score', 1, '/100'),
-    ]
+    scenarios = ['Scénario A', 'Scénario B', 'Scénario C']
+    keys = ['A', 'B', 'C']
+    costs = [scenarios_costs.get(k, 0) for k in keys]
+    colors_list = [COLORS[k] for k in keys]
 
-    fig, axes = plt.subplots(1, 4, figsize=(14, 3.5))
-    fig.patch.set_facecolor('white')
+    # Normalize costs to millions for display
+    costs_millions = [c / 1_000_000 for c in costs]
 
-    for idx, (title, key, divisor, suffix) in enumerate(criteria):
-        ax = axes[idx]
-        vals = [scenarios.get(l, {}).get(key, 0) / divisor for l in labels]
+    bars = ax.bar(scenarios, costs_millions, color=colors_list, alpha=0.85, edgecolor=COLORS['dark'], linewidth=1.5)
 
-        bars = ax.bar(labels, vals, color=colors, width=0.6, edgecolor='white', linewidth=1)
+    # Add value labels on bars
+    for bar, cost_m in zip(bars, costs_millions):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, height + max(costs_millions) * 0.02,
+                f'{int(cost_m)}M FCFA', ha='center', va='bottom', fontsize=12, weight='bold', color=COLORS['dark'])
 
-        for bar, v in zip(bars, vals):
-            fmt = f'{v:.0f}{suffix}' if divisor > 1 else f'{int(v)}{suffix}'
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(vals)*0.03,
-                    fmt, ha='center', va='bottom', fontsize=9, fontweight='bold', color=COLORS['text'])
+    ax.set_ylabel('Coût Total (Millions FCFA)', fontsize=12, weight='bold', color=COLORS['text'])
+    ax.set_ylim(0, max(costs_millions) * 1.15)
+    ax.grid(axis='y', color=COLORS['grid'], alpha=0.5, linestyle='--')
+    ax.set_axisbelow(True)
 
-        ax.set_title(title, fontsize=10, fontweight='bold', color=COLORS['dark'], pad=10)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_color(COLORS['grid'])
-        ax.spines['bottom'].set_color(COLORS['grid'])
-        ax.tick_params(colors=COLORS['text'], labelsize=9)
-        ax.set_ylim(0, max(vals) * 1.25 if max(vals) > 0 else 1)
-        ax.yaxis.set_visible(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.set_facecolor(COLORS['light'])
+    fig.patch.set_facecolor(COLORS['bg'])
 
-    fig.suptitle('Critères d\'arbitrage stratégique', fontsize=13,
-                 fontweight='bold', color=COLORS['dark'], y=1.02)
     plt.tight_layout()
-
     _save(fig, output_path)
 
+# ─────────────────────────────────────────────────────────────
+# COST BREAKDOWN PIE CHART
+# ─────────────────────────────────────────────────────────────
+def generate_cost_breakdown(scenario_data, output_path):
+    """
+    Pie chart breaking down costs by category.
+    Uses scenario data if available, falls back to defaults.
+    """
+    fig, ax = plt.subplots(figsize=(10, 10))
 
-# ═══════════════════════════════════════════════════════════════
-# 6. COST BREAKDOWN PIE — camembert ventilation des coûts (slide 17)
-# ═══════════════════════════════════════════════════════════════
-def generate_cost_breakdown(scenario: dict, output_path: str):
-    """
-    Pie chart showing cost breakdown for the recommended scenario.
-    """
+    # Try to extract cost breakdown from scenario_data
+    # Expected keys: cost_fondations_infrastructure, cost_gros_oeuvre_structure,
+    #                cost_second_oeuvre_finitions, cost_vrd_amenagements
+    cost_fondations = scenario_data.get('cost_fondations_infrastructure', None)
+    cost_gros_oeuvre = scenario_data.get('cost_gros_oeuvre_structure', None)
+    cost_second_oeuvre = scenario_data.get('cost_second_oeuvre_finitions', None)
+    cost_vrd = scenario_data.get('cost_vrd_amenagements', None)
+
+    # If all costs are available, compute percentages
+    if all(v is not None for v in [cost_fondations, cost_gros_oeuvre, cost_second_oeuvre, cost_vrd]):
+        total = cost_fondations + cost_gros_oeuvre + cost_second_oeuvre + cost_vrd
+        if total > 0:
+            percentages = [
+                (cost_fondations / total) * 100,
+                (cost_gros_oeuvre / total) * 100,
+                (cost_second_oeuvre / total) * 100,
+                (cost_vrd / total) * 100,
+            ]
+        else:
+            percentages = [20, 35, 30, 15]  # Fallback defaults
+    else:
+        percentages = [20, 35, 30, 15]  # Fallback defaults
+
     labels = [
         'Fondations &\ninfrastructure',
         'Gros œuvre &\nstructure',
         'Second œuvre &\nfinitions',
-        'VRD &\naménagements',
+        'VRD &\naménagements'
     ]
-    sizes = [20, 35, 30, 15]
-    colors_pie = ['#1E2761', '#2C7873', '#F39C12', '#E74C3C']
-    explode = (0.03, 0.03, 0.03, 0.03)
+    colors_pie = [COLORS['red'], COLORS['orange'], COLORS['green'], COLORS['blue']]
+    # Note: if COLORS doesn't have 'blue', use a suitable color
+    if 'blue' not in COLORS:
+        colors_pie = [COLORS['red'], COLORS['orange'], COLORS['green'], '#3498DB']
 
-    cost_total = scenario.get('cost_total_fcfa', 100000000)
+    wedges, texts, autotexts = ax.pie(percentages, labels=labels, colors=colors_pie, autopct='%1.0f%%',
+                                        startangle=90, textprops={'fontsize': 11, 'weight': 'bold'})
 
-    fig, ax = plt.subplots(figsize=(5, 4))
-    fig.patch.set_facecolor('white')
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_weight('bold')
+        autotext.set_fontsize(12)
 
-    wedges, texts, autotexts = ax.pie(
-        sizes, labels=labels, autopct='%1.0f%%', explode=explode,
-        colors=colors_pie, startangle=90, textprops={'fontsize': 9},
-        pctdistance=0.75, labeldistance=1.15,
-        wedgeprops={'edgecolor': 'white', 'linewidth': 2}
-    )
-
-    for t in autotexts:
-        t.set_fontweight('bold')
-        t.set_color('white')
-        t.set_fontsize(10)
-
-    # Add cost values as annotation
-    for i, (wedge, pct) in enumerate(zip(wedges, sizes)):
-        cost_val = cost_total * pct / 100
-        angle = (wedge.theta2 + wedge.theta1) / 2
-        x = 0.5 * np.cos(np.radians(angle))
-        y = 0.5 * np.sin(np.radians(angle))
-
-    centre_circle = plt.Circle((0, 0), 0.45, fc='white', ec=COLORS['grid'], linewidth=1)
-    ax.add_artist(centre_circle)
-
-    # Center text
-    ax.text(0, 0.05, f'{cost_total / 1_000_000:.0f} M', fontsize=16, fontweight='bold',
-            ha='center', va='center', color=COLORS['dark'])
-    ax.text(0, -0.12, 'FCFA', fontsize=10, ha='center', va='center', color=COLORS['text'])
-
-    ax.set_title('Ventilation des coûts de construction',
-                 fontsize=12, fontweight='bold', color=COLORS['dark'], pad=15)
+    ax.set_facecolor(COLORS['bg'])
+    fig.patch.set_facecolor(COLORS['bg'])
 
     _save(fig, output_path)
 
+# ─────────────────────────────────────────────────────────────
+# TIMELINE CHART
+# ─────────────────────────────────────────────────────────────
+def generate_timeline(scenario_data, output_path):
+    """
+    Gantt-like timeline showing project phases.
+    Scales phase durations proportionally to total project duration.
+    """
+    fig, ax = plt.subplots(figsize=(14, 7))
 
-# ═══════════════════════════════════════════════════════════════
-# 7. TIMELINE — phasage chantier (slide 19)
-# ═══════════════════════════════════════════════════════════════
-def generate_timeline(scenario: dict, output_path: str):
-    """
-    Horizontal timeline showing construction phases.
-    """
-    phases = [
-        ('Études &\nPermis', 3, COLORS['dark']),
-        ('Terrassement &\nFondations', 2, '#2C7873'),
-        ('Gros\nœuvre', 4, COLORS['B']),
-        ('Second\nœuvre', 3, '#E67E22'),
-        ('Finitions &\nRéception', 1, COLORS['C']),
+    # Get total project duration from scenario (default 18 months)
+    total_duration = scenario_data.get('duree_chantier_mois', 18)
+
+    # Default phase structure with relative proportions
+    # These will be scaled to match total_duration
+    default_phases = [
+        ('Études & Permis', 3),
+        ('Terrassement', 2),
+        ('Fondations', 2),
+        ('Gros Œuvre', 4),
+        ('Second Œuvre', 4),
+        ('Finitions', 2),
+        ('Livraison', 1),
     ]
 
-    total_months = sum(p[1] for p in phases)
-    duree = scenario.get('duree_chantier_mois', total_months)
+    default_total = sum(d for _, d in default_phases)
+    scale_factor = total_duration / default_total if default_total > 0 else 1.0
 
-    fig, ax = plt.subplots(figsize=(12, 3))
-    fig.patch.set_facecolor('white')
+    # Scale all durations
+    phases = [(name, max(1, int(duration * scale_factor))) for name, duration in default_phases]
 
-    x = 0
-    bar_height = 0.5
-    y_center = 0.5
+    # Compute cumulative positions
+    positions = []
+    cumulative = 0
+    for name, duration in phases:
+        positions.append((cumulative, duration, name))
+        cumulative += duration
 
-    for label, months, color in phases:
-        width = months / total_months
-        rect = mpatches.FancyBboxPatch(
-            (x, y_center - bar_height / 2), width - 0.005, bar_height,
-            boxstyle="round,pad=0.01", facecolor=color, edgecolor='white', linewidth=2
-        )
-        ax.add_patch(rect)
+    # Colors for phases
+    phase_colors = [COLORS['red'], COLORS['orange'], COLORS['green'], COLORS['blue'] if 'blue' in COLORS else '#3498DB',
+                    COLORS['dark'], '#95A5A6', '#34495E']
 
-        # Phase label
-        ax.text(x + width / 2, y_center + 0.05, label,
-                ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+    y_pos = 0
+    for i, (start, duration, name) in enumerate(positions):
+        color = phase_colors[i % len(phase_colors)]
+        ax.barh(y_pos, duration, left=start, height=0.6, color=color, edgecolor=COLORS['dark'], linewidth=2, alpha=0.85)
+        ax.text(start + duration / 2, y_pos, f'{name}\n({duration}m)', ha='center', va='center',
+                fontsize=10, weight='bold', color='white')
 
-        # Month count below
-        ax.text(x + width / 2, y_center - bar_height / 2 - 0.12,
-                f'{months} mois', ha='center', va='top', fontsize=9, color=COLORS['text'])
+    ax.set_ylim(-0.5, 0.5)
+    ax.set_xlim(0, total_duration + 1)
+    ax.set_xlabel('Durée (mois)', fontsize=12, weight='bold', color=COLORS['text'])
+    ax.set_yticks([])
+    ax.grid(axis='x', color=COLORS['grid'], alpha=0.5, linestyle='--')
+    ax.set_axisbelow(True)
 
-        # Month markers above
-        ax.text(x + 0.005, y_center + bar_height / 2 + 0.08,
-                f'M{int(x * total_months) + 1}', ha='left', va='bottom',
-                fontsize=7, color='#999')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.set_facecolor(COLORS['light'])
+    fig.patch.set_facecolor(COLORS['bg'])
 
-        x += width
+    plt.tight_layout()
+    _save(fig, output_path)
 
-    # End marker
-    ax.text(1.0, y_center + bar_height / 2 + 0.08,
-            f'M{total_months}', ha='right', va='bottom', fontsize=7, color='#999')
-
-    ax.set_xlim(-0.02, 1.02)
-    ax.set_ylim(-0.1, 1.1)
+# ─────────────────────────────────────────────────────────────
+# RECAP CARD
+# ─────────────────────────────────────────────────────────────
+def generate_recap_card(scenario_data, scenario_key, output_path):
+    """
+    Summary card displaying key scenario metrics.
+    Pulls data from: sdp_m2, surface_habitable_m2, total_units, cost_total_fcfa,
+                     duree_chantier_mois, recommendation_score
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
     ax.axis('off')
 
-    ax.set_title(f'Phasage du chantier — Durée estimée : {duree} mois',
-                 fontsize=13, fontweight='bold', color=COLORS['dark'], pad=20)
+    # Extract data
+    sdp_m2 = scenario_data.get('sdp_m2', 'N/A')
+    surface_habitable = scenario_data.get('surface_habitable_m2', 'N/A')
+    total_units = scenario_data.get('total_units', 'N/A')
+    cost_total = scenario_data.get('cost_total_fcfa', 0)
+    duration = scenario_data.get('duree_chantier_mois', 'N/A')
+    score = scenario_data.get('recommendation_score', 50)
 
-    # Rain season warning
-    ax.text(0.5, -0.05, '⚠ Saison des pluies (juin–octobre) : éviter terrassement et fondations',
-            ha='center', va='top', fontsize=9, fontstyle='italic', color=COLORS['orange'])
+    # Format cost in millions
+    if isinstance(cost_total, (int, float)):
+        cost_display = f"{int(cost_total / 1_000_000)}M FCFA"
+    else:
+        cost_display = "N/A"
 
-    _save(fig, output_path)
+    # Title
+    title_color = COLORS[scenario_key]
+    ax.text(0.5, 0.95, f'Scénario {scenario_key}', fontsize=28, weight='bold', ha='center',
+            transform=ax.transAxes, color=title_color)
 
+    # Draw card background box
+    card_box = FancyBboxPatch((0.05, 0.1), 0.9, 0.8, boxstyle="round,pad=0.01",
+                             edgecolor=title_color, facecolor=COLORS['light'], linewidth=3,
+                             transform=ax.transAxes, zorder=1)
+    ax.add_patch(card_box)
 
-# ═══════════════════════════════════════════════════════════════
-# 8. RECAP CARD — mini-fiche scénario recommandé (slide 20)
-# ═══════════════════════════════════════════════════════════════
-def generate_recap_card(scenario: dict, label: str, output_path: str):
-    """
-    Visual summary card for the recommended scenario.
-    """
-    fig, ax = plt.subplots(figsize=(10, 3))
-    fig.patch.set_facecolor('white')
-    ax.axis('off')
-
-    color = COLORS.get(label, COLORS['C'])
-
-    # Main card background
-    card = mpatches.FancyBboxPatch(
-        (0.02, 0.1), 0.96, 0.8,
-        boxstyle="round,pad=0.02", facecolor=color, edgecolor='white', linewidth=0, alpha=0.1
-    )
-    ax.add_patch(card)
-
-    # Top accent bar
-    accent = mpatches.FancyBboxPatch(
-        (0.02, 0.82), 0.96, 0.08,
-        boxstyle="round,pad=0.01", facecolor=color, edgecolor='none'
-    )
-    ax.add_patch(accent)
-    ax.text(0.5, 0.86, f'SCÉNARIO {label} — RECOMMANDÉ', ha='center', va='center',
-            fontsize=14, fontweight='bold', color='white')
-
-    # KPI boxes
-    kpis = [
-        ('SDP', f'{scenario.get("sdp_m2", 0)} m²'),
-        ('Surface\nhabitable', f'{scenario.get("surface_habitable_m2", 0)} m²'),
-        ('Unités', f'{scenario.get("total_units", 0)}'),
-        ('Coût\nestimé', f'{scenario.get("cost_total_fcfa", 0) / 1_000_000:.0f} M FCFA'),
-        ('Durée\nchantier', f'{scenario.get("duree_chantier_mois", 0)} mois'),
-        ('Score', f'{scenario.get("recommendation_score", 0)}/100'),
+    # Key metrics
+    metrics = [
+        ('SDP', f"{sdp_m2} m²" if sdp_m2 != 'N/A' else sdp_m2),
+        ('Surface habitable', f"{surface_habitable} m²" if surface_habitable != 'N/A' else surface_habitable),
+        ('Total unités', str(total_units)),
+        ('Coût total', cost_display),
+        ('Durée du chantier', f"{duration} mois" if duration != 'N/A' else duration),
+        ('Score recommandation', f"{int(score)}/100"),
     ]
 
-    n = len(kpis)
-    box_w = 0.14
-    gap = (0.92 - n * box_w) / (n + 1)
+    y_start = 0.75
+    for i, (label, value) in enumerate(metrics):
+        y = y_start - (i * 0.11)
+        ax.text(0.1, y, label, fontsize=12, weight='bold', ha='left', transform=ax.transAxes, color=COLORS['text'])
+        ax.text(0.65, y, value, fontsize=12, weight='normal', ha='right', transform=ax.transAxes, color=COLORS['dark'])
 
-    for i, (kpi_label, kpi_value) in enumerate(kpis):
-        x = 0.04 + gap + i * (box_w + gap)
-        y = 0.25
-
-        # KPI box
-        kpi_box = mpatches.FancyBboxPatch(
-            (x, y), box_w, 0.5,
-            boxstyle="round,pad=0.015", facecolor='white', edgecolor=COLORS['grid'], linewidth=1
-        )
-        ax.add_patch(kpi_box)
-
-        # Value (big)
-        ax.text(x + box_w / 2, y + 0.35, kpi_value,
-                ha='center', va='center', fontsize=13, fontweight='bold', color=COLORS['dark'])
-
-        # Label (small)
-        ax.text(x + box_w / 2, y + 0.1, kpi_label,
-                ha='center', va='center', fontsize=8, color='#777')
-
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-
+    fig.patch.set_facecolor(COLORS['bg'])
     _save(fig, output_path)
 
-
-# ═══════════════════════════════════════════════════════════════
-# 9. COMBINED RISK PANEL — 3 charts side by side for one scenario
-# ═══════════════════════════════════════════════════════════════
-def generate_risk_panel(risk_scores: dict, recommendation_score: float,
-                        scenario_label: str, output_dir: str):
+# ─────────────────────────────────────────────────────────────
+# MAIN GENERATION FUNCTION
+# ─────────────────────────────────────────────────────────────
+def generate_all_charts(scenario_data, output_dir):
     """
-    Generates 3 separate PNGs: radar, gauge, bars
-    Returns dict of paths.
-    """
-    radar_path = os.path.join(output_dir, f'risk_radar_{scenario_label}.png')
-    gauge_path = os.path.join(output_dir, f'risk_gauge_{scenario_label}.png')
-    bars_path = os.path.join(output_dir, f'risk_bars_{scenario_label}.png')
+    Generate all required charts for the PPTX.
 
-    generate_radar(risk_scores, scenario_label, radar_path)
-    generate_gauge(recommendation_score, 100, scenario_label, gauge_path)
-    generate_risk_bars(risk_scores, scenario_label, bars_path)
+    scenario_data: dict with structure:
+    {
+        'scenarios': {
+            'A': { risk metrics and project data },
+            'B': { ... },
+            'C': { ... }
+        },
+        'recommended': 'A' or 'B' or 'C'
+    }
 
-    return {'radar': radar_path, 'gauge': gauge_path, 'bars': bars_path}
-
-
-# ═══════════════════════════════════════════════════════════════
-# MAIN — generate all charts from JSON input
-# ═══════════════════════════════════════════════════════════════
-def generate_all_charts(data: dict, output_dir: str) -> dict:
-    """
-    data: full /generate-pptx JSON payload
-    Returns dict mapping placeholder keys to image file paths.
+    Returns: dict mapping chart_path keys to file paths
     """
     os.makedirs(output_dir, exist_ok=True)
+
     chart_paths = {}
 
-    scenarios = data.get('scenarios', {})
+    # Extract scenarios and recommended
+    scenarios = scenario_data.get('scenarios', {})
+    recommended_key = scenario_data.get('recommended', 'A')
 
-    # Per-scenario risk panels (slides 8, 11, 14)
-    for label in ['A', 'B', 'C']:
-        sc = scenarios.get(label, {})
-        risk_scores = sc.get('risk_scores', {})
-        rec_score = sc.get('recommendation_score', 50)
+    # Generate per-scenario charts (radar, gauge, bars)
+    for scenario_key in ['A', 'B', 'C']:
+        scenario_info = scenarios.get(scenario_key, {})
 
-        if risk_scores:
-            paths = generate_risk_panel(risk_scores, rec_score, label, output_dir)
-            chart_paths[f'scenario_{label}_risk_radar'] = paths['radar']
-            chart_paths[f'scenario_{label}_risk_gauge'] = paths['gauge']
-            chart_paths[f'scenario_{label}_risk_bars'] = paths['bars']
+        # Risk metrics (for radar and bars)
+        risk_metrics = {
+            'budget_fit': scenario_info.get('budget_fit', 50),
+            'complexite_structurelle': scenario_info.get('complexite_structurelle', 50),
+            'risque_permis': scenario_info.get('risque_permis', 50),
+            'ratio_efficacite': scenario_info.get('ratio_efficacite', 50),
+            'densite_cos': scenario_info.get('densite_cos', 50),
+            'phasabilite': scenario_info.get('phasabilite', 50),
+            'cout_m2': scenario_info.get('cout_m2', 50),
+        }
 
-    # Comparatif table (slide 15)
-    comp_path = os.path.join(output_dir, 'comparatif_table.png')
-    generate_comparatif_table(scenarios, comp_path)
-    chart_paths['tableau_comparative_charts'] = comp_path
+        # Radar
+        radar_path = os.path.join(output_dir, f'scenario_{scenario_key}_risk_radar.png')
+        generate_risk_radar(risk_metrics, scenario_key, radar_path)
+        chart_paths[f'scenario_{scenario_key}_risk_radar'] = radar_path
 
-    # Arbitrage graphs (slide 16)
-    arb_path = os.path.join(output_dir, 'arbitrage_graphs.png')
-    generate_arbitrage_graphs(scenarios, arb_path)
-    chart_paths['arbitrage_graph_'] = arb_path
+        # Gauge
+        score = scenario_info.get('recommendation_score', 50)
+        gauge_path = os.path.join(output_dir, f'scenario_{scenario_key}_risk_gauge.png')
+        generate_gauge(score, scenario_key, gauge_path)
+        chart_paths[f'scenario_{scenario_key}_risk_gauge'] = gauge_path
 
-    # Cost breakdown pie (slide 17)
-    rec_label = data.get('recommended_scenario', 'C')
-    rec_sc = scenarios.get(rec_label, {})
-    if rec_sc:
-        pie_path = os.path.join(output_dir, 'cost_breakdown.png')
-        generate_cost_breakdown(rec_sc, pie_path)
-        chart_paths['cost_breakdown'] = pie_path
+        # Horizontal bars
+        bars_path = os.path.join(output_dir, f'scenario_{scenario_key}_risk_bars.png')
+        generate_horizontal_bars(risk_metrics, scenario_key, bars_path)
+        chart_paths[f'scenario_{scenario_key}_risk_bars'] = bars_path
 
-    # Timeline (slide 19)
-    if rec_sc:
-        timeline_path = os.path.join(output_dir, 'timeline.png')
-        generate_timeline(rec_sc, timeline_path)
-        chart_paths['timeline'] = timeline_path
+    # Comparative table
+    all_risk_metrics = {}
+    for scenario_key in ['A', 'B', 'C']:
+        scenario_info = scenarios.get(scenario_key, {})
+        all_risk_metrics[scenario_key] = {
+            'budget_fit': scenario_info.get('budget_fit', 50),
+            'complexite_structurelle': scenario_info.get('complexite_structurelle', 50),
+            'risque_permis': scenario_info.get('risque_permis', 50),
+            'ratio_efficacite': scenario_info.get('ratio_efficacite', 50),
+            'densite_cos': scenario_info.get('densite_cos', 50),
+            'phasabilite': scenario_info.get('phasabilite', 50),
+            'cout_m2': scenario_info.get('cout_m2', 50),
+        }
 
-    # Recap card (slide 20)
-    if rec_sc:
-        recap_path = os.path.join(output_dir, 'recap_card.png')
-        generate_recap_card(rec_sc, rec_label, recap_path)
-        chart_paths['recap_card'] = recap_path
+    table_path = os.path.join(output_dir, 'tableau_comparative_charts.png')
+    generate_comparative_table(all_risk_metrics, table_path)
+    chart_paths['tableau_comparative_charts'] = table_path
+
+    # Arbitrage graph (costs)
+    scenarios_costs = {
+        'A': scenarios.get('A', {}).get('cost_total_fcfa', 0),
+        'B': scenarios.get('B', {}).get('cost_total_fcfa', 0),
+        'C': scenarios.get('C', {}).get('cost_total_fcfa', 0),
+    }
+    arbitrage_path = os.path.join(output_dir, 'arbitrage_graph_costs.png')
+    generate_arbitrage_graph(scenarios_costs, arbitrage_path)
+    chart_paths['arbitrage_graph_costs'] = arbitrage_path
+    chart_paths['arbitrage_graph_'] = arbitrage_path  # backward compat
+
+    # Cost breakdown (from recommended scenario)
+    recommended_scenario = scenarios.get(recommended_key, {})
+    cost_breakdown_path = os.path.join(output_dir, 'cost_breakdown.png')
+    generate_cost_breakdown(recommended_scenario, cost_breakdown_path)
+    chart_paths['cost_breakdown'] = cost_breakdown_path
+
+    # Timeline (from recommended scenario)
+    timeline_path = os.path.join(output_dir, 'timeline.png')
+    generate_timeline(recommended_scenario, timeline_path)
+    chart_paths['timeline'] = timeline_path
+
+    # Recap card (from recommended scenario)
+    recap_path = os.path.join(output_dir, 'recap_card.png')
+    generate_recap_card(recommended_scenario, recommended_key, recap_path)
+    chart_paths['recap_card'] = recap_path
 
     return chart_paths
 
-
-# ═══════════════════════════════════════════════════════════════
-# CLI entry point
-# ═══════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        print("Usage: python generate_charts.py <input.json> <output_dir>")
-        sys.exit(1)
+    # For testing: load sample scenario data
+    if len(sys.argv) > 1:
+        json_path = sys.argv[1]
+        with open(json_path, 'r') as f:
+            scenario_data = json.load(f)
+    else:
+        # Default sample data
+        scenario_data = {
+            'scenarios': {
+                'A': {
+                    'budget_fit': 65, 'complexite_structurelle': 55, 'risque_permis': 75,
+                    'ratio_efficacite': 70, 'densite_cos': 60, 'phasabilite': 65, 'cout_m2': 50,
+                    'recommendation_score': 65,
+                    'cost_total_fcfa': 2_500_000_000,
+                    'duree_chantier_mois': 18,
+                    'sdp_m2': 5000, 'surface_habitable_m2': 3500, 'total_units': 40,
+                    'cost_fondations_infrastructure': 500_000_000,
+                    'cost_gros_oeuvre_structure': 875_000_000,
+                    'cost_second_oeuvre_finitions': 750_000_000,
+                    'cost_vrd_amenagements': 375_000_000,
+                },
+                'B': {
+                    'budget_fit': 75, 'complexite_structurelle': 45, 'risque_permis': 65,
+                    'ratio_efficacite': 80, 'densite_cos': 50, 'phasabilite': 75, 'cout_m2': 60,
+                    'recommendation_score': 75,
+                    'cost_total_fcfa': 2_200_000_000,
+                    'duree_chantier_mois': 16,
+                    'sdp_m2': 5000, 'surface_habitable_m2': 3200, 'total_units': 35,
+                },
+                'C': {
+                    'budget_fit': 55, 'complexite_structurelle': 65, 'risque_permis': 45,
+                    'ratio_efficacite': 60, 'densite_cos': 70, 'phasabilite': 50, 'cout_m2': 40,
+                    'recommendation_score': 55,
+                    'cost_total_fcfa': 1_800_000_000,
+                    'duree_chantier_mois': 14,
+                    'sdp_m2': 5000, 'surface_habitable_m2': 2800, 'total_units': 28,
+                },
+            },
+            'recommended': 'B',
+        }
 
-    with open(sys.argv[1], 'r') as f:
-        data = json.load(f)
+    output_dir = './charts_output'
+    chart_paths = generate_all_charts(scenario_data, output_dir)
 
-    output_dir = sys.argv[2]
-    paths = generate_all_charts(data, output_dir)
-
-    # Output paths as JSON for Node.js to consume
-    print(json.dumps(paths, indent=2))
+    print('Generated charts:')
+    for key, path in chart_paths.items():
+        print(f'  {key}: {path}')
