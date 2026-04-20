@@ -695,9 +695,9 @@ const CES_FILL_BY_ROLE = {
 //   C = pas d'extension (même empreinte que le RDC)
 // ══════════════════════════════════════════════════════════════════════════════
 const ETAGE_EXTENSION_BY_ROLE = {
-  INTENSIFICATION: "ENVELOPE",  // fp_etages = enveloppe constructible
-  EQUILIBRE: 1.15,               // fp_etages = fp_rdc × 1.15
-  PRUDENT: 1.00,                  // fp_etages = fp_rdc (pas d'extension)
+  INTENSIFICATION: "ENVELOPE",  // fp_etages = enveloppe constructible (max)
+  EQUILIBRE: 1.00,               // v72.80: fp_etages = fp_rdc (pas d'extension, différencie de A)
+  PRUDENT: 0.90,                  // v72.80: fp_etages = fp_rdc × 0.90 (emprise réduite aux étages)
 };
 // ══════════════════════════════════════════════════════════════════════════════
 // Le CES réglementaire = max autorisé, PAS ce qu'on doit construire.
@@ -2043,8 +2043,15 @@ function computeSmartScenarios({
       fpRdc = Math.round(fpProgramme * roleFpFactor);
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
-      fpRdc = Math.max(fpRdc, fpMinViable);
+      // v72.80 FIX: fpMinViable RÉDUIT PAR RÔLE en SUPERPOSÉ (comme en SPLIT ligne 1948)
+      // AVANT: fpMinViable identique pour A/B/C → A et B convergeaient sur petites parcelles
+      // MAINTENANT: B=75%, C=55% du fpMinViable → emprise réellement différenciée
+      const fpMinForRole = role === "INTENSIFICATION" ? fpMinViable
+        : role === "EQUILIBRE" ? Math.round(fpMinViable * 0.75)
+        : Math.round(fpMinViable * 0.55);
+      fpRdc = Math.max(fpRdc, fpMinForRole);
       fpRdc = Math.round(fpRdc);
+      console.log(`│   v72.80 FIX: fpMinViable=${fpMinViable} → fpMinForRole(${role})=${fpMinForRole} → fpRdc=${fpRdc}`);
       }
       const cesPctResult = Math.round((splitLayout ? (splitLayout.volume_commerce.fp_m2 + fpRdc) : fpRdc) / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
@@ -3524,7 +3531,7 @@ app.post("/compute-scenarios", (req, res) => {
     // ── NARRATIVE ──
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
     rec_scenario: (diag.recommandation || {}).scenario || "",
-    rec_score: (diag.recommandation || {}).score || 0,
+    rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100), // v72.80 FIX: 0-1 → 0-100
     // ── COMPARATIF DELTAS (texte plat) ──
     delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
     delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
@@ -3560,7 +3567,7 @@ app.post("/compute-scenarios", (req, res) => {
     retrait_reduction_pct: `${retr.reduction_pct || 0}%`,
     // ── SCENARIO A (champs plats) ──
     A_fp: String(sA.fp_m2 || 0), A_fp_rdc: String(sA.fp_rdc_m2 || 0),
-    A_levels: String(sA.levels || 0), A_height: String(sA.height_m || 0),
+    A_levels: String(Math.max(0, (sA.levels || 1) - 1)), A_height: String(sA.height_m || 0),
     A_sdp: String(sA.sdp_m2 || 0), A_units: String(sA.total_units || 0),
     A_unit_mix: sA.unit_mix_detail || "", A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
     A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
@@ -3576,7 +3583,7 @@ app.post("/compute-scenarios", (req, res) => {
     A_parking_deficit: String((sA.parking_detail || {}).deficit || 0),
     A_parking_source: (sA.parking_detail || {}).source || "",
     A_duree_chantier: `${sA.duree_chantier_mois || 0} mois`,
-    A_score: String(sA.recommendation_score || 0),
+    A_score: String(Math.round((sA.recommendation_score || 0) * 100)), // v72.80 FIX: 0-1 → 0-100
     A_hab_m2: String(sA.surface_habitable_m2 || sA.total_useful_m2 || 0),
     A_efficacite: `${sA.ratio_efficacite_pct || 0}%`,
     A_ventil_go: `${(sA.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sA.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
@@ -3596,7 +3603,7 @@ app.post("/compute-scenarios", (req, res) => {
     A_ventil_global: `${(sA.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sA.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
     // ── SCENARIO B (champs plats) ──
     B_fp: String(sB.fp_m2 || 0), B_fp_rdc: String(sB.fp_rdc_m2 || 0),
-    B_levels: String(sB.levels || 0), B_height: String(sB.height_m || 0),
+    B_levels: String(Math.max(0, (sB.levels || 1) - 1)), B_height: String(sB.height_m || 0),
     B_sdp: String(sB.sdp_m2 || 0), B_units: String(sB.total_units || 0),
     B_unit_mix: sB.unit_mix_detail || "", B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
     B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
@@ -3612,7 +3619,7 @@ app.post("/compute-scenarios", (req, res) => {
     B_parking_deficit: String((sB.parking_detail || {}).deficit || 0),
     B_parking_source: (sB.parking_detail || {}).source || "",
     B_duree_chantier: `${sB.duree_chantier_mois || 0} mois`,
-    B_score: String(sB.recommendation_score || 0),
+    B_score: String(Math.round((sB.recommendation_score || 0) * 100)), // v72.80 FIX: 0-1 → 0-100
     B_hab_m2: String(sB.surface_habitable_m2 || sB.total_useful_m2 || 0),
     B_efficacite: `${sB.ratio_efficacite_pct || 0}%`,
     B_ventil_go: `${(sB.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sB.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
@@ -3632,7 +3639,7 @@ app.post("/compute-scenarios", (req, res) => {
     B_ventil_global: `${(sB.cout_ventilation || {}).cout_global_projet_fcfa ? Math.round(sB.cout_ventilation.cout_global_projet_fcfa / 1e6) : 0}M FCFA`,
     // ── SCENARIO C (champs plats) ──
     C_fp: String(sC.fp_m2 || 0), C_fp_rdc: String(sC.fp_rdc_m2 || 0),
-    C_levels: String(sC.levels || 0), C_height: String(sC.height_m || 0),
+    C_levels: String(Math.max(0, (sC.levels || 1) - 1)), C_height: String(sC.height_m || 0),
     C_sdp: String(sC.sdp_m2 || 0), C_units: String(sC.total_units || 0),
     C_unit_mix: sC.unit_mix_detail || "", C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
     C_cost_total: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
@@ -3648,7 +3655,7 @@ app.post("/compute-scenarios", (req, res) => {
     C_parking_deficit: String((sC.parking_detail || {}).deficit || 0),
     C_parking_source: (sC.parking_detail || {}).source || "",
     C_duree_chantier: `${sC.duree_chantier_mois || 0} mois`,
-    C_score: String(sC.recommendation_score || 0),
+    C_score: String(Math.round((sC.recommendation_score || 0) * 100)), // v72.80 FIX: 0-1 → 0-100
     C_hab_m2: String(sC.surface_habitable_m2 || sC.total_useful_m2 || 0),
     C_efficacite: `${sC.ratio_efficacite_pct || 0}%`,
     C_ventil_go: `${(sC.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sC.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
@@ -6173,6 +6180,13 @@ Tu es un expert en promotion immobiliere en Afrique subsaharienne (Cameroun, Cot
 7. NE PAS utiliser d'accents. Ecrire en francais SANS accents (a au lieu de a, e au lieu de e/e, etc.).
 8. TOUJOURS utiliser les chiffres EXACTS du JSON. Ne pas arrondir differemment.
 9. Utiliser \\n pour les sauts de ligne.
+10. COS et CES : expliquer ce que sont le COS (Coefficient d'Occupation des Sols) et le CES (Coefficient d'Emprise au Sol) UNE SEULE FOIS dans slide_4_text. Ensuite, ne plus expliquer ni definir ces termes — utiliser simplement les valeurs en %.
+11. Les termes "economique", "tropical", "standard", "premium" doivent etre en MINUSCULES dans le texte courant.
+12. La posture "BALANCED" doit etre ecrite "EQUILIBREE" en francais, "AGGRESSIVE" → "AMBITIEUSE", "CONSERVATIVE" → "PRUDENTE".
+13. UTILISE {budget_fcfa} pour le budget (c'est le montant FCFA formate). Ne pas utiliser {budget_range} directement.
+14. Pour les ventilations en pourcentage, utilise les variables {X_ventil_go_pct}, {X_ventil_so_pct}, {X_ventil_lt_pct}, {X_ventil_vrd_pct} au lieu d'ecrire "XX %".
+15. Pour les scores individuels, utilise {A_score}, {B_score}, {C_score} (deja en 0-100). Ne pas inventer.
+16. Pour les surfaces habitables totales, utilise {A_hab_m2_total}, {B_hab_m2_total}, {C_hab_m2_total}.
 
 === STRUCTURE OBLIGATOIRE PAR TEXTE ===
 
@@ -6181,7 +6195,7 @@ Les paragraphes sont separes par \\n\\n (double saut de ligne).
 
 --- slide_3_intro_text ---
 STRUCTURE OBLIGATOIRE (4 paragraphes) :
-PARA 1: "Ce projet consiste a valoriser un terrain de {site_area} m2 situe a {city}, dans le cadre d'un programme {program_main}. Le programme cible prevoit {target_units} unites pour un standing {standing_level}, avec un budget de reference de l'ordre de {budget_range} FCFA."
+PARA 1: "Ce projet consiste a valoriser un terrain de {site_area} m2 situe a {city}, dans le cadre d'un programme {program_main}. Le programme cible prevoit {target_units} unites pour un standing {standing_level}, avec un budget de reference de l'ordre de {budget_fcfa}."
 PARA 2: "L'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de {site_cos_regl}, un CES de {site_ces_regl}%, et des retraits reglementaires qui reduisent significativement l'emprise constructible."
 PARA 3: "Pour repondre a cette question, trois scenarios ont ete elabores :\\n- Le Scenario A ({A_role}) explore [description courte A].\\n- Le Scenario B ({B_role}) recherche [description courte B].\\n- Le Scenario C ({C_role}) privilegie [description courte C]."
 PARA 4: "Le present rapport diagnostic analyse chacun de ces scenarios sous l'angle volumetrique, financier et reglementaire, afin d'orienter le porteur de projet vers le scenario le plus recommande au regard de ses priorites et de son enveloppe budgetaire."
@@ -6225,20 +6239,20 @@ MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables C_* et en
 STRUCTURE OBLIGATOIRE :
 PARA 1: "Pour un standing {standing_level} a {city}, le cout de construction au m2 de SDP se situerait aux alentours de {A_cost_m2}. Ce positionnement [qualificatif marche local]."
 PARA 2: "Le raisonnement de cout s'articule ainsi :\\n- SDP totale : {A_sdp} m2\\n- Cout estime au m2 : {A_cost_m2}\\n- Cout total estime : environ {A_cost_total}"
-PARA 3: "Ventilation previsionnelle des travaux :\\n- Gros oeuvre et structure : {A_ventil_go} FCFA (XX %)\\n- Second oeuvre et finitions : {A_ventil_so} FCFA (XX %)\\n- Lots techniques (electricite, plomberie, CVC) : {A_ventil_lt} FCFA (XX %)\\n- VRD et amenagements exterieurs : {A_ventil_vrd} FCFA (XX %)"
+PARA 3: "Ventilation previsionnelle des travaux :\\n- Gros oeuvre et structure : {A_ventil_go} FCFA ({A_ventil_go_pct})\\n- Second oeuvre et finitions : {A_ventil_so} FCFA ({A_ventil_so_pct})\\n- Lots techniques (electricite, plomberie, CVC) : {A_ventil_lt} FCFA ({A_ventil_lt_pct})\\n- VRD et amenagements exterieurs : {A_ventil_vrd} FCFA ({A_ventil_vrd_pct})"
 PARA 4: "La fourchette budgetaire globale se situerait {A_fourchette_text}."
 PARA 5: "Honoraires de maitrise d'oeuvre : entre {A_hono_bas_M}M et {A_hono_haut_M}M FCFA ({A_hono_taux_bas} a {A_hono_taux_haut})."
-PARA 6: "- Enveloppe budgetaire du client : environ {budget_range} FCFA\\n- Position budgetaire : {A_budget_fit}\\n- Ratio cout par unite : environ {A_cost_unit}/unite"
+PARA 6: "- Enveloppe budgetaire du client : environ {budget_fcfa}\\n- Position budgetaire : {A_budget_fit}\\n- Ratio cout par unite : environ {A_cost_unit}/unite"
 
 --- scenario_B_financial_text ---
-MEME STRUCTURE QUE scenario_A_financial_text, avec variables B_*. Mentionner la comparaison avec A.
+MEME STRUCTURE QUE scenario_A_financial_text, avec variables B_* (B_ventil_go, B_ventil_go_pct, B_ventil_so, B_ventil_so_pct, B_ventil_lt, B_ventil_lt_pct, B_ventil_vrd, B_ventil_vrd_pct, B_cost_total, B_cost_m2, B_sdp, B_fourchette_text, B_hono_bas_M, B_hono_haut_M, B_hono_taux_bas, B_hono_taux_haut, B_budget_fit, B_cost_unit). Mentionner la comparaison avec A. Utilise {budget_fcfa} pour le budget.
 
 --- scenario_C_financial_text ---
-MEME STRUCTURE QUE scenario_A_financial_text, avec variables C_*. Insister sur l'optimisation du cout.
+MEME STRUCTURE QUE scenario_A_financial_text, avec variables C_* (C_ventil_go, C_ventil_go_pct, C_ventil_so, C_ventil_so_pct, C_ventil_lt, C_ventil_lt_pct, C_ventil_vrd, C_ventil_vrd_pct, C_cost_total, C_cost_m2, C_sdp, C_fourchette_text, C_hono_bas_M, C_hono_haut_M, C_hono_taux_bas, C_hono_taux_haut, C_budget_fit, C_cost_unit). Insister sur l'optimisation du cout. Utilise {budget_fcfa} pour le budget.
 
 --- scenario_A_risk_text ---
 STRUCTURE OBLIGATOIRE :
-PARA 1: "Le scoring evalue le Scenario A selon 7 criteres ponderes, chacun note de 1 a 5. Le score global de [score A]/100 reflete un profil a [qualificatif] :"
+PARA 1: "Le scoring evalue le Scenario A selon 7 criteres ponderes, chacun note de 1 a 5. Le score global de {A_score}/100 reflete un profil [qualificatif] :"
 PARA 2: "1) Risque urbanistique : conforme au COS ({A_cos_pct} % utilise sur {site_cos_regl} autorise), hauteurs et retraits respectes.\\n2) Risque de compacite : {A_m2_par_logt} m2/logement de surface utile habitable, [faible/moyen/fort] risque de refus de permis.\\n3) Risque financier : position {A_budget_fit}. [detail depassement si HORS_BUDGET].\\n4) Risque de parking : [deficit ou aucun deficit] ({A_parking_places} places pour {A_units} unites).\\n5) Risque de construction : complexite d'un R+{A_levels} en standing {standing_level}, [qualificatif]."
 PARA 3: "Probabilite [faible/moyenne/elevee], impact [faible/modere/eleve], [mitigation possible]."
 
@@ -6250,10 +6264,10 @@ MEME STRUCTURE, variables C_*. Insister que ce scenario est le plus recommande s
 
 --- strategic_arbitrage_text ---
 STRUCTURE OBLIGATOIRE (5 paragraphes) :
-PARA 1: "Le client recherche un programme {program_main} en standing {standing_level}, avec une posture {feasibility_posture}, pour une enveloppe budgetaire de l'ordre de {budget_range} FCFA."
+PARA 1: "Le client recherche un programme {program_main} en standing {standing_level}, avec une posture {feasibility_posture_fr}, pour une enveloppe budgetaire de l'ordre de {budget_fcfa}."
 PARA 2: "Le systeme de scoring evalue chaque scenario selon 7 criteres ponderes : adequation budgetaire (25 %), alignement risque (20 %), conformite COS (12 %), capacite du programme (13 %), efficacite cout (12 %), adequation standing (8 %), flexibilite de phasage (10 %)."
-PARA 3: "Les 3 scenarios livrent tous les {target_units} unites demandees, mais different significativement sur le cout :\\n- Scenario A : {A_cost_total}, [A_hab_m2_total] m2 habitables, score [A_score]/100\\n- Scenario B : {B_cost_total}, [B_hab_m2_total] m2 habitables, score [B_score]/100\\n- Scenario C : {C_cost_total}, [C_hab_m2_total] m2 habitables, score [C_score]/100"
-PARA 4: "L'ecart entre C et A est de [delta_CA_cout] pour [delta_CA_sdp] de surface supplementaire, soit un surcout de [calcul] par m2 gagne, [justifiable ou non] au regard de l'enveloppe disponible."
+PARA 3: "Les 3 scenarios livrent tous les {target_units} unites demandees, mais different significativement sur le cout :\\n- Scenario A : {A_cost_total}, {A_hab_m2_total} m2 habitables, score {A_score}/100\\n- Scenario B : {B_cost_total}, {B_hab_m2_total} m2 habitables, score {B_score}/100\\n- Scenario C : {C_cost_total}, {C_hab_m2_total} m2 habitables, score {C_score}/100"
+PARA 4: "L'ecart entre C et A est de {delta_CA_cout} pour {delta_CA_sdp} de surface supplementaire. Cet ecart [est justifiable / n'est pas justifiable] au regard de l'enveloppe disponible de {budget_fcfa}."
 PARA 5: "Le Scenario {rec_scenario} obtient le meilleur score ({rec_score}/100) car il offre le meilleur compromis entre [arguments hierarchises]. Il est le scenario recommande."
 
 --- comparatif_intro_text ---
@@ -6265,14 +6279,14 @@ UNE SEULE PHRASE: "Points de vigilance techniques et administratifs a anticiper 
 --- invisible_technical_text ---
 STRUCTURE OBLIGATOIRE (texte dense pour slide 17) :
 PARA 1: "Les conditions de reussite reposent sur une anticipation rigoureuse des postes de depenses et des delais. Voici la ventilation detaillee pour le scenario {rec_scenario} recommande ({rec_cost_total}) :"
-PARA 2: "Ventilation des couts par lot :\\n- Fondations et infrastructure : environ [montant] FCFA ([%]). Etude geotechnique prealable indispensable. Mitoyennete imposant fondations independantes.\\n- Gros oeuvre et structure : environ [montant] FCFA ([%]). Systeme poteau-poutre en beton arme adapte au R+[niveaux].\\n- Second oeuvre et finitions : environ [montant] FCFA ([%]). Materiaux {standing_level} mais durables.\\n- VRD et amenagements : environ [montant] FCFA ([%]). Raccordements reseaux, assainissement.\\n- Lots techniques : environ [montant] FCFA ([%]). Electricite, plomberie, ventilation naturelle."
+PARA 2: "Ventilation des couts par lot pour le scenario recommande {rec_scenario} :\\n- Gros oeuvre et structure : utilise les variables ventil_go et ventil_go_pct du scenario recommande. Systeme poteau-poutre en beton arme adapte au R+{rec_levels}.\\n- Second oeuvre et finitions : utilise les variables ventil_so et ventil_so_pct du scenario recommande. Materiaux {standing_level} mais durables.\\n- Lots techniques : utilise les variables ventil_lt et ventil_lt_pct du scenario recommande. Electricite, plomberie, ventilation naturelle.\\n- VRD et amenagements : utilise les variables ventil_vrd et ventil_vrd_pct du scenario recommande. Raccordements reseaux, assainissement.\\nNote : identifie le scenario recommande (A, B ou C) depuis {rec_scenario} et utilise les variables {X_ventil_go}, {X_ventil_go_pct} etc. correspondantes."
 PARA 3: "Strategies de phasage recommandees :\\n- Duree estimee du chantier : {rec_duree_chantier}\\n- Phase 1 (M1-M2) : etudes et permis\\n- Phase 2 (M3) : terrassement et fondations, eviter la saison des pluies (juin-octobre)\\n- Phase 3 (M4-M5) : gros oeuvre\\n- Phase 4 (M6-M7) : second oeuvre\\n- Phase 5 (M8) : finitions et reception"
 PARA 4: "Delais caches a anticiper : obtention du permis (2-4 mois), etude geotechnique (2-3 semaines), raccordements reseaux (variable)."
 
 --- invisible_financial_text ---
 STRUCTURE OBLIGATOIRE (texte dense pour slide 17 col 2 et slide 18 col 2) :
 Ce texte sera utilise DEUX FOIS (slide 17 et slide 18). Redige-le pour la slide 18 (budget detaille).
-PARA 1: "Le budget du Scenario {rec_scenario} s'etablit a environ {rec_cost_total}, a comparer au budget initial de {budget_range} FCFA. L'ecart de [X]M est gerable avec une optimisation rigoureuse."
+PARA 1: "Le budget du Scenario {rec_scenario} s'etablit a environ {rec_cost_total}, a comparer au budget initial de {budget_fcfa}. L'ecart est gerable avec une optimisation rigoureuse."
 PARA 2: "Frais complementaires a anticiper :\\n- Honoraires d'architecte : entre {rec_hono_bas}M et {rec_hono_haut}M FCFA ({rec_hono_taux_bas} a {rec_hono_taux_haut})\\n- Frais de permis de construire et taxes : environ 1 a 2 % du montant des travaux\\n- Etudes geotechniques : entre 300 000 et 500 000 FCFA\\n- Frais de notaire et administratifs : variables\\n- Assurance dommage-ouvrage : recommandee, environ 2 % du cout travaux"
 PARA 3: "Budgetiser l'ensemble de ces postes en amont est imperatif pour eviter toute derive financiere."
 
@@ -6297,7 +6311,7 @@ MEME CONTENU QUE invisible_financial_text. Retourner le MEME texte.
 MEME CONTENU QUE invisible_strategic_text. Retourner le MEME texte.
 
 --- next_step_intro_text ---
-UNE PHRASE: introduction aux prochaines etapes.
+UNE PHRASE contextualisee: "Suite a la recommandation du Scenario {rec_scenario}, voici les etudes et demarches a engager pour passer a la phase operationnelle du projet."
 
 --- next_step_scope_text ---
 STRUCTURE OBLIGATOIRE (5 etudes a lancer) :
@@ -6314,7 +6328,7 @@ Livrables attendus en 2-3 phrases.
 --- conclusion_summary_text ---
 STRUCTURE OBLIGATOIRE (2 paragraphes) :
 PARA 1: "Ce diagnostic a permis d'analyser le potentiel d'un terrain de {site_area} m2 a {city} sous trois scenarios contrastes : {A_role} (A), {B_role} (B) et {C_role} (C). Chacun repond au programme cible de {target_units} unites en usage {program_main} en standing {standing_level}."
-PARA 2: "Le Scenario {rec_scenario} est recommande avec un score de {rec_score}/100. Il offre le meilleur compromis entre le respect du programme, la proximite avec l'enveloppe budgetaire ({rec_cost_total} vs {budget_range} FCFA vises), la conformite urbanistique, et la simplicite de mise en oeuvre d'un R+{rec_levels}. La prochaine etape consiste a lancer les etudes de faisabilite (APS/APD) et l'etude geotechnique pour confirmer ces hypotheses."
+PARA 2: "Le Scenario {rec_scenario} est recommande avec un score de {rec_score}/100. Il offre le meilleur compromis entre le respect du programme, la proximite avec l'enveloppe budgetaire ({rec_cost_total} vs {budget_fcfa} vises), la conformite urbanistique, et la simplicite de mise en oeuvre d'un R+{rec_levels}. La prochaine etape consiste a lancer les etudes de faisabilite (APS/APD) et l'etude geotechnique pour confirmer ces hypotheses."
 
 --- conclusion_positioning_text ---
 STRUCTURE OBLIGATOIRE (1 paragraphe dense) :
@@ -6369,7 +6383,7 @@ function buildGptDataContext(p, scenarios, flat) {
     max_floors: p.max_floors, max_height_m: p.max_height_m,
     site_cos_regl: flat.site_cos_regl || "2.5",
     site_ces_regl: flat.site_ces_regl || "60%",
-    site_sdp_max: flat.site_sdp_max || "",
+    site_sdp_max: flat.site_sdp_max || `${Math.round(Number(p.site_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`,
     // Retraits
     retrait_avant: flat.retrait_avant, retrait_lateral: flat.retrait_lateral,
     retrait_arriere: flat.retrait_arriere,
@@ -6405,7 +6419,9 @@ function buildGptDataContext(p, scenarios, flat) {
     rec_hono_taux_haut: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_taux_haut; if (rs === "B") return flat.B_hono_taux_haut; return flat.C_hono_taux_haut; })(),
     rec_hab_m2_total: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hab_m2_total; if (rs === "B") return flat.B_hab_m2_total; return flat.C_hab_m2_total; })(),
     // Scenario A
-    A_role: sA.role || flat.A_role || "", A_fp: flat.A_fp, A_levels: flat.A_levels,
+    A_role: sA.role || flat.A_role || "", A_fp: flat.A_fp,
+    A_levels: String(Math.max(0, (sA.levels || 1) - 1)), // v72.80 FIX: R+X = levels-1 (levels=total incl. RDC)
+    A_levels_total: flat.A_levels, // total levels for internal use
     A_height: flat.A_height, A_sdp: flat.A_sdp, A_units: flat.A_units,
     A_unit_summary: flat.A_unit_summary, A_m2_par_logt: flat.A_m2_par_logt,
     A_has_pilotis: flat.A_has_pilotis, A_cost_total: flat.A_cost_total,
@@ -6423,7 +6439,8 @@ function buildGptDataContext(p, scenarios, flat) {
     A_budget_equation: flat.A_budget_equation || "",
     A_gabarit: sA.gabarit_desc || flat.A_gabarit || "",
     // Scenario B
-    B_role: sB.role || flat.B_role || "", B_fp: flat.B_fp, B_levels: flat.B_levels,
+    B_role: sB.role || flat.B_role || "", B_fp: flat.B_fp,
+    B_levels: String(Math.max(0, (sB.levels || 1) - 1)), // v72.80 FIX: R+X = levels-1
     B_height: flat.B_height, B_sdp: flat.B_sdp, B_units: flat.B_units,
     B_unit_summary: flat.B_unit_summary, B_m2_par_logt: flat.B_m2_par_logt,
     B_has_pilotis: flat.B_has_pilotis, B_cost_total: flat.B_cost_total,
@@ -6441,7 +6458,8 @@ function buildGptDataContext(p, scenarios, flat) {
     B_budget_equation: flat.B_budget_equation || "",
     B_gabarit: sB.gabarit_desc || flat.B_gabarit || "",
     // Scenario C
-    C_role: sC.role || flat.C_role || "", C_fp: flat.C_fp, C_levels: flat.C_levels,
+    C_role: sC.role || flat.C_role || "", C_fp: flat.C_fp,
+    C_levels: String(Math.max(0, (sC.levels || 1) - 1)), // v72.80 FIX: R+X = levels-1
     C_height: flat.C_height, C_sdp: flat.C_sdp, C_units: flat.C_units,
     C_unit_summary: flat.C_unit_summary, C_m2_par_logt: flat.C_m2_par_logt,
     C_has_pilotis: flat.C_has_pilotis, C_cost_total: flat.C_cost_total,
@@ -6458,6 +6476,44 @@ function buildGptDataContext(p, scenarios, flat) {
     C_cost_unit: flat.C_cost_unit || "", C_free_ground: flat.C_free_ground,
     C_budget_equation: flat.C_budget_equation || "",
     C_gabarit: sC.gabarit_desc || flat.C_gabarit || "",
+    // v72.80: Individual scores (0-100)
+    A_score: String(Math.round((sA.recommendation_score || 0) * 100)),
+    B_score: String(Math.round((sB.recommendation_score || 0) * 100)),
+    C_score: String(Math.round((sC.recommendation_score || 0) * 100)),
+    // v72.80: hab_m2_total per scenario
+    A_hab_m2_total: String(sA.surface_habitable_m2 || sA.total_useful_m2 || 0),
+    B_hab_m2_total: String(sB.surface_habitable_m2 || sB.total_useful_m2 || 0),
+    C_hab_m2_total: String(sC.surface_habitable_m2 || sC.total_useful_m2 || 0),
+    // v72.80: Ventilation percentages (pre-calculated for GPT)
+    A_ventil_go_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    A_ventil_so_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    A_ventil_lt_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
+    A_ventil_vrd_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    B_ventil_go_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    B_ventil_so_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    B_ventil_lt_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
+    B_ventil_vrd_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    C_ventil_go_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    C_ventil_so_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    C_ventil_lt_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
+    C_ventil_vrd_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    // v72.80: Budget as clean FCFA string (parsed from raw budget_range)
+    budget_fcfa: (() => {
+      const raw = String(p.budget_range || "");
+      const fcfaM = raw.match(/(\d[\d\s.,]*)\s*M\s*FCFA/i);
+      if (fcfaM) return fcfaM[1].replace(/[\s,]/g, '').replace(',', '.') + "M FCFA";
+      const fcfaPlain = raw.match(/~?\s*(\d[\d\s]*)\s*M\s*FCFA/i);
+      if (fcfaPlain) return fcfaPlain[1].replace(/\s/g, '') + "M FCFA";
+      const eurM = raw.match(/(\d[\d\s.,]*)\s*M?\s*€/i);
+      if (eurM) { const eur = parseFloat(eurM[1].replace(/[\s,]/g, '')) * (eurM[0].includes('M') ? 1e6 : 1); return Math.round(eur * 655.957 / 1e6) + "M FCFA"; }
+      if (Number(p.budget_range) > 0) return Math.round(Number(p.budget_range) * 655.957 / 1e6) + "M FCFA";
+      return "N/A";
+    })(),
+    // v72.80: Posture in French
+    feasibility_posture_fr: (() => {
+      const p2 = String(flat.profil_posture || p.feasibility_posture || "").toUpperCase();
+      return { AGGRESSIVE: "AMBITIEUSE", BALANCED: "EQUILIBREE", CONSERVATIVE: "PRUDENTE" }[p2] || p2;
+    })(),
     // Deltas
     delta_BA_sdp: flat.delta_BA_sdp, delta_BA_cout: flat.delta_BA_cout,
     delta_CA_sdp: flat.delta_CA_sdp, delta_CA_cout: flat.delta_CA_cout,
@@ -6590,7 +6646,7 @@ app.post("/generate-texts", async (req, res) => {
   const flat = {
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
     rec_scenario: (diag.recommandation || {}).scenario || "",
-    rec_score: (diag.recommandation || {}).score || 0,
+    rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100), // v72.80 FIX: 0-1 → 0-100
     delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
     delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
     delta_BA_unites: `${dBA.delta_unites || 0} logements`,
@@ -6776,7 +6832,7 @@ app.post("/generate-texts", async (req, res) => {
     gpt_text_rules: rules.substring(0, 200) + "...",
     gpt_elapsed_ms: generatedTexts._gpt_elapsed_ms || 0,
     gpt_model: generatedTexts._gpt_model || GPT_TEXT_MODEL,
-    server_version: "72.80-PREMIUM-STRUCTURAL-v4",
+    server_version: "72.81-PREMIUM-FINAL",
     total_duration_ms: Date.now() - t0,
   };
 
@@ -6857,7 +6913,7 @@ app.post("/generate-pptx", async (req, res) => {
     // Build flat data (abbreviated — reuse same logic)
     const flat = {
       rec_scenario: (diag.recommandation || {}).scenario || "",
-      rec_score: (diag.recommandation || {}).score || 0,
+      rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100), // v72.80 FIX: 0-1 → 0-100
       phasage_text: phasageD.text || "",
       retrait_avant: `${retrD.avant_m || 0}m`,
       retrait_lateral: `${retrD.lateral_m || 0}m`,
@@ -6878,7 +6934,7 @@ app.post("/generate-pptx", async (req, res) => {
     for (const [key, s] of [["A", sA], ["B", sB], ["C", sC]]) {
       flat[`${key}_role`] = s.role || "";
       flat[`${key}_fp`] = String(s.fp_m2 || 0);
-      flat[`${key}_levels`] = String(s.levels || 0);
+      flat[`${key}_levels`] = String(Math.max(0, (s.levels || 1) - 1)); // v72.80 FIX: R+X = levels-1
       flat[`${key}_sdp`] = String(s.sdp_m2 || 0);
       flat[`${key}_units`] = String(s.total_units || 0);
       flat[`${key}_unit_summary`] = s.unit_mix_detail || "";
