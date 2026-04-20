@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-BARLO — Server-side PPTX generation from diagnostic data.
-v3.0 — Comprehensive fix: fonts, chart positioning, phasage, arbitrage.
+BARLO -- Server-side PPTX generation from diagnostic data.
+v4.0 -- Premium density: font sizes calibrated, structural text templates.
 """
 import json, sys, os, re, copy, tempfile, urllib.request, shutil
 from pptx import Presentation
@@ -10,9 +10,9 @@ from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
 from generate_charts import generate_all_charts
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # PLACEHOLDER MAPPINGS
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 IMAGE_PLACEHOLDERS = {
     '{{slide_4_image}}',
@@ -42,9 +42,9 @@ SLIDE_SPECIFIC_TEXT = {
 # Risk chart slides that need fallback shape detection
 RISK_CHART_SLIDES = {8, 11, 14}
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # UTILITY FUNCTIONS
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def download_image(url, dest_dir):
     try:
@@ -84,9 +84,9 @@ def clear_shape_text(shape):
             for run in para.runs:
                 run.text = ''
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # FONT SIZE STRATEGY
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # Template uses 15pt body / 16pt client_name.
 # Reference PDF shows ~13-14pt for body text (auto-shrunk from 15pt).
 # We keep template fonts for most slides and only override for dense slides.
@@ -94,21 +94,21 @@ def clear_shape_text(shape):
 
 def get_font_size_for_slide(slide_num):
     """
-    Return target font size or None to keep template default (15-16pt).
-    Only override for slides with dense text that needs smaller fonts.
+    Return target font size matching premium document density.
+    v4.0 -- Calibrated from manual red-comment corrections.
     """
-    if slide_num in [8, 11, 14]:
-        return Pt(10)    # Risk text below charts — dense paragraphs
+    if slide_num == 3:
+        return Pt(11)    # Intro -- 4 paragraphs, moderate density
+    elif slide_num in [5, 6, 9, 12]:
+        return Pt(9)     # Dense analysis: context, scenario summaries
+    elif slide_num in [4, 7, 10, 11, 13, 14, 16, 19]:
+        return Pt(10)    # Standard dense: site, financial, risk, arbitrage, next steps
     elif slide_num in [17, 18]:
-        return Pt(10)    # 3-column layout — dense bullet points
-    elif slide_num in [7, 10, 13]:
-        return Pt(12)    # Financial slides — moderate density
-    elif slide_num == 16:
-        return Pt(12)    # Arbitrage text
-    elif slide_num in [19, 20]:
-        return Pt(12)    # Next steps / conclusion
+        return Pt(9)     # 3-column layout -- very dense
+    elif slide_num == 20:
+        return Pt(11)    # Conclusion -- moderate density
     else:
-        return None       # Keep template font (15-16pt) for slides 1-6, 9, 12, 15
+        return None       # Keep template font (15-16pt) for slides 1, 2, 8_chart, 15
 
 def set_font_size_for_shape(shape, font_size_pt):
     """
@@ -141,9 +141,9 @@ def enable_auto_shrink(shape, fontScale=80000):
     normAutofit = etree.SubElement(bodyPr, f'{{{ns}}}normAutofit')
     normAutofit.set('fontScale', str(fontScale))
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # TEXT REPLACEMENT
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def replace_text_in_shape(shape, placeholder, new_text):
     if not shape.has_text_frame:
@@ -200,9 +200,9 @@ def _add_run_to_paragraph(p_element, text, ref_run=None):
     if text and (text[0] == ' ' or text[-1] == ' '):
         t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # IMAGE REPLACEMENT
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def replace_shape_with_image(slide, shape, image_path, override_bounds=None, maintain_aspect_ratio=False):
     if not os.path.exists(image_path):
@@ -252,9 +252,9 @@ def replace_shape_with_multiple_images(slide, shape, image_paths):
         img_left = left + i * (img_width + gap)
         slide.shapes.add_picture(img_path, img_left, top, img_width, height)
 
-# ─────────────────────────────────────────────────────────────
-# SLIDE 15 — COMPARATIVE TABLE (FULL SLIDE)
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
+# SLIDE 15 -- COMPARATIVE TABLE (FULL SLIDE)
+# -------------------------------------------------------------
 
 SLIDE_15_GRID_SHAPES = {
     'Google Shape;141;p27', 'Google Shape;145;p27',
@@ -284,9 +284,9 @@ def _handle_slide_15(slide, chart_paths):
     height = Emu(4400000)
     slide.shapes.add_picture(chart_path, left, top, width, height)
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # RISK CHART FALLBACK (SLIDES 8, 11, 14)
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def find_large_shape_for_charts(slide):
     """Find large empty shape on risk chart slides."""
@@ -327,9 +327,9 @@ def _insert_risk_charts_fallback(slide, slide_num, chart_paths):
         replace_shape_with_multiple_images(slide, target_shape, chart_image_paths)
     return True
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # PHASAGE TEXT CLEANUP (SLIDE 18)
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def _clean_phasage_text(text):
     """
@@ -343,9 +343,9 @@ def _clean_phasage_text(text):
         return ''
     return text
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # APPLY TEXT + FONT TO A SHAPE (DRY helper)
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def _apply_text_to_shape(shape, placeholder, text, slide_num):
     """Replace placeholder text, set font size, enable auto-shrink."""
@@ -353,11 +353,15 @@ def _apply_text_to_shape(shape, placeholder, text, slide_num):
     font_size = get_font_size_for_slide(slide_num)
     if font_size is not None:
         set_font_size_for_shape(shape, font_size)
-    enable_auto_shrink(shape, fontScale=80000)
+    # More aggressive shrink for very dense slides (9pt text)
+    if slide_num in [5, 6, 9, 12, 17, 18]:
+        enable_auto_shrink(shape, fontScale=70000)  # 70% min = ~6.3pt from 9pt
+    else:
+        enable_auto_shrink(shape, fontScale=80000)  # 80% standard
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 # MAIN ASSEMBLY
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 
 def assemble_pptx(data, template_path, output_path):
     chart_dir = tempfile.mkdtemp(prefix='barlo_charts_')
@@ -379,7 +383,7 @@ def assemble_pptx(data, template_path, output_path):
     texts = data.get('texts', {})
     client_name = data.get('client_name', '')
 
-    # ── Prepare composite text keys ──
+    # -- Prepare composite text keys --
     if 'slide_3_text' not in texts and 'slide_3_intro_text' in texts:
         parts = [texts.get('slide_3_intro_text', ''), texts.get('slide_3_programme_text', '')]
         texts['slide_3_text'] = '\n\n'.join(p for p in parts if p)
@@ -399,16 +403,16 @@ def assemble_pptx(data, template_path, output_path):
     print(f"Text keys available: {sorted(texts.keys())}", file=sys.stderr)
     print(f"Chart paths available: {sorted(chart_paths.keys())}", file=sys.stderr)
 
-    # ── Process each slide ──
+    # -- Process each slide --
     for slide_idx, slide in enumerate(prs.slides):
         slide_num = slide_idx + 1
 
-        # Slide 15 — full-page comparative table
+        # Slide 15 -- full-page comparative table
         if slide_num == 15:
             _handle_slide_15(slide, chart_paths)
             continue
 
-        # Risk chart slides (8, 11, 14) — special chart insertion + text
+        # Risk chart slides (8, 11, 14) -- special chart insertion + text
         if slide_num in RISK_CHART_SLIDES:
             shapes_to_process = list(slide.shapes)
             chart_inserted = False
@@ -528,14 +532,14 @@ def assemble_pptx(data, template_path, output_path):
                     else:
                         print(f"WARNING: No text for placeholder {placeholder} on slide {slide_num}", file=sys.stderr)
 
-    # ──────────────────────────────────────────────────────────
+    # ----------------------------------------------------------
     # INSERT EXTRA CHARTS (positioned within slide bounds)
     # Slide dimensions: 10.00" x 5.62" (9144000 x 5143500 EMU)
-    # ──────────────────────────────────────────────────────────
+    # ----------------------------------------------------------
 
     slides_list = list(prs.slides)
 
-    # Slide 17 — Cost breakdown pie chart (center-bottom, overlapping columns)
+    # Slide 17 -- Cost breakdown pie chart (center-bottom, overlapping columns)
     cost_chart = chart_paths.get('cost_breakdown')
     if cost_chart and os.path.exists(cost_chart) and len(slides_list) >= 17:
         slide17 = slides_list[16]
@@ -545,7 +549,7 @@ def assemble_pptx(data, template_path, output_path):
             Emu(2743200), Emu(2743200), Emu(3657600), Emu(2103120))
         print("Inserted cost breakdown chart on slide 17", file=sys.stderr)
 
-    # Slide 19 — Timeline Gantt chart (below text, full width)
+    # Slide 19 -- Timeline Gantt chart (below text, full width)
     timeline_chart = chart_paths.get('timeline')
     if timeline_chart and os.path.exists(timeline_chart) and len(slides_list) >= 19:
         slide19 = slides_list[18]
@@ -554,7 +558,7 @@ def assemble_pptx(data, template_path, output_path):
             Emu(182880), Emu(3474720), Emu(8686800), Emu(1463040))
         print("Inserted timeline chart on slide 19", file=sys.stderr)
 
-    # Slide 20 — Recap card (below text)
+    # Slide 20 -- Recap card (below text)
     recap_chart = chart_paths.get('recap_card')
     if recap_chart and os.path.exists(recap_chart) and len(slides_list) >= 20:
         slide20 = slides_list[19]
@@ -563,7 +567,7 @@ def assemble_pptx(data, template_path, output_path):
             Emu(182880), Emu(3657600), Emu(8686800), Emu(1188720))
         print("Inserted recap card on slide 20", file=sys.stderr)
 
-    # ── Final auto-shrink pass for any text-heavy shapes not yet handled ──
+    # -- Final auto-shrink pass for any text-heavy shapes not yet handled --
     # Uses fontScale=80000 (80% minimum) to prevent over-shrinking
     shrink_count = 0
     for slide in prs.slides:
