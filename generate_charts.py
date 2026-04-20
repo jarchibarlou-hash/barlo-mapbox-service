@@ -97,7 +97,7 @@ def generate_gauge(score, scenario_key, output_path):
 
     # Draw background arc (gray)
     theta_bg = np.linspace(np.pi, 0, 100)
-    ax.plot(np.cos(theta_bg), np.sin(theta_bg), 'k-', linewidth=20, color='#CCCCCC', solid_capstyle='round')
+    ax.plot(np.cos(theta_bg), np.sin(theta_bg), '-', linewidth=20, color='#CCCCCC', solid_capstyle='round')
 
     # Draw colored arc segments
     # RED: low scores (t < 0.33, left side)
@@ -305,10 +305,7 @@ def generate_cost_breakdown(scenario_data, output_path):
         'Second œuvre &\nfinitions',
         'VRD &\naménagements'
     ]
-    colors_pie = [COLORS['red'], COLORS['orange'], COLORS['green'], COLORS['blue']]
-    # Note: if COLORS doesn't have 'blue', use a suitable color
-    if 'blue' not in COLORS:
-        colors_pie = [COLORS['red'], COLORS['orange'], COLORS['green'], '#3498DB']
+    colors_pie = ['#1E2761', '#2C7873', '#F39C12', '#E74C3C']
 
     wedges, texts, autotexts = ax.pie(percentages, labels=labels, colors=colors_pie, autopct='%1.0f%%',
                                         startangle=90, textprops={'fontsize': 11, 'weight': 'bold'})
