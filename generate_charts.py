@@ -121,7 +121,7 @@ def generate_risk_radar(scenario_data, scenario_key, output_path):
 # ===============================================================
 # GAUGE CHART -- Score global (segmented arc)
 # ===============================================================
-def generate_gauge(score, scenario_key, output_path):
+def generate_gauge(score, scenario_key, output_path, is_recommended=False):
     fig, ax = plt.subplots(figsize=(8, 5.5))
 
     # Draw segmented arc from 180° (left/red) to 0° (right/green)
@@ -162,8 +162,8 @@ def generate_gauge(score, scenario_key, output_path):
     ax.text(0, -0.35, f'{int(score)}/100', fontsize=36, weight='bold', ha='center',
             va='center', color=COLORS['dark'])
 
-    # "Recommandé" label if score >= 70
-    if score >= 70:
+    # "Recommandé" label ONLY for the actual recommended scenario
+    if is_recommended:
         ax.text(0, -0.55, 'Recommandé', fontsize=16, weight='bold', ha='center',
                 va='center', color=COLORS['green'])
 
@@ -627,7 +627,7 @@ def generate_all_charts(scenario_data, output_dir):
         # Gauge
         score = scenario_info.get('recommendation_score', 50)
         gauge_path = os.path.join(output_dir, f'scenario_{scenario_key}_risk_gauge.png')
-        generate_gauge(score, scenario_key, gauge_path)
+        generate_gauge(score, scenario_key, gauge_path, is_recommended=(scenario_key == recommended_key))
         chart_paths[f'scenario_{scenario_key}_risk_gauge'] = gauge_path
 
         # Horizontal bars
