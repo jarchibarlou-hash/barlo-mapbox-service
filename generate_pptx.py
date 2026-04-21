@@ -354,8 +354,9 @@ def _apply_text_to_shape(shape, placeholder, text, slide_num):
     if font_size is not None:
         set_font_size_for_shape(shape, font_size)
     # More aggressive shrink for very dense slides (9pt text)
+    # v72.87: 75% min instead of 70% to avoid over-truncation on slide 17/18 col 3
     if slide_num in [5, 6, 9, 12, 17, 18]:
-        enable_auto_shrink(shape, fontScale=70000)  # 70% min = ~6.3pt from 9pt
+        enable_auto_shrink(shape, fontScale=75000)  # 75% min = ~6.75pt from 9pt
     else:
         enable_auto_shrink(shape, fontScale=80000)  # 80% standard
 
@@ -630,6 +631,70 @@ def assemble_pptx(data, template_path, output_path):
             print("Inserted budget comparison table on slide 17", file=sys.stderr)
         except Exception as e:
             print(f"Warning: could not insert budget table on slide 17: {e}", file=sys.stderr)
+
+    # Slide 18 -- Budget comparison table (same as slide 17, for risk/conclusion)
+    if len(slides_list) >= 18:
+        slide18 = slides_list[17]
+        try:
+            table_rows_18 = []
+            for sc_key in ['A', 'B', 'C']:
+                sdp_val = flat_data.get(f'{sc_key}_sdp', '0')
+                cost_m2_marche = flat_data.get(f'{sc_key}_cost_m2_marche', '0k')
+                cost_m2_ajuste = flat_data.get(f'{sc_key}_cost_m2_ajuste', '0k')
+                cost_total = flat_data.get(f'{sc_key}_cost_total', '0M FCFA')
+                budget_fit = flat_data.get(f'{sc_key}_budget_fit', '')
+                fit_label = {
+                    'DANS_BUDGET': 'DANS BUDGET',
+                    'BUDGET_TENDU': 'BUDGET TENDU',
+                    'HORS_BUDGET': 'HORS BUDGET',
+                }.get(budget_fit, budget_fit)
+                table_rows_18.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
+
+            tbl_left_18 = Emu(1371600)
+            tbl_top_18 = Emu(3703320)
+            tbl_width_18 = Emu(6400800)
+            tbl_height_18 = Emu(1371600)
+
+            table_shape_18 = slide18.shapes.add_table(4, 6, tbl_left_18, tbl_top_18, tbl_width_18, tbl_height_18)
+            tbl_18 = table_shape_18.table
+
+            col_widths_18 = [Emu(914400), Emu(914400), Emu(1143000), Emu(1143000), Emu(1028700), Emu(1257300)]
+            for i, w in enumerate(col_widths_18):
+                tbl_18.columns[i].width = w
+
+            headers_18 = ['Scenario', 'SDP', 'Cout/m\u00b2\nmarche', 'Cout/m\u00b2\najuste', 'Cout\ntotal', 'Label']
+            DARK_GREEN_18 = RGBColor(0x2C, 0x5F, 0x2D)
+            WHITE_18 = RGBColor(0xFF, 0xFF, 0xFF)
+            LIGHT_BG_18 = RGBColor(0xF5, 0xF5, 0xF0)
+
+            for ci, hdr in enumerate(headers_18):
+                cell = tbl_18.cell(0, ci)
+                cell.text = hdr
+                for para in cell.text_frame.paragraphs:
+                    para.alignment = PP_ALIGN.CENTER
+                    for run in para.runs:
+                        run.font.size = Pt(9)
+                        run.font.bold = True
+                        run.font.color.rgb = WHITE_18
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = DARK_GREEN_18
+
+            for ri, row_data in enumerate(table_rows_18):
+                for ci, val in enumerate(row_data):
+                    cell = tbl_18.cell(ri + 1, ci)
+                    cell.text = val
+                    for para in cell.text_frame.paragraphs:
+                        para.alignment = PP_ALIGN.CENTER
+                        for run in para.runs:
+                            run.font.size = Pt(9)
+                            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+                    if ri % 2 == 1:
+                        cell.fill.solid()
+                        cell.fill.fore_color.rgb = LIGHT_BG_18
+
+            print("Inserted budget comparison table on slide 18", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: could not insert budget table on slide 18: {e}", file=sys.stderr)
 
     # Slide 19 -- Timeline Gantt chart (below text, full width)
     timeline_chart = chart_paths.get('timeline')
