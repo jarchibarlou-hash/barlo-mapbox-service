@@ -16,10 +16,12 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
-const POLISH_TIMEOUT_MS = 90000; // 90s per API call
-const POLISH_MAX_RETRIES = 2;    // retry each variation up to 2 times
+const POLISH_TIMEOUT_MS = 60000; // v72.93: 60s per API call (was 90s — too slow for Make.com 300s limit)
+const POLISH_MAX_RETRIES = 1;    // v72.93: 1 retry only (was 2 — worst case 270s of retries alone)
 const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
+// v72.93: TIME BUDGET — skip polish if endpoint has already spent this many ms
+const POLISH_TIME_BUDGET_MS = 180000; // 180s = leave 120s margin for Make.com 300s timeout
 
 /**
  * v72.34: Robust single polish API call with retry + timeout + full error logging
@@ -134,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.92-PILOTIS-SYNC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.93-TIMEOUT-FIX" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5578,10 +5580,15 @@ app.post("/generate", async (req, res) => {
     //           → strict drift scoring (25%) → redraw overlays on top
     //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
-    const SLIDE4_VARIATIONS = 3;
+    const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
     const SLIDE4_AI_POLISH_ENABLED = true;
     const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
-    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
+    // v72.93: TIME BUDGET GUARD
+    const slide4Elapsed = Date.now() - t0;
+    if (slide4Elapsed > POLISH_TIME_BUDGET_MS) {
+      console.log(`[SLIDE4-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(slide4Elapsed/1000)}s already spent → SKIPPING polish`);
+    }
+    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY && slide4Elapsed <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[SLIDE4-POLISH] v72.34: Robust hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%, model=${POLISH_MODEL}`);
         // v72.34: Resize for API reliability
@@ -5755,6 +5762,8 @@ app.post("/generate-massing", async (req, res) => {
     layout_mode,           // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
     commerce_depth_m,      // profondeur bande commerciale (défaut 6m)
     retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
+    // v72.93: Performance — skip AI polish to stay within Make.com 300s timeout
+    skip_polish = false,
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -6131,9 +6140,17 @@ app.post("/generate-massing", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     // v72.34: ROBUST MULTI-RENDER MASSING POLISH — model fallback, retry, timeout
     // ═══════════════════════════════════════════════════════════════════════════
-    const MASSING_VARIATIONS = 2;
+    const MASSING_VARIATIONS = 1; // v72.93: reduced from 2 → 1 (saves 30-60s, stays in Make.com budget)
     let polishApplied = false;
-    if (OPENAI_API_KEY) {
+    // v72.93: TIME BUDGET GUARD — skip polish if we've already spent too long
+    const elapsedBeforePolish = Date.now() - t0;
+    const skipPolishFlag = String(skip_polish).toLowerCase() === "true" || skip_polish === true;
+    if (skipPolishFlag) {
+      console.log(`[MASSING-POLISH] v72.93: skip_polish=true → SKIPPING AI polish (deterministic render only)`);
+    } else if (elapsedBeforePolish > POLISH_TIME_BUDGET_MS) {
+      console.log(`[MASSING-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(elapsedBeforePolish/1000)}s already spent (limit ${POLISH_TIME_BUDGET_MS/1000}s) → SKIPPING polish`);
+    }
+    if (OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[MASSING-POLISH] v72.34: Starting robust multi-render (${MASSING_VARIATIONS} variations) for ${label}... model=${POLISH_MODEL}`);
         // v72.34: Resize image for API — reduces payload, improves reliability
@@ -6428,7 +6445,8 @@ function buildTemplateTexts(flat, scenarios) {
   const texts = {};
 
   // ── SLIDE 3: Introduction ──
-  texts.slide_3_intro_text = `Ce projet consiste a valoriser un terrain de ${f("site_area")} m2 situe a ${f("city")}, dans le cadre d'un programme ${f("program_main")}. Le programme cible prevoit ${f("target_units")} unites pour un standing ${f("standing_level").toLowerCase()}, avec un budget de reference de l'ordre de ${f("budget_fcfa")}.\n\nL'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de ${f("site_cos_regl")}, un CES de ${f("site_ces_regl")}%, et des retraits reglementaires qui reduisent significativement l'emprise constructible.\n\nPour repondre a cette question, trois scenarios ont ete elabores :\n- Le Scenario A (${f("A_role")}) explore une approche de maximisation de la densite.\n- Le Scenario B (${f("B_role")}) recherche un compromis entre densite et cout.\n- Le Scenario C (${f("C_role")}) privilegie une approche plus prudente en termes de couts.\n\nLe present rapport diagnostic analyse chacun de ces scenarios sous l'angle volumetrique, financier et reglementaire, afin d'orienter le porteur de projet vers le scenario le plus recommande au regard de ses priorites et de son enveloppe budgetaire.`;
+  // v72.93: Added "Donnees cles" section to fill slide 3 empty space
+  texts.slide_3_intro_text = `Ce projet consiste a valoriser un terrain de ${f("site_area")} m2 situe a ${f("city")}, dans le cadre d'un programme ${f("program_main")}. Le programme cible prevoit ${f("target_units")} unites pour un standing ${f("standing_level").toLowerCase()}, avec un budget de reference de l'ordre de ${f("budget_fcfa")}.\n\nL'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de ${f("site_cos_regl")}, un CES de ${f("site_ces_regl")}%, et des retraits reglementaires qui reduisent significativement l'emprise constructible.\n\nPour repondre a cette question, trois scenarios ont ete elabores :\n- Le Scenario A (${f("A_role")}) explore une approche de maximisation de la densite.\n- Le Scenario B (${f("B_role")}) recherche un compromis entre densite et cout.\n- Le Scenario C (${f("C_role")}) privilegie une approche plus prudente en termes de couts.\n\nLe present rapport diagnostic analyse chacun de ces scenarios sous l'angle volumetrique, financier et reglementaire, afin d'orienter le porteur de projet vers le scenario le plus recommande au regard de ses priorites et de son enveloppe budgetaire.\n\nDonnees cles du projet :\n- Surface terrain : ${f("site_area")} m2 | Emprise constructible : ${f("retrait_emprise_constructible")} (apres retraits)\n- Enveloppe largeur × profondeur : ${f("envelope_w")} m × ${f("envelope_d")} m\n- SDP maximale theorique (COS) : ${f("site_sdp_max")}\n- Budget de reference : ${f("budget_fcfa")} | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyennete : ${f("retrait_mitoyennete")} cotes`;
   texts.slide_3_programme_text = "";
 
   // ── SLIDE 4: Terrain ──
@@ -6438,9 +6456,20 @@ function buildTemplateTexts(flat, scenarios) {
   texts.slide_5_text = `Le quartier de ${f("city")} presente une densite urbaine elevee, avec un environnement bati mixte associant des immeubles de logements et des activites commerciales. Le tissu urbain environnant est compose d'habitations individuelles et collectives, de commerces de proximite, et d'equipements publics.\n\nLe rapport a la rue est influence par la mitoyennete sur ${f("retrait_mitoyennete")} cotes, ce qui limite les ouvertures laterales et necessite une reflexion approfondie sur l'eclairage et la ventilation naturelle des espaces interieurs.\n\nLa surface de plancher est limitee par plusieurs facteurs cumules :\n- L'emprise constructible apres retraits est reduite a ${f("retrait_emprise_constructible")} (soit ${f("retrait_reduction_pct")} de perte)\n- Le COS de ${f("site_cos_regl")} autorise jusqu'a ${f("site_sdp_max")} de SDP (Surface de Plancher) theorique, mais l'emprise reelle au sol limite fortement cette capacite\n- Le CES de ${f("site_ces_regl")}% definit la couverture maximale du terrain\n\nLa zone climatique ${(f("orient_zone") || "tropical").toLowerCase()} impacte le confort thermique. Une orientation optimale des facades et une ventilation naturelle traversante sont essentielles pour maximiser le confort des occupants tout en limitant les couts energetiques.\n\nLa densite du voisinage et les contraintes reglementaires orientent vers un gabarit de R+${f("rec_levels")} maximum, coherent avec l'environnement bati existant et les objectifs du programme de ${f("target_units")} unites.`;
 
   // ── SLIDES 6/9/12: Scenario summaries ──
+  // v72.93: Add comparison paragraphs for B (vs A) and C (vs A+B)
   texts.scenario_A_summary_text = buildSummary("A");
-  texts.scenario_B_summary_text = buildSummary("B");
-  texts.scenario_C_summary_text = buildSummary("C");
+
+  // B vs A comparison
+  const bVsA_sdpDelta = n("A_sdp") - n("B_sdp");
+  const bVsA_costDeltaM = Math.round((n("A_cost_total") - n("B_cost_total")) / 1e6) || Math.round(n("A_cost_total") / 1e6) - Math.round(n("B_cost_total") / 1e6);
+  const bVsA_comparison = `\n\nComparaison avec le Scenario A :\nPar rapport au Scenario A (${f("A_role")}), le Scenario B reduit la SDP de ${bVsA_sdpDelta} m2 (${f("A_sdp")} → ${f("B_sdp")} m2) et le cout estime de ${f("A_cost_total")} a ${f("B_cost_total")}, soit une economie significative. L'emprise au sol passe de ${f("A_fp")} a ${f("B_fp")} m2, avec une surface habitable par logement de ${f("B_m2_par_logt")} m2 contre ${f("A_m2_par_logt")} m2 pour A. Le score de recommandation passe de ${f("A_score")}/100 (A) a ${f("B_score")}/100 (B).`;
+  texts.scenario_B_summary_text = buildSummary("B") + bVsA_comparison;
+
+  // C vs A+B comparison
+  const cVsA_costDeltaM = Math.round((n("A_cost_total") - n("C_cost_total")) / 1e6) || Math.round(n("A_cost_total") / 1e6) - Math.round(n("C_cost_total") / 1e6);
+  const cVsB_costDeltaM = Math.round((n("B_cost_total") - n("C_cost_total")) / 1e6) || Math.round(n("B_cost_total") / 1e6) - Math.round(n("C_cost_total") / 1e6);
+  const cVsAB_comparison = `\n\nComparaison avec les Scenarios A et B :\nLe Scenario C est le plus compact et le plus economique des trois. Par rapport a A (${f("A_cost_total")}), il economise environ ${f("delta_CA_cout")} soit ${f("delta_CA_sdp")} de surface en moins. Par rapport a B (${f("B_cost_total")}), il reduit encore le cout de ${f("B_cost_total")} a ${f("C_cost_total")}, avec une emprise de ${f("C_fp")} m2 (vs ${f("B_fp")} pour B et ${f("A_fp")} pour A). La surface habitable par logement (${f("C_m2_par_logt")} m2) est inferieure a B (${f("B_m2_par_logt")} m2) et A (${f("A_m2_par_logt")} m2), mais reste acceptable en standing ${f("standing_level").toLowerCase()}. Le score de ${f("C_score")}/100 est le plus eleve, confirmant le meilleur rapport cout/conformite.`;
+  texts.scenario_C_summary_text = buildSummary("C") + cVsAB_comparison;
 
   // ── SLIDES 7/10/13: Financial ──
   texts.scenario_A_financial_text = buildFinancial("A");
@@ -7654,6 +7683,14 @@ app.post("/generate-texts", async (req, res) => {
     console.log(`[GENERATE-TEXTS] ⚠️ GPT slide_5_text missing/short — keeping template version`);
   }
 
+  // v72.93: SLIDE 17/18 TEXT ALIASES (same fix as /generate-pptx)
+  generatedTexts.invisible_technical_text_s17 = generatedTexts.invisible_technical_text || "";
+  generatedTexts.invisible_financial_text_s17 = generatedTexts.invisible_financial_text || "";
+  generatedTexts.invisible_strategic_text_s17 = generatedTexts.invisible_strategic_text || "";
+  generatedTexts.invisible_technical_text_s18 = generatedTexts.success_technical_text || "";
+  generatedTexts.invisible_financial_text_s18 = generatedTexts.success_financial_text || "";
+  generatedTexts.invisible_strategic_text_s18 = generatedTexts.success_strategic_text || "";
+
   // ── PREMIUM GATE: sanitize (mostly a no-op now, but catches edge cases) ──
   generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
 
@@ -7871,6 +7908,15 @@ app.post("/generate-pptx", async (req, res) => {
     }
     // Template slide_5_text is already complete — no fallback needed
 
+    // v72.93: SLIDE 17/18 TEXT ALIASES — generate_pptx.py uses SLIDE_SPECIFIC_TEXT
+    // mapping that expects _s17 and _s18 suffixed keys
+    generatedTexts.invisible_technical_text_s17 = generatedTexts.invisible_technical_text || "";
+    generatedTexts.invisible_financial_text_s17 = generatedTexts.invisible_financial_text || "";
+    generatedTexts.invisible_strategic_text_s17 = generatedTexts.invisible_strategic_text || "";
+    generatedTexts.invisible_technical_text_s18 = generatedTexts.success_technical_text || "";
+    generatedTexts.invisible_financial_text_s18 = generatedTexts.success_financial_text || "";
+    generatedTexts.invisible_strategic_text_s18 = generatedTexts.success_strategic_text || "";
+
     // ── PREMIUM GATE + CONFORMITY GATE ──
     generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
     const conformity = validateConformity(flat, scenarios, generatedTexts);
@@ -7908,13 +7954,14 @@ app.post("/generate-pptx", async (req, res) => {
         cout_m2: Math.round(((sd.standing_match || {}).score || 0.5) * 100),
       };
 
-      // Cost breakdown: ventilation → pie chart keys (clés _fcfa)
-      const goTotal = vent.gros_oeuvre_fcfa || 0;
+      // v72.93: Cost breakdown — 4 categories ALIGNED with template text
+      // OLD: split gros_oeuvre into fondations+GO and merged VRD+lots_tech → mismatch with text
+      // NEW: same 4 categories as text: GO, SO, Lots Tech, VRD
       const costBreakdown = {
-        cost_fondations_infrastructure: Math.round(goTotal * 0.20),
-        cost_gros_oeuvre_structure: Math.round(goTotal * 0.80),
+        cost_gros_oeuvre_structure: vent.gros_oeuvre_fcfa || 0,
         cost_second_oeuvre_finitions: vent.second_oeuvre_fcfa || 0,
-        cost_vrd_amenagements: (vent.vrd_fcfa || 0) + (vent.lots_techniques_fcfa || 0),
+        cost_lots_techniques: vent.lots_techniques_fcfa || 0,
+        cost_vrd_amenagements: (vent.vrd_fcfa || 0) + (vent.amenagements_ext_fcfa || 0),
       };
 
       // v72.72: FIX — recommendation_score est 0.0–1.0 dans le moteur → convertir en 0–100
