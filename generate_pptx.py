@@ -512,9 +512,8 @@ def assemble_pptx(data, template_path, output_path):
                 if slide_specific_key in SLIDE_SPECIFIC_TEXT:
                     text_key = SLIDE_SPECIFIC_TEXT[slide_specific_key]
                     text = texts.get(text_key, '')
-                    # Slide 18: clean phasage raw data from ALL text fields
-                    if slide_num == 18:
-                        text = _clean_phasage_text(text)
+                    # v72.94: REMOVED phasage cleanup — _s18 texts are clean
+                    # buildTemplateTexts already produces proper prose, not raw data
                     if text:
                         _apply_text_to_shape(shape, placeholder, text, slide_num)
                     else:
