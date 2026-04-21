@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.90-TEMPLATE-ENGINE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.91-LOCKDOWN" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2623,7 +2623,13 @@ function computeSmartScenarios({
         configJustif = `Configuration en volume unique superpose (${typoName}) : commerce au RDC et logement aux etages. Cette disposition compacte optimise le cout de construction (une seule structure porteuse, une seule toiture) et minimise l'emprise au sol (${Math.round(fp)} m2). La mitoyennete sur ${nbMitoyens} cote(s) contraint les ouvertures laterales, favorisant une orientation des pieces de vie en facade avant et arriere pour la ventilation naturelle en climat ${climaticZone.toLowerCase()}.`;
       }
       sc.typology_predicted = predictedTypo;
-      sc.typology_desc = `${typoName}${isSplit ? " (split avant/arriere)" : " (superpose)"}`;
+      // v72.91: When isSplit, override typology to describe SPLIT — not "bloc compact"
+      // The massing visually shows 2 separate volumes, so text must match.
+      if (isSplit) {
+        sc.typology_desc = `deux volumes separes (split avant/arriere)${sc.has_pilotis ? ", logement sur pilotis" : ""}`;
+      } else {
+        sc.typology_desc = `${typoName} (superpose)`;
+      }
       sc.pilotis_desc = pilotisDesc;
       sc.config_justification = configJustif;
     }
@@ -5400,9 +5406,9 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const logtLabelY = pilotisY + 22*s;
     ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Logement: ${logtSdpDisplay} m² SDP`, annX, logtLabelY);
+    ctx.strokeText(`Logement: ${logtSdpDisplay} m² SDP (Surface de Plancher)`, annX, logtLabelY);
     ctx.fillStyle = "#3a7ac0";
-    ctx.fillText(`Logement: ${logtSdpDisplay} m² SDP`, annX, logtLabelY);
+    ctx.fillText(`Logement: ${logtSdpDisplay} m² SDP (Surface de Plancher)`, annX, logtLabelY);
     // ── COMMERCE annotations (en dessous du logement, ORANGE) ──
     const commBaseY = logtLabelY + 28*s;
     for (let f = 0; f < vc.levels; f++) {
@@ -5424,14 +5430,15 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.strokeText(`Commerce: ${commSdpDisplay} m² SDP`, annX, commLabelY);
     ctx.fillStyle = "#e07830";
     ctx.fillText(`Commerce: ${commSdpDisplay} m² SDP`, annX, commLabelY);
+    // v72.91: SDP already spelled out on Logement line above — keep Commerce short
     // Total SDP en bas — NOIR avec contour blanc — v72.87: utiliser le SDP RÉEL du scénario
     const totalSDP = sdp_m2_actual || ((vc.sdp_m2 || 0) + (vl.sdp_m2 || 0));
     const totalY = commLabelY + 24*s;
     ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
+    ctx.strokeText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP (Surface de Plancher)`, annX, totalY);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP`, annX, totalY);
+    ctx.fillText(`Total: ${totalSDP.toLocaleString("fr-FR")} m² SDP (Surface de Plancher)`, annX, totalY);
   } else {
     // ══ MODE SUPERPOSÉ : annotations classiques ══
     const realTotalH = rdcH_m + (levels - 1) * etageH_m;
@@ -5455,9 +5462,9 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     // Total SDP en bas — NOIR avec contour blanc
     ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
+    ctx.strokeText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP (Surface de Plancher)`, annX, annBaseY + 24*s);
     ctx.fillStyle = "#000000";
-    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP`, annX, annBaseY + 24*s);
+    ctx.fillText(`Total: ${sdpTotale.toLocaleString("fr-FR")} m² SDP (Surface de Plancher)`, annX, annBaseY + 24*s);
   }
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
@@ -6414,8 +6421,8 @@ function buildTemplateTexts(flat, scenarios) {
   // ── SLIDE 4: Terrain ──
   texts.slide_4_text = `Ce terrain de ${f("site_area")} m2 se situe dans un tissu urbain dense de ${f("city")}. Il presente une geometrie reguliere de ${f("envelope_w")} m de largeur sur ${f("envelope_d")} m de profondeur, offrant une surface brute de ${f("envelope_area")} m2.\n\nLes contraintes reglementaires imposent les retraits suivants :\n- Recul avant : ${f("retrait_avant")} (par rapport a la voie)\n- Recul lateral : ${f("retrait_lateral")} de chaque cote\n- Recul arriere : ${f("retrait_arriere")}\n- Mitoyennete : ${f("retrait_mitoyennete")} cotes\n\nL'impact de ces retraits est significatif : ils reduisent l'emprise constructible de ${f("retrait_reduction_pct")}, la ramenant a environ ${f("retrait_emprise_constructible")} exploitables.\n\nLe programme envisage prevoit ${f("target_units")} unites en usage ${f("program_main")}, dans un standing ${f("standing_level").toLowerCase()}.\n\n- Zone climatique : ${f("orient_zone").toLowerCase()}\n- COS reglementaire : ${f("site_cos_regl")}\n- CES reglementaire : ${f("site_ces_regl")} %`;
 
-  // ── SLIDE 5: empty — GPT fills this ──
-  texts.slide_5_text = "";
+  // ── SLIDE 5: Contexte quartier (base deterministe — GPT reformule uniquement) ──
+  texts.slide_5_text = `Le quartier de ${f("city")} presente une densite urbaine elevee, avec un environnement bati mixte associant des immeubles de logements et des activites commerciales. Le tissu urbain environnant est compose d'habitations individuelles et collectives, de commerces de proximite, et d'equipements publics.\n\nLe rapport a la rue est influence par la mitoyennete sur ${f("retrait_mitoyennete")} cotes, ce qui limite les ouvertures laterales et necessite une reflexion approfondie sur l'eclairage et la ventilation naturelle des espaces interieurs.\n\nLa surface de plancher est limitee par plusieurs facteurs cumules :\n- L'emprise constructible apres retraits est reduite a ${f("retrait_emprise_constructible")} (soit ${f("retrait_reduction_pct")} de perte)\n- Le COS de ${f("site_cos_regl")} autorise jusqu'a ${f("site_sdp_max")} de SDP (Surface de Plancher) theorique, mais l'emprise reelle au sol limite fortement cette capacite\n- Le CES de ${f("site_ces_regl")}% definit la couverture maximale du terrain\n\nLa zone climatique ${(f("orient_zone") || "tropical").toLowerCase()} impacte le confort thermique. Une orientation optimale des facades et une ventilation naturelle traversante sont essentielles pour maximiser le confort des occupants tout en limitant les couts energetiques.\n\nLa densite du voisinage et les contraintes reglementaires orientent vers un gabarit de R+${f("rec_levels")} maximum, coherent avec l'environnement bati existant et les objectifs du programme de ${f("target_units")} unites.`;
 
   // ── SLIDES 6/9/12: Scenario summaries ──
   texts.scenario_A_summary_text = buildSummary("A");
@@ -6471,6 +6478,96 @@ function buildTemplateTexts(flat, scenarios) {
 
   console.log(`│ ✅ TEMPLATE ENGINE v72.90: ${Object.keys(texts).length} textes generes (100% deterministes)`);
   return texts;
+}
+
+// ─── v72.91 enrichFlatForTemplates — Ajoute TOUTES les clés manquantes au flat ─
+// Called BEFORE buildTemplateTexts() in both /generate-texts and /generate-pptx.
+// Ensures: site_area, city, standing_level, budget_fcfa, target_units, program_main,
+//   envelope_w/d/area, feasibility_posture_fr, X_score, X_hab_m2_total, X_ventil_*_pct,
+//   rec_* (recommended scenario aliases), site_sdp_max
+// ════════════════════════════════════════════════════════════════════════════════
+function enrichFlatForTemplates(flat, p, scenarios) {
+  const sA = scenarios.A || {};
+  const sB = scenarios.B || {};
+  const sC = scenarios.C || {};
+  const diag = scenarios.diagnostic || {};
+  const siteDiag = diag.site || {};
+
+  // ── Basic params ──
+  flat.site_area = flat.site_area || String(p.site_area || "");
+  flat.city = flat.city || p.city || "Douala";
+  flat.standing_level = flat.standing_level || p.standing_level || "STANDARD";
+  flat.target_units = flat.target_units || String(p.target_units || 0);
+  flat.program_main = flat.program_main || p.program_main || p.project_type || "MIXTE";
+  flat.envelope_w = flat.envelope_w || String(p.envelope_w || "");
+  flat.envelope_d = flat.envelope_d || String(p.envelope_d || "");
+  flat.envelope_area = flat.envelope_area || String(p.envelope_area || Math.round(Number(p.envelope_w || 0) * Number(p.envelope_d || 0)));
+
+  // ── Budget FCFA (parsed from budget_range) ──
+  if (!flat.budget_fcfa) {
+    const raw = String(p.budget_range || "");
+    const fcfaM = raw.match(/(\d[\d\s.,]*)\s*M\s*FCFA/i);
+    if (fcfaM) flat.budget_fcfa = fcfaM[1].replace(/[\s,]/g, '').replace(',', '.') + "M FCFA";
+    else {
+      const eurM = raw.match(/(\d[\d\s.,]*)\s*M?\s*€/i);
+      if (eurM) { const eur = parseFloat(eurM[1].replace(/[\s,]/g, '')) * (eurM[0].includes('M') ? 1e6 : 1); flat.budget_fcfa = Math.round(eur * 655.957 / 1e6) + "M FCFA"; }
+      else if (Number(p.budget_range) > 0) flat.budget_fcfa = Math.round(Number(p.budget_range) * 655.957 / 1e6) + "M FCFA";
+      else flat.budget_fcfa = "N/A";
+    }
+  }
+
+  // ── Feasibility posture FR ──
+  if (!flat.feasibility_posture_fr) {
+    const p2 = String(flat.profil_posture || p.feasibility_posture || "").toUpperCase();
+    flat.feasibility_posture_fr = ({ AGGRESSIVE: "ambitieuse", BALANCED: "equilibree", CONSERVATIVE: "prudente" })[p2] || p2.toLowerCase() || "equilibree";
+  }
+
+  // ── Site SDPmax ──
+  if (!flat.site_sdp_max) {
+    flat.site_sdp_max = `${siteDiag.sdp_max_m2 || Math.round(Number(p.site_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`;
+  }
+
+  // ── Per-scenario: score, hab_m2_total, ventil_*_pct ──
+  for (const [key, sc] of [["A", sA], ["B", sB], ["C", sC]]) {
+    if (!flat[`${key}_score`]) {
+      flat[`${key}_score`] = String(Math.round((sc.recommendation_score || 0) * 100));
+    }
+    if (!flat[`${key}_hab_m2_total`]) {
+      flat[`${key}_hab_m2_total`] = String(sc.surface_habitable_m2 || sc.total_useful_m2 || sc.hab_m2_total || 0);
+    }
+    // Ventilation percentages (calculated from actual values)
+    const cv = sc.cout_ventilation || {};
+    const t = sc.cost_total_fcfa || 1;
+    if (!flat[`${key}_ventil_go_pct`]) flat[`${key}_ventil_go_pct`] = `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`;
+    if (!flat[`${key}_ventil_so_pct`]) flat[`${key}_ventil_so_pct`] = `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`;
+    if (!flat[`${key}_ventil_lt_pct`]) flat[`${key}_ventil_lt_pct`] = `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`;
+    if (!flat[`${key}_ventil_vrd_pct`]) flat[`${key}_ventil_vrd_pct`] = `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / t * 100)}%`;
+  }
+
+  // ── Recommended scenario aliases (rec_*) ──
+  const rec = flat.rec_scenario || "C";
+  const recSc = rec === "A" ? sA : rec === "B" ? sB : sC;
+  flat.rec_cost_total = flat.rec_cost_total || flat[`${rec}_cost_total`] || "";
+  flat.rec_levels = flat.rec_levels || flat[`${rec}_levels`] || "";
+  flat.rec_fp = flat.rec_fp || flat[`${rec}_fp`] || "";
+  flat.rec_cos_pct = flat.rec_cos_pct || flat[`${rec}_cos_pct`] || "";
+  flat.rec_duree_chantier = flat.rec_duree_chantier || flat[`${rec}_duree_chantier`] || "";
+  flat.rec_hono_bas = flat.rec_hono_bas || flat[`${rec}_hono_bas_M`] || "";
+  flat.rec_hono_haut = flat.rec_hono_haut || flat[`${rec}_hono_haut_M`] || "";
+  flat.rec_hono_taux_bas = flat.rec_hono_taux_bas || flat[`${rec}_hono_taux_bas`] || "";
+  flat.rec_hono_taux_haut = flat.rec_hono_taux_haut || flat[`${rec}_hono_taux_haut`] || "";
+  flat.rec_hab_m2_total = flat.rec_hab_m2_total || flat[`${rec}_hab_m2_total`] || "";
+  flat.rec_ventil_go = flat.rec_ventil_go || flat[`${rec}_ventil_go`] || "";
+  flat.rec_ventil_so = flat.rec_ventil_so || flat[`${rec}_ventil_so`] || "";
+  flat.rec_ventil_lt = flat.rec_ventil_lt || flat[`${rec}_ventil_lt`] || "";
+  flat.rec_ventil_vrd = flat.rec_ventil_vrd || flat[`${rec}_ventil_vrd`] || "";
+  flat.rec_ventil_go_pct = flat.rec_ventil_go_pct || flat[`${rec}_ventil_go_pct`] || "";
+  flat.rec_ventil_so_pct = flat.rec_ventil_so_pct || flat[`${rec}_ventil_so_pct`] || "";
+  flat.rec_ventil_lt_pct = flat.rec_ventil_lt_pct || flat[`${rec}_ventil_lt_pct`] || "";
+  flat.rec_ventil_vrd_pct = flat.rec_ventil_vrd_pct || flat[`${rec}_ventil_vrd_pct`] || "";
+
+  console.log(`│ ✅ enrichFlatForTemplates: ${Object.keys(flat).length} clés (site_area=${flat.site_area}, city=${flat.city}, budget=${flat.budget_fcfa}, rec=${rec})`);
+  return flat;
 }
 
 // ─── PREMIUM GATE v1.0 — Post-GPT sanitization ─────────────────────────────
@@ -6803,30 +6900,38 @@ const GPT_TEXT_TIMEOUT_MS = 120000;
  * All other texts are generated by buildTemplateTexts() (100% deterministic).
  */
 function buildGptTextRules() {
-  return `ROLE : Tu es un expert en urbanisme en Afrique subsaharienne. Tu rediges UN SEUL texte qualitatif pour un diagnostic foncier.
+  return `ROLE : Tu es un expert en urbanisme en Afrique subsaharienne. Tu REFORMULES un texte existant pour lui donner un ton professionnel premium.
 
-REGLES :
-1. Ecrire en francais SANS accents (a au lieu de a, e au lieu de e/e).
-2. Utiliser \\n pour les sauts de ligne.
-3. NE PAS inventer de chiffres — utilise uniquement les variables du JSON {data}.
-4. Style professionnel, precis, contextualise a {city}.
-5. Utiliser des tirets (- ) pour les listes.
+REGLES STRICTES :
+1. Tu recois un texte de reference dans le champ "slide_5_base" du JSON {data}.
+2. Tu REFORMULES ce texte avec un ton professionnel, fluide et expert.
+3. Tu NE CHANGES PAS les chiffres, les donnees, les pourcentages, les surfaces, les dimensions.
+4. Tu NE SUPPRIMES AUCUNE information du texte de base.
+5. Tu N'INVENTES AUCUNE donnee, aucun chiffre, aucun fait.
+6. Tu N'AJOUTES PAS d'informations qui ne sont pas dans le texte de base.
+7. Ecrire en francais SANS accents (a au lieu de a, e au lieu de e/e).
+8. Utiliser \\n pour les sauts de ligne.
+9. Utiliser des tirets (- ) pour les listes.
+10. Garder la MEME STRUCTURE en 5 paragraphes.
 
-=== TEXTE A GENERER ===
+CE QUE TU PEUX FAIRE :
+- Ameliorer la formulation et le vocabulaire
+- Rendre les transitions plus fluides
+- Ajouter des connecteurs logiques
+- Utiliser un vocabulaire d'expert urbaniste
+- Contextualiser a {city} avec des references generiques au tissu urbain local
 
---- slide_5_text ---
-STRUCTURE OBLIGATOIRE (5 paragraphes) :
-PARA 1: Description de l'environnement bati (quartier, densite, voisinage). Contextualisee a {city}. Decrire le tissu urbain : immeubles, commerces, habitat, voies.
-PARA 2: Rapport a la rue et impact de la mitoyennete ({retrait_mitoyennete} cotes) sur les ouvertures, l'eclairage, la ventilation naturelle.
-PARA 3: "La surface de plancher est limitee par plusieurs facteurs cumules :\\n- L'emprise constructible apres retraits est reduite a {retrait_emprise_constructible} (soit {retrait_reduction_pct} de perte)\\n- Le COS de {site_cos_regl} autorise jusqu'a {site_sdp_max} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\\n- Le CES de {site_ces_regl}% [est/n'est pas] le facteur limitant ici"
-PARA 4: Impact de la zone climatique {orient_zone} sur le confort thermique, l'orientation, les facades.
-PARA 5: Conclusion sur la densite du voisinage et le gabarit a respecter.
+CE QUE TU NE PEUX PAS FAIRE :
+- Inventer des chiffres ou des donnees
+- Modifier les valeurs numeriques
+- Ajouter des informations factuelles absentes du texte de base
+- Changer la structure (5 paragraphes)
 
 === FORMAT DE REPONSE ===
 
 Reponds UNIQUEMENT en JSON valide avec UNE SEULE cle : "slide_5_text".
 Pas de markdown, pas de commentaires.
-La valeur est une string contenant le texte redige.
+La valeur est une string contenant le texte reformule.
 Utilise \\n pour les sauts de ligne.
 NE PAS utiliser d'accents.`;
 }
@@ -7044,7 +7149,7 @@ END LEGACY REMOVED */
 /**
  * Build the data context string for GPT from computed scenarios
  */
-function buildGptDataContext(p, scenarios, flat) {
+function buildGptDataContext(p, scenarios, flat, templateTexts) {
   const sA = scenarios.A || {};
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
@@ -7224,6 +7329,8 @@ function buildGptDataContext(p, scenarios, flat) {
       const budgetVal = parseInt((flat.budget_fcfa || "0").replace(/[^\d]/g, "")) || 0;
       return recCost > budgetVal ? "depassement" : "economie";
     })(),
+    // v72.91: Pass template slide_5 text as base for GPT reformulation
+    slide_5_base: (templateTexts && templateTexts.slide_5_text) || "",
   }, null, 0);
 }
 
@@ -7499,13 +7606,16 @@ app.post("/generate-texts", async (req, res) => {
     C_frais_M: `${sC.frais_annexes ? Math.round(sC.frais_annexes / 1e6) : 0}M`,
   };
 
+  // ═══ v72.91 ENRICH flat with ALL keys needed by template engine ═══
+  enrichFlatForTemplates(flat, p, scenarios);
+
   // ═══ v72.90 TEMPLATE ENGINE — deterministic texts (zero GPT) ═══
   const templateTexts = buildTemplateTexts(flat, scenarios);
   console.log(`[GENERATE-TEXTS] Template engine: ${Object.keys(templateTexts).length} deterministic texts`);
 
   // ═══ v72.90 GPT — ONLY slide_5_text (qualitative neighborhood context) ═══
   const rules = buildGptTextRules();
-  const dataContext = buildGptDataContext(p, scenarios, flat);
+  const dataContext = buildGptDataContext(p, scenarios, flat, templateTexts);
   let gptTexts = {};
 
   if (OPENAI_API_KEY) {
@@ -7519,16 +7629,16 @@ app.post("/generate-texts", async (req, res) => {
     console.warn(`[GENERATE-TEXTS] OPENAI_API_KEY missing — slide_5_text will be empty`);
   }
 
-  // ═══ MERGE: templates (base) + GPT (slide_5_text only) ═══
-  // Templates are the source of truth. GPT only fills slide_5_text.
+  // ═══ v72.91 MERGE: templates (base) + GPT reformulation (slide_5_text only) ═══
+  // Templates are the source of truth. GPT only REFORMULATES slide_5_text.
+  // If GPT fails, the template version is already professional and complete.
   let generatedTexts = { ...templateTexts };
   if (gptTexts.slide_5_text && gptTexts.slide_5_text.length > 50) {
     generatedTexts.slide_5_text = gptTexts.slide_5_text;
-    console.log(`[GENERATE-TEXTS] ✅ GPT slide_5_text merged (${gptTexts.slide_5_text.length} chars)`);
+    console.log(`[GENERATE-TEXTS] ✅ GPT slide_5_text reformulated (${gptTexts.slide_5_text.length} chars)`);
   } else {
-    // Fallback: generate a basic slide_5_text from variables
-    generatedTexts.slide_5_text = `Le quartier de ${flat.city || "Douala"} presente une densite urbaine elevee, avec un environnement bati mixte associant des immeubles de logements et des activites commerciales. La proximite de voies principales favorise l'accessibilite et le dynamisme economique.\n\nLe rapport a la rue est influence par la mitoyennete sur ${flat.retrait_mitoyennete || "2"} cotes, ce qui limite les ouvertures et necessite une reflexion approfondie sur l'eclairage et la ventilation naturelle des espaces interieurs.\n\nLa surface de plancher est limitee par plusieurs facteurs cumules :\n- L'emprise constructible apres retraits est reduite a ${flat.retrait_emprise_constructible || "N/A"} (soit ${flat.retrait_reduction_pct || "N/A"} de perte)\n- Le COS de ${flat.site_cos_regl || "N/A"} autorise jusqu'a ${flat.site_sdp_max || "N/A"} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\n- Le CES de ${flat.site_ces_regl || "N/A"}% n'est pas le facteur limitant ici\n\nLa zone climatique ${(flat.orient_zone || "tropical").toLowerCase()} impacte le confort thermique, necessitant une orientation optimale et des facades adaptees pour maximiser la ventilation naturelle.\n\nConclusion sur la densite du voisinage et le gabarit a respecter : il est crucial de concevoir un projet qui s'integre harmonieusement dans le tissu urbain existant tout en respectant les contraintes reglementaires.`;
-    console.log(`[GENERATE-TEXTS] ⚠️ GPT slide_5_text missing/short — using fallback`);
+    // Template slide_5_text is already filled by buildTemplateTexts — keep it as is
+    console.log(`[GENERATE-TEXTS] ⚠️ GPT slide_5_text missing/short — keeping template version`);
   }
 
   // ── PREMIUM GATE: sanitize (mostly a no-op now, but catches edge cases) ──
@@ -7726,25 +7836,27 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_ventil_hono`] = `${Math.round((cvh.median_fcfa || 0) / 1e6)}M`;
     }
 
+    // ═══ v72.91 ENRICH flat with ALL keys needed by template engine ═══
+    enrichFlatForTemplates(flat, p, scenarios);
+
     // ═══ v72.90 TEMPLATE ENGINE — deterministic texts ═══
     const templateTexts = buildTemplateTexts(flat, scenarios);
 
     // ═══ v72.90 GPT — ONLY slide_5_text ═══
     const rules = buildGptTextRules();
-    const dataContext = buildGptDataContext(p, scenarios, flat);
+    const dataContext = buildGptDataContext(p, scenarios, flat, templateTexts);
     let gptTexts = {};
     if (OPENAI_API_KEY) {
       try { gptTexts = await generateDiagnosticTexts(dataContext, rules); }
       catch (e) { console.error(`[PPTX] GPT error: ${e.message}`); }
     }
 
-    // ═══ MERGE: templates + GPT slide_5 ═══
+    // ═══ v72.91 MERGE: templates + GPT reformulation slide_5 ═══
     let generatedTexts = { ...templateTexts };
     if (gptTexts.slide_5_text && gptTexts.slide_5_text.length > 50) {
       generatedTexts.slide_5_text = gptTexts.slide_5_text;
-    } else {
-      generatedTexts.slide_5_text = `Le quartier de ${flat.city || "Douala"} presente une densite urbaine elevee, avec un environnement bati mixte associant des immeubles de logements et des activites commerciales.\n\nLe rapport a la rue est influence par la mitoyennete sur ${flat.retrait_mitoyennete || "2"} cotes, ce qui limite les ouvertures et necessite une reflexion approfondie sur l'eclairage et la ventilation naturelle.\n\nLa surface de plancher est limitee par plusieurs facteurs cumules :\n- L'emprise constructible apres retraits est reduite a ${flat.retrait_emprise_constructible || "N/A"} (soit ${flat.retrait_reduction_pct || "N/A"} de perte)\n- Le COS de ${flat.site_cos_regl || "N/A"} autorise jusqu'a ${flat.site_sdp_max || "N/A"} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\n\nLa zone climatique ${(flat.orient_zone || "tropical").toLowerCase()} impacte le confort thermique, necessitant une orientation optimale et des facades adaptees pour maximiser la ventilation naturelle.`;
     }
+    // Template slide_5_text is already complete — no fallback needed
 
     // ── PREMIUM GATE + CONFORMITY GATE ──
     generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
