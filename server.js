@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.91-LOCKDOWN" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.92-PILOTIS-SYNC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -1932,6 +1932,14 @@ function computeSmartScenarios({
       if (role === "PRUDENT" && _splitRequested) {
         console.log(`│   🏗️ v72.30 PRUDENT: SPLIT demandé → SUPERPOSÉ COMPACT (choix stratégique: volume unique, commerce RDC + logement dessus)`);
       }
+      // v72.92: PILOTIS SYNC — quand SPLIT demandé mais terrain trop petit pour le moteur,
+      // le RENDERER crée un split synthétique avec pilotis (ligne 5904). Le texte doit correspondre.
+      // → Forcer has_pilotis=true pour A/B même si le moteur reste en SUPERPOSÉ.
+      if (_splitRequested && !useSplitForRole && role !== "PRUDENT") {
+        hasPilotis = true;
+        pilotisLevels = 1;
+        console.log(`│   ⚡ v72.92 PILOTIS SYNC: SPLIT demandé mais non viable en moteur → pilotis=true (RENDERER montrera split synthétique)`);
+      }
       if (useSplitForRole) {
         const parcDepth = envelope_d || Math.round(site_area / (envelope_w || 20));
         const parcWidth = envelope_w || Math.round(site_area / parcDepth);
@@ -2619,14 +2627,19 @@ function computeSmartScenarios({
         const cD = sc.split_layout.volume_commerce.depth_m || 6;
         const gD = sc.split_layout.retrait_inter_m || 4;
         configJustif = `Configuration en deux volumes separes (SPLIT) : commerce en bande de ${cD}m de profondeur devant, logement en retrait de ${Math.round(cD + gD)}m sur pilotis a l'arriere. Cette disposition maximise la visibilite commerciale depuis la rue, degage un espace de circulation entre les deux volumes, et libere le sol sous le logement pour le stationnement. La mitoyennete sur ${nbMitoyens} cote(s) impose des murs aveugles lateraux, compensee par des ouvertures en facade avant et arriere pour la ventilation traversante en climat ${climaticZone.toLowerCase()}.`;
+      } else if (sc.has_pilotis) {
+        // v72.92: SUPERPOSÉ + PILOTIS — le renderer montre commerce devant + logement sur pilotis
+        configJustif = `Configuration avec logement sur pilotis : le RDC est libere pour le stationnement et la circulation, tandis que le commerce est au rez-de-chaussee et les logements aux etages. Cette disposition sur pilotis (${typoName}) libere l'emprise au sol (${Math.round(fp)} m2) pour le parking et les espaces verts. La mitoyennete sur ${nbMitoyens} cote(s) contraint les ouvertures laterales, favorisant une orientation des pieces de vie en facade avant et arriere pour la ventilation naturelle en climat ${climaticZone.toLowerCase()}.`;
       } else {
         configJustif = `Configuration en volume unique superpose (${typoName}) : commerce au RDC et logement aux etages. Cette disposition compacte optimise le cout de construction (une seule structure porteuse, une seule toiture) et minimise l'emprise au sol (${Math.round(fp)} m2). La mitoyennete sur ${nbMitoyens} cote(s) contraint les ouvertures laterales, favorisant une orientation des pieces de vie en facade avant et arriere pour la ventilation naturelle en climat ${climaticZone.toLowerCase()}.`;
       }
       sc.typology_predicted = predictedTypo;
-      // v72.91: When isSplit, override typology to describe SPLIT — not "bloc compact"
-      // The massing visually shows 2 separate volumes, so text must match.
+      // v72.92: typology_desc doit TOUJOURS refléter ce que le massing montre visuellement
       if (isSplit) {
         sc.typology_desc = `deux volumes separes (split avant/arriere)${sc.has_pilotis ? ", logement sur pilotis" : ""}`;
+      } else if (sc.has_pilotis) {
+        // SUPERPOSÉ + PILOTIS: le renderer montre un split synthétique avec pilotis
+        sc.typology_desc = `${typoName}, logement sur pilotis (RDC libere)`;
       } else {
         sc.typology_desc = `${typoName} (superpose)`;
       }
