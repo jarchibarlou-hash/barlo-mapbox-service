@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.84-BUDGET-STANDING-DRIVEN" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.86-TYPOLOGY-JUSTIFIED" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -600,9 +600,9 @@ function computeZoomMassing(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const mpp = (ext * 0.9) / 1280;  // x2 zoom — parcelle centrée et proche
+  const mpp = (ext * 0.45) / 1280;  // v72.85: zoom ×2 sur bâtiment principal — cadrage serré
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(19, Math.max(17, Math.round(z * 4) / 4));
+  return Math.min(19.5, Math.max(17.5, Math.round(z * 4) / 4));
 }
 function computeBearing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -2580,6 +2580,50 @@ function computeSmartScenarios({
       complexite: { score: 0, label: "Moyen" },
       risque: "MOYEN",
     };
+    // ── v72.86 TYPOLOGY + PILOTIS DESCRIPTION ──
+    // Builds human-readable description of the architectural configuration
+    {
+      const sc = results[label];
+      const isSplit = sc.split_layout && sc.split_layout.mode === "SPLIT_AV_AR";
+      // Typology name (forme du bâti)
+      const typoNames = {
+        BLOC: "bloc compact", EN_L: "en L", EN_U: "en U", BARRE: "barre (lamelle)", EXTENSION: "extension",
+      };
+      // Predict typology from scenario params (same logic as selectTypology)
+      const fillR = fp / Math.max(1, empriseConstructible);
+      let predictedTypo;
+      if (fillR > 0.80) predictedTypo = "BLOC";
+      else if (role === "PRUDENT" && fillR > 0.35) predictedTypo = "BLOC";
+      else if (role === "INTENSIFICATION" && isMixte && empriseConstructible > 500 && fillR > 0.35) predictedTypo = "EN_U";
+      else if (mode === "COMPACT") predictedTypo = "BLOC";
+      else if (mode === "SPREAD") predictedTypo = (empriseConstructible > 400) ? "EN_L" : "BARRE";
+      else predictedTypo = (isMixte && fillR > 0.35 && empriseConstructible > 400) ? "EN_U" : "BLOC";
+      const typoName = typoNames[predictedTypo] || "bloc compact";
+      // Pilotis description
+      let pilotisDesc;
+      if (isSplit && sc.has_pilotis) {
+        pilotisDesc = `logement sur pilotis (RDC libere), commerce en volume separe devant`;
+      } else if (sc.has_pilotis) {
+        pilotisDesc = `RDC sur pilotis (sol libere pour parking et circulation)`;
+      } else if (isSplit) {
+        pilotisDesc = `commerce au RDC en volume separe, logement en retrait`;
+      } else {
+        pilotisDesc = `commerce directement au RDC, logement aux etages superieurs (volume unique superpose)`;
+      }
+      // Configuration justification
+      let configJustif;
+      if (isSplit) {
+        const cD = sc.split_layout.volume_commerce.depth_m || 6;
+        const gD = sc.split_layout.retrait_inter_m || 4;
+        configJustif = `Configuration en deux volumes separes (SPLIT) : commerce en bande de ${cD}m de profondeur devant, logement en retrait de ${Math.round(cD + gD)}m sur pilotis a l'arriere. Cette disposition maximise la visibilite commerciale depuis la rue, degage un espace de circulation entre les deux volumes, et libere le sol sous le logement pour le stationnement. La mitoyennete sur ${nbMitoyens} cote(s) impose des murs aveugles lateraux, compensee par des ouvertures en facade avant et arriere pour la ventilation traversante en climat ${climaticZone.toLowerCase()}.`;
+      } else {
+        configJustif = `Configuration en volume unique superpose (${typoName}) : commerce au RDC et logement aux etages. Cette disposition compacte optimise le cout de construction (une seule structure porteuse, une seule toiture) et minimise l'emprise au sol (${Math.round(fp)} m2). La mitoyennete sur ${nbMitoyens} cote(s) contraint les ouvertures laterales, favorisant une orientation des pieces de vie en facade avant et arriere pour la ventilation naturelle en climat ${climaticZone.toLowerCase()}.`;
+      }
+      sc.typology_predicted = predictedTypo;
+      sc.typology_desc = `${typoName}${isSplit ? " (split avant/arriere)" : " (superpose)"}`;
+      sc.pilotis_desc = pilotisDesc;
+      sc.config_justification = configJustif;
+    }
     // ── v57.6 REVENUE & FINANCIAL INDICATORS ──
     const loyerKey = /PREMIUM|HAUT/i.test(String(standing_level)) ? "PREMIUM" : /ECO/i.test(String(standing_level)) ? "ECO" : "STANDARD";
     const loyers = LOYERS_MENSUELS_FCFA[loyerKey] || LOYERS_MENSUELS_FCFA.STANDARD;
@@ -6217,6 +6261,157 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     if (browser) { try { browser.disconnect(); } catch (_) {} }
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── PREMIUM GATE v1.0 — Post-GPT sanitization ─────────────────────────────
+// Catches and fixes: orphan variables, raw scores, untranslated labels,
+// raw budget strings, uppercase terms, missing percentages
+// ═══════════════════════════════════════════════════════════════════════════════
+function sanitizePremiumTexts(texts, flat) {
+  if (!texts || typeof texts !== "object") return texts;
+  const sanitized = { ...texts };
+
+  // Build replacement map from flat data
+  const replacements = {};
+
+  // Score fixes: "0.XXX/100" → "XX/100"
+  const scoreRegex = /\b0\.(\d{2,3})\/100\b/g;
+
+  // Budget label translations
+  const LABEL_TR = {
+    "HORS_BUDGET": "hors budget",
+    "BUDGET_TENDU": "budget tendu",
+    "DANS_BUDGET": "dans le budget",
+    "BALANCED": "equilibree",
+    "AGGRESSIVE": "ambitieuse",
+    "CONSERVATIVE": "prudente",
+  };
+
+  // Budget raw string patterns (emoji + text)
+  const budgetRawRegex = /⭕\s*Moins de [^)]+\(~?(\d+)\s*M\s*FCFA\)/gi;
+  const budgetRawRegex2 = /environ\s*⭕[^)]+\)/gi;
+
+  for (const [key, val] of Object.entries(sanitized)) {
+    if (typeof val !== "string" || key.startsWith("_")) continue;
+    let text = val;
+
+    // 1. Fix scores "0.741/100" → "74/100"
+    text = text.replace(scoreRegex, (match, digits) => {
+      const score = Math.round(parseFloat("0." + digits) * 100);
+      return `${score}/100`;
+    });
+
+    // 2. Clean budget raw strings
+    text = text.replace(budgetRawRegex, (match, amount) => `${amount}M FCFA`);
+    text = text.replace(budgetRawRegex2, (match) => {
+      const m = match.match(/(\d+)\s*M\s*FCFA/i);
+      return m ? `environ ${m[1]}M FCFA` : match;
+    });
+    // Also catch standalone "⭕ Moins de..." without parens
+    text = text.replace(/⭕\s*Moins de [^(.\n]+/gi, (match) => {
+      const m = match.match(/(\d+)\s*M\s*FCFA/i);
+      return m ? `${m[1]}M FCFA` : match;
+    });
+
+    // 3. Translate labels (case-insensitive, keep context)
+    for (const [raw, translated] of Object.entries(LABEL_TR)) {
+      // Replace "HORS_BUDGET" or "Position budgetaire : HORS_BUDGET"
+      text = text.replace(new RegExp(raw.replace(/_/g, "[_ ]"), "gi"), translated);
+    }
+
+    // 4. Fix "XX %" or "(XX%)" → use flat data if available
+    // Replace generic XX% with actual percentages from flat data
+    if (text.includes("XX")) {
+      // For ventilation percentages in financial texts
+      for (const sc of ["A", "B", "C"]) {
+        if (key.includes(`scenario_${sc}`) || key.includes(`_${sc.toLowerCase()}_`)) {
+          const goPct = flat[`${sc}_ventil_go_pct`] || "";
+          const soPct = flat[`${sc}_ventil_so_pct`] || "";
+          const ltPct = flat[`${sc}_ventil_lt_pct`] || "";
+          const vrdPct = flat[`${sc}_ventil_vrd_pct`] || "";
+          if (goPct) {
+            // Replace first XX% with GO, second with SO, etc.
+            let idx = 0;
+            const pcts = [goPct, soPct, ltPct, vrdPct];
+            text = text.replace(/\(?\s*XX\s*%?\s*\)?/g, (m) => {
+              const pct = pcts[idx] || "";
+              idx++;
+              return pct ? `(${pct})` : m;
+            });
+          }
+        }
+      }
+      // Catch remaining XX%
+      text = text.replace(/\(\s*XX\s*%?\s*\)/g, "");
+      text = text.replace(/XX\s*%/g, "");
+    }
+
+    // 5. Fix orphan variables: [montant], [%], [X]M, [calcul]
+    // Replace [montant] FCFA ([%]) with actual ventilation data for recommended scenario
+    const recSc = flat.rec_scenario || "C";
+    if (text.includes("[montant]") || text.includes("[%]") || text.includes("[X]M") || text.includes("[calcul]")) {
+      const cv = {};
+      cv.go = flat[`${recSc}_ventil_go`] || "0M";
+      cv.so = flat[`${recSc}_ventil_so`] || "0M";
+      cv.lt = flat[`${recSc}_ventil_lt`] || "0M";
+      cv.vrd = flat[`${recSc}_ventil_vrd`] || "0M";
+      cv.goPct = flat[`${recSc}_ventil_go_pct`] || "";
+      cv.soPct = flat[`${recSc}_ventil_so_pct`] || "";
+      cv.ltPct = flat[`${recSc}_ventil_lt_pct`] || "";
+      cv.vrdPct = flat[`${recSc}_ventil_vrd_pct`] || "";
+
+      // Replace [montant] FCFA ([%]) patterns sequentially
+      let montantIdx = 0;
+      const montants = [cv.go, cv.go, cv.so, cv.vrd, cv.lt]; // fondations≈GO, GO, SO, VRD, LT
+      const pcts = [cv.goPct, cv.goPct, cv.soPct, cv.vrdPct, cv.ltPct];
+      text = text.replace(/\[montant\]\s*FCFA\s*\(\[%\]\)/g, () => {
+        const m = montants[montantIdx] || "N/A";
+        const p = pcts[montantIdx] || "";
+        montantIdx++;
+        return `${m} FCFA${p ? ` (${p})` : ""}`;
+      });
+      // Standalone [montant] or [%]
+      text = text.replace(/\[montant\]/g, () => {
+        const m = montants[montantIdx] || "N/A";
+        montantIdx++;
+        return m;
+      });
+      text = text.replace(/\[%\]/g, "");
+
+      // [X]M → actual budget delta
+      const recCost = parseInt((flat[`${recSc}_cost_total`] || "0").replace(/[^\d]/g, "")) || 0;
+      const budgetFcfa = parseInt((flat.budget_fcfa || "0").replace(/[^\d]/g, "")) || 0;
+      const delta = recCost - budgetFcfa;
+      text = text.replace(/\[X\]M/g, `${Math.abs(delta)}M`);
+      text = text.replace(/\[calcul\]/g, delta > 0 ? `${Math.round(delta * 1e6 / 130)}` : "N/A");
+    }
+
+    // 6. TROPICAL → tropical (EVERYWHERE in flowing text — zone labels handled by generate_pptx.py)
+    text = text.replace(/\bTROPICAL\b/g, "tropical");
+    // EQUILIBREE/AMBITIEUSE/PRUDENTE → minuscules dans texte courant
+    text = text.replace(/\bEQUILIBREE\b/g, "equilibree");
+    text = text.replace(/\bAMBITIEUSE\b/g, "ambitieuse");
+    text = text.replace(/\bPRUDENTE\b/g, "prudente");
+    // ECONOMIQUE/STANDARD/HAUT/PREMIUM → minuscules (sauf dans titres en ALL CAPS)
+    text = text.replace(/\bECONOMIQUE\b/g, "economique");
+    text = text.replace(/\bSTANDARD\b(?!\s*[-:])/g, (m, offset) => {
+      // Keep if in a label context like "STANDARD:"
+      return "standard";
+    });
+    // INTENSIFICATION/EQUILIBRE/PRUDENT as role labels — keep uppercase when in parens like "(INTENSIFICATION)"
+    // But lowercase when in flowing text like "posture EQUILIBREE"
+
+    // 7. Remove orphan curly-brace variables {var_name} that weren't replaced
+    text = text.replace(/\{[A-Z][a-z_]+\}/g, "");
+    // But keep legitimate uses like {A_score}
+
+    sanitized[key] = text;
+  }
+
+  console.log(`│ ✅ PREMIUM GATE: sanitized ${Object.keys(sanitized).length} text fields`);
+  return sanitized;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── ENDPOINT /generate-texts — PREMIUM TEXT ENGINE v3.0 ─────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6254,6 +6449,11 @@ Tu es un expert en promotion immobiliere en Afrique subsaharienne (Cameroun, Cot
 17. TRADUCTION budget_fit : "HORS_BUDGET" → "hors budget", "DANS_BUDGET" → "dans le budget", "TIGHT" → "en limite de budget". Ne JAMAIS afficher les codes bruts.
 18. FORMULATION DELTA : quand tu compares deux scenarios, ne pas combiner un chiffre negatif avec le mot "supplementaire". Ecrire : "L'ecart entre A et C est de {delta_CA_cout} de surcout pour {delta_CA_sdp} de SDP en plus." Si C < A, ecrire "Le scenario C economise {montant} par rapport a A, pour {surface} de surface en moins."
 19. VARIABLES rec_ventil_* : pour la ventilation du scenario recommande, utilise {rec_ventil_go}, {rec_ventil_go_pct}, {rec_ventil_so}, {rec_ventil_so_pct}, {rec_ventil_lt}, {rec_ventil_lt_pct}, {rec_ventil_vrd}, {rec_ventil_vrd_pct}. NE PAS recopier le nom des variables dans le texte final.
+20. ZERO IMPROVISATION : Tu ne dois JAMAIS ecrire un chiffre, montant, pourcentage ou surface qui ne provient pas DIRECTEMENT d'une variable {xxx} du JSON data. Si tu ne connais pas une valeur, utilise la variable correspondante entre accolades. JAMAIS de "environ 35 %" ou "pres de 40M" si la variable exacte existe. Tout chiffre non issu d'une variable = ERREUR CRITIQUE.
+21. SCORE FORMAT : Toujours ecrire le score comme {X_score}/100 (ou X = A, B, C, rec). Les scores sont deja en echelle 0-100 dans le JSON. JAMAIS ecrire "0.741/100" ou "74.1/100" — utiliser {A_score}/100, {B_score}/100, {C_score}/100, {rec_score}/100 directement. Le score est un ENTIER sur 100.
+22. COUT AU M2 : Pour les couts au m2, utilise {A_cost_m2_marche}/{A_cost_m2_ajuste}, {B_cost_m2_marche}/{B_cost_m2_ajuste}, {C_cost_m2_marche}/{C_cost_m2_ajuste}. Le cout "marche" est le prix de reference du marche. Le cout "ajuste" est recalcule pour respecter l'enveloppe budgetaire. Si cost_adjusted=true, mentionner l'ajustement.
+23. BUDGET DELTA : Pour comparer budget vs cout, utilise {rec_budget_delta_M} (ecart en millions) et {rec_budget_delta_sign} ("depassement" ou "economie"). NE PAS calculer l'ecart toi-meme.
+24. CONFIGURATION ARCHITECTURALE : Chaque scenario a une configuration specifique decrite par {X_typology_desc} (forme), {X_pilotis_desc} (disposition RDC) et {X_config_justif} (justification). UTILISE ces variables pour decrire la configuration. NE PAS ecrire "Pas de pilotis" si {X_has_pilotis}=true ou si {X_pilotis_desc} mentionne des pilotis. La justification de la forme (bloc, L, U, barre, split) doit etre liee aux contraintes du terrain (mitoyennete, retraits, orientation, programme).
 
 === STRUCTURE OBLIGATOIRE PAR TEXTE ===
 
@@ -6290,17 +6490,18 @@ PARA 5: Conclusion sur la densite du voisinage et le gabarit a respecter.
 --- scenario_A_summary_text ---
 STRUCTURE OBLIGATOIRE (scenario A) :
 PARA 1: "Le Scenario A ({A_role}) [description philosophie] afin de repondre au programme cible du client : {A_units} unites en usage mixte."
-PARA 2 Config: "Configuration retenue :\\n- Gabarit : R+{A_levels} (rez-de-chaussee + {A_levels} etages)\\n- Emprise au sol : {A_fp} m2\\n- SDP totale : {A_sdp} m2\\n- [Pilotis si A_has_pilotis=true, sinon 'Pas de pilotis : commerce dispose directement au RDC']"
-PARA 3 Programme: "Programme :\\n- [detail du mix: {A_unit_summary}]"
-PARA 4: "La surface utile et habitable par logement, hors circulations et parties communes, est estimee a environ {A_m2_par_logt} m2, un niveau [compact/confortable/spacieux] pour des T[X] en standing {standing_level}."
-PARA 5: Description de l'acces et circulation.
-PARA 6: "- Parking : {A_parking_places} places en surface, [deficit/aucun deficit]\\n- Gabarit et impact visuel : [qualificatif] mais conforme\\n- COS utilise : {A_cos_pct} % du COS autorise ({A_sdp} m2 sur {site_sdp_max})"
+PARA 2 Config: "Configuration retenue :\\n- Gabarit : R+{A_levels} (rez-de-chaussee + {A_levels} etages)\\n- Emprise au sol : {A_fp} m2\\n- SDP totale : {A_sdp} m2\\n- Disposition : {A_pilotis_desc}\\n- Forme : {A_typology_desc}"
+PARA 3 Justification architecturale: Reprendre {A_config_justif} et le reformuler en 2-3 phrases fluides. Expliquer POURQUOI cette configuration (split/superpose, pilotis/pas de pilotis, forme en bloc/L/U/barre) a ete choisie compte tenu des contraintes du terrain, de la mitoyennete, du programme et du standing.
+PARA 4 Programme: "Programme :\\n- [detail du mix: {A_unit_summary}]"
+PARA 5: "La surface utile et habitable par logement, hors circulations et parties communes, est estimee a environ {A_m2_par_logt} m2, un niveau [compact/confortable/spacieux] pour des T[X] en standing {standing_level}."
+PARA 6: Description de l'acces et circulation.
+PARA 7: "- Parking : {A_parking_places} places en surface, [deficit/aucun deficit]\\n- Gabarit et impact visuel : [qualificatif] mais conforme\\n- COS utilise : {A_cos_pct} % du COS autorise ({A_sdp} m2 sur {site_sdp_max})"
 
 --- scenario_B_summary_text ---
-MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables B_* et en decrivant la philosophie d'equilibre.
+MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables B_* (B_fp, B_levels, B_sdp, B_pilotis_desc, B_typology_desc, B_config_justif, B_unit_summary, B_m2_par_logt, B_parking_places, B_cos_pct) et en decrivant la philosophie d'equilibre. IMPORTANT: utiliser {B_pilotis_desc} pour decrire la disposition (PAS "Pas de pilotis" par defaut).
 
 --- scenario_C_summary_text ---
-MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables C_* et en decrivant la philosophie de prudence.
+MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables C_* (C_fp, C_levels, C_sdp, C_pilotis_desc, C_typology_desc, C_config_justif, C_unit_summary, C_m2_par_logt, C_parking_places, C_cos_pct) et en decrivant la philosophie de prudence. IMPORTANT: utiliser {C_pilotis_desc} pour decrire la disposition.
 
 --- scenario_A_financial_text ---
 STRUCTURE OBLIGATOIRE :
@@ -6594,6 +6795,19 @@ function buildGptDataContext(p, scenarios, flat) {
     delta_BA_sdp: flat.delta_BA_sdp, delta_BA_cout: flat.delta_BA_cout,
     delta_CA_sdp: flat.delta_CA_sdp, delta_CA_cout: flat.delta_CA_cout,
     delta_CB_sdp: flat.delta_CB_sdp || "", delta_CB_cout: flat.delta_CB_cout || "",
+    // v72.84: Pre-computed budget delta for slides 17/18
+    rec_budget_delta_M: (() => {
+      const recKey = flat.rec_scenario || "C";
+      const recCost = parseInt((flat[`${recKey}_cost_total`] || "0").replace(/[^\d]/g, "")) || 0;
+      const budgetVal = parseInt((flat.budget_fcfa || "0").replace(/[^\d]/g, "")) || 0;
+      return `${Math.abs(recCost - budgetVal)}M`;
+    })(),
+    rec_budget_delta_sign: (() => {
+      const recKey = flat.rec_scenario || "C";
+      const recCost = parseInt((flat[`${recKey}_cost_total`] || "0").replace(/[^\d]/g, "")) || 0;
+      const budgetVal = parseInt((flat.budget_fcfa || "0").replace(/[^\d]/g, "")) || 0;
+      return recCost > budgetVal ? "depassement" : "economie";
+    })(),
   }, null, 0);
 }
 
@@ -6784,6 +6998,9 @@ app.post("/generate-texts", async (req, res) => {
     A_commerce_count: String(sA.commerce_count || 0),
     A_logement_count: String(sA.logement_count || 0),
     A_typology_desc: sA.typology_desc || "",
+    A_pilotis_desc: sA.pilotis_desc || "pas de pilotis",
+    A_config_justif: sA.config_justification || "",
+    A_layout_mode: sA.layout_mode || "SUPERPOSE",
     A_split_layout: sA.split_layout ? JSON.stringify(sA.split_layout) : "",
     A_frais_M: `${sA.frais_annexes ? Math.round(sA.frais_annexes / 1e6) : 0}M`,
     B_role: sB.role || "", B_fp: String(sB.fp_m2 || 0), B_levels: String(sB.levels || 0),
@@ -6821,6 +7038,9 @@ app.post("/generate-texts", async (req, res) => {
     B_commerce_count: String(sB.commerce_count || 0),
     B_logement_count: String(sB.logement_count || 0),
     B_typology_desc: sB.typology_desc || "",
+    B_pilotis_desc: sB.pilotis_desc || "pas de pilotis",
+    B_config_justif: sB.config_justification || "",
+    B_layout_mode: sB.layout_mode || "SUPERPOSE",
     B_frais_M: `${sB.frais_annexes ? Math.round(sB.frais_annexes / 1e6) : 0}M`,
     C_role: sC.role || "", C_fp: String(sC.fp_m2 || 0), C_levels: String(sC.levels || 0),
     C_height: String(sC.height_m || 0), C_sdp: String(sC.sdp_m2 || 0),
@@ -6857,6 +7077,9 @@ app.post("/generate-texts", async (req, res) => {
     C_commerce_count: String(sC.commerce_count || 0),
     C_logement_count: String(sC.logement_count || 0),
     C_typology_desc: sC.typology_desc || "",
+    C_pilotis_desc: sC.pilotis_desc || "pas de pilotis",
+    C_config_justif: sC.config_justification || "",
+    C_layout_mode: sC.layout_mode || "SUPERPOSE",
     C_frais_M: `${sC.frais_annexes ? Math.round(sC.frais_annexes / 1e6) : 0}M`,
   };
 
@@ -6887,6 +7110,9 @@ app.post("/generate-texts", async (req, res) => {
     comparatif_B_units: flat.B_unit_summary,
     comparatif_C_units: flat.C_unit_summary,
   };
+
+  // ── PREMIUM GATE: sanitize all GPT texts ──
+  generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
 
   // Step 5: Merge all into response
   const response = {
@@ -7022,6 +7248,10 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_unit_summary`] = s.unit_mix_detail || "";
       flat[`${key}_m2_par_logt`] = String(s.m2_habitable_par_logement || 0);
       flat[`${key}_has_pilotis`] = String(s.has_pilotis || false);
+      flat[`${key}_pilotis_desc`] = s.pilotis_desc || "pas de pilotis";
+      flat[`${key}_typology_desc`] = s.typology_desc || "";
+      flat[`${key}_config_justif`] = s.config_justification || "";
+      flat[`${key}_layout_mode`] = s.layout_mode || "SUPERPOSE";
       flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
       flat[`${key}_cost_m2`] = `${s.cost_per_m2_sdp ? Math.round(s.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`;
       flat[`${key}_cost_m2_marche`] = `${s.market_cost_per_m2 ? Math.round(s.market_cost_per_m2 / 1000) : 0}k`;
@@ -7063,6 +7293,9 @@ app.post("/generate-pptx", async (req, res) => {
     if (OPENAI_API_KEY) {
       generatedTexts = await generateDiagnosticTexts(dataContext, rules);
     }
+
+    // ── PREMIUM GATE: sanitize all GPT texts ──
+    generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
 
     // Step 4: Map server data to EXACT keys expected by Python scripts
     // ═══════════════════════════════════════════════════════════════
