@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.34-SUPERVISOR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.84-BUDGET-STANDING-DRIVEN" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -695,9 +695,9 @@ const CES_FILL_BY_ROLE = {
 //   C = pas d'extension (même empreinte que le RDC)
 // ══════════════════════════════════════════════════════════════════════════════
 const ETAGE_EXTENSION_BY_ROLE = {
-  INTENSIFICATION: "ENVELOPE",  // fp_etages = enveloppe constructible (max)
-  EQUILIBRE: 1.00,               // v72.80: fp_etages = fp_rdc (pas d'extension, différencie de A)
-  PRUDENT: 0.90,                  // v72.80: fp_etages = fp_rdc × 0.90 (emprise réduite aux étages)
+  INTENSIFICATION: 1.10,  // v72.82: léger débord étages (+10%), intensification maîtrisée
+  EQUILIBRE: 1.00,         // fp_etages = fp_rdc (pas d'extension)
+  PRUDENT: 1.00,           // v72.82: fp_etages = fp_rdc (pas de réduction, T3 doit rentrer)
 };
 // ══════════════════════════════════════════════════════════════════════════════
 // Le CES réglementaire = max autorisé, PAS ce qu'on doit construire.
@@ -1660,6 +1660,18 @@ function computeSmartScenarios({
     const scenarioKey = label; // A, B, C
     const expertZone = EXPERT_RATIOS[programKey]?.[zoning_type] || EXPERT_RATIOS[programKey]?.Z_DEFAULT;
     const expertRatio = expertZone?.[scenarioKey] || null;
+    // ── v72.84 BUDGET + STANDING COST REFERENCE (shared by both modes) ──
+    const BUDGET_CAP_FACTOR_V84 = { A: 1.20, B: 1.00, C: 0.85 };
+    const COST_PER_M2_ROLE_V84 = {
+      ECONOMIQUE: { A: 250000, B: 215000, C: 175000 },
+      ECO:        { A: 250000, B: 215000, C: 175000 },
+      STANDARD:   { A: 350000, B: 300000, C: 250000 },
+      HAUT:       { A: 450000, B: 385000, C: 325000 },
+      PREMIUM:    { A: 550000, B: 475000, C: 400000 },
+    };
+    const standingKeyV84 = String(standing_level).toUpperCase();
+    const costTableV84 = COST_PER_M2_ROLE_V84[standingKeyV84] || COST_PER_M2_ROLE_V84.STANDARD;
+    const marketCostV84 = costTableV84[label] || costTableV84.B;
     if (isProgramDriven) {
       // ════════════════════════════════════════════════════════════════════════
       // MODE CES-DRIVEN v57.0
@@ -1836,7 +1848,9 @@ function computeSmartScenarios({
       // fpProgramme = dimensionné pour les unités qui rentrent réellement
       const fpProgramme = Math.round(adaptiveUnitsPerFloor * effectiveUnitSize / (1 - circRatio));
       // Plancher : minimum 1 appartement compressé
-      const fpMinViable = Math.round(Math.max(100, 1 * compressedSize / (1 - circRatio)));
+      // v72.82: floor abaissé de 100 à 50 — le 100 forçait un surdimensionnement
+      // sur les petits programmes (3 unités → emprise 100m² alors que 70m² suffit)
+      const fpMinViable = Math.round(Math.max(50, 1 * compressedSize / (1 - circRatio)));
       console.log(`│   🏠 v72.33 PLATEAU ADAPTATIF (parcelle → unités → niveaux):`);
       console.log(`│     1. PROGRAMME CLIENT: ${clientUnits} appartements demandés`);
       console.log(`│     2. PARCELLE: fpMaxParcel=${fpMaxParcel}m² → utile=${Math.round(usefulPerFloor)}m²/palier`);
@@ -2043,15 +2057,14 @@ function computeSmartScenarios({
       fpRdc = Math.round(fpProgramme * roleFpFactor);
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
-      // v72.80 FIX: fpMinViable RÉDUIT PAR RÔLE en SUPERPOSÉ (comme en SPLIT ligne 1948)
-      // AVANT: fpMinViable identique pour A/B/C → A et B convergeaient sur petites parcelles
-      // MAINTENANT: B=75%, C=55% du fpMinViable → emprise réellement différenciée
-      const fpMinForRole = role === "INTENSIFICATION" ? fpMinViable
-        : role === "EQUILIBRE" ? Math.round(fpMinViable * 0.75)
-        : Math.round(fpMinViable * 0.55);
+      // v72.82 FIX: fpMinForRole BASÉ SUR LE PROGRAMME RÉEL
+      // Garantit que 1 unité résidentielle rentre physiquement par étage
+      // La différenciation A/B/C vient des TAILLES d'unités (avgResSize), pas d'un ratio arbitraire
+      const minEmpriseForOneUnit = Math.ceil(avgResSize / (1 - circRatio));
+      const fpMinForRole = Math.max(fpMinViable, minEmpriseForOneUnit);
       fpRdc = Math.max(fpRdc, fpMinForRole);
       fpRdc = Math.round(fpRdc);
-      console.log(`│   v72.80 FIX: fpMinViable=${fpMinViable} → fpMinForRole(${role})=${fpMinForRole} → fpRdc=${fpRdc}`);
+      console.log(`│   v72.82 FIX: avgResSize=${avgResSize} → minEmprise1Unit=${minEmpriseForOneUnit} fpMinViable=${fpMinViable} → fpMinForRole=${fpMinForRole} → fpRdc=${fpRdc}`);
       }
       const cesPctResult = Math.round((splitLayout ? (splitLayout.volume_commerce.fp_m2 + fpRdc) : fpRdc) / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
@@ -2143,6 +2156,16 @@ function computeSmartScenarios({
         floorsNeeded = Math.max(2, Math.min(floorsNeeded, effectiveMaxFloors));
         // Garde-fou COS
         while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > maxSdpForRole) floorsNeeded--;
+        // v72.82: ANTI-SURINTENSIFICATION — SDP ne dépasse pas programme × 1.15
+        // Empêche A à 330m² SDP pour 216m² de programme (50% de vide)
+        const commerceSizeEst = sizes.COMMERCE || sizes.BOUTIQUE || 30;
+        const totalProgrammeGross = Math.ceil((commerceUnits * commerceSizeEst + resiTarget * avgResSize) / (1 - circRatio));
+        const sdpCapProgramme = Math.round(totalProgrammeGross * 1.15);
+        while (floorsNeeded > 2 && computeSdpDual(floorsNeeded) > sdpCapProgramme
+               && computeSdpDual(floorsNeeded - 1) >= totalProgrammeGross) {
+          floorsNeeded--;
+          console.log(`│   v72.82 ANTI-SURINTENSIF: SDP(${floorsNeeded+1}niv)=${computeSdpDual(floorsNeeded+1)} > cap ${sdpCapProgramme} → réduit à ${floorsNeeded} niv (SDP=${computeSdpDual(floorsNeeded)} ≥ prog ${totalProgrammeGross})`);
+        }
         const actualResiFloors = floorsNeeded - 1;
         totalUnits = commerceUnits + resiPerFloor * actualResiFloors;
         console.log(`│   v72.33 MIXTE: ${resiTarget} logts cibles / ${resiPerFloor} par palier (${avgResSize}m²) = ${actualResiFloors} étages rési + 1 RDC commerce`);
@@ -2206,11 +2229,18 @@ function computeSmartScenarios({
       // on réduit C d'1 niveau pour créer une différenciation visible.
       // ══════════════════════════════════════════════════════════════════
       if (!splitLayout && role === "PRUDENT" && levels >= 2 && fpRdc <= fpMinViable * 1.15) {
-        // C est au plancher d'emprise → réduire d'1 niveau pour différencier de B
-        // v72.22: en programme mixte, minimum = commerceLevels + 1 (au moins 1 logement au-dessus du commerce)
+        // C est au plancher d'emprise → TENTER de réduire d'1 niveau pour différencier de B
         const minLevels = commerceLevels > 0 ? commerceLevels + 1 : 1;
-        levels = Math.max(minLevels, levels - 1);
-        console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (emprise au plancher ${fpRdc}m² ≈ fpMin=${fpMinViable}m² | min=${minLevels} car commerce=${commerceLevels})`);
+        const proposedLevels = Math.max(minLevels, levels - 1);
+        // v72.82: GARDE-FOU — ne pas réduire si le programme ne rentre plus
+        const sdpIfReduced = computeSdpDual(proposedLevels);
+        const minSdpForProgramme = Math.ceil(totalUseful / (1 - circRatio));
+        if (sdpIfReduced >= minSdpForProgramme) {
+          levels = proposedLevels;
+          console.log(`│   ⚠️ v70.2 ANTI-COLLAPSE: C réduit à ${levels} niv (SDP ${sdpIfReduced} ≥ prog ${minSdpForProgramme} ✓)`);
+        } else {
+          console.log(`│   ⚠️ v72.82 ANTI-COLLAPSE BLOQUÉ: SDP(${proposedLevels}niv)=${sdpIfReduced} < prog ${minSdpForProgramme} → C maintenu à ${levels} niv`);
+        }
       }
       // ── PILOTIS ──
       const freeGround = envelope_area - fpRdc;
@@ -2336,21 +2366,29 @@ function computeSmartScenarios({
     // Construction = SDP × coût/m²
     // VRD = 10% de SDP × 50% du coût/m²
     // Total = construction + VRD = SDP × costPerM2 × 1.05
-    // v72.71: COÛT/M² EXPLICITE PAR STANDING × RÔLE
-    // Chaque standing a 3 valeurs : A=fourchette HAUTE, B=MÉDIANE, C=BASSE
-    //   A (INTENSIFICATION) → complexité structurelle (R+N, pilotis, SPLIT) → coût haut
-    //   B (EQUILIBRE)       → référence marché standard
-    //   C (PRUDENT)         → structure simple, moins de niveaux → coût bas
-    const COST_PER_M2_BY_ROLE = {
-      ECONOMIQUE: { A: 250000, B: 215000, C: 175000 },
-      ECO:        { A: 250000, B: 215000, C: 175000 },
-      STANDARD:   { A: 350000, B: 300000, C: 250000 },
-      HAUT:       { A: 450000, B: 385000, C: 325000 },
-      PREMIUM:    { A: 550000, B: 475000, C: 400000 },
-    };
-    const standingKey = String(standing_level).toUpperCase();
-    const costTable = COST_PER_M2_BY_ROLE[standingKey] || COST_PER_M2_BY_ROLE.STANDARD;
-    const costPerM2 = costTable[label] || costTable.B;
+    // ── v72.84 BUDGET + STANDING DRIVEN ──
+    // Standing → coût/m² MARCHÉ (réalité construction, affiché dans le tableau)
+    // Budget × cap factor → plafond budgétaire par rôle (A=1.20, B=1.00, C=0.85)
+    // Si coût marché × SDP > plafond → coût/m² ajusté à la baisse (plancher par standing)
+    // Le tableau PPTX montre les deux : marché vs ajusté
+    const standingKey = standingKeyV84;
+    const marketCostPerM2 = marketCostV84;
+    let costPerM2 = marketCostPerM2;
+    let costAdjusted = false;
+    if (budgetMax > 0 && sdp > 0) {
+      const budgetCapForRole = budgetMax * (BUDGET_CAP_FACTOR_V84[label] || 1.00);
+      const marketEstimatedCost = Math.round(sdp * marketCostPerM2 * 1.05);
+      if (marketEstimatedCost > budgetCapForRole) {
+        const COST_FLOOR_BY_STANDING = {
+          ECONOMIQUE: 130000, ECO: 130000,
+          STANDARD: 200000, HAUT: 280000, PREMIUM: 360000,
+        };
+        const costFloor = COST_FLOOR_BY_STANDING[standingKey] || COST_FLOOR_BY_STANDING.STANDARD;
+        costPerM2 = Math.max(costFloor, Math.floor(budgetCapForRole / (sdp * 1.05)));
+        costAdjusted = true;
+        console.log(`│   v72.84 BUDGET-DRIVEN: ${label} market=${marketCostPerM2/1000}k×${sdp}m²=${Math.round(marketEstimatedCost/1e6)}M > cap ${Math.round(budgetCapForRole/1e6)}M → adjusted ${costPerM2/1000}k/m²`);
+      }
+    }
     const constructionCost = sdp * costPerM2;
     const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
     const estimatedCost = Math.round(constructionCost + vrdCost);
@@ -2454,6 +2492,9 @@ function computeSmartScenarios({
       label_fr: labels_fr[label],
       accent_color: accents[label],
       estimated_cost: estimatedCost,
+      cost_per_m2: costPerM2,
+      market_cost_per_m2: marketCostPerM2,
+      cost_adjusted: costAdjusted,
       budget_fit: budgetFit,
       // v57.0 CES-driven extras
       program_driven: isProgramDriven,
@@ -2646,15 +2687,23 @@ function computeSmartScenarios({
     const bLev = r.B.levels, cLev = r.C.levels;
     const bFp = Math.round(r.B.fp_m2), cFp = Math.round(r.C.fp_m2);
     const bSdp = Math.round(r.B.sdp_m2), cSdp = Math.round(r.C.sdp_m2);
+    // v72.82: calcul du SDP min pour que le programme C rentre
+    const cTotalUseful = r.C.total_useful_m2 || r.C.surface_habitable_m2 || 0;
+    const cMinSdp = cTotalUseful > 0 ? Math.ceil(cTotalUseful / (1 - 0.15)) : 0;
     if (bLev === cLev && bFp === cFp) {
-      console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE: B(${bLev}niv,${bFp}m²) === C(${cLev}niv,${cFp}m²) → différenciation forcée`);
+      console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE: B(${bLev}niv,${bFp}m²) === C(${cLev}niv,${cFp}m²) → différenciation`);
       if (cLev >= 2) {
-        // Réduire C d'1 niveau
-        r.C.levels = cLev - 1;
-        recalcSdp(r.C);
-        console.log(`│   → C réduit à ${r.C.levels} niv, SDP=${r.C.sdp_m2}m²`);
+        // v72.82: vérifier que la réduction ne casse pas le programme
+        const proposedLevels = cLev - 1;
+        const sdpIfReduced = r.C.fp_rdc_m2 + r.C.fp_etages_m2 * Math.max(0, proposedLevels - 1);
+        if (cMinSdp === 0 || sdpIfReduced >= cMinSdp) {
+          r.C.levels = proposedLevels;
+          recalcSdp(r.C);
+          console.log(`│   → C réduit à ${r.C.levels} niv, SDP=${r.C.sdp_m2}m² (≥ prog ${cMinSdp})`);
+        } else {
+          console.log(`│   → C MAINTENU à ${cLev} niv (SDP ${sdpIfReduced} < prog ${cMinSdp})`);
+        }
       } else {
-        // C déjà à 1 niveau → réduire emprise de 15%
         r.C.fp_m2 = Math.round(cFp * 0.85);
         r.C.fp_rdc_m2 = r.C.fp_m2;
         r.C.fp_etages_m2 = r.C.fp_m2;
@@ -2662,11 +2711,17 @@ function computeSmartScenarios({
         console.log(`│   → C emprise réduite à ${r.C.fp_m2}m², SDP=${r.C.sdp_m2}m²`);
       }
     } else if (bSdp === cSdp && bSdp > 0) {
-      console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE (SDP): B.sdp=${bSdp} === C.sdp=${cSdp} → C réduit`);
+      console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE (SDP): B.sdp=${bSdp} === C.sdp=${cSdp}`);
       if (cLev >= 2) {
-        r.C.levels = cLev - 1;
-        recalcSdp(r.C);
-        console.log(`│   → C réduit à ${r.C.levels} niv, SDP=${r.C.sdp_m2}m²`);
+        const proposedLevels = cLev - 1;
+        const sdpIfReduced = r.C.fp_rdc_m2 + r.C.fp_etages_m2 * Math.max(0, proposedLevels - 1);
+        if (cMinSdp === 0 || sdpIfReduced >= cMinSdp) {
+          r.C.levels = proposedLevels;
+          recalcSdp(r.C);
+          console.log(`│   → C réduit à ${r.C.levels} niv, SDP=${r.C.sdp_m2}m²`);
+        } else {
+          console.log(`│   → C MAINTENU (SDP ${sdpIfReduced} < prog ${cMinSdp})`);
+        }
       }
     }
   }
@@ -2701,6 +2756,9 @@ function computeSmartScenarios({
       cout_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost,
       cout_par_unite: sc.cost_per_unit || 0,
       cout_par_m2_sdp: sc.cost_per_m2_sdp || 0,
+      cout_par_m2_marche: sc.market_cost_per_m2 || 0,
+      cout_par_m2_ajuste: sc.cost_per_m2 || 0,
+      cost_adjusted: sc.cost_adjusted || false,
       cout_par_m2_habitable: sc.cost_per_m2_habitable || 0,
       ces_utilise_pct: sc.ces_fill_pct,
       cos_utilise_pct: sc.cos_ratio_pct,
@@ -3574,6 +3632,8 @@ app.post("/compute-scenarios", (req, res) => {
     A_cost_bas: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M`,
     A_cost_haut: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.haut / 1e6) : 0}M`,
     A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    A_cost_m2_marche: `${sA.market_cost_per_m2 ? Math.round(sA.market_cost_per_m2 / 1000) : 0}k`,
+    A_cost_m2_ajuste: `${sA.cost_per_m2 ? Math.round(sA.cost_per_m2 / 1000) : 0}k`,
     A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
     A_budget_fit: sA.budget_fit || "",
     A_ces_pct: String(sA.ces_fill_pct || 0), A_cos_pct: String(sA.cos_ratio_pct || 0),
@@ -3610,6 +3670,8 @@ app.post("/compute-scenarios", (req, res) => {
     B_cost_bas: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M`,
     B_cost_haut: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.haut / 1e6) : 0}M`,
     B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    B_cost_m2_marche: `${sB.market_cost_per_m2 ? Math.round(sB.market_cost_per_m2 / 1000) : 0}k`,
+    B_cost_m2_ajuste: `${sB.cost_per_m2 ? Math.round(sB.cost_per_m2 / 1000) : 0}k`,
     B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
     B_budget_fit: sB.budget_fit || "",
     B_ces_pct: String(sB.ces_fill_pct || 0), B_cos_pct: String(sB.cos_ratio_pct || 0),
@@ -3646,6 +3708,8 @@ app.post("/compute-scenarios", (req, res) => {
     C_cost_bas: `${sC.cout_fourchette ? Math.round(sC.cout_fourchette.bas / 1e6) : 0}M`,
     C_cost_haut: `${sC.cout_fourchette ? Math.round(sC.cout_fourchette.haut / 1e6) : 0}M`,
     C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    C_cost_m2_marche: `${sC.market_cost_per_m2 ? Math.round(sC.market_cost_per_m2 / 1000) : 0}k`,
+    C_cost_m2_ajuste: `${sC.cost_per_m2 ? Math.round(sC.cost_per_m2 / 1000) : 0}k`,
     C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
     C_budget_fit: sC.budget_fit || "",
     C_ces_pct: String(sC.ces_fill_pct || 0), C_cos_pct: String(sC.cos_ratio_pct || 0),
@@ -6181,12 +6245,15 @@ Tu es un expert en promotion immobiliere en Afrique subsaharienne (Cameroun, Cot
 8. TOUJOURS utiliser les chiffres EXACTS du JSON. Ne pas arrondir differemment.
 9. Utiliser \\n pour les sauts de ligne.
 10. COS et CES : expliquer ce que sont le COS (Coefficient d'Occupation des Sols) et le CES (Coefficient d'Emprise au Sol) UNE SEULE FOIS dans slide_4_text. Ensuite, ne plus expliquer ni definir ces termes — utiliser simplement les valeurs en %.
-11. Les termes "economique", "tropical", "standard", "premium" doivent etre en MINUSCULES dans le texte courant.
+11. Les termes "economique", "tropical", "standard", "premium", "hors budget", "dans le budget" doivent etre en MINUSCULES dans le texte courant. JAMAIS "TROPICAL", "ECONOMIQUE" etc. en majuscules sauf dans un titre.
 12. La posture "BALANCED" doit etre ecrite "EQUILIBREE" en francais, "AGGRESSIVE" → "AMBITIEUSE", "CONSERVATIVE" → "PRUDENTE".
 13. UTILISE {budget_fcfa} pour le budget (c'est le montant FCFA formate). Ne pas utiliser {budget_range} directement.
 14. Pour les ventilations en pourcentage, utilise les variables {X_ventil_go_pct}, {X_ventil_so_pct}, {X_ventil_lt_pct}, {X_ventil_vrd_pct} au lieu d'ecrire "XX %".
 15. Pour les scores individuels, utilise {A_score}, {B_score}, {C_score} (deja en 0-100). Ne pas inventer.
 16. Pour les surfaces habitables totales, utilise {A_hab_m2_total}, {B_hab_m2_total}, {C_hab_m2_total}.
+17. TRADUCTION budget_fit : "HORS_BUDGET" → "hors budget", "DANS_BUDGET" → "dans le budget", "TIGHT" → "en limite de budget". Ne JAMAIS afficher les codes bruts.
+18. FORMULATION DELTA : quand tu compares deux scenarios, ne pas combiner un chiffre negatif avec le mot "supplementaire". Ecrire : "L'ecart entre A et C est de {delta_CA_cout} de surcout pour {delta_CA_sdp} de SDP en plus." Si C < A, ecrire "Le scenario C economise {montant} par rapport a A, pour {surface} de surface en moins."
+19. VARIABLES rec_ventil_* : pour la ventilation du scenario recommande, utilise {rec_ventil_go}, {rec_ventil_go_pct}, {rec_ventil_so}, {rec_ventil_so_pct}, {rec_ventil_lt}, {rec_ventil_lt_pct}, {rec_ventil_vrd}, {rec_ventil_vrd_pct}. NE PAS recopier le nom des variables dans le texte final.
 
 === STRUCTURE OBLIGATOIRE PAR TEXTE ===
 
@@ -6267,7 +6334,7 @@ STRUCTURE OBLIGATOIRE (5 paragraphes) :
 PARA 1: "Le client recherche un programme {program_main} en standing {standing_level}, avec une posture {feasibility_posture_fr}, pour une enveloppe budgetaire de l'ordre de {budget_fcfa}."
 PARA 2: "Le systeme de scoring evalue chaque scenario selon 7 criteres ponderes : adequation budgetaire (25 %), alignement risque (20 %), conformite COS (12 %), capacite du programme (13 %), efficacite cout (12 %), adequation standing (8 %), flexibilite de phasage (10 %)."
 PARA 3: "Les 3 scenarios livrent tous les {target_units} unites demandees, mais different significativement sur le cout :\\n- Scenario A : {A_cost_total}, {A_hab_m2_total} m2 habitables, score {A_score}/100\\n- Scenario B : {B_cost_total}, {B_hab_m2_total} m2 habitables, score {B_score}/100\\n- Scenario C : {C_cost_total}, {C_hab_m2_total} m2 habitables, score {C_score}/100"
-PARA 4: "L'ecart entre C et A est de {delta_CA_cout} pour {delta_CA_sdp} de surface supplementaire. Cet ecart [est justifiable / n'est pas justifiable] au regard de l'enveloppe disponible de {budget_fcfa}."
+PARA 4: Compare les scenarios A et C : le scenario C economise combien par rapport a A (utilise {delta_CA_cout}) pour combien de surface en moins ({delta_CA_sdp}). Conclure si l'economie justifie la perte de surface au regard de l'enveloppe de {budget_fcfa}.
 PARA 5: "Le Scenario {rec_scenario} obtient le meilleur score ({rec_score}/100) car il offre le meilleur compromis entre [arguments hierarchises]. Il est le scenario recommande."
 
 --- comparatif_intro_text ---
@@ -6279,7 +6346,7 @@ UNE SEULE PHRASE: "Points de vigilance techniques et administratifs a anticiper 
 --- invisible_technical_text ---
 STRUCTURE OBLIGATOIRE (texte dense pour slide 17) :
 PARA 1: "Les conditions de reussite reposent sur une anticipation rigoureuse des postes de depenses et des delais. Voici la ventilation detaillee pour le scenario {rec_scenario} recommande ({rec_cost_total}) :"
-PARA 2: "Ventilation des couts par lot pour le scenario recommande {rec_scenario} :\\n- Gros oeuvre et structure : utilise les variables ventil_go et ventil_go_pct du scenario recommande. Systeme poteau-poutre en beton arme adapte au R+{rec_levels}.\\n- Second oeuvre et finitions : utilise les variables ventil_so et ventil_so_pct du scenario recommande. Materiaux {standing_level} mais durables.\\n- Lots techniques : utilise les variables ventil_lt et ventil_lt_pct du scenario recommande. Electricite, plomberie, ventilation naturelle.\\n- VRD et amenagements : utilise les variables ventil_vrd et ventil_vrd_pct du scenario recommande. Raccordements reseaux, assainissement.\\nNote : identifie le scenario recommande (A, B ou C) depuis {rec_scenario} et utilise les variables {X_ventil_go}, {X_ventil_go_pct} etc. correspondantes."
+PARA 2: "Ventilation des couts par lot :\\n- Gros oeuvre et structure : {rec_ventil_go} FCFA ({rec_ventil_go_pct}). Systeme poteau-poutre en beton arme adapte au R+{rec_levels}.\\n- Second oeuvre et finitions : {rec_ventil_so} FCFA ({rec_ventil_so_pct}). Materiaux {standing_level} mais durables.\\n- Lots techniques : {rec_ventil_lt} FCFA ({rec_ventil_lt_pct}). Electricite, plomberie, ventilation naturelle.\\n- VRD et amenagements : {rec_ventil_vrd} FCFA ({rec_ventil_vrd_pct}). Raccordements reseaux, assainissement."
 PARA 3: "Strategies de phasage recommandees :\\n- Duree estimee du chantier : {rec_duree_chantier}\\n- Phase 1 (M1-M2) : etudes et permis\\n- Phase 2 (M3) : terrassement et fondations, eviter la saison des pluies (juin-octobre)\\n- Phase 3 (M4-M5) : gros oeuvre\\n- Phase 4 (M6-M7) : second oeuvre\\n- Phase 5 (M8) : finitions et reception"
 PARA 4: "Delais caches a anticiper : obtention du permis (2-4 mois), etude geotechnique (2-3 semaines), raccordements reseaux (variable)."
 
@@ -6418,6 +6485,15 @@ function buildGptDataContext(p, scenarios, flat) {
     rec_hono_taux_bas: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_taux_bas; if (rs === "B") return flat.B_hono_taux_bas; return flat.C_hono_taux_bas; })(),
     rec_hono_taux_haut: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hono_taux_haut; if (rs === "B") return flat.B_hono_taux_haut; return flat.C_hono_taux_haut; })(),
     rec_hab_m2_total: (() => { const rs = flat.rec_scenario; if (rs === "A") return flat.A_hab_m2_total; if (rs === "B") return flat.B_hab_m2_total; return flat.C_hab_m2_total; })(),
+    // v72.82: ventilation du scénario recommandé (pour slides 17/18)
+    rec_ventil_go: (() => { const rs = flat.rec_scenario; return flat[`${rs}_ventil_go`] || ""; })(),
+    rec_ventil_so: (() => { const rs = flat.rec_scenario; return flat[`${rs}_ventil_so`] || ""; })(),
+    rec_ventil_lt: (() => { const rs = flat.rec_scenario; return flat[`${rs}_ventil_lt`] || ""; })(),
+    rec_ventil_vrd: (() => { const rs = flat.rec_scenario; return flat[`${rs}_ventil_vrd`] || ""; })(),
+    rec_ventil_go_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    rec_ventil_so_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
+    rec_ventil_lt_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
+    rec_ventil_vrd_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
     // Scenario A
     A_role: sA.role || flat.A_role || "", A_fp: flat.A_fp,
     A_levels: String(Math.max(0, (sA.levels || 1) - 1)), // v72.80 FIX: R+X = levels-1 (levels=total incl. RDC)
@@ -6679,6 +6755,8 @@ app.post("/generate-texts", async (req, res) => {
     A_has_pilotis: String(sA.has_pilotis || false),
     A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
     A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    A_cost_m2_marche: `${sA.market_cost_per_m2 ? Math.round(sA.market_cost_per_m2 / 1000) : 0}k`,
+    A_cost_m2_ajuste: `${sA.cost_per_m2 ? Math.round(sA.cost_per_m2 / 1000) : 0}k`,
     A_fourchette_text: `entre ${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M et ${sA.cout_fourchette ? Math.round(sA.cout_fourchette.haut / 1e6) : 0}M FCFA`,
     A_budget_fit: sA.budget_fit || "", A_cos_pct: String(sA.cos_ratio_pct || 0),
     A_cos_compliance: sA.cos_compliance || "", A_duree_chantier: `${sA.duree_chantier_mois || 0} mois`,
@@ -6715,6 +6793,8 @@ app.post("/generate-texts", async (req, res) => {
     B_has_pilotis: String(sB.has_pilotis || false),
     B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
     B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    B_cost_m2_marche: `${sB.market_cost_per_m2 ? Math.round(sB.market_cost_per_m2 / 1000) : 0}k`,
+    B_cost_m2_ajuste: `${sB.cost_per_m2 ? Math.round(sB.cost_per_m2 / 1000) : 0}k`,
     B_fourchette_text: `entre ${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M et ${sB.cout_fourchette ? Math.round(sB.cout_fourchette.haut / 1e6) : 0}M FCFA`,
     B_budget_fit: sB.budget_fit || "", B_cos_pct: String(sB.cos_ratio_pct || 0),
     B_cos_compliance: sB.cos_compliance || "", B_duree_chantier: `${sB.duree_chantier_mois || 0} mois`,
@@ -6749,6 +6829,8 @@ app.post("/generate-texts", async (req, res) => {
     C_has_pilotis: String(sC.has_pilotis || false),
     C_cost_total: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
     C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
+    C_cost_m2_marche: `${sC.market_cost_per_m2 ? Math.round(sC.market_cost_per_m2 / 1000) : 0}k`,
+    C_cost_m2_ajuste: `${sC.cost_per_m2 ? Math.round(sC.cost_per_m2 / 1000) : 0}k`,
     C_fourchette_text: `entre ${sC.cout_fourchette ? Math.round(sC.cout_fourchette.bas / 1e6) : 0}M et ${sC.cout_fourchette ? Math.round(sC.cout_fourchette.haut / 1e6) : 0}M FCFA`,
     C_budget_fit: sC.budget_fit || "", C_cos_pct: String(sC.cos_ratio_pct || 0),
     C_cos_compliance: sC.cos_compliance || "", C_duree_chantier: `${sC.duree_chantier_mois || 0} mois`,
@@ -6832,7 +6914,7 @@ app.post("/generate-texts", async (req, res) => {
     gpt_text_rules: rules.substring(0, 200) + "...",
     gpt_elapsed_ms: generatedTexts._gpt_elapsed_ms || 0,
     gpt_model: generatedTexts._gpt_model || GPT_TEXT_MODEL,
-    server_version: "72.81-PREMIUM-FINAL",
+    server_version: "72.82-PREMIUM-COHERENT",
     total_duration_ms: Date.now() - t0,
   };
 
@@ -6942,6 +7024,8 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_has_pilotis`] = String(s.has_pilotis || false);
       flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
       flat[`${key}_cost_m2`] = `${s.cost_per_m2_sdp ? Math.round(s.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`;
+      flat[`${key}_cost_m2_marche`] = `${s.market_cost_per_m2 ? Math.round(s.market_cost_per_m2 / 1000) : 0}k`;
+      flat[`${key}_cost_m2_ajuste`] = `${s.cost_per_m2 ? Math.round(s.cost_per_m2 / 1000) : 0}k`;
       flat[`${key}_budget_fit`] = s.budget_fit || "";
       flat[`${key}_cos_pct`] = String(s.cos_ratio_pct || 0);
       flat[`${key}_cos_compliance`] = s.cos_compliance || "";
