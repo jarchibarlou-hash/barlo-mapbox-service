@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.88-FULL-COHERENCE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.90-TEMPLATE-ENGINE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -811,12 +811,13 @@ const MITOYENNETE_SIDES = {
 // ══════════════════════════════════════════════════════════════════════════════
 // v57.7 — VENTILATION COÛTS PAR POSTE (% du coût construction hors VRD)
 // ══════════════════════════════════════════════════════════════════════════════
-const COST_VENTILATION_PCT = {
-  gros_oeuvre: 0.55,      // fondations, structure, maçonnerie, charpente
-  second_oeuvre: 0.25,    // cloisons, menuiseries, revêtements, peinture
-  lots_techniques: 0.15,  // plomberie, électricité, climatisation
-  amenagements_ext: 0.05, // VRD, clôture, aménagements paysagers
+// v72.90: ventilation PAR RÔLE — A (grand volume) a plus de GO, C (compact) plus de LT%
+const COST_VENTILATION_PCT_BY_ROLE = {
+  A: { gros_oeuvre: 0.55, second_oeuvre: 0.24, lots_techniques: 0.14, amenagements_ext: 0.07 },
+  B: { gros_oeuvre: 0.52, second_oeuvre: 0.25, lots_techniques: 0.15, amenagements_ext: 0.08 },
+  C: { gros_oeuvre: 0.48, second_oeuvre: 0.26, lots_techniques: 0.16, amenagements_ext: 0.10 },
 };
+const COST_VENTILATION_PCT = COST_VENTILATION_PCT_BY_ROLE.B; // fallback
 // ══════════════════════════════════════════════════════════════════════════════
 // v57.8 — HONORAIRES ARCHITECTE : barème international dégressif
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2373,15 +2374,22 @@ function computeSmartScenarios({
       const budgetCapForRole = budgetMax * (BUDGET_CAP_FACTOR_V84[label] || 1.00);
       const marketEstimatedCost = Math.round(sdp * marketCostPerM2 * 1.05);
       if (marketEstimatedCost > budgetCapForRole) {
-        // v72.88: planchers réhaussés — 130k irréaliste même en ECO au Cameroun
-        const COST_FLOOR_BY_STANDING = {
-          ECONOMIQUE: 175000, ECO: 175000,
-          STANDARD: 220000, HAUT: 300000, PREMIUM: 380000,
+        // v72.90: COST_FLOOR par standing × rôle — évite l'effondrement identique A=B=C
+        // Quand le budget est serré, A reste au prix marché, B légèrement en dessous, C au plancher
+        const COST_FLOOR_BY_STANDING_ROLE = {
+          ECONOMIQUE: { A: 200000, B: 180000, C: 160000 },
+          ECO:        { A: 200000, B: 180000, C: 160000 },
+          STANDARD:   { A: 280000, B: 250000, C: 220000 },
+          HAUT:       { A: 370000, B: 330000, C: 290000 },
+          PREMIUM:    { A: 460000, B: 410000, C: 360000 },
         };
-        const costFloor = COST_FLOOR_BY_STANDING[standingKey] || COST_FLOOR_BY_STANDING.STANDARD;
-        costPerM2 = Math.max(costFloor, Math.floor(budgetCapForRole / (sdp * 1.05)));
+        const floorTable = COST_FLOOR_BY_STANDING_ROLE[standingKey] || COST_FLOOR_BY_STANDING_ROLE.STANDARD;
+        const costFloor = floorTable[label] || floorTable.B;
+        const budgetDriven = Math.floor(budgetCapForRole / (sdp * 1.05));
+        // v72.90: Use the HIGHER of budget-driven and floor — but never exceed market price
+        costPerM2 = Math.min(marketCostPerM2, Math.max(costFloor, budgetDriven));
         costAdjusted = true;
-        console.log(`│   v72.84 BUDGET-DRIVEN: ${label} market=${marketCostPerM2/1000}k×${sdp}m²=${Math.round(marketEstimatedCost/1e6)}M > cap ${Math.round(budgetCapForRole/1e6)}M → adjusted ${costPerM2/1000}k/m²`);
+        console.log(`│   v72.90 COST-DIFF: ${label} market=${marketCostPerM2/1000}k budgetDriven=${Math.round(budgetDriven/1000)}k floor=${costFloor/1000}k → final=${costPerM2/1000}k/m²`);
       }
     }
     const constructionCost = sdp * costPerM2;
@@ -2665,11 +2673,13 @@ function computeSmartScenarios({
     // Malus orientation solaire (surcoût climatisation si mal orienté)
     const malusSolaire = solarImpact.malus_orientation_pct > 0 ? Math.round(estimatedCost * solarImpact.malus_orientation_pct / 100) : 0;
     const coutGlobalProjet = estimatedCost + honorairesArchi + totalFraisAnnexes + malusSolaire;
+    // v72.90: ventilation par rôle (A/B/C ont des ratios différents)
+    const ventPct = COST_VENTILATION_PCT_BY_ROLE[label] || COST_VENTILATION_PCT;
     results[label].cout_ventilation = {
-      gros_oeuvre_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.gros_oeuvre),
-      second_oeuvre_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.second_oeuvre),
-      lots_techniques_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.lots_techniques),
-      amenagements_ext_fcfa: Math.round(coutConstruction * COST_VENTILATION_PCT.amenagements_ext),
+      gros_oeuvre_fcfa: Math.round(coutConstruction * ventPct.gros_oeuvre),
+      second_oeuvre_fcfa: Math.round(coutConstruction * ventPct.second_oeuvre),
+      lots_techniques_fcfa: Math.round(coutConstruction * ventPct.lots_techniques),
+      amenagements_ext_fcfa: Math.round(coutConstruction * ventPct.amenagements_ext),
       vrd_fcfa: Math.round(vrdCost),
       sous_total_construction_fcfa: estimatedCost,
       honoraires_architecte: {
@@ -6272,6 +6282,197 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── v72.90 TEMPLATE TEXT ENGINE — textes 100% deterministes (zero GPT) ──────
+// Genere TOUS les textes techniques/financiers directement depuis flat vars.
+// GPT n'est utilise QUE pour slide_5_text (contexte voisinage qualitatif).
+// ═══════════════════════════════════════════════════════════════════════════════
+function buildTemplateTexts(flat, scenarios) {
+  const f = (k) => flat[k] || "";
+  const n = (k) => parseInt(String(flat[k] || "0").replace(/[^\d]/g, "")) || 0;
+
+  // ── Helpers qualificatifs ──
+  function qualifSurface(m2) {
+    const v = parseInt(m2) || 0;
+    if (v < 50) return "compact";
+    if (v <= 65) return "confortable";
+    return "spacieux";
+  }
+  function qualifGabarit(levels) {
+    const v = parseInt(levels) || 0;
+    if (v <= 2) return "modere mais conforme";
+    if (v <= 4) return "significatif mais conforme";
+    return "imposant";
+  }
+  function tradBudgetFit(bf) {
+    const s = String(bf || "").toUpperCase().replace(/[_ ]/g, "_");
+    if (s.includes("HORS")) return "hors budget";
+    if (s.includes("DANS")) return "dans le budget";
+    if (s.includes("TENDU") || s.includes("LIMITE")) return "en limite de budget";
+    return "N/A";
+  }
+  function qualifRisqueCompacite(m2) {
+    const v = parseInt(m2) || 0;
+    if (v < 45) return "fort";
+    if (v <= 55) return "moyen";
+    return "faible";
+  }
+  function qualifProfil(score) {
+    const v = parseInt(score) || 0;
+    if (v >= 75) return "prudent";
+    if (v >= 60) return "equilibre";
+    return "modere";
+  }
+  function parkingText(sc) {
+    const places = f(`${sc}_parking_places`);
+    const deficit = n(`${sc}_parking_deficit`);
+    if (deficit > 0) return `${places} places, deficit de ${deficit} places`;
+    return `${places} places en surface, aucun deficit`;
+  }
+  const philosophie = { A: "vise a maximiser la densite", B: "recherche un compromis entre densite et cout", C: "privilegie une approche plus prudente en termes de couts" };
+
+  // ── Scenario summary builder ──
+  function buildSummary(sc) {
+    const role = f(`${sc}_role`);
+    const fp = f(`${sc}_fp`);
+    const levels = f(`${sc}_levels`);
+    const sdp = f(`${sc}_sdp`);
+    const pilotisDesc = f(`${sc}_pilotis_desc`) || "sans pilotis";
+    const typoDesc = f(`${sc}_typology_desc`) || "bloc compact";
+    const configJustif = f(`${sc}_config_justif`) || `Configuration optimisee pour le terrain`;
+    const unitSummary = f(`${sc}_unit_summary`);
+    const m2Logt = f(`${sc}_m2_par_logt`);
+    const units = f(`${sc}_units`);
+    const cosPct = f(`${sc}_cos_pct`);
+    const sdpMax = f("site_sdp_max");
+    const standing = f("standing_level").toLowerCase();
+
+    return `Le Scenario ${sc} (${role}) ${philosophie[sc]} afin de repondre au programme cible du client : ${units} unites en usage mixte.\n\nConfiguration retenue :\n- Gabarit : R+${levels} (rez-de-chaussee + ${levels} etages)\n- Emprise au sol : ${fp} m2\n- SDP totale : ${sdp} m2\n- Disposition : ${pilotisDesc}\n- Forme : ${typoDesc}\n\n${configJustif}\n\nProgramme :\n- ${unitSummary}\n\nLa surface utile et habitable par logement, hors circulations et parties communes, est estimee a environ ${m2Logt} m2, un niveau ${qualifSurface(m2Logt)} pour des T3 en standing ${standing}.\n\nL'acces principal se fait par une entree unique desservant les differentes unites, avec une circulation verticale optimisee pour limiter les espaces perdus.\n\n- Parking : ${parkingText(sc)}\n- Gabarit et impact visuel : ${qualifGabarit(levels)}\n- COS utilise : ${cosPct} % du COS autorise (${sdp} m2 sur ${sdpMax})`;
+  }
+
+  // ── Scenario financial builder ──
+  function buildFinancial(sc) {
+    const standing = f("standing_level").toLowerCase();
+    const city = f("city");
+    const sdp = f(`${sc}_sdp`);
+    const costM2 = f(`${sc}_cost_m2`);
+    const costTotal = f(`${sc}_cost_total`);
+    const ventGo = f(`${sc}_ventil_go`);
+    const ventGoPct = f(`${sc}_ventil_go_pct`);
+    const ventSo = f(`${sc}_ventil_so`);
+    const ventSoPct = f(`${sc}_ventil_so_pct`);
+    const ventLt = f(`${sc}_ventil_lt`);
+    const ventLtPct = f(`${sc}_ventil_lt_pct`);
+    const ventVrd = f(`${sc}_ventil_vrd`);
+    const ventVrdPct = f(`${sc}_ventil_vrd_pct`);
+    const fourchette = f(`${sc}_fourchette_text`);
+    const honoBas = f(`${sc}_hono_bas_M`);
+    const honoHaut = f(`${sc}_hono_haut_M`);
+    const honoTauxBas = f(`${sc}_hono_taux_bas`);
+    const honoTauxHaut = f(`${sc}_hono_taux_haut`);
+    const budgetFcfa = f("budget_fcfa");
+    const budgetFit = tradBudgetFit(f(`${sc}_budget_fit`));
+    const costUnit = f(`${sc}_cost_unit`);
+
+    return `Pour un standing ${standing} a ${city}, le cout de construction au m2 de SDP se situerait aux alentours de ${costM2}. Ce positionnement est coherent avec les references du marche local.\n\nLe raisonnement de cout s'articule ainsi :\n- SDP totale : ${sdp} m2\n- Cout estime au m2 : ${costM2}\n- Cout total estime : environ ${costTotal}\n\nVentilation previsionnelle des travaux :\n- Gros oeuvre et structure : ${ventGo} FCFA (${ventGoPct})\n- Second oeuvre et finitions : ${ventSo} FCFA (${ventSoPct})\n- Lots techniques (electricite, plomberie, CVC) : ${ventLt} FCFA (${ventLtPct})\n- VRD et amenagements exterieurs : ${ventVrd} FCFA (${ventVrdPct})\n\nLa fourchette budgetaire globale se situerait ${fourchette}.\n\nHonoraires de maitrise d'oeuvre : entre ${honoBas}M et ${honoHaut}M FCFA (${honoTauxBas} a ${honoTauxHaut}).\n\n- Enveloppe budgetaire du client : environ ${budgetFcfa}\n- Position budgetaire : ${budgetFit}\n- Ratio cout par unite : environ ${costUnit}/unite`;
+  }
+
+  // ── Scenario risk builder ──
+  function buildRisk(sc) {
+    const score = f(`${sc}_score`);
+    const cosPct = f(`${sc}_cos_pct`);
+    const cosRegl = f("site_cos_regl");
+    const m2Logt = f(`${sc}_m2_par_logt`);
+    const budgetFit = tradBudgetFit(f(`${sc}_budget_fit`));
+    const parking = parkingText(sc);
+    const units = f(`${sc}_units`);
+    const levels = f(`${sc}_levels`);
+    const standing = f("standing_level").toLowerCase();
+    const profil = qualifProfil(score);
+    const risqueCompacite = qualifRisqueCompacite(m2Logt);
+
+    let budgetDetail = "";
+    if (budgetFit === "hors budget") budgetDetail = "Le depassement est significatif par rapport a l'enveloppe prevue.";
+    else if (budgetFit === "en limite de budget") budgetDetail = "Le depassement est minime par rapport a l'enveloppe prevue.";
+    else budgetDetail = "Le budget est respecte.";
+
+    const probaImpact = budgetFit === "hors budget" ? "Probabilite moyenne, impact modere, mitigation possible par ajustement des couts et optimisation de la conception." : budgetFit === "en limite de budget" ? "Probabilite faible, impact faible, mitigation possible par une gestion rigoureuse des couts." : "Probabilite faible, impact faible. Configuration favorable.";
+
+    return `Le scoring evalue le Scenario ${sc} selon 7 criteres ponderes, chacun note de 1 a 5. Le score global de ${score}/100 reflete un profil ${profil} :\n\n1) Risque urbanistique : conforme au COS (${cosPct} % utilise sur ${cosRegl} autorise), hauteurs et retraits respectes.\n2) Risque de compacite : ${m2Logt} m2/logement de surface utile habitable, ${risqueCompacite} risque de refus de permis.\n3) Risque financier : position ${budgetFit}. ${budgetDetail}\n4) Risque de parking : ${parking.includes("deficit") ? parking : `aucun deficit (${f(`${sc}_parking_places`)} places pour ${units} unites)`}.\n5) Risque de construction : complexite d'un R+${levels} en standing ${standing}, ${risqueCompacite === "fort" ? "eleve" : risqueCompacite === "moyen" ? "modere" : "faible"}.\n\n${probaImpact}`;
+  }
+
+  // ── Recommended scenario shortcuts ──
+  const rec = f("rec_scenario") || "C";
+
+  // ═══ BUILD ALL TEXT KEYS ═══
+  const texts = {};
+
+  // ── SLIDE 3: Introduction ──
+  texts.slide_3_intro_text = `Ce projet consiste a valoriser un terrain de ${f("site_area")} m2 situe a ${f("city")}, dans le cadre d'un programme ${f("program_main")}. Le programme cible prevoit ${f("target_units")} unites pour un standing ${f("standing_level").toLowerCase()}, avec un budget de reference de l'ordre de ${f("budget_fcfa")}.\n\nL'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de ${f("site_cos_regl")}, un CES de ${f("site_ces_regl")}%, et des retraits reglementaires qui reduisent significativement l'emprise constructible.\n\nPour repondre a cette question, trois scenarios ont ete elabores :\n- Le Scenario A (${f("A_role")}) explore une approche de maximisation de la densite.\n- Le Scenario B (${f("B_role")}) recherche un compromis entre densite et cout.\n- Le Scenario C (${f("C_role")}) privilegie une approche plus prudente en termes de couts.\n\nLe present rapport diagnostic analyse chacun de ces scenarios sous l'angle volumetrique, financier et reglementaire, afin d'orienter le porteur de projet vers le scenario le plus recommande au regard de ses priorites et de son enveloppe budgetaire.`;
+  texts.slide_3_programme_text = "";
+
+  // ── SLIDE 4: Terrain ──
+  texts.slide_4_text = `Ce terrain de ${f("site_area")} m2 se situe dans un tissu urbain dense de ${f("city")}. Il presente une geometrie reguliere de ${f("envelope_w")} m de largeur sur ${f("envelope_d")} m de profondeur, offrant une surface brute de ${f("envelope_area")} m2.\n\nLes contraintes reglementaires imposent les retraits suivants :\n- Recul avant : ${f("retrait_avant")} (par rapport a la voie)\n- Recul lateral : ${f("retrait_lateral")} de chaque cote\n- Recul arriere : ${f("retrait_arriere")}\n- Mitoyennete : ${f("retrait_mitoyennete")} cotes\n\nL'impact de ces retraits est significatif : ils reduisent l'emprise constructible de ${f("retrait_reduction_pct")}, la ramenant a environ ${f("retrait_emprise_constructible")} exploitables.\n\nLe programme envisage prevoit ${f("target_units")} unites en usage ${f("program_main")}, dans un standing ${f("standing_level").toLowerCase()}.\n\n- Zone climatique : ${f("orient_zone").toLowerCase()}\n- COS reglementaire : ${f("site_cos_regl")}\n- CES reglementaire : ${f("site_ces_regl")} %`;
+
+  // ── SLIDE 5: empty — GPT fills this ──
+  texts.slide_5_text = "";
+
+  // ── SLIDES 6/9/12: Scenario summaries ──
+  texts.scenario_A_summary_text = buildSummary("A");
+  texts.scenario_B_summary_text = buildSummary("B");
+  texts.scenario_C_summary_text = buildSummary("C");
+
+  // ── SLIDES 7/10/13: Financial ──
+  texts.scenario_A_financial_text = buildFinancial("A");
+  texts.scenario_B_financial_text = buildFinancial("B");
+  texts.scenario_C_financial_text = buildFinancial("C");
+
+  // ── SLIDES 8/11/14: Risk ──
+  texts.scenario_A_risk_text = buildRisk("A");
+  texts.scenario_B_risk_text = buildRisk("B");
+  texts.scenario_C_risk_text = buildRisk("C");
+
+  // ── SLIDE 15: Comparatif intro ──
+  texts.comparatif_intro_text = `Comparatif strategique des trois scenarios : SDP, couts, scores et surfaces habitables.`;
+
+  // ── SLIDE 16: Arbitrage strategique ──
+  texts.strategic_arbitrage_text = `Le client recherche un programme ${f("program_main")} en standing ${f("standing_level").toLowerCase()}, avec une posture ${f("feasibility_posture_fr")}, pour une enveloppe budgetaire de l'ordre de ${f("budget_fcfa")}.\n\nLe systeme de scoring evalue chaque scenario selon 7 criteres ponderes : adequation budgetaire (25 %), alignement risque (20 %), conformite COS (12 %), capacite du programme (13 %), efficacite cout (12 %), adequation standing (8 %), flexibilite de phasage (10 %).\n\nLes 3 scenarios livrent tous les ${f("target_units")} unites demandees, mais different significativement sur le cout :\n- Scenario A : ${f("A_cost_total")}, ${f("A_hab_m2_total")} m2 habitables, score ${f("A_score")}/100\n- Scenario B : ${f("B_cost_total")}, ${f("B_hab_m2_total")} m2 habitables, score ${f("B_score")}/100\n- Scenario C : ${f("C_cost_total")}, ${f("C_hab_m2_total")} m2 habitables, score ${f("C_score")}/100\n\nLe scenario C economise ${f("delta_CA_cout")} par rapport a A, pour ${f("delta_CA_sdp")} de surface en moins. L'economie justifie la perte de surface au regard de l'enveloppe de ${f("budget_fcfa")}.\n\nLe Scenario ${rec} obtient le meilleur score (${f("rec_score")}/100) car il offre le meilleur compromis entre cout optimise, conformite urbanistique et gestion rigoureuse du budget. Il est le scenario recommande.`;
+
+  // ── SLIDE 17: Conditions de reussite ──
+  texts.invisible_intro_text = `Points de vigilance techniques et administratifs a anticiper pour assurer la conformite et l'efficacite du projet.`;
+
+  texts.invisible_technical_text = `Les conditions de reussite reposent sur une anticipation rigoureuse des postes de depenses et des delais. Voici la ventilation detaillee pour le scenario ${rec} recommande (${f("rec_cost_total")}) :\n\nVentilation des couts par lot :\n- Gros oeuvre et structure : ${f("rec_ventil_go")} FCFA (${f("rec_ventil_go_pct")}). Systeme poteau-poutre en beton arme adapte au R+${f("rec_levels")}.\n- Second oeuvre et finitions : ${f("rec_ventil_so")} FCFA (${f("rec_ventil_so_pct")}). Materiaux ${f("standing_level").toLowerCase()} mais durables.\n- Lots techniques : ${f("rec_ventil_lt")} FCFA (${f("rec_ventil_lt_pct")}). Electricite, plomberie, ventilation naturelle.\n- VRD et amenagements : ${f("rec_ventil_vrd")} FCFA (${f("rec_ventil_vrd_pct")}). Raccordements reseaux, assainissement.\n\nStrategies de phasage recommandees :\n- Duree estimee du chantier : ${f("rec_duree_chantier")}\n- Phase 1 (M1-M2) : etudes et permis\n- Phase 2 (M3) : terrassement et fondations, eviter la saison des pluies (juin-octobre)\n- Phase 3 (M4-M5) : gros oeuvre\n- Phase 4 (M6-M7) : second oeuvre\n- Phase 5 (M8) : finitions et reception\n\nDelais caches a anticiper : obtention du permis (2-4 mois), etude geotechnique (2-3 semaines), raccordements reseaux (variable).`;
+
+  texts.invisible_financial_text = `Le budget du Scenario ${rec} s'etablit a environ ${f("rec_cost_total")}, a comparer au budget initial de ${f("budget_fcfa")}. L'ecart est gerable avec une optimisation rigoureuse.\n\nFrais complementaires a anticiper :\n- Honoraires d'architecte : entre ${f("rec_hono_bas")}M et ${f("rec_hono_haut")}M FCFA (${f("rec_hono_taux_bas")} a ${f("rec_hono_taux_haut")})\n- Frais de permis de construire et taxes : environ 1 a 2 % du montant des travaux\n- Etudes geotechniques : entre 300 000 et 500 000 FCFA\n- Frais de notaire et administratifs : variables\n- Assurance dommage-ouvrage : recommandee, environ 2 % du cout travaux\n\nBudgetiser l'ensemble de ces postes en amont est imperatif pour eviter toute derive financiere.`;
+
+  texts.invisible_strategic_text = `Le phasage financier doit tenir compte du climat ${f("orient_zone").toLowerCase()} de ${f("city")}, en particulier de la saison des pluies (juin a octobre).\n\nRecommandations de phasage :\n- Demarrage ideal des travaux : novembre a janvier (saison seche)\n- Terrassement et fondations : imperativement hors saison des pluies\n- Gros oeuvre : peut se poursuivre pendant la saison des pluies avec precautions\n- Finitions : planifier la reception avant la prochaine saison des pluies\n\nEchelonnement des decaissements :\n- M1-M2 : 15 % (etudes, permis, installation chantier)\n- M3-M5 : 50 % (fondations + gros oeuvre)\n- M6-M7 : 25 % (second oeuvre)\n- M8 : 10 % (finitions, reception, solde)`;
+
+  // ── SLIDE 18: Success / Technique ──
+  texts.success_intro_text = `Le scenario recommande (${rec}) est le meilleur choix en raison de son cout optimise (${f("rec_cost_total")}), de sa conformite urbanistique (COS a ${f("rec_cos_pct")} %), et de sa gestion rigoureuse du budget.`;
+
+  texts.success_technical_text = `Le Scenario ${rec} propose une structure R+${f("rec_levels")} avec commerce au RDC, compacte mais fonctionnelle. Points techniques a anticiper :\n\n- Structure R+${f("rec_levels")} en beton arme : systeme poteau-poutre classique, maitrise par les entreprises locales\n- Fondations : etude geotechnique indispensable compte tenu de la mitoyennete sur ${f("retrait_mitoyennete")} cotes\n- Emprise de ${f("rec_fp")} m2 : optimisation des circulations verticales necessaire\n- Ventilation naturelle : essentielle en zone ${f("orient_zone").toLowerCase()}, ouvertures traversantes sur facades libres\n- Etancheite toiture terrasse : point critique en climat tropical humide`;
+
+  texts.success_financial_text = texts.invisible_financial_text;
+  texts.success_strategic_text = texts.invisible_strategic_text;
+
+  // ── SLIDE 19: Next steps ──
+  texts.next_step_intro_text = `Suite a la recommandation du Scenario ${rec}, voici les etudes et demarches a engager pour passer a la phase operationnelle du projet.`;
+
+  texts.next_step_scope_text = `Perimetre des etudes a lancer pour la phase suivante :\n\n- APS (Avant-Projet Sommaire) : definition des volumes, implantation, choix structurels. Validation de la faisabilite technique et affinage du budget. Delai : 3-4 semaines.\n\n- APD (Avant-Projet Definitif) : plans detailles, dimensionnement structure, choix des materiaux. Base pour le chiffrage definitif. Delai : 4-6 semaines.\n\n- Etudes geotechniques : sondages et essais de sol pour dimensionner les fondations. Indispensable avant le depot de permis. Delai : 2-3 semaines.\n\n- Dossier de permis de construire : constitution du dossier administratif complet. Delai d'instruction : 2-4 mois selon la commune.\n\n- Consultation des entreprises : appel d'offres restreint ou consultation directe. Prevoir 3-4 semaines pour reception et analyse des devis.`;
+
+  texts.next_step_outcome_text = `Les livrables attendus a l'issue de cette phase sont : un APS valide, un budget affine a +/- 10%, un rapport geotechnique, et un dossier de permis de construire complet pret pour depot.`;
+
+  // ── SLIDE 20: Conclusion ──
+  texts.conclusion_summary_text = `Ce diagnostic a permis d'analyser le potentiel d'un terrain de ${f("site_area")} m2 a ${f("city")} sous trois scenarios contrastes : ${f("A_role")} (A), ${f("B_role")} (B) et ${f("C_role")} (C). Chacun repond au programme cible de ${f("target_units")} unites en usage ${f("program_main")} en standing ${f("standing_level").toLowerCase()}.\n\nLe Scenario ${rec} est recommande avec un score de ${f("rec_score")}/100. Il offre le meilleur compromis entre le respect du programme, la proximite avec l'enveloppe budgetaire (${f("rec_cost_total")} vs ${f("budget_fcfa")} vises), la conformite urbanistique, et la simplicite de mise en oeuvre d'un R+${f("rec_levels")}. La prochaine etape consiste a lancer les etudes de faisabilite (APS/APD) et l'etude geotechnique pour confirmer ces hypotheses.`;
+
+  texts.conclusion_positioning_text = `Le scenario ${rec} est le meilleur compromis entre cout maitrise (${f("rec_cost_total")}), conformite urbanistique (COS utilise a ${f("rec_cos_pct")} %), et adequation avec les objectifs du client. Il permet de livrer les ${f("target_units")} unites demandees dans un gabarit R+${f("rec_levels")} sobre et realiste.`;
+
+  texts.conclusion_projection_text = `La duree estimee du chantier est de ${f("rec_duree_chantier")}. Le calendrier optimal prevoit un demarrage en saison seche (novembre-janvier) pour securiser les fondations. L'horizon de livraison se situe environ 12 a 14 mois apres le lancement des etudes, sous reserve de l'obtention du permis de construire dans les delais habituels.`;
+
+  console.log(`│ ✅ TEMPLATE ENGINE v72.90: ${Object.keys(texts).length} textes generes (100% deterministes)`);
+  return texts;
+}
+
 // ─── PREMIUM GATE v1.0 — Post-GPT sanitization ─────────────────────────────
 // Catches and fixes: orphan variables, raw scores, untranslated labels,
 // raw budget strings, uppercase terms, missing percentages
@@ -6597,14 +6798,49 @@ const GPT_TEXT_MODEL = "gpt-4o";
 const GPT_TEXT_TIMEOUT_MS = 120000;
 
 /**
- * PREMIUM GPT PROMPT RULES — v4.0 STRUCTURAL
- * Generates all diagnostic texts with EXACT structure matching premium reference.
- * Each text has a mandatory paragraph structure that GPT MUST follow.
+ * v72.90 GPT PROMPT — REDUCED TO QUALITATIVE ONLY
+ * GPT only generates slide_5_text (neighborhood context analysis).
+ * All other texts are generated by buildTemplateTexts() (100% deterministic).
  */
 function buildGptTextRules() {
-  return `REGLES ABSOLUES POUR LA GENERATION DES TEXTES DIAGNOSTIC BARLO -- VERSION PREMIUM v4.0:
+  return `ROLE : Tu es un expert en urbanisme en Afrique subsaharienne. Tu rediges UN SEUL texte qualitatif pour un diagnostic foncier.
 
-Tu es un expert en promotion immobiliere en Afrique subsaharienne (Cameroun, Cote d'Ivoire, Senegal). Tu rediges un diagnostic foncier de qualite professionnelle pour un client investisseur.
+REGLES :
+1. Ecrire en francais SANS accents (a au lieu de a, e au lieu de e/e).
+2. Utiliser \\n pour les sauts de ligne.
+3. NE PAS inventer de chiffres — utilise uniquement les variables du JSON {data}.
+4. Style professionnel, precis, contextualise a {city}.
+5. Utiliser des tirets (- ) pour les listes.
+
+=== TEXTE A GENERER ===
+
+--- slide_5_text ---
+STRUCTURE OBLIGATOIRE (5 paragraphes) :
+PARA 1: Description de l'environnement bati (quartier, densite, voisinage). Contextualisee a {city}. Decrire le tissu urbain : immeubles, commerces, habitat, voies.
+PARA 2: Rapport a la rue et impact de la mitoyennete ({retrait_mitoyennete} cotes) sur les ouvertures, l'eclairage, la ventilation naturelle.
+PARA 3: "La surface de plancher est limitee par plusieurs facteurs cumules :\\n- L'emprise constructible apres retraits est reduite a {retrait_emprise_constructible} (soit {retrait_reduction_pct} de perte)\\n- Le COS de {site_cos_regl} autorise jusqu'a {site_sdp_max} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\\n- Le CES de {site_ces_regl}% [est/n'est pas] le facteur limitant ici"
+PARA 4: Impact de la zone climatique {orient_zone} sur le confort thermique, l'orientation, les facades.
+PARA 5: Conclusion sur la densite du voisinage et le gabarit a respecter.
+
+=== FORMAT DE REPONSE ===
+
+Reponds UNIQUEMENT en JSON valide avec UNE SEULE cle : "slide_5_text".
+Pas de markdown, pas de commentaires.
+La valeur est une string contenant le texte redige.
+Utilise \\n pour les sauts de ligne.
+NE PAS utiliser d'accents.`;
+}
+
+/* ── OLD GPT RULES v4.0 removed in v72.90 — replaced by buildTemplateTexts() ──
+   All deterministic texts are now generated by template engine.
+   GPT only generates slide_5_text (neighborhood qualitative context).
+*/
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── DEAD CODE BOUNDARY — everything below until next function is legacy ─────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/* LEGACY REMOVED v72.90 — was:
 
 === PRINCIPES FONDAMENTAUX ===
 
@@ -6802,8 +7038,8 @@ Reponds UNIQUEMENT en JSON valide avec toutes les cles ci-dessus. Pas de markdow
 Chaque valeur est une string contenant le texte redige.
 Utilise \\n pour les sauts de ligne dans les strings JSON.
 Utilise des tirets (- ) pour les listes, PAS de bullet points unicode.
-NE PAS utiliser d'accents dans le texte.`;
-}
+NE PAS utiliser d'accents dans le texte.
+END LEGACY REMOVED */
 
 /**
  * Build the data context string for GPT from computed scenarios
@@ -7263,17 +7499,40 @@ app.post("/generate-texts", async (req, res) => {
     C_frais_M: `${sC.frais_annexes ? Math.round(sC.frais_annexes / 1e6) : 0}M`,
   };
 
-  // Step 3: Generate texts via GPT-4o
+  // ═══ v72.90 TEMPLATE ENGINE — deterministic texts (zero GPT) ═══
+  const templateTexts = buildTemplateTexts(flat, scenarios);
+  console.log(`[GENERATE-TEXTS] Template engine: ${Object.keys(templateTexts).length} deterministic texts`);
+
+  // ═══ v72.90 GPT — ONLY slide_5_text (qualitative neighborhood context) ═══
   const rules = buildGptTextRules();
   const dataContext = buildGptDataContext(p, scenarios, flat);
-  let generatedTexts = {};
+  let gptTexts = {};
 
   if (OPENAI_API_KEY) {
-    generatedTexts = await generateDiagnosticTexts(dataContext, rules);
-    console.log(`[GENERATE-TEXTS] GPT returned ${Object.keys(generatedTexts).length} keys`);
+    try {
+      gptTexts = await generateDiagnosticTexts(dataContext, rules);
+      console.log(`[GENERATE-TEXTS] GPT returned: ${Object.keys(gptTexts).join(", ")}`);
+    } catch (gptErr) {
+      console.error(`[GENERATE-TEXTS] GPT error: ${gptErr.message} — using fallback`);
+    }
   } else {
-    console.warn(`[GENERATE-TEXTS] OPENAI_API_KEY missing — returning empty texts`);
+    console.warn(`[GENERATE-TEXTS] OPENAI_API_KEY missing — slide_5_text will be empty`);
   }
+
+  // ═══ MERGE: templates (base) + GPT (slide_5_text only) ═══
+  // Templates are the source of truth. GPT only fills slide_5_text.
+  let generatedTexts = { ...templateTexts };
+  if (gptTexts.slide_5_text && gptTexts.slide_5_text.length > 50) {
+    generatedTexts.slide_5_text = gptTexts.slide_5_text;
+    console.log(`[GENERATE-TEXTS] ✅ GPT slide_5_text merged (${gptTexts.slide_5_text.length} chars)`);
+  } else {
+    // Fallback: generate a basic slide_5_text from variables
+    generatedTexts.slide_5_text = `Le quartier de ${flat.city || "Douala"} presente une densite urbaine elevee, avec un environnement bati mixte associant des immeubles de logements et des activites commerciales. La proximite de voies principales favorise l'accessibilite et le dynamisme economique.\n\nLe rapport a la rue est influence par la mitoyennete sur ${flat.retrait_mitoyennete || "2"} cotes, ce qui limite les ouvertures et necessite une reflexion approfondie sur l'eclairage et la ventilation naturelle des espaces interieurs.\n\nLa surface de plancher est limitee par plusieurs facteurs cumules :\n- L'emprise constructible apres retraits est reduite a ${flat.retrait_emprise_constructible || "N/A"} (soit ${flat.retrait_reduction_pct || "N/A"} de perte)\n- Le COS de ${flat.site_cos_regl || "N/A"} autorise jusqu'a ${flat.site_sdp_max || "N/A"} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\n- Le CES de ${flat.site_ces_regl || "N/A"}% n'est pas le facteur limitant ici\n\nLa zone climatique ${(flat.orient_zone || "tropical").toLowerCase()} impacte le confort thermique, necessitant une orientation optimale et des facades adaptees pour maximiser la ventilation naturelle.\n\nConclusion sur la densite du voisinage et le gabarit a respecter : il est crucial de concevoir un projet qui s'integre harmonieusement dans le tissu urbain existant tout en respectant les contraintes reglementaires.`;
+    console.log(`[GENERATE-TEXTS] ⚠️ GPT slide_5_text missing/short — using fallback`);
+  }
+
+  // ── PREMIUM GATE: sanitize (mostly a no-op now, but catches edge cases) ──
+  generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
 
   // Step 4: Build comparatif data from scenarios
   const comparatif = {
@@ -7290,9 +7549,6 @@ app.post("/generate-texts", async (req, res) => {
     comparatif_B_units: flat.B_unit_summary,
     comparatif_C_units: flat.C_unit_summary,
   };
-
-  // ── PREMIUM GATE: sanitize all GPT texts ──
-  generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
 
   // ── CONFORMITY GATE v72.87: vérification automatique post-génération ──
   const conformity = validateConformity(flat, scenarios, generatedTexts);
@@ -7470,19 +7726,28 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_ventil_hono`] = `${Math.round((cvh.median_fcfa || 0) / 1e6)}M`;
     }
 
-    // Step 3: Generate premium texts
+    // ═══ v72.90 TEMPLATE ENGINE — deterministic texts ═══
+    const templateTexts = buildTemplateTexts(flat, scenarios);
+
+    // ═══ v72.90 GPT — ONLY slide_5_text ═══
     const rules = buildGptTextRules();
     const dataContext = buildGptDataContext(p, scenarios, flat);
-    let generatedTexts = {};
-
+    let gptTexts = {};
     if (OPENAI_API_KEY) {
-      generatedTexts = await generateDiagnosticTexts(dataContext, rules);
+      try { gptTexts = await generateDiagnosticTexts(dataContext, rules); }
+      catch (e) { console.error(`[PPTX] GPT error: ${e.message}`); }
     }
 
-    // ── PREMIUM GATE: sanitize all GPT texts ──
-    generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
+    // ═══ MERGE: templates + GPT slide_5 ═══
+    let generatedTexts = { ...templateTexts };
+    if (gptTexts.slide_5_text && gptTexts.slide_5_text.length > 50) {
+      generatedTexts.slide_5_text = gptTexts.slide_5_text;
+    } else {
+      generatedTexts.slide_5_text = `Le quartier de ${flat.city || "Douala"} presente une densite urbaine elevee, avec un environnement bati mixte associant des immeubles de logements et des activites commerciales.\n\nLe rapport a la rue est influence par la mitoyennete sur ${flat.retrait_mitoyennete || "2"} cotes, ce qui limite les ouvertures et necessite une reflexion approfondie sur l'eclairage et la ventilation naturelle.\n\nLa surface de plancher est limitee par plusieurs facteurs cumules :\n- L'emprise constructible apres retraits est reduite a ${flat.retrait_emprise_constructible || "N/A"} (soit ${flat.retrait_reduction_pct || "N/A"} de perte)\n- Le COS de ${flat.site_cos_regl || "N/A"} autorise jusqu'a ${flat.site_sdp_max || "N/A"} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\n\nLa zone climatique ${(flat.orient_zone || "tropical").toLowerCase()} impacte le confort thermique, necessitant une orientation optimale et des facades adaptees pour maximiser la ventilation naturelle.`;
+    }
 
-    // ── CONFORMITY GATE v72.87 ──
+    // ── PREMIUM GATE + CONFORMITY GATE ──
+    generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
     const conformity = validateConformity(flat, scenarios, generatedTexts);
 
     // Step 4: Map server data to EXACT keys expected by Python scripts
