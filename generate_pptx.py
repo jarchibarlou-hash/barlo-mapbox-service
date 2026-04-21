@@ -697,6 +697,35 @@ def assemble_pptx(data, template_path, output_path):
         except Exception as e:
             print(f"Warning: could not insert budget table on slide 18: {e}", file=sys.stderr)
 
+    # Slide 18 -- FALLBACK: Force-inject 3rd column (strategic/phasage) text
+    # The template's 3rd column shape has static text instead of a {{invisible_strategic_text}} placeholder,
+    # so the placeholder-based replacement never triggers. We find it by position (rightmost text column).
+    if len(slides_list) >= 18:
+        slide18_fb = slides_list[17]
+        strategic_text_s18 = texts.get('invisible_strategic_text_s18', '')
+        if strategic_text_s18:
+            # Find the rightmost text shape that is NOT the header (header spans full width)
+            text_columns = []
+            for shape in slide18_fb.shapes:
+                if shape.has_text_frame and shape.width < Emu(5000000):  # exclude full-width header
+                    text_columns.append(shape)
+            # Sort by left position
+            text_columns.sort(key=lambda s: s.left)
+            if len(text_columns) >= 3:
+                third_col = text_columns[2]
+                # Check if this shape was NOT already replaced by placeholder logic
+                current_text = third_col.text_frame.text
+                placeholder_match = re.search(r'\{\{[^}]+\}\}', current_text)
+                if not placeholder_match:
+                    # Apply the strategic text
+                    _clean_text = _clean_phasage_text(strategic_text_s18)
+                    _apply_text_to_shape(third_col, '{{invisible_strategic_text}}', _clean_text, 18)
+                    print("Slide 18: FALLBACK injected strategic text into 3rd column", file=sys.stderr)
+            else:
+                print(f"Slide 18: only {len(text_columns)} text columns found (need 3)", file=sys.stderr)
+        else:
+            print("Slide 18: no invisible_strategic_text_s18 in texts", file=sys.stderr)
+
     # Slide 19 -- Timeline Gantt chart (below text, full width)
     timeline_chart = chart_paths.get('timeline')
     if timeline_chart and os.path.exists(timeline_chart) and len(slides_list) >= 19:
