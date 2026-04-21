@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.87-CONFORMITY-GATE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.88-FULL-COHERENCE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2023,24 +2023,18 @@ function computeSmartScenarios({
           espace_arriere_m2: espaceArriere,
           ces_total_pct: cesTotalPct,
         };
-        // v72.29: FORCER LA DIFFÉRENCIATION — même si les contraintes convergent
-        // Le fp du logement DOIT être réduit par le rôle (visible sur le rendu)
-        const fpLogtDiff = role === "INTENSIFICATION" ? fpLogtFinal
-          : role === "EQUILIBRE" ? Math.round(fpLogtFinal * 0.75)
-          : Math.round(fpLogtFinal * 0.50); // PRUDENT = moitié
-        console.log(`│   v72.29 DIFF: fpLogtFinal=${fpLogtFinal} → fpLogtDiff=${fpLogtDiff} (role=${role})`);
-        // Mettre à jour le splitLayout avec les valeurs différenciées
-        splitLayout.volume_logement.fp_m2 = fpLogtDiff;
-        splitLayout.volume_logement.sdp_m2 = fpLogtDiff * levelsLogt;
-        splitLayout.volume_logement.width_m = Math.round(splitLayout.volume_logement.width_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.85 : 0.70));
-        splitLayout.volume_logement.depth_m = Math.round(splitLayout.volume_logement.depth_m * (role === "INTENSIFICATION" ? 1.0 : role === "EQUILIBRE" ? 0.88 : 0.72));
+        // v72.88: DIFFÉRENCIATION SUPPRIMÉE ICI — ROLE_FP_FACTOR (ligne 1898) applique
+        // DÉJÀ la réduction 0.75/0.55 sur fpProgramme AVANT d'arriver ici.
+        // La double réduction 0.75×0.75=0.5625 causait un massing B minuscule.
+        const fpLogtDiff = fpLogtFinal; // PAS de 2e réduction — la 1ère suffit
+        console.log(`│   v72.88 DIFF: fpLogtFinal=${fpLogtFinal} → fpLogtDiff=${fpLogtDiff} (role=${role}, réduction déjà appliquée par ROLE_FP_FACTOR)`);
         // Valeurs principales = LOGEMENT
         fpRdc = fpLogtDiff;
         fp = fpLogtDiff;
         fpEtages = fpLogtDiff;
         levels = levelsLogt;
         totalUnitsResult = nbBoutiques + totalResiUnits;
-        totalUseful = Math.round(sdpCommerce + fpLogtFinal * levelsLogt * (1 - circRatio));
+        totalUseful = Math.round(sdpCommerce + fpLogtDiff * levelsLogt * (1 - circRatio));
         unitMix = { COMMERCE: nbBoutiques };
         const resiMix = rules.default_mix_fn ? rules.default_mix_fn(totalResiUnits) : { T3: totalResiUnits };
         for (const [typ, count] of Object.entries(resiMix)) {
@@ -2379,9 +2373,10 @@ function computeSmartScenarios({
       const budgetCapForRole = budgetMax * (BUDGET_CAP_FACTOR_V84[label] || 1.00);
       const marketEstimatedCost = Math.round(sdp * marketCostPerM2 * 1.05);
       if (marketEstimatedCost > budgetCapForRole) {
+        // v72.88: planchers réhaussés — 130k irréaliste même en ECO au Cameroun
         const COST_FLOOR_BY_STANDING = {
-          ECONOMIQUE: 130000, ECO: 130000,
-          STANDARD: 200000, HAUT: 280000, PREMIUM: 360000,
+          ECONOMIQUE: 175000, ECO: 175000,
+          STANDARD: 220000, HAUT: 300000, PREMIUM: 380000,
         };
         const costFloor = COST_FLOOR_BY_STANDING[standingKey] || COST_FLOOR_BY_STANDING.STANDARD;
         costPerM2 = Math.max(costFloor, Math.floor(budgetCapForRole / (sdp * 1.05)));
@@ -2643,8 +2638,11 @@ function computeSmartScenarios({
     // Cost range (fourchette)
     const costBas = Math.round(estimatedCost * COST_RANGE_MULT.bas);
     const costHaut = Math.round(estimatedCost * COST_RANGE_MULT.haut);
-    // Complexity (1-5)
-    const complexityScore = Math.min(5, 1 + Math.floor(levels / 2) + (hasPilotis ? 1 : 0) + (totalUnitsResult > 12 ? 1 : 0) + (commerceLevels > 0 ? 1 : 0));
+    // Complexity (1-5) — v72.88: pilotis +2 (was +1), split_layout +1
+    //   Pilotis structures are structurally more complex than compact (requires transfer slab).
+    //   Split layout (2 separate volumes) adds coordination complexity.
+    //   This ensures B(pilotis+split) always scores higher than C(compact).
+    const complexityScore = Math.min(5, 1 + Math.floor(levels / 2) + (hasPilotis ? 2 : 0) + (splitLayout ? 1 : 0) + (totalUnitsResult > 12 ? 1 : 0) + (commerceLevels > 0 ? 1 : 0));
     const complexityLabel = ["", "Faible", "Modere", "Moyen", "Eleve", "Tres eleve"][complexityScore] || "Moyen";
     // Risk level
     let riskLevel = "MOYEN";
@@ -5380,13 +5378,21 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.strokeText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
     ctx.fillStyle = "#888";
     ctx.fillText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    // v72.88: Recalculate sub-labels proportionally from actual SDP total
+    //   Raw vl.sdp_m2 + vc.sdp_m2 may not match sdp_m2_actual (the real moteur value).
+    //   Apply ratio so sub-labels sum exactly to the total shown.
+    const rawTotal = (vl.sdp_m2 || 0) + (vc.sdp_m2 || 0);
+    const sdpRatio = (sdp_m2_actual && rawTotal > 0) ? sdp_m2_actual / rawTotal : 1;
+    const logtSdpDisplay = Math.round((vl.sdp_m2 || 0) * sdpRatio);
+    const commSdpDisplay = Math.round((vc.sdp_m2 || 0) * sdpRatio);
+
     // Label "Logement" sous les niveaux
     const logtLabelY = pilotisY + 22*s;
     ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Logement: ${vl.sdp_m2} m² SDP`, annX, logtLabelY);
+    ctx.strokeText(`Logement: ${logtSdpDisplay} m² SDP`, annX, logtLabelY);
     ctx.fillStyle = "#3a7ac0";
-    ctx.fillText(`Logement: ${vl.sdp_m2} m² SDP`, annX, logtLabelY);
+    ctx.fillText(`Logement: ${logtSdpDisplay} m² SDP`, annX, logtLabelY);
     // ── COMMERCE annotations (en dessous du logement, ORANGE) ──
     const commBaseY = logtLabelY + 28*s;
     for (let f = 0; f < vc.levels; f++) {
@@ -5405,9 +5411,9 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const commLabelY = commBaseY + vc.levels * 24*s + 4*s;
     ctx.font = `bold ${11*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
+    ctx.strokeText(`Commerce: ${commSdpDisplay} m² SDP`, annX, commLabelY);
     ctx.fillStyle = "#e07830";
-    ctx.fillText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
+    ctx.fillText(`Commerce: ${commSdpDisplay} m² SDP`, annX, commLabelY);
     // Total SDP en bas — NOIR avec contour blanc — v72.87: utiliser le SDP RÉEL du scénario
     const totalSDP = sdp_m2_actual || ((vc.sdp_m2 || 0) + (vl.sdp_m2 || 0));
     const totalY = commLabelY + 24*s;
@@ -6408,6 +6414,25 @@ function sanitizePremiumTexts(texts, flat) {
     text = text.replace(/\{[A-Z][a-z_]+\}/g, "");
     // But keep legitimate uses like {A_score}
 
+    // 8. v72.88 PILOTIS GATE — force pilotis description when has_pilotis=true
+    //    GPT sometimes writes "sans pilotis" even when the massing clearly has pilotis.
+    //    This catches and corrects the contradiction.
+    for (const sc of ["A", "B", "C"]) {
+      if (key.toLowerCase().includes(`scenario_${sc.toLowerCase()}`) || key.toLowerCase().includes(`_${sc.toLowerCase()}_`) || key.toLowerCase().includes(`sc${sc.toLowerCase()}`)) {
+        const hasPilotis = flat[`${sc}_has_pilotis`];
+        if (hasPilotis === "true" || hasPilotis === true) {
+          const pilotisDesc = flat[`${sc}_pilotis_desc`] || "avec pilotis au RDC";
+          // Replace contradictory "sans pilotis" mentions
+          text = text.replace(/sans\s+pilotis/gi, pilotisDesc);
+          text = text.replace(/pas\s+de\s+pilotis/gi, pilotisDesc);
+          text = text.replace(/absence\s+de\s+pilotis/gi, `présence de pilotis (${pilotisDesc})`);
+          text = text.replace(/aucun\s+pilotis/gi, pilotisDesc);
+          // Also ensure "sur dalle" is not used when pilotis exist
+          text = text.replace(/sur\s+dalle\s+pleine/gi, `sur pilotis (${pilotisDesc})`);
+        }
+      }
+    }
+
     sanitized[key] = text;
   }
 
@@ -6516,8 +6541,38 @@ function validateConformity(flat, scenarios, texts) {
     }
   }
 
+  // ── v72.88 CONFORMITY TRACE — trace critical data through all layers ──
+  console.log(`\n┌── CONFORMITY TRACE v72.88 ─────────────────────────────────┐`);
+  for (const sc of ["A", "B", "C"]) {
+    const s = scenarios[sc] || {};
+    const hasPil = s.has_pilotis ? "OUI" : "NON";
+    const flatPil = flat[`${sc}_has_pilotis`] || "?";
+    const flatPilDesc = flat[`${sc}_pilotis_desc`] || "N/A";
+    const sdpMoteur = s.sdp_m2 || "?";
+    const sdpFlat = flat[`${sc}_sdp_m2`] || "?";
+    const costM2 = flat[`${sc}_cost_m2_adjusted`] || flat[`${sc}_cost_m2`] || "?";
+    const fpMoteur = s.fp_m2 || "?";
+    const fpFlat = flat[`${sc}_fp_m2`] || "?";
+    const complexity = s.complexite ? `${s.complexite.score}/5 (${s.complexite.label})` : "?";
+    const layoutMode = s.layout_mode || "?";
+    console.log(`│ ${sc}: pilotis=${hasPil}(flat:${flatPil}) | sdp=${sdpMoteur}(flat:${sdpFlat}) | fp=${fpMoteur}(flat:${fpFlat}) | cost/m²=${costM2} | complexity=${complexity} | layout=${layoutMode}`);
+    console.log(`│    pilotis_desc: "${flatPilDesc}"`);
+    // Check GPT text for contradictions
+    if (texts && typeof texts === "object") {
+      for (const [tKey, tVal] of Object.entries(texts)) {
+        if (typeof tVal !== "string") continue;
+        if (tKey.toLowerCase().includes(`scenario_${sc.toLowerCase()}`) || tKey.toLowerCase().includes(`_${sc.toLowerCase()}_`)) {
+          if (flatPil === "true" && /sans\s+pilotis|pas\s+de\s+pilotis/i.test(tVal)) {
+            errors.push(`${sc}: GPT text "${tKey}" still says "sans pilotis" despite has_pilotis=true (PREMIUM GATE may have missed it)`);
+          }
+        }
+      }
+    }
+  }
+  console.log(`└───────────────────────────────────────────────────────────┘`);
+
   // ── LOG RESULTS ──
-  console.log(`\n╔══ CONFORMITY GATE v72.87 ══╗`);
+  console.log(`\n╔══ CONFORMITY GATE v72.88 ══╗`);
   if (errors.length === 0 && warnings.length === 0) {
     console.log(`║ ✅ PASS — 0 erreurs, 0 warnings`);
   } else {
