@@ -421,24 +421,25 @@ def generate_arbitrage_graph(scenarios_data, output_path):
 def generate_cost_breakdown(scenario_data, output_path):
     fig, ax = plt.subplots(figsize=(8, 8))
 
-    cost_fondations = scenario_data.get('cost_fondations_infrastructure', None)
+    # v72.93: 4 categories ALIGNED with slide 17 text (GO, SO, Lots Tech, VRD)
     cost_gros_oeuvre = scenario_data.get('cost_gros_oeuvre_structure', None)
     cost_second_oeuvre = scenario_data.get('cost_second_oeuvre_finitions', None)
+    cost_lots_tech = scenario_data.get('cost_lots_techniques', None)
     cost_vrd = scenario_data.get('cost_vrd_amenagements', None)
 
-    if all(v is not None and v > 0 for v in [cost_fondations, cost_gros_oeuvre, cost_second_oeuvre, cost_vrd]):
-        total = cost_fondations + cost_gros_oeuvre + cost_second_oeuvre + cost_vrd
+    if all(v is not None and v > 0 for v in [cost_gros_oeuvre, cost_second_oeuvre, cost_lots_tech, cost_vrd]):
+        total = cost_gros_oeuvre + cost_second_oeuvre + cost_lots_tech + cost_vrd
         percentages = [
-            (cost_fondations / total) * 100,
             (cost_gros_oeuvre / total) * 100,
             (cost_second_oeuvre / total) * 100,
+            (cost_lots_tech / total) * 100,
             (cost_vrd / total) * 100,
         ]
     else:
-        percentages = [20, 35, 30, 15]
+        percentages = [48, 26, 16, 10]
 
-    labels = ['Fondations &\ninfrastructure', 'Gros œuvre &\nstructure',
-              'Second œuvre &\nfinitions', 'VRD &\naménagements']
+    labels = ['Gros œuvre &\nstructure', 'Second œuvre &\nfinitions',
+              'Lots\ntechniques', 'VRD &\naménagements']
     colors_pie = [COLORS['dark'], COLORS['teal'], COLORS['orange'], COLORS['red']]
 
     explode = (0.02, 0.02, 0.02, 0.02)
