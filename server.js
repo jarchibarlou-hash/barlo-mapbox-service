@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.86-TYPOLOGY-JUSTIFIED" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.87-CONFORMITY-GATE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3693,7 +3693,7 @@ app.post("/compute-scenarios", (req, res) => {
     A_ventil_go: `${(sA.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sA.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
     A_ventil_so: `${(sA.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sA.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
     A_ventil_lt: `${(sA.cout_ventilation || {}).lots_techniques_fcfa ? Math.round(sA.cout_ventilation.lots_techniques_fcfa / 1e6) : 0}M`,
-    A_ventil_vrd: `${(sA.cout_ventilation || {}).vrd_fcfa ? Math.round(sA.cout_ventilation.vrd_fcfa / 1e6) : 0}M`,
+    A_ventil_vrd: `${(() => { const cv = sA.cout_ventilation || {}; return Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6); })()}M`,
     A_ventil_hono: `${(sA.cout_ventilation || {}).honoraires_architecte ? Math.round(((sA.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa / 1e6) : 0}M`,
     A_ventil_hono_bas: `${(sA.cout_ventilation || {}).honoraires_architecte ? Math.round(((sA.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa / 1e6) : 0}M`,
     A_ventil_hono_haut: `${(sA.cout_ventilation || {}).honoraires_architecte ? Math.round(((sA.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa / 1e6) : 0}M`,
@@ -3731,7 +3731,7 @@ app.post("/compute-scenarios", (req, res) => {
     B_ventil_go: `${(sB.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sB.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
     B_ventil_so: `${(sB.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sB.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
     B_ventil_lt: `${(sB.cout_ventilation || {}).lots_techniques_fcfa ? Math.round(sB.cout_ventilation.lots_techniques_fcfa / 1e6) : 0}M`,
-    B_ventil_vrd: `${(sB.cout_ventilation || {}).vrd_fcfa ? Math.round(sB.cout_ventilation.vrd_fcfa / 1e6) : 0}M`,
+    B_ventil_vrd: `${(() => { const cv = sB.cout_ventilation || {}; return Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6); })()}M`,
     B_ventil_hono: `${(sB.cout_ventilation || {}).honoraires_architecte ? Math.round(((sB.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa / 1e6) : 0}M`,
     B_ventil_hono_bas: `${(sB.cout_ventilation || {}).honoraires_architecte ? Math.round(((sB.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa / 1e6) : 0}M`,
     B_ventil_hono_haut: `${(sB.cout_ventilation || {}).honoraires_architecte ? Math.round(((sB.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa / 1e6) : 0}M`,
@@ -3769,7 +3769,7 @@ app.post("/compute-scenarios", (req, res) => {
     C_ventil_go: `${(sC.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sC.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
     C_ventil_so: `${(sC.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sC.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
     C_ventil_lt: `${(sC.cout_ventilation || {}).lots_techniques_fcfa ? Math.round(sC.cout_ventilation.lots_techniques_fcfa / 1e6) : 0}M`,
-    C_ventil_vrd: `${(sC.cout_ventilation || {}).vrd_fcfa ? Math.round(sC.cout_ventilation.vrd_fcfa / 1e6) : 0}M`,
+    C_ventil_vrd: `${(() => { const cv = sC.cout_ventilation || {}; return Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6); })()}M`,
     C_ventil_hono: `${(sC.cout_ventilation || {}).honoraires_architecte ? Math.round(((sC.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa / 1e6) : 0}M`,
     C_ventil_hono_bas: `${(sC.cout_ventilation || {}).honoraires_architecte ? Math.round(((sC.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa / 1e6) : 0}M`,
     C_ventil_hono_haut: `${(sC.cout_ventilation || {}).honoraires_architecte ? Math.round(((sC.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa / 1e6) : 0}M`,
@@ -5329,7 +5329,7 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, split_layout }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
   const s = W / 1280;
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
@@ -5408,8 +5408,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.strokeText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
     ctx.fillStyle = "#e07830";
     ctx.fillText(`Commerce: ${vc.sdp_m2} m² SDP`, annX, commLabelY);
-    // Total SDP en bas — NOIR avec contour blanc
-    const totalSDP = (vc.sdp_m2 || 0) + (vl.sdp_m2 || 0);
+    // Total SDP en bas — NOIR avec contour blanc — v72.87: utiliser le SDP RÉEL du scénario
+    const totalSDP = sdp_m2_actual || ((vc.sdp_m2 || 0) + (vl.sdp_m2 || 0));
     const totalY = commLabelY + 24*s;
     ctx.font = `bold ${13*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
@@ -5419,7 +5419,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   } else {
     // ══ MODE SUPERPOSÉ : annotations classiques ══
     const realTotalH = rdcH_m + (levels - 1) * etageH_m;
-    const sdpTotale = fp_m2 * levels;
+    // v72.87: utiliser le SDP RÉEL du scénario (pas fp_m2 × levels qui est une approximation)
+    const sdpTotale = sdp_m2_actual || (fp_m2 * levels);
     const annX = W * 0.62;
     const annBaseY = H * 0.58;
     const annStepY = -32 * s;
@@ -5779,7 +5780,7 @@ app.post("/generate-massing", async (req, res) => {
   console.log(`[MASSING v72.25] │ field_values_sample="${fieldValues.slice(0, 500)}"`);
   console.log(`[MASSING v72.25] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
-  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null;
+  let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null, scenarioSdp = 0;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
@@ -5836,7 +5837,8 @@ app.post("/generate-massing", async (req, res) => {
     scenarioRole = sc.label_fr;
     accentColor = sc.accent_color;
     splitLayout = sc.split_layout || null;
-    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} (${sc.cos_compliance})`);
+    scenarioSdp = sc.sdp_m2 || 0;  // v72.87: SDP réel du moteur (pour annotations)
+    console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} sdp=${scenarioSdp}m² (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
     fp = Number(fp_m2_raw);
@@ -5856,7 +5858,8 @@ app.post("/generate-massing", async (req, res) => {
     has_pilotis = false;
     scenarioRole = String(role_raw);
     accentColor = String(accent_raw);
-    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels}`);
+    scenarioSdp = Math.round(fp * levels);  // v72.87: SDP classique = fp × levels
+    console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} sdp=${scenarioSdp}m²`);
   }
   // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
   // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
@@ -6082,7 +6085,7 @@ app.post("/generate-massing", async (req, res) => {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
-      typology: massingCoords._typology, split_layout: splitLayout,
+      typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -6219,7 +6222,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
             site_area: Number(site_area), bearing, label,
             levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
             total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
-            typology: massingCoords._typology, split_layout: splitLayout,
+            typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
           });
           const finalPng = finalCtx.canvas.toBuffer("image/png");
           const enhancedPath = `${folder}/${slideName}_enhanced.png`;
@@ -6410,6 +6413,126 @@ function sanitizePremiumTexts(texts, flat) {
 
   console.log(`│ ✅ PREMIUM GATE: sanitized ${Object.keys(sanitized).length} text fields`);
   return sanitized;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── v72.87 CONFORMITY GATE — vérification automatique post-génération ───────
+// ═══════════════════════════════════════════════════════════════════════════════
+function validateConformity(flat, scenarios, texts) {
+  const errors = [];
+  const warnings = [];
+  const sA = scenarios.A || {}, sB = scenarios.B || {}, sC = scenarios.C || {};
+
+  // ── 1. CHECK: SDP A > SDP B > SDP C (hierarchie intensification → prudent) ──
+  if (sA.sdp_m2 && sB.sdp_m2 && sA.sdp_m2 < sB.sdp_m2) {
+    errors.push(`SDP A (${sA.sdp_m2}) < SDP B (${sB.sdp_m2}) — hiérarchie inversée`);
+  }
+  if (sB.sdp_m2 && sC.sdp_m2 && sB.sdp_m2 < sC.sdp_m2) {
+    errors.push(`SDP B (${sB.sdp_m2}) < SDP C (${sC.sdp_m2}) — hiérarchie inversée`);
+  }
+
+  // ── 2. CHECK: Cost A > Cost B > Cost C ──
+  if (sA.cost_total_fcfa && sB.cost_total_fcfa && sA.cost_total_fcfa < sB.cost_total_fcfa) {
+    errors.push(`Coût A (${Math.round(sA.cost_total_fcfa/1e6)}M) < Coût B (${Math.round(sB.cost_total_fcfa/1e6)}M)`);
+  }
+  if (sB.cost_total_fcfa && sC.cost_total_fcfa && sB.cost_total_fcfa < sC.cost_total_fcfa) {
+    errors.push(`Coût B (${Math.round(sB.cost_total_fcfa/1e6)}M) < Coût C (${Math.round(sC.cost_total_fcfa/1e6)}M)`);
+  }
+
+  // ── 3. CHECK: Levels A ≥ Levels B ≥ Levels C ──
+  if (sA.levels && sB.levels && sA.levels < sB.levels) {
+    warnings.push(`Niveaux A (${sA.levels}) < Niveaux B (${sB.levels})`);
+  }
+
+  // ── 4. CHECK: Scores are 0-100 integers, not 0-1 floats ──
+  for (const lbl of ["A", "B", "C"]) {
+    const sc = scenarios[lbl] || {};
+    if (sc.score !== undefined && sc.score < 1 && sc.score > 0) {
+      errors.push(`Score ${lbl} = ${sc.score} — semble être un float 0-1 au lieu d'un entier 0-100`);
+    }
+  }
+
+  // ── 5. CHECK: Ventilation percentages sum ~100% ──
+  for (const lbl of ["A", "B", "C"]) {
+    const goPct = parseInt(flat[`${lbl}_ventil_go_pct`]) || 0;
+    const soPct = parseInt(flat[`${lbl}_ventil_so_pct`]) || 0;
+    const ltPct = parseInt(flat[`${lbl}_ventil_lt_pct`]) || 0;
+    const vrdPct = parseInt(flat[`${lbl}_ventil_vrd_pct`]) || 0;
+    const total = goPct + soPct + ltPct + vrdPct;
+    if (total > 0 && (total < 95 || total > 105)) {
+      errors.push(`Ventilation ${lbl}: GO${goPct}+SO${soPct}+LT${ltPct}+VRD${vrdPct} = ${total}% (≠ ~100%)`);
+    }
+  }
+
+  // ── 6. CHECK: Budget fit coherence ──
+  for (const lbl of ["A", "B", "C"]) {
+    const sc = scenarios[lbl] || {};
+    const budgetMax = flat.budget_fcfa ? parseInt(String(flat.budget_fcfa).replace(/[^\d]/g, "")) * 1e6 : 0;
+    if (budgetMax > 0 && sc.cost_total_fcfa) {
+      const ratio = sc.cost_total_fcfa / budgetMax;
+      if (sc.budget_fit === "DANS_BUDGET" && ratio > 1.05) {
+        errors.push(`${lbl}: budget_fit=DANS_BUDGET mais coût/budget = ${(ratio*100).toFixed(0)}%`);
+      }
+      if (sc.budget_fit === "HORS_BUDGET" && ratio < 1.0) {
+        errors.push(`${lbl}: budget_fit=HORS_BUDGET mais coût/budget = ${(ratio*100).toFixed(0)}%`);
+      }
+    }
+  }
+
+  // ── 7. CHECK: Texts don't contain raw variable placeholders ──
+  if (texts) {
+    for (const [key, text] of Object.entries(texts)) {
+      if (!text) continue;
+      const unreplaced = text.match(/\{[A-Za-z_]+\}/g);
+      if (unreplaced && unreplaced.length > 0) {
+        warnings.push(`Text "${key}" contient ${unreplaced.length} variable(s) non remplacée(s): ${unreplaced.slice(0, 3).join(", ")}`);
+      }
+      // Check for raw 0.XXX scores
+      if (/\b0\.\d{2,}\/100\b/.test(text)) {
+        errors.push(`Text "${key}" contient un score au format float "0.XXX/100" au lieu de "XX/100"`);
+      }
+      // Check for uppercase TROPICAL/EQUILIBREE in flowing text
+      if (/\bTROPICAL\b/.test(text) && !/titre|TITRE/.test(key)) {
+        warnings.push(`Text "${key}" contient "TROPICAL" en majuscules`);
+      }
+    }
+  }
+
+  // ── 8. CHECK: Recommended scenario exists and has valid score ──
+  const recSc = flat.rec_scenario;
+  if (!recSc || !["A", "B", "C"].includes(recSc)) {
+    errors.push(`rec_scenario invalide: "${recSc}"`);
+  } else {
+    const recData = scenarios[recSc] || {};
+    if (!recData.score || recData.score < 1) {
+      errors.push(`Scénario recommandé ${recSc}: score invalide (${recData.score})`);
+    }
+  }
+
+  // ── 9. CHECK: A/B/C scores are distinct ──
+  if (sA.score && sB.score && sC.score) {
+    if (sA.score === sB.score && sB.score === sC.score) {
+      errors.push(`Scores identiques A=B=C=${sA.score} — moteur de différenciation défaillant`);
+    }
+  }
+
+  // ── LOG RESULTS ──
+  console.log(`\n╔══ CONFORMITY GATE v72.87 ══╗`);
+  if (errors.length === 0 && warnings.length === 0) {
+    console.log(`║ ✅ PASS — 0 erreurs, 0 warnings`);
+  } else {
+    if (errors.length > 0) {
+      console.log(`║ ❌ ${errors.length} ERREUR(S) CRITIQUE(S):`);
+      errors.forEach(e => console.log(`║   ✖ ${e}`));
+    }
+    if (warnings.length > 0) {
+      console.log(`║ ⚠️  ${warnings.length} WARNING(S):`);
+      warnings.forEach(w => console.log(`║   ⚠ ${w}`));
+    }
+  }
+  console.log(`╚═══════════════════════════╝\n`);
+
+  return { valid: errors.length === 0, errors, warnings };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6694,7 +6817,8 @@ function buildGptDataContext(p, scenarios, flat) {
     rec_ventil_go_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     rec_ventil_so_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     rec_ventil_lt_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
-    rec_ventil_vrd_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    // v72.87: VRD pct inclut amenagements_ext pour total 100%
+    rec_ventil_vrd_pct: (() => { const rs = flat.rec_scenario; const cv = (rs === "A" ? sA : rs === "B" ? sB : sC).cout_ventilation || {}; const t = (rs === "A" ? sA : rs === "B" ? sB : sC).cost_total_fcfa || 1; return `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / t * 100)}%`; })(),
     // Scenario A
     A_role: sA.role || flat.A_role || "", A_fp: flat.A_fp,
     A_levels: String(Math.max(0, (sA.levels || 1) - 1)), // v72.80 FIX: R+X = levels-1 (levels=total incl. RDC)
@@ -6765,15 +6889,16 @@ function buildGptDataContext(p, scenarios, flat) {
     A_ventil_go_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     A_ventil_so_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     A_ventil_lt_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
-    A_ventil_vrd_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    // v72.87: VRD pct inclut amenagements_ext pour que GO+SO+LT+VRD = 100%
+    A_ventil_vrd_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / t * 100)}%`; })(),
     B_ventil_go_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     B_ventil_so_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     B_ventil_lt_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
-    B_ventil_vrd_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    B_ventil_vrd_pct: (() => { const cv = sB.cout_ventilation || {}; const t = sB.cost_total_fcfa || 1; return `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / t * 100)}%`; })(),
     C_ventil_go_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     C_ventil_so_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     C_ventil_lt_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
-    C_ventil_vrd_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.vrd_fcfa || 0) / t * 100)}%`; })(),
+    C_ventil_vrd_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / t * 100)}%`; })(),
     // v72.80: Budget as clean FCFA string (parsed from raw budget_range)
     budget_fcfa: (() => {
       const raw = String(p.budget_range || "");
@@ -6982,7 +7107,7 @@ app.post("/generate-texts", async (req, res) => {
     A_ventil_go: `${Math.round(((sA.cout_ventilation || {}).gros_oeuvre_fcfa || 0) / 1e6)}M`,
     A_ventil_so: `${Math.round(((sA.cout_ventilation || {}).second_oeuvre_fcfa || 0) / 1e6)}M`,
     A_ventil_lt: `${Math.round(((sA.cout_ventilation || {}).lots_techniques_fcfa || 0) / 1e6)}M`,
-    A_ventil_vrd: `${Math.round(((sA.cout_ventilation || {}).vrd_fcfa || 0) / 1e6)}M`,
+    A_ventil_vrd: `${(() => { const cv = sA.cout_ventilation || {}; return Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6); })()}M`,
     A_ventil_hono: `${Math.round((((sA.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa || 0) / 1e6)}M`,
     A_hono_bas_M: String(Math.round((((sA.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa || 0) / 1e6)),
     A_hono_haut_M: String(Math.round((((sA.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa || 0) / 1e6)),
@@ -7022,7 +7147,7 @@ app.post("/generate-texts", async (req, res) => {
     B_ventil_go: `${Math.round(((sB.cout_ventilation || {}).gros_oeuvre_fcfa || 0) / 1e6)}M`,
     B_ventil_so: `${Math.round(((sB.cout_ventilation || {}).second_oeuvre_fcfa || 0) / 1e6)}M`,
     B_ventil_lt: `${Math.round(((sB.cout_ventilation || {}).lots_techniques_fcfa || 0) / 1e6)}M`,
-    B_ventil_vrd: `${Math.round(((sB.cout_ventilation || {}).vrd_fcfa || 0) / 1e6)}M`,
+    B_ventil_vrd: `${(() => { const cv = sB.cout_ventilation || {}; return Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6); })()}M`,
     B_ventil_hono: `${Math.round((((sB.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa || 0) / 1e6)}M`,
     B_hono_bas_M: String(Math.round((((sB.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa || 0) / 1e6)),
     B_hono_haut_M: String(Math.round((((sB.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa || 0) / 1e6)),
@@ -7061,7 +7186,7 @@ app.post("/generate-texts", async (req, res) => {
     C_ventil_go: `${Math.round(((sC.cout_ventilation || {}).gros_oeuvre_fcfa || 0) / 1e6)}M`,
     C_ventil_so: `${Math.round(((sC.cout_ventilation || {}).second_oeuvre_fcfa || 0) / 1e6)}M`,
     C_ventil_lt: `${Math.round(((sC.cout_ventilation || {}).lots_techniques_fcfa || 0) / 1e6)}M`,
-    C_ventil_vrd: `${Math.round(((sC.cout_ventilation || {}).vrd_fcfa || 0) / 1e6)}M`,
+    C_ventil_vrd: `${(() => { const cv = sC.cout_ventilation || {}; return Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6); })()}M`,
     C_ventil_hono: `${Math.round((((sC.cout_ventilation || {}).honoraires_architecte || {}).median_fcfa || 0) / 1e6)}M`,
     C_hono_bas_M: String(Math.round((((sC.cout_ventilation || {}).honoraires_architecte || {}).bas_fcfa || 0) / 1e6)),
     C_hono_haut_M: String(Math.round((((sC.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa || 0) / 1e6)),
@@ -7114,6 +7239,9 @@ app.post("/generate-texts", async (req, res) => {
   // ── PREMIUM GATE: sanitize all GPT texts ──
   generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
 
+  // ── CONFORMITY GATE v72.87: vérification automatique post-génération ──
+  const conformity = validateConformity(flat, scenarios, generatedTexts);
+
   // Step 5: Merge all into response
   const response = {
     ...flat,
@@ -7140,7 +7268,8 @@ app.post("/generate-texts", async (req, res) => {
     gpt_text_rules: rules.substring(0, 200) + "...",
     gpt_elapsed_ms: generatedTexts._gpt_elapsed_ms || 0,
     gpt_model: generatedTexts._gpt_model || GPT_TEXT_MODEL,
-    server_version: "72.82-PREMIUM-COHERENT",
+    conformity_check: conformity,
+    server_version: "72.87-CONFORMITY-GATE",
     total_duration_ms: Date.now() - t0,
   };
 
@@ -7281,7 +7410,8 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_ventil_go`] = `${Math.round((cv.gros_oeuvre_fcfa || 0) / 1e6)}M`;
       flat[`${key}_ventil_so`] = `${Math.round((cv.second_oeuvre_fcfa || 0) / 1e6)}M`;
       flat[`${key}_ventil_lt`] = `${Math.round((cv.lots_techniques_fcfa || 0) / 1e6)}M`;
-      flat[`${key}_ventil_vrd`] = `${Math.round((cv.vrd_fcfa || 0) / 1e6)}M`;
+      // v72.87: VRD inclut amenagements_ext pour total 100%
+      flat[`${key}_ventil_vrd`] = `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / 1e6)}M`;
       flat[`${key}_ventil_hono`] = `${Math.round((cvh.median_fcfa || 0) / 1e6)}M`;
     }
 
@@ -7296,6 +7426,9 @@ app.post("/generate-pptx", async (req, res) => {
 
     // ── PREMIUM GATE: sanitize all GPT texts ──
     generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
+
+    // ── CONFORMITY GATE v72.87 ──
+    const conformity = validateConformity(flat, scenarios, generatedTexts);
 
     // Step 4: Map server data to EXACT keys expected by Python scripts
     // ═══════════════════════════════════════════════════════════════
