@@ -6482,7 +6482,7 @@ function validateConformity(flat, scenarios, texts) {
   // ── 7. CHECK: Texts don't contain raw variable placeholders ──
   if (texts) {
     for (const [key, text] of Object.entries(texts)) {
-      if (!text) continue;
+      if (!text || typeof text !== "string") continue;
       const unreplaced = text.match(/\{[A-Za-z_]+\}/g);
       if (unreplaced && unreplaced.length > 0) {
         warnings.push(`Text "${key}" contient ${unreplaced.length} variable(s) non remplacée(s): ${unreplaced.slice(0, 3).join(", ")}`);
