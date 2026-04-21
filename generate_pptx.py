@@ -549,6 +549,88 @@ def assemble_pptx(data, template_path, output_path):
             Emu(2743200), Emu(2743200), Emu(3657600), Emu(2103120))
         print("Inserted cost breakdown chart on slide 17", file=sys.stderr)
 
+    # Slide 17 -- Budget comparison table (bottom area)
+    # Table: Scenario | SDP | Cout/m2 marche | Cout/m2 ajuste | Cout total | Label
+    if len(slides_list) >= 17:
+        slide17 = slides_list[16]
+        try:
+            # Extract data from flat_data
+            table_rows = []
+            for sc_key in ['A', 'B', 'C']:
+                sdp_val = flat_data.get(f'{sc_key}_sdp', '0')
+                cost_m2_marche = flat_data.get(f'{sc_key}_cost_m2_marche', '0k')
+                cost_m2_ajuste = flat_data.get(f'{sc_key}_cost_m2_ajuste', '0k')
+                cost_total = flat_data.get(f'{sc_key}_cost_total', '0M FCFA')
+                budget_fit = flat_data.get(f'{sc_key}_budget_fit', '')
+                # Translate budget_fit labels
+                fit_label = {
+                    'DANS_BUDGET': 'DANS BUDGET',
+                    'BUDGET_TENDU': 'BUDGET TENDU',
+                    'HORS_BUDGET': 'HORS BUDGET',
+                }.get(budget_fit, budget_fit)
+                table_rows.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
+
+            # Position: bottom-center, below text columns
+            # left=1.5", top=4.05", width=7.0", height=1.5"
+            tbl_left = Emu(1371600)   # 1.5"
+            tbl_top = Emu(3703320)    # 4.05"
+            tbl_width = Emu(6400800)  # 7.0"
+            tbl_height = Emu(1371600) # 1.5"
+
+            rows, cols = 4, 6  # header + 3 data rows
+            table_shape = slide17.shapes.add_table(rows, cols, tbl_left, tbl_top, tbl_width, tbl_height)
+            tbl = table_shape.table
+
+            # Column widths (proportional)
+            col_widths_emu = [
+                Emu(914400),   # Scenario (1.0")
+                Emu(914400),   # SDP (1.0")
+                Emu(1143000),  # Cout/m2 marche (1.25")
+                Emu(1143000),  # Cout/m2 ajuste (1.25")
+                Emu(1028700),  # Cout total (1.125")
+                Emu(1257300),  # Label (1.375")
+            ]
+            for i, w in enumerate(col_widths_emu):
+                tbl.columns[i].width = w
+
+            # Header row
+            headers = ['Scenario', 'SDP', 'Cout/m\u00b2\nmarche', 'Cout/m\u00b2\najuste', 'Cout\ntotal', 'Label']
+            DARK_GREEN = RGBColor(0x2C, 0x5F, 0x2D)
+            WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+            LIGHT_BG = RGBColor(0xF5, 0xF5, 0xF0)
+
+            for ci, hdr in enumerate(headers):
+                cell = tbl.cell(0, ci)
+                cell.text = hdr
+                for para in cell.text_frame.paragraphs:
+                    para.alignment = PP_ALIGN.CENTER
+                    for run in para.runs:
+                        run.font.size = Pt(9)
+                        run.font.bold = True
+                        run.font.color.rgb = WHITE
+                # Dark green header background
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = DARK_GREEN
+
+            # Data rows
+            for ri, row_data in enumerate(table_rows):
+                for ci, val in enumerate(row_data):
+                    cell = tbl.cell(ri + 1, ci)
+                    cell.text = val
+                    for para in cell.text_frame.paragraphs:
+                        para.alignment = PP_ALIGN.CENTER
+                        for run in para.runs:
+                            run.font.size = Pt(9)
+                            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+                    # Alternate row shading
+                    if ri % 2 == 1:
+                        cell.fill.solid()
+                        cell.fill.fore_color.rgb = LIGHT_BG
+
+            print("Inserted budget comparison table on slide 17", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: could not insert budget table on slide 17: {e}", file=sys.stderr)
+
     # Slide 19 -- Timeline Gantt chart (below text, full width)
     timeline_chart = chart_paths.get('timeline')
     if timeline_chart and os.path.exists(timeline_chart) and len(slides_list) >= 19:
