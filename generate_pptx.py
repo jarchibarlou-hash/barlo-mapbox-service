@@ -540,17 +540,18 @@ def assemble_pptx(data, template_path, output_path):
 
     slides_list = list(prs.slides)
 
-    # Slide 17 -- Cost breakdown pie chart (center-bottom, overlapping columns)
+    # Slide 17 -- Cost breakdown pie chart
+    # v72.92: Repositioned to bottom-right to avoid overlapping text columns
     cost_chart = chart_paths.get('cost_breakdown')
     if cost_chart and os.path.exists(cost_chart) and len(slides_list) >= 17:
         slide17 = slides_list[16]
-        # Centered horizontally, in lower third of slide
-        # left=3.0", top=3.0", width=4.0", height=2.3" → bottom=5.3" (within 5.62")
+        # Right side, below text columns: left=6.3", top=3.3", width=3.2", height=2.1"
         slide17.shapes.add_picture(cost_chart,
-            Emu(2743200), Emu(2743200), Emu(3657600), Emu(2103120))
-        print("Inserted cost breakdown chart on slide 17", file=sys.stderr)
+            Emu(5760720), Emu(3017520), Emu(2926080), Emu(1920240))
+        print("Inserted cost breakdown chart on slide 17 (bottom-right)", file=sys.stderr)
 
-    # Slide 17 -- Budget comparison table (bottom area)
+    # Slide 17 -- Budget comparison table (bottom-left, next to pie chart)
+    # v72.92: Repositioned to bottom-left to coexist with pie chart on right
     # Table: Scenario | SDP | Cout/m2 marche | Cout/m2 ajuste | Cout total | Label
     if len(slides_list) >= 17:
         slide17 = slides_list[16]
@@ -571,12 +572,12 @@ def assemble_pptx(data, template_path, output_path):
                 }.get(budget_fit, budget_fit)
                 table_rows.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
 
-            # Position: bottom-center, below text columns
-            # left=1.5", top=4.05", width=7.0", height=1.5"
-            tbl_left = Emu(1371600)   # 1.5"
-            tbl_top = Emu(3703320)    # 4.05"
-            tbl_width = Emu(6400800)  # 7.0"
-            tbl_height = Emu(1371600) # 1.5"
+            # Position: bottom-left, left-aligned under text columns
+            # left=0.3", top=3.7", width=5.8", height=1.3"
+            tbl_left = Emu(274320)    # 0.3"
+            tbl_top = Emu(3383280)    # 3.7"
+            tbl_width = Emu(5303520)  # 5.8"
+            tbl_height = Emu(1188720) # 1.3"
 
             rows, cols = 4, 6  # header + 3 data rows
             table_shape = slide17.shapes.add_table(rows, cols, tbl_left, tbl_top, tbl_width, tbl_height)
