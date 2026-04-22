@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.95-SUPERVISOR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.96-SUPERVISOR" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2253,25 +2253,21 @@ function computeSmartScenarios({
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
       const pilotisRule = rules.requires_pilotis;
-      // v72.95: règle ratio parking/vert → WARNING DIAGNOSTIC uniquement
-      // Avant : activait automatiquement les pilotis si parking > 40% de l'espace libre.
-      // Ça imposait une décision structurelle majeure (+8-12% coût fondations) sans consentement client.
-      // Maintenant : produit un warning dans les logs mais ne modifie PLUS la géométrie.
-      // Les pilotis s'activent UNIQUEMENT si :
-      //   - le client les a demandés explicitement (PROGRAM_RULES.requires_pilotis === true)
-      //   - OU le sol libre est absolument insuffisant (seuil strict en valeur absolue)
+      // v57.16: ratio parking/vert — si le parking requis dépasse 40% du sol libre,
+      // le ratio 1/3 parking - 2/3 vert est impossible → pilotis auto
       const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
       if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" && (
-        // Seuil strict absolu : sol libre vraiment insuffisant ET parking ne rentre pas de moitié
-        freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 && freeGround < parkingM2Needed * 0.5
+        // ancien seuil : sol libre insuffisant en absolu
+        ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
+          && freeGround < parkingM2Needed)
+        // v57.16 : ratio parking/vert déséquilibré → pilotis pour libérer le sol
+        || parkingRatioExceeded
       )))) {
         hasPilotis = true;
         pilotisLevels = 1;
-        console.log(`│   ⚡ PILOTIS ACTIVÉ: sol libre ${Math.round(freeGround)}m² < seuil absolu (${PILOTIS_CONFIG.MIN_FREE_GROUND_M2}m²) ET parking ne rentre pas`);
-      }
-      // Warning diagnostic si parking serré mais géométrie préservée (pas de pilotis forcé)
-      if (parkingRatioExceeded && !hasPilotis) {
-        console.log(`│   🅿️⚠️ v72.95: parking ${Math.round(parkingM2Needed)}m² > 40% sol libre ${Math.round(freeGround)}m² — warning (pilotis NON activé, géométrie préservée, envisager parking sous-sol ou voirie)`);
+        if (parkingRatioExceeded) {
+          console.log(`│   🅿️→🏗️ v57.16: parking ${Math.round(parkingM2Needed)}m² > 40% sol libre ${Math.round(freeGround)}m² → PILOTIS AUTO (ratio 1/3-2/3 impossible sans pilotis)`);
+        }
       }
       // Commerce au RDC
       const hasRdcCommerce = rules.rdc_commerce || false;
@@ -2340,15 +2336,11 @@ function computeSmartScenarios({
       const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil(fp * levels / 70));
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
-      // v72.95: ratio parking/vert → warning uniquement (regulation mode)
+      // v72.96: ratio parking/vert → warning uniquement (regulation mode)
       const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
       if (freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 && freeGround < parkingM2Needed * 0.5) {
         hasPilotis = true;
         pilotisLevels = 1;
-        console.log(`│   ⚡ PILOTIS ACTIVÉ (regulation): sol libre ${Math.round(freeGround)}m² insuffisant`);
-      }
-      if (parkingRatioExceeded && !hasPilotis) {
-        console.log(`│   🅿️⚠️ v72.95 (regulation): parking ${Math.round(parkingM2Needed)}m² > 40% sol libre — warning, géométrie préservée`);
       }
       unitMixDetail = null;
       totalUseful = 0;
@@ -3855,9 +3847,6 @@ function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_
   streetBearing = 0, latitude = 14, scenario_role = "EQUILIBRE" }) {
   const fillRatio = fp_m2 / Math.max(1, envelopeArea);
   const isMixte = /mixte|mixed/i.test(program_main || "");
-  // v72.95: Support "considérer parcelle vide" — si project_type contient DEMOLITION,
-  // le bâtiment existant est ignoré (traitement comme terrain vierge pour la typologie).
-  // Le client doit choisir "Démolition / Reconstruction" dans le formulaire pour déclencher ce mode.
   const isDemolition = /DEMOLITION/i.test(project_type || "");
   const isReno = !isDemolition && /RENOVATION|EXTENSION|SURELEVATION/i.test(project_type || "");
   const effectiveExistingFp = isDemolition ? 0 : (Number(existing_fp_m2) || 0);
@@ -4418,7 +4407,7 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   return commerceGPS;
 }
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex) {
+function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4573,6 +4562,14 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
+    // v72.96: Masquer les bâtiments OSM à l'intérieur de la parcelle si terrain nu/démolition
+    ${hideExistingBuildings ? `
+    map.setFilter('3d-buildings', ['all',
+      ['==', 'extrude', 'true'],
+      ['\!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
+    ]);
+    console.log('[SLIDE4 v72.96] Bati existant masque dans la parcelle');
+    ` : ""}
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -5505,7 +5502,13 @@ app.post("/generate", async (req, res) => {
     zoom: zoomOverride = null,
     style_ref_url = null,
     front_edge,
+    support_type,
+    project_type,
+    consider_site_empty,
   } = req.body;
+  const isEmptySite = String(support_type || "").toUpperCase().includes("TERRAIN_NU") ||
+                      /DEMOLITION/i.test(String(project_type || "")) ||
+                      String(consider_site_empty || "").toLowerCase() === "true";
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
   if (!BROWSERLESS_TOKEN) return res.status(500).json({ error: "BROWSERLESS_TOKEN manquant" });
@@ -5531,7 +5534,7 @@ app.post("/generate", async (req, res) => {
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex);
+    const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -5806,30 +5809,26 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
   console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
-  // v72.95: DÉTECTION STRICTE — uniquement sur les champs d'entrée CLIENT
-  // On ignore explicitement les textes générés (diagnostic_narrative, phasage_text,
-  // orient_recommandation, etc.) qui peuvent contenir des mots déclencheurs
-  // sans rapport avec l'intention réelle du client.
-  const clientInputFields = [
-    program_main,
-    project_type,
-    req.body.target_program,
-    layout_mode,
-  ].filter(Boolean).map(v => String(v).toLowerCase()).join(" ");
-  // ── Détection MIXTE : uniquement sur les inputs client ──
+  // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
+  // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
+  // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
+  const clientInputFields = [program_main, project_type, req.body.target_program, layout_mode].filter(Boolean).map(v => String(v).toLowerCase()).join(" ");
+  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
+  // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
+  // ── Détection MIXTE ──
   const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(clientInputFields);
   // ── Détection SPLIT ──
-  // Signal 1: layout_mode explicitement SPLIT_AV_AR (choix explicite du client)
+  // Signal 1: layout_mode explicitement SPLIT_AV_AR
   const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
-  // Signal 2: input client mentionne la séparation (pas un texte généré)
+  // Signal 2: une valeur du body mentionne clairement la séparation
   const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(clientInputFields);
-  // Signal 3: commerce_depth_m explicitement saisi par le client
+  // Signal 3: commerce_depth_m est envoyé avec une valeur > 0 → c'est forcément du SPLIT
   const hasCommerceDepth = Number(commerce_depth_m) > 0;
   // ── Résolution ──
   const effectiveLayoutMode = (layoutModeIsSplit || bodyHasSplit || hasCommerceDepth)
     ? "SPLIT_AV_AR" : "SUPERPOSE";
   const splitActive = effectiveLayoutMode === "SPLIT_AV_AR";
-  // ── Programme effectif : ne force USAGE_MIXTE que si détecté dans l'input client ──
+  // ── Programme effectif ──
   const effectiveProgramMain = program_main || project_type || ((bodyHasMixte || splitActive) ? "USAGE_MIXTE" : "");
   console.log(`[MASSING v72.25] ┌── DÉTECTION MIXTE/SPLIT ──`);
   console.log(`[MASSING v72.25] │ program_main="${program_main}" project_type="${project_type}"`);
@@ -5921,13 +5920,9 @@ app.post("/generate-massing", async (req, res) => {
     scenarioSdp = Math.round(fp * levels);  // v72.87: SDP classique = fp × levels
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} sdp=${scenarioSdp}m²`);
   }
-  // v72.95: FILET ULTIME SUPPRIMÉ
-  // L'ancien filet forçait commerce=1 dès qu'un mot "mixte" apparaissait n'importe où
-  // dans le body (y compris dans les textes générés par 8D).
-  // Avec la détection stricte du PATCH 1, la détection dans la branche CLASSIQUE suffit.
-  // Plus aucun override automatique : commerce est activé UNIQUEMENT si :
-  //   - le client a choisi un programme "Usage mixte" dans le formulaire
-  //   - ou le client a choisi un layout SPLIT_AV_AR explicitement
+  // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
+  // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
+  // v72.96: FILET ULTIME SUPPRIMÉ — le commerce n'est activé que si détecté (P1)
   // v72.28: Si mixte SUPERPOSÉ et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
   // En SPLIT, les levels = logement seulement (commerce est un volume séparé) → PAS de override
   if (commerceLevels > 0 && levels <= commerceLevels && !splitLayout) {
@@ -8097,7 +8092,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.95-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.96-SUPERVISOR on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
