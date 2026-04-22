@@ -1,4 +1,4 @@
-AVconst express = require("express");
+const express = require("express");
 const puppeteer = require("puppeteer-core");
 const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.107-STABLE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.109-GROUND-ZERO" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4426,7 +4426,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   // v72.102: Calcul du buffer +5m pour le masquage bâti slide 4
   const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
   const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
-  const bufferM = 30; // v72.104: aggressive buffer
+  const bufferM = 50; // v72.108: super aggressive // v72.104: aggressive buffer
   const scaleLat = bufferM / 111000;
   const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
   const bufferedCoords = parcelCoords.map(p => {
@@ -4574,14 +4574,15 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v72.102: Masquer SYSTÉMATIQUEMENT bâtiments OSM dans parcelle BUFFERÉE +5m
     map.setFilter('3d-buildings', ['all',
       ['==', 'extrude', 'true'],
-      ['!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
+      ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
     ]);
     console.log('[SLIDE4 v72.104] Bati existant masque (parcelle +30m buffer) SYSTEMATIQUEMENT');
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    // v72.108: parcel-fill transparent
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.45 } });
+      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.0 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -4692,7 +4693,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
       if (map && parcelCoords && parcelCoords.length > 0) {
         const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
         const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
-        const bufferM = 30; // v72.104: aggressive buffer
+        const bufferM = 50; // v72.108: super aggressive // v72.104: aggressive buffer
         const scaleLat = bufferM / 111000;
         const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
         const bufferedCoords = parcelCoords.map(p => {
@@ -4703,7 +4704,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         const rings = [bufferedCoords.map(c => [c.lon, c.lat])];
         rings[0].push(rings[0][0]);
         map.setFilter('3d-buildings', ['all', ['==', 'extrude', 'true'], 
-          ['!', ['within', {type: 'Polygon', coordinates: rings}]]]);
+          ['!', ['within', {type: 'Feature', geometry: {type: 'Polygon', coordinates: rings}, properties: {}}]]]);
         console.log('[MASSING v72.103] Bati OSM masque (parcelle +10m buffer)');
       }
     }, 200);
@@ -5641,6 +5642,8 @@ app.post("/generate", async (req, res) => {
         const polishPrompt = [
           "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
           "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
+          "CRITICAL GROUND LEVEL RULE: the parcel (red outline) is just a LINE ON THE GROUND. Do NOT raise the parcel, do NOT add a platform, do NOT add a plateau, do NOT add a pedestal under the parcel. The parcel interior MUST be at the SAME ground level as the surrounding road and grass. Any elevated parcel or raised platform is a HALLUCINATION and FORBIDDEN.",
+          "The red dashed lines are setback zones — purely 2D lines on the ground. Do NOT extrude them.",
           "Do NOT move, add, remove, or redesign any building.",
           "Do NOT change the camera angle or perspective.",
           "Do NOT add people, vehicles, text, labels, or watermarks.",
@@ -6285,7 +6288,7 @@ app.post("/generate-massing", async (req, res) => {
     // Aucune possibilité d'hallucination IA (socle, commerce fantôme, flottement, etc.).
     // Pour réactiver plus tard : remplacer la condition `false` par l'ancienne.
     console.log(`[MASSING-POLISH v72.107] ⚡ Polish désactivé pour stabilité max — rendu déterministe uniquement`);
-    if (false && OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
+    if (OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[MASSING-POLISH] v72.34: Starting robust multi-render (${MASSING_VARIATIONS} variations) for ${label}... model=${POLISH_MODEL}`);
         // v72.34: Resize image for API — reduces payload, improves reliability
@@ -6312,7 +6315,10 @@ GROUNDING RULES (CRITICAL):
 - Do NOT wash out, desaturate, or unify the floor colors.
 - Do NOT turn orange or blue floors into beige, gray, or white.
 - The color difference between floor types is essential information — preserve it exactly.`;
-        let massingPolishPrompt = `STRICT EDIT ONLY.
+        let massingPolishPrompt = `STRICT EDIT ONLY. VERY SUBTLE, GENTLE, NON-AGGRESSIVE POLISH ONLY.
+Your polish must be BARELY VISIBLE — only slight tonal harmonization, minimal contrast improvement, soft ambient occlusion.
+Do NOT make dramatic changes. Do NOT add new elements. Do NOT reinterpret the scene.
+
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
 Do NOT modify, move, add, or remove ANY element.
 Do NOT change building shapes, positions, sizes, count.
@@ -6370,7 +6376,8 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
           }
           const enhancedBuf = Buffer.from(result.b64, "base64");
           // Massing uses default threshold (0.25) — light polish
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
+          // v72.108: drift threshold 0.15
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.15);
           // v72.22: COLOR PRESERVATION CHECK — verify orange and blue floor bands survived
           let colorCheckPassed = true;
           let colorLog = "";
@@ -8228,7 +8235,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.107-STABLE on port ${PORT}`);
+  console.log(`BARLO v72.109-GROUND-ZERO on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
