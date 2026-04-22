@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.102-CLEAN" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.104-CLEAN-PARCEL" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4426,7 +4426,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   // v72.102: Calcul du buffer +5m pour le masquage bâti slide 4
   const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
   const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
-  const bufferM = 5;
+  const bufferM = 30; // v72.104: aggressive buffer
   const scaleLat = bufferM / 111000;
   const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
   const bufferedCoords = parcelCoords.map(p => {
@@ -4576,7 +4576,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       ['==', 'extrude', 'true'],
       ['!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
     ]);
-    console.log('[SLIDE4 v72.102] Bati existant masque (parcelle +5m buffer) SYSTEMATIQUEMENT');
+    console.log('[SLIDE4 v72.104] Bati existant masque (parcelle +30m buffer) SYSTEMATIQUEMENT');
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -4687,10 +4687,31 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
+    // v72.103: Masquer bâtiments OSM dans parcelle bufferée (via setFilter après rendering)
+    setTimeout(() => {
+      if (map && parcelCoords && parcelCoords.length > 0) {
+        const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
+        const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
+        const bufferM = 30; // v72.104: aggressive buffer
+        const scaleLat = bufferM / 111000;
+        const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
+        const bufferedCoords = parcelCoords.map(p => {
+          const dx = p.lon - cLon, dy = p.lat - cLat, len = Math.sqrt(dx*dx + dy*dy);
+          if (len < 1e-10) return p;
+          return { lat: p.lat + (dy/len)*scaleLat, lon: p.lon + (dx/len)*scaleLon };
+        });
+        const rings = [bufferedCoords.map(c => [c.lon, c.lat])];
+        rings[0].push(rings[0][0]);
+        map.setFilter('3d-buildings', ['all', ['==', 'extrude', 'true'], 
+          ['!', ['within', {type: 'Polygon', coordinates: rings}]]]);
+        console.log('[MASSING v72.103] Bati OSM masque (parcelle +10m buffer)');
+      }
+    }, 200);
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    // v72.103: Fond parcelle TRANSPARENT dans massing (évite tinting orange par polish IA)
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.60 } }, '3d-buildings');
+      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.0 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#c04020', 'line-width': 5, 'line-opacity': 1.0 } });
     // v71: Zone constructible (reculs) — tirets rouge au-dessus des bâtiments
@@ -5816,6 +5837,33 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
   console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // v72.103 EARLY GUARD — simple mode detection AVANT toute autre logique
+  // Si le client veut pure résidentiel + volume unique, on force simple mode :
+  //   - pas de commerce (commerceLevels sera 0)
+  //   - pas de pilotis (has_pilotis sera false)
+  //   - pas de split (splitLayout sera null)
+  //   - layout_mode forcé à SUPERPOSE
+  // Cela empêche les chemins downstream de ré-activer du commerce/split/pilotis.
+  // ═══════════════════════════════════════════════════════════════════════════
+  try {
+    const _dispoEarly = String((req.body && req.body.Disposition) || (req.body && req.body.disposition) || "").toLowerCase();
+    const _progEarly = String((req.body && req.body.target_program) || "").toLowerCase();
+    const _wantsSingle = /seul\s*b.?timent|un\s*seul|single\s*building/i.test(_dispoEarly);
+    const _isPureResi = /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(_progEarly)
+                      && !/mixte|mixed|commerce|bureau|activite/i.test(_progEarly);
+    if (_wantsSingle && _isPureResi) {
+      console.log(`[v72.103 EARLY GUARD ${label}] ⚡ SIMPLE MODE activé : pure résidentiel + volume unique`);
+      console.log(`  → force layout_mode=SUPERPOSE, commerce_raw=0, skip_split=true`);
+      req.body.layout_mode = "SUPERPOSE";
+      req.body.commerce_levels = 0;
+      req.body.commerce_raw = 0;
+      req.body.consider_site_empty = req.body.consider_site_empty || "true";
+    }
+  } catch (_earlyErr) {
+    console.warn(`[v72.103 EARLY GUARD] non-fatal:`, _earlyErr.message);
+  }
+  // ═══════════════════════════════════════════════════════════════════════════
   // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
@@ -8163,7 +8211,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.102-CLEAN on port ${PORT}`);
+  console.log(`BARLO v72.104-CLEAN-PARCEL on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
