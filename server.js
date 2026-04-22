@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.98-PROGRAMLOCK" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.99-BULLETPROOF" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5973,7 +5973,7 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.32] SPLIT levels sync: levels=${levels} (logement seul, depuis splitLayout.volume_logement.levels)`);
   }
   // ═══════════════════════════════════════════════════════════════════════════
-  // v72.98 PROGRAM LOCK — garde-fou final pour respecter strictement le
+  // v72.99 PROGRAM LOCK (bulletproof) — garde-fou final pour respecter strictement le
   // programme saisi par le client dans son formulaire.
   // FILTRES :
   //   F1. Inputs client ≠ mixte/split → commerce=0, pilotis=false, split=null
@@ -6013,6 +6013,7 @@ app.post("/generate-massing", async (req, res) => {
     has_pilotis = false;
   }
   // F5 : cap des unités
+  try {
   const clientTargetUnits = Number(req.body.target_units) || 0;
   let unitsWarning = "";
   if (clientTargetUnits > 0 && totalUnitsResult > clientTargetUnits) {
@@ -6020,12 +6021,16 @@ app.post("/generate-massing", async (req, res) => {
   }
   const lockChanged = (lockBefore.commerce !== commerceLevels) || (lockBefore.pilotis !== has_pilotis) || (lockBefore.split !== !!splitLayout);
   if (lockChanged || unitsWarning) {
-    console.log(`[v72.98 PROGRAM LOCK ${label}] overrides:`);
+    console.log(`[v72.99 PROGRAM LOCK (bulletproof) ${label}] overrides:`);
     if (lockBefore.commerce !== commerceLevels) console.log(`  commerce: ${lockBefore.commerce} → ${commerceLevels}`);
     if (lockBefore.pilotis !== has_pilotis) console.log(`  pilotis: ${lockBefore.pilotis} → ${has_pilotis}`);
     if (lockBefore.split !== !!splitLayout) console.log(`  split: ${lockBefore.split} → ${!!splitLayout}`);
     if (unitsWarning) console.log(`  units:${unitsWarning}`);
     console.log(`  [contexte] mixte=${bodyHasMixte} split=${splitActive} singleVol=${clientWantsSingleVolume} pureResi=${clientProgramIsPureResidential} terrainNu=${isTerrainNuMassing}`);
+  }
+
+  } catch (lockErr) {
+    console.error(`[v72.99 PROGRAM LOCK] ERROR (non-fatal, continuing render):`, lockErr.message);
   }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
@@ -8140,7 +8145,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.98-PROGRAMLOCK on port ${PORT}`);
+  console.log(`BARLO v72.99-BULLETPROOF on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
