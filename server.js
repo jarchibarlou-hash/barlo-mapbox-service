@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.104-CLEAN-PARCEL" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.105-NO-HALLU" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -6287,21 +6287,28 @@ app.post("/generate-massing", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[MASSING-POLISH] ${label} input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // v72.4: Stronger color preservation for floor coding
+        // v72.105: Adaptive prompt — no mention of orange if commerce=0 (évite hallucination IA)
+        const _colorInstruction = (commerceLevels === 0)
+          ? `STRICT COLOR CONSTRAINT: The building has ONLY BLUE floors (100% residential, NO commerce).
+- ALL floors are BLUE (#3a7ac0) — there is NO ORANGE anywhere in the building.
+- Do NOT add any orange, brown, red, or warm-colored elements to the building.
+- Do NOT render a colored base, plinth, or platform under the building.
+- The building is a pure BLUE volume, period.
+- Any orange/warm tone you add is a HALLUCINATION and is FORBIDDEN.
+- The ground/grass/parcel around may have natural warm tones, but the building itself is 100% BLUE.`
+          : `CRITICAL COLOR PRESERVATION:
+- The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
+- These colors MUST remain vivid and clearly distinguishable after polish.
+- Do NOT wash out, desaturate, or unify the floor colors.
+- Do NOT turn orange or blue floors into beige, gray, or white.
+- The color difference between floor types is essential information — preserve it exactly.`;
         let massingPolishPrompt = `STRICT EDIT ONLY.
-
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
 Do NOT modify, move, add, or remove ANY element.
 Do NOT change building shapes, positions, sizes, count.
 Do NOT reinterpret, redesign, or restyle the scene.
 NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
-
-CRITICAL COLOR PRESERVATION:
-- The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
-- These colors MUST remain vivid and clearly distinguishable after polish.
-- Do NOT wash out, desaturate, or unify the floor colors.
-- Do NOT turn orange or blue floors into beige, gray, or white.
-- The color difference between floor types is essential information — preserve it exactly.
+${_colorInstruction}
 
 Apply ONLY these subtle non-structural adjustments:
 - Very slight tonal harmonization (uniform warm balance) — but KEEP floor colors intact
@@ -8211,7 +8218,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.104-CLEAN-PARCEL on port ${PORT}`);
+  console.log(`BARLO v72.105-NO-HALLU on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
