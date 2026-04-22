@@ -1,4 +1,4 @@
-const express = require("express");
+AVconst express = require("express");
 const puppeteer = require("puppeteer-core");
 const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
