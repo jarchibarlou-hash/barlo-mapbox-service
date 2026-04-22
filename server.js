@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.105-NO-HALLU" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.107-STABLE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -6280,7 +6280,12 @@ app.post("/generate-massing", async (req, res) => {
     } else if (elapsedBeforePolish > POLISH_TIME_BUDGET_MS) {
       console.log(`[MASSING-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(elapsedBeforePolish/1000)}s already spent (limit ${POLISH_TIME_BUDGET_MS/1000}s) → SKIPPING polish`);
     }
-    if (OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
+    // v72.107: POLISH MASSING DÉSACTIVÉ définitivement pour stabilité maximale.
+    // Le rendu déterministe (Mapbox + overlays) est la seule source de vérité.
+    // Aucune possibilité d'hallucination IA (socle, commerce fantôme, flottement, etc.).
+    // Pour réactiver plus tard : remplacer la condition `false` par l'ancienne.
+    console.log(`[MASSING-POLISH v72.107] ⚡ Polish désactivé pour stabilité max — rendu déterministe uniquement`);
+    if (false && OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[MASSING-POLISH] v72.34: Starting robust multi-render (${MASSING_VARIATIONS} variations) for ${label}... model=${POLISH_MODEL}`);
         // v72.34: Resize image for API — reduces payload, improves reliability
@@ -6289,13 +6294,18 @@ app.post("/generate-massing", async (req, res) => {
         console.log(`[MASSING-POLISH] ${label} input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // v72.105: Adaptive prompt — no mention of orange if commerce=0 (évite hallucination IA)
         const _colorInstruction = (commerceLevels === 0)
-          ? `STRICT COLOR CONSTRAINT: The building has ONLY BLUE floors (100% residential, NO commerce).
+          ? `STRICT COLOR AND GROUNDING CONSTRAINT: The building has ONLY BLUE floors (100% residential, NO commerce).
 - ALL floors are BLUE (#3a7ac0) — there is NO ORANGE anywhere in the building.
 - Do NOT add any orange, brown, red, or warm-colored elements to the building.
-- Do NOT render a colored base, plinth, or platform under the building.
-- The building is a pure BLUE volume, period.
-- Any orange/warm tone you add is a HALLUCINATION and is FORBIDDEN.
-- The ground/grass/parcel around may have natural warm tones, but the building itself is 100% BLUE.`
+- The building is a pure BLUE volume, period. Any orange/warm tone = HALLUCINATION = FORBIDDEN.
+GROUNDING RULES (CRITICAL):
+- The building MUST sit DIRECTLY on the ground (grass or parcel surface). NO gap, NO shadow gap, NO raised socle.
+- Do NOT add any platform, plinth, pedestal, base, raised floor, colored slab, or elevated plateau under the building.
+- Do NOT fill the parcel area with any colored surface that would appear raised above ground level.
+- The parcel outline (red dashed line) is JUST a line on the ground — do NOT extrude it, do NOT fill it, do NOT add texture to it.
+- The building's bottom edge MUST touch the ground plane — zero elevation, zero floating.
+- If you render any platform or raised surface under the building, that is a HALLUCINATION and FORBIDDEN.
+- Ground (grass/parcel) may have natural warm tones, but there must be NO visible raised element between the ground and the building.`
           : `CRITICAL COLOR PRESERVATION:
 - The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
 - These colors MUST remain vivid and clearly distinguishable after polish.
@@ -8218,7 +8228,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.105-NO-HALLU on port ${PORT}`);
+  console.log(`BARLO v72.107-STABLE on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
