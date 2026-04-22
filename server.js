@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.109-GROUND-ZERO" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.110-CLEAN" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4574,7 +4574,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v72.102: Masquer SYSTÉMATIQUEMENT bâtiments OSM dans parcelle BUFFERÉE +5m
     map.setFilter('3d-buildings', ['all',
       ['==', 'extrude', 'true'],
-      ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
+      ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }, properties: {} }]]
     ]);
     console.log('[SLIDE4 v72.104] Bati existant masque (parcelle +30m buffer) SYSTEMATIQUEMENT');
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
@@ -8235,7 +8235,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.109-GROUND-ZERO on port ${PORT}`);
+  console.log(`BARLO v72.110-CLEAN on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
