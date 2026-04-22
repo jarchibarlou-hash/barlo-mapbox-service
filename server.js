@@ -5837,7 +5837,7 @@ app.post("/generate-massing", async (req, res) => {
   console.log(`[MASSING v72.25] │ bodyHasMixte=${bodyHasMixte} bodyHasSplit=${bodyHasSplit} splitActive=${splitActive}`);
   console.log(`[MASSING v72.25] │ effectiveLayoutMode="${effectiveLayoutMode}" effectiveProgramMain="${effectiveProgramMain}"`);
   console.log(`[MASSING v72.25] │ BODY KEYS: ${Object.keys(req.body).join(", ")}`);
-  console.log(`[MASSING v72.25] │ field_values_sample="${fieldValues.slice(0, 500)}"`);
+  console.log(`[MASSING v72.25] │ field_values_sample="${clientInputFields.slice(0, 500)}"`);
   console.log(`[MASSING v72.25] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null, scenarioSdp = 0;
