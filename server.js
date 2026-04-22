@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.96-SUPERVISOR" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.98-PROGRAMLOCK" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2253,21 +2253,13 @@ function computeSmartScenarios({
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
       const pilotisRule = rules.requires_pilotis;
-      // v57.16: ratio parking/vert — si le parking requis dépasse 40% du sol libre,
-      // le ratio 1/3 parking - 2/3 vert est impossible → pilotis auto
+      // v72.98: ratio parking/vert → WARNING uniquement
       const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
       if (!isBungalow && (pilotisRule === true || (pilotisRule === "auto" && (
-        // ancien seuil : sol libre insuffisant en absolu
-        ((freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 || freeGroundPct < PILOTIS_CONFIG.MIN_FREE_GROUND_PCT)
-          && freeGround < parkingM2Needed)
-        // v57.16 : ratio parking/vert déséquilibré → pilotis pour libérer le sol
-        || parkingRatioExceeded
+        freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 && freeGround < parkingM2Needed * 0.5
       )))) {
         hasPilotis = true;
         pilotisLevels = 1;
-        if (parkingRatioExceeded) {
-          console.log(`│   🅿️→🏗️ v57.16: parking ${Math.round(parkingM2Needed)}m² > 40% sol libre ${Math.round(freeGround)}m² → PILOTIS AUTO (ratio 1/3-2/3 impossible sans pilotis)`);
-        }
       }
       // Commerce au RDC
       const hasRdcCommerce = rules.rdc_commerce || false;
@@ -2336,7 +2328,7 @@ function computeSmartScenarios({
       const parkingSpotsNeeded = Math.max(PILOTIS_CONFIG.MIN_PARKING_SPOTS, Math.ceil(fp * levels / 70));
       const parkingM2Needed = parkingSpotsNeeded * PILOTIS_CONFIG.PARKING_SPOT_M2;
       const freeGroundPct = freeGround / Math.max(1, envelope_area);
-      // v72.96: ratio parking/vert → warning uniquement (regulation mode)
+      // v72.98: ratio parking/vert → warning (regulation mode)
       const parkingRatioExceeded = freeGround > 0 && parkingM2Needed > freeGround * 0.40;
       if (freeGround < PILOTIS_CONFIG.MIN_FREE_GROUND_M2 && freeGround < parkingM2Needed * 0.5) {
         hasPilotis = true;
@@ -3847,6 +3839,7 @@ function selectTypology({ fp_m2, envelopeArea, envAspect, massing_mode, primary_
   streetBearing = 0, latitude = 14, scenario_role = "EQUILIBRE" }) {
   const fillRatio = fp_m2 / Math.max(1, envelopeArea);
   const isMixte = /mixte|mixed/i.test(program_main || "");
+    // v72.98: DEMOLITION → parcelle vide
   const isDemolition = /DEMOLITION/i.test(project_type || "");
   const isReno = !isDemolition && /RENOVATION|EXTENSION|SURELEVATION/i.test(project_type || "");
   const effectiveExistingFp = isDemolition ? 0 : (Number(existing_fp_m2) || 0);
@@ -4562,13 +4555,13 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.96: Masquer les bâtiments OSM à l'intérieur de la parcelle si terrain nu/démolition
+    // v72.98: Masquer bâtiments OSM à l'intérieur de la parcelle si terrain nu
     ${hideExistingBuildings ? `
     map.setFilter('3d-buildings', ['all',
       ['==', 'extrude', 'true'],
-      ['\!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
+      ['!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
     ]);
-    console.log('[SLIDE4 v72.96] Bati existant masque dans la parcelle');
+    console.log('[SLIDE4 v72.98] Bati existant masque dans la parcelle');
     ` : ""}
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
@@ -5506,9 +5499,11 @@ app.post("/generate", async (req, res) => {
     project_type,
     consider_site_empty,
   } = req.body;
+  // v72.98: terrain nu / démolition → masquer bâti existant
   const isEmptySite = String(support_type || "").toUpperCase().includes("TERRAIN_NU") ||
                       /DEMOLITION/i.test(String(project_type || "")) ||
                       String(consider_site_empty || "").toLowerCase() === "true";
+  if (isEmptySite) console.log(`[SLIDE4 v72.98] Terrain nu/démolition détecté → masquage bâti existant dans parcelle`);
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!MAPBOX_TOKEN) return res.status(500).json({ error: "MAPBOX_TOKEN manquant" });
   if (!BROWSERLESS_TOKEN) return res.status(500).json({ error: "BROWSERLESS_TOKEN manquant" });
@@ -5812,16 +5807,16 @@ app.post("/generate-massing", async (req, res) => {
   // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
-  const clientInputFields = [program_main, project_type, req.body.target_program, layout_mode].filter(Boolean).map(v => String(v).toLowerCase()).join(" ");
+  const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
   // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
   // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
   // ── Détection MIXTE ──
-  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(clientInputFields);
+  const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
   // ── Détection SPLIT ──
   // Signal 1: layout_mode explicitement SPLIT_AV_AR
   const layoutModeIsSplit = String(layout_mode || "").toUpperCase() === "SPLIT_AV_AR";
   // Signal 2: une valeur du body mentionne clairement la séparation
-  const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(clientInputFields);
+  const bodyHasSplit = /split.?av|commerce.?devant|devant.?retrait|dissoci/i.test(fieldValues);
   // Signal 3: commerce_depth_m est envoyé avec une valeur > 0 → c'est forcément du SPLIT
   const hasCommerceDepth = Number(commerce_depth_m) > 0;
   // ── Résolution ──
@@ -5920,9 +5915,7 @@ app.post("/generate-massing", async (req, res) => {
     scenarioSdp = Math.round(fp * levels);  // v72.87: SDP classique = fp × levels
     console.log(`CLASSIC MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} sdp=${scenarioSdp}m²`);
   }
-  // v72.22: FILET ULTIME — si le body contient "mixte" MAIS commerceLevels est toujours 0, on force
-  // Ça arrive quand Make.com envoie program_main vide pour certains scénarios
-  // v72.96: FILET ULTIME SUPPRIMÉ — le commerce n'est activé que si détecté (P1)
+  // v72.98: FILET ULTIME SUPPRIMÉ — commerce piloté uniquement par input client (P1)
   // v72.28: Si mixte SUPERPOSÉ et 1 seul niveau, forcer à 2 minimum (1 commerce + 1 logement)
   // En SPLIT, les levels = logement seulement (commerce est un volume séparé) → PAS de override
   if (commerceLevels > 0 && levels <= commerceLevels && !splitLayout) {
@@ -5978,6 +5971,61 @@ app.post("/generate-massing", async (req, res) => {
   if (splitLayout && splitLayout.volume_logement) {
     levels = splitLayout.volume_logement.levels;
     console.log(`[v72.32] SPLIT levels sync: levels=${levels} (logement seul, depuis splitLayout.volume_logement.levels)`);
+  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  // v72.98 PROGRAM LOCK — garde-fou final pour respecter strictement le
+  // programme saisi par le client dans son formulaire.
+  // FILTRES :
+  //   F1. Inputs client ≠ mixte/split → commerce=0, pilotis=false, split=null
+  //   F2. Disposition="Tout dans un seul bâtiment" → split=null
+  //   F3. target_program résidentiel pur (Petit collectif, etc.) → commerce=0
+  //   F4. Terrain nu + pas de pilotis demandé → has_pilotis=false
+  //   F5. target_units > résultat moteur → warning log
+  // ═══════════════════════════════════════════════════════════════════════════
+  const dispositionRaw = String(req.body.Disposition || req.body.disposition || "").toLowerCase();
+  const targetProgRaw = String(req.body.target_program || "").toLowerCase();
+  const supportTypeRaw = String(req.body.support_type || "").toUpperCase();
+  const clientWantsSingleVolume = /seul\s*b.?timent|seul\s*batiment|un\s*seul|single\s*building/i.test(dispositionRaw);
+  const clientProgramIsPureResidential = (
+    /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(targetProgRaw)
+    && !/mixte|mixed|commerce|bureau|activite/i.test(targetProgRaw)
+  );
+  const clientWantsPilotis = /pilotis|rdc.?ouvert|rdc.?libere/i.test(dispositionRaw);
+  const isTerrainNuMassing = supportTypeRaw.includes("TERRAIN_NU");
+  const lockBefore = { commerce: commerceLevels, pilotis: has_pilotis, split: !!splitLayout, totalUnits: totalUnitsResult };
+  // F1 : pas mixte/split dans inputs client → neutraliser
+  if (!bodyHasMixte && !splitActive) {
+    commerceLevels = 0;
+    splitLayout = null;
+    if (!clientWantsPilotis) has_pilotis = false;
+  }
+  // F2 : volume unique demandé → pas de split
+  if (clientWantsSingleVolume) {
+    splitLayout = null;
+  }
+  // F3 : programme résidentiel pur → pas de commerce
+  if (clientProgramIsPureResidential) {
+    commerceLevels = 0;
+    splitLayout = null;
+  }
+  // F4 : terrain nu + pas de demande explicite pilotis → pas de pilotis
+  if (isTerrainNuMassing && !clientWantsPilotis) {
+    has_pilotis = false;
+  }
+  // F5 : cap des unités
+  const clientTargetUnits = Number(req.body.target_units) || 0;
+  let unitsWarning = "";
+  if (clientTargetUnits > 0 && totalUnitsResult > clientTargetUnits) {
+    unitsWarning = ` (client ${clientTargetUnits} logements, moteur ${totalUnitsResult})`;
+  }
+  const lockChanged = (lockBefore.commerce !== commerceLevels) || (lockBefore.pilotis !== has_pilotis) || (lockBefore.split !== !!splitLayout);
+  if (lockChanged || unitsWarning) {
+    console.log(`[v72.98 PROGRAM LOCK ${label}] overrides:`);
+    if (lockBefore.commerce !== commerceLevels) console.log(`  commerce: ${lockBefore.commerce} → ${commerceLevels}`);
+    if (lockBefore.pilotis !== has_pilotis) console.log(`  pilotis: ${lockBefore.pilotis} → ${has_pilotis}`);
+    if (lockBefore.split !== !!splitLayout) console.log(`  split: ${lockBefore.split} → ${!!splitLayout}`);
+    if (unitsWarning) console.log(`  units:${unitsWarning}`);
+    console.log(`  [contexte] mixte=${bodyHasMixte} split=${splitActive} singleVol=${clientWantsSingleVolume} pureResi=${clientProgramIsPureResidential} terrainNu=${isTerrainNuMassing}`);
   }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
@@ -8092,7 +8140,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.96-SUPERVISOR on port ${PORT}`);
+  console.log(`BARLO v72.98-PROGRAMLOCK on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
