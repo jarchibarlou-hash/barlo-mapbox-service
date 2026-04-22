@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.113-SLIDE4-DETERMINISTIC-ONLY" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.114-DOUBLE-MASK-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4583,6 +4583,9 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // v72.108: parcel-fill transparent
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.0 } });
+    // v72.114: DOUBLE-MASK — parcel zone masking layer (flat opaque ground cover to hide Mapbox buildings)
+    map.addLayer({ id: 'parcel-zone-mask', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#f5f0e1', 'fill-opacity': 1.0 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -5625,7 +5628,7 @@ app.post("/generate", async (req, res) => {
     //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
-    const SLIDE4_AI_POLISH_ENABLED = false; // v72.113: DISABLED — deterministic render only
+    const SLIDE4_AI_POLISH_ENABLED = true;
     const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
@@ -5643,6 +5646,7 @@ app.post("/generate", async (req, res) => {
           "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
           "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
           "CRITICAL GROUND LEVEL RULE: the parcel (red outline) is just a LINE ON THE GROUND. Do NOT raise the parcel, do NOT add a platform, do NOT add a plateau, do NOT add a pedestal under the parcel. The parcel interior MUST be at the SAME ground level as the surrounding road and grass. Any elevated parcel or raised platform is a HALLUCINATION and FORBIDDEN.",
+          "The inside of the red parcel outline is an EMPTY LOT with bare ground only — no building, no construction, no volume. Preserve this emptiness exactly.",
           "The parcel boundary is a FLAT ground-level line. NEVER render it as a raised platform, socle, wall, or extruded volume.",
           "The red dashed lines are setback zones — purely 2D lines on the ground. Do NOT extrude them.",
           "Do NOT move, add, remove, or redesign any building.",
@@ -8236,7 +8240,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.113-SLIDE4-DETERMINISTIC-ONLY on port ${PORT}`);
+  console.log(`BARLO v72.114-DOUBLE-MASK-POLISH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
