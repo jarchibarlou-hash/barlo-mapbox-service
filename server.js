@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.101-FIXED" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.102-CLEAN" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4423,6 +4423,22 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
   };
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
+  // v72.102: Calcul du buffer +5m pour le masquage bâti slide 4
+  const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
+  const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
+  const bufferM = 5;
+  const scaleLat = bufferM / 111000;
+  const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
+  const bufferedCoords = parcelCoords.map(p => {
+    const dx = p.lon - cLon;
+    const dy = p.lat - cLat;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-10) return p;
+    return {
+      lat: p.lat + (dy / len) * scaleLat,
+      lon: p.lon + (dx / len) * scaleLon,
+    };
+  });
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4555,12 +4571,12 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.100: Masquer SYSTÉMATIQUEMENT les bâtiments OSM à l'intérieur de la parcelle
+    // v72.102: Masquer SYSTÉMATIQUEMENT bâtiments OSM dans parcelle BUFFERÉE +5m
     map.setFilter('3d-buildings', ['all',
       ['==', 'extrude', 'true'],
       ['!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
     ]);
-    console.log('[SLIDE4 v72.98] Bati existant masque dans la parcelle');
+    console.log('[SLIDE4 v72.102] Bati existant masque (parcelle +5m buffer) SYSTEMATIQUEMENT');
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -5355,7 +5371,7 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, fp_rdc_m2, fp_etages_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
   const s = W / 1280;
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
@@ -5462,14 +5478,15 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     for (let f = 0; f < levels; f++) {
       const y = annBaseY + f * annStepY;
       const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      const floorFp = f === 0 ? (fp_rdc_m2 || fp_m2) : (fp_etages_m2 || fp_m2);
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
       ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
       ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.strokeText(`${floorLabel} : ${floorFp} m²`, annX + lineLen + 6*s, y + 4*s);
       ctx.fillStyle = "#000000";
-      ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillText(`${floorLabel} : ${floorFp} m²`, annX + lineLen + 6*s, y + 4*s);
     }
     // Total SDP en bas — NOIR avec contour blanc
     ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
@@ -6184,12 +6201,18 @@ app.post("/generate-massing", async (req, res) => {
     ctx.drawImage(img, 0, 0, W, H);
     // v65.2: Image SANS overlays pour le polish AI (éviter dédoublement)
     const pngClean = canvas.toBuffer("image/png");
+    // v72.102: fp RDC (pour annotations cohérentes avec engine)
+    const fp_m2_raw_used_rdc = (typeof fp_m2_raw !== "undefined" && fp_m2_raw)
+      ? Number(fp_m2_raw)
+      : (typeof sc !== "undefined" && sc && sc.fp_rdc_m2) ? sc.fp_rdc_m2 : fp;
     // Version avec overlays (fallback si pas d'AI polish)
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
       typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
+      fp_rdc_m2: Math.round(Number(fp_m2_raw_used_rdc) || fp),
+      fp_etages_m2: Math.round(fp),
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -8140,7 +8163,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.101-FIXED on port ${PORT}`);
+  console.log(`BARLO v72.102-CLEAN on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
