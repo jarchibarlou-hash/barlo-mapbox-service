@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.99-BULLETPROOF" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.100-FIXED" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4555,21 +4555,17 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.98: Masquer bâtiments OSM à l'intérieur de la parcelle si terrain nu
-    ${hideExistingBuildings ? `
+    // v72.100: Masquer SYSTÉMATIQUEMENT les bâtiments OSM à l'intérieur de la parcelle
     map.setFilter('3d-buildings', ['all',
       ['==', 'extrude', 'true'],
       ['!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
     ]);
     console.log('[SLIDE4 v72.98] Bati existant masque dans la parcelle');
-    ` : ""}
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
-    // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
+    // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
-    map.addLayer({ id: 'parcel-fill-3d', type: 'fill-extrusion', source: 'parcel',
-      paint: { 'fill-extrusion-color': '#d4c8a0', 'fill-extrusion-height': 0.15,
-               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.85 } });
+    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.45 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -5592,12 +5588,11 @@ app.post("/generate", async (req, res) => {
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
     const SLIDE4_AI_POLISH_ENABLED = true;
     const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
-    // v72.93: TIME BUDGET GUARD
+    // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
+    // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
-    if (slide4Elapsed > POLISH_TIME_BUDGET_MS) {
-      console.log(`[SLIDE4-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(slide4Elapsed/1000)}s already spent → SKIPPING polish`);
-    }
-    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY && slide4Elapsed <= POLISH_TIME_BUDGET_MS) {
+    console.log(`[SLIDE4-POLISH v72.100] Début polish à ${Math.round(slide4Elapsed/1000)}s`);
+    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
       try {
         console.log(`[SLIDE4-POLISH] v72.34: Robust hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%, model=${POLISH_MODEL}`);
         // v72.34: Resize for API reliability
@@ -8145,7 +8140,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.99-BULLETPROOF on port ${PORT}`);
+  console.log(`BARLO v72.100-FIXED on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
