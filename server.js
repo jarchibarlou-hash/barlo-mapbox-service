@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.110-CLEAN" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.111-FLAT-PARCEL" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5643,6 +5643,7 @@ app.post("/generate", async (req, res) => {
           "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
           "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
           "CRITICAL GROUND LEVEL RULE: the parcel (red outline) is just a LINE ON THE GROUND. Do NOT raise the parcel, do NOT add a platform, do NOT add a plateau, do NOT add a pedestal under the parcel. The parcel interior MUST be at the SAME ground level as the surrounding road and grass. Any elevated parcel or raised platform is a HALLUCINATION and FORBIDDEN.",
+          "The parcel boundary is a FLAT ground-level line. NEVER render it as a raised platform, socle, wall, or extruded volume.",
           "The red dashed lines are setback zones — purely 2D lines on the ground. Do NOT extrude them.",
           "Do NOT move, add, remove, or redesign any building.",
           "Do NOT change the camera angle or perspective.",
@@ -8235,7 +8236,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.110-CLEAN on port ${PORT}`);
+  console.log(`BARLO v72.111-FLAT-PARCEL on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
