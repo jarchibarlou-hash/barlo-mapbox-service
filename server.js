@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.100-FIXED" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.101-FIXED" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5968,65 +5968,65 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.32] SPLIT levels sync: levels=${levels} (logement seul, depuis splitLayout.volume_logement.levels)`);
   }
   // ═══════════════════════════════════════════════════════════════════════════
-  // v72.99 PROGRAM LOCK (bulletproof) — garde-fou final pour respecter strictement le
-  // programme saisi par le client dans son formulaire.
-  // FILTRES :
-  //   F1. Inputs client ≠ mixte/split → commerce=0, pilotis=false, split=null
-  //   F2. Disposition="Tout dans un seul bâtiment" → split=null
-  //   F3. target_program résidentiel pur (Petit collectif, etc.) → commerce=0
-  //   F4. Terrain nu + pas de pilotis demandé → has_pilotis=false
-  //   F5. target_units > résultat moteur → warning log
+  // v72.101 PROGRAM LOCK (bulletproof + defensive) — Respect strict du programme client
+  // Try/catch + typeof sur TOUTES les variables → jamais de crash runtime.
   // ═══════════════════════════════════════════════════════════════════════════
-  const dispositionRaw = String(req.body.Disposition || req.body.disposition || "").toLowerCase();
-  const targetProgRaw = String(req.body.target_program || "").toLowerCase();
-  const supportTypeRaw = String(req.body.support_type || "").toUpperCase();
-  const clientWantsSingleVolume = /seul\s*b.?timent|seul\s*batiment|un\s*seul|single\s*building/i.test(dispositionRaw);
-  const clientProgramIsPureResidential = (
-    /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(targetProgRaw)
-    && !/mixte|mixed|commerce|bureau|activite/i.test(targetProgRaw)
-  );
-  const clientWantsPilotis = /pilotis|rdc.?ouvert|rdc.?libere/i.test(dispositionRaw);
-  const isTerrainNuMassing = supportTypeRaw.includes("TERRAIN_NU");
-  const lockBefore = { commerce: commerceLevels, pilotis: has_pilotis, split: !!splitLayout, totalUnits: totalUnitsResult };
-  // F1 : pas mixte/split dans inputs client → neutraliser
-  if (!bodyHasMixte && !splitActive) {
-    commerceLevels = 0;
-    splitLayout = null;
-    if (!clientWantsPilotis) has_pilotis = false;
-  }
-  // F2 : volume unique demandé → pas de split
-  if (clientWantsSingleVolume) {
-    splitLayout = null;
-  }
-  // F3 : programme résidentiel pur → pas de commerce
-  if (clientProgramIsPureResidential) {
-    commerceLevels = 0;
-    splitLayout = null;
-  }
-  // F4 : terrain nu + pas de demande explicite pilotis → pas de pilotis
-  if (isTerrainNuMassing && !clientWantsPilotis) {
-    has_pilotis = false;
-  }
-  // F5 : cap des unités
   try {
-  const clientTargetUnits = Number(req.body.target_units) || 0;
-  let unitsWarning = "";
-  if (clientTargetUnits > 0 && totalUnitsResult > clientTargetUnits) {
-    unitsWarning = ` (client ${clientTargetUnits} logements, moteur ${totalUnitsResult})`;
-  }
-  const lockChanged = (lockBefore.commerce !== commerceLevels) || (lockBefore.pilotis !== has_pilotis) || (lockBefore.split !== !!splitLayout);
-  if (lockChanged || unitsWarning) {
-    console.log(`[v72.99 PROGRAM LOCK (bulletproof) ${label}] overrides:`);
-    if (lockBefore.commerce !== commerceLevels) console.log(`  commerce: ${lockBefore.commerce} → ${commerceLevels}`);
-    if (lockBefore.pilotis !== has_pilotis) console.log(`  pilotis: ${lockBefore.pilotis} → ${has_pilotis}`);
-    if (lockBefore.split !== !!splitLayout) console.log(`  split: ${lockBefore.split} → ${!!splitLayout}`);
-    if (unitsWarning) console.log(`  units:${unitsWarning}`);
-    console.log(`  [contexte] mixte=${bodyHasMixte} split=${splitActive} singleVol=${clientWantsSingleVolume} pureResi=${clientProgramIsPureResidential} terrainNu=${isTerrainNuMassing}`);
-  }
-
+    const _dispositionRaw = String((req.body && req.body.Disposition) || (req.body && req.body.disposition) || "").toLowerCase();
+    const _targetProgRaw = String((req.body && req.body.target_program) || "").toLowerCase();
+    const _supportTypeRaw = String((req.body && req.body.support_type) || "").toUpperCase();
+    const _clientWantsSingleVolume = /seul\s*b.?timent|seul\s*batiment|un\s*seul|single\s*building/i.test(_dispositionRaw);
+    const _clientProgramIsPureResidential = (
+      /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(_targetProgRaw)
+      && !/mixte|mixed|commerce|bureau|activite/i.test(_targetProgRaw)
+    );
+    const _clientWantsPilotis = /pilotis|rdc.?ouvert|rdc.?libere/i.test(_dispositionRaw);
+    const _isTerrainNu = _supportTypeRaw.includes("TERRAIN_NU");
+    const _before = {
+      commerce: (typeof commerceLevels !== "undefined" ? commerceLevels : 0),
+      pilotis: (typeof has_pilotis !== "undefined" ? has_pilotis : false),
+      split: (typeof splitLayout !== "undefined" && splitLayout ? true : false),
+    };
+    const _bodyHasMixte = (typeof bodyHasMixte !== "undefined") ? bodyHasMixte : false;
+    const _splitActive = (typeof splitActive !== "undefined") ? splitActive : false;
+    if (!_bodyHasMixte && !_splitActive) {
+      if (typeof commerceLevels !== "undefined") commerceLevels = 0;
+      if (typeof splitLayout !== "undefined") splitLayout = null;
+      if (typeof has_pilotis !== "undefined" && !_clientWantsPilotis) has_pilotis = false;
+    }
+    if (_clientWantsSingleVolume && typeof splitLayout !== "undefined") {
+      splitLayout = null;
+    }
+    if (_clientProgramIsPureResidential) {
+      if (typeof commerceLevels !== "undefined") commerceLevels = 0;
+      if (typeof splitLayout !== "undefined") splitLayout = null;
+    }
+    if (_isTerrainNu && !_clientWantsPilotis && typeof has_pilotis !== "undefined") {
+      has_pilotis = false;
+    }
+    const _clientTargetUnits = Number((req.body && req.body.target_units)) || 0;
+    const _totalUnitsResult = (typeof totalUnitsResult !== "undefined") ? totalUnitsResult : 0;
+    let _unitsWarning = "";
+    if (_clientTargetUnits > 0 && _totalUnitsResult > _clientTargetUnits) {
+      _unitsWarning = ` (client ${_clientTargetUnits} logements, moteur ${_totalUnitsResult})`;
+    }
+    const _changed = (_before.commerce !== (typeof commerceLevels !== "undefined" ? commerceLevels : 0))
+                  || (_before.pilotis !== (typeof has_pilotis !== "undefined" ? has_pilotis : false))
+                  || (_before.split !== (typeof splitLayout !== "undefined" && splitLayout ? true : false));
+    if (_changed || _unitsWarning) {
+      const _label = (typeof label !== "undefined") ? label : "?";
+      console.log(`[v72.101 PROGRAM LOCK ${_label}] overrides appliqués :`);
+      console.log(`  commerce : ${_before.commerce} → ${typeof commerceLevels !== "undefined" ? commerceLevels : "undef"}`);
+      console.log(`  pilotis  : ${_before.pilotis} → ${typeof has_pilotis !== "undefined" ? has_pilotis : "undef"}`);
+      console.log(`  split    : ${_before.split} → ${typeof splitLayout !== "undefined" && splitLayout ? true : false}`);
+      if (_unitsWarning) console.log(`  units    :${_unitsWarning}`);
+      console.log(`  [ctx] mixte=${_bodyHasMixte} split=${_splitActive} singleVol=${_clientWantsSingleVolume} pureResi=${_clientProgramIsPureResidential} terrainNu=${_isTerrainNu}`);
+    }
   } catch (lockErr) {
-    console.error(`[v72.99 PROGRAM LOCK] ERROR (non-fatal, continuing render):`, lockErr.message);
+    console.error(`[v72.101 PROGRAM LOCK] ERROR non-fatal, render continue:`, lockErr.message);
   }
+  // ═══════════════════════════════════════════════════════════════════════════
+
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
   const habitationLevels = splitLayout ? levels : levels - commerceLevels;
@@ -8140,7 +8140,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.100-FIXED on port ${PORT}`);
+  console.log(`BARLO v72.101-FIXED on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
