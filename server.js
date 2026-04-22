@@ -16,7 +16,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
-const POLISH_TIMEOUT_MS = 60000; // v72.93: 60s per API call (was 90s — too slow for Make.com 300s limit)
+const POLISH_TIMEOUT_MS = 120000; // v72.112: 120s per API call (increased from 60s for more reliable polish) (was 90s — too slow for Make.com 300s limit)
 const POLISH_MAX_RETRIES = 1;    // v72.93: 1 retry only (was 2 — worst case 270s of retries alone)
 const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.111-FLAT-PARCEL" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.112-POLISH-TIMEOUT-120S" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -8236,7 +8236,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.111-FLAT-PARCEL on port ${PORT}`);
+  console.log(`BARLO v72.112-POLISH-TIMEOUT-120S on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
