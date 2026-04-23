@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.116-INTERSECT-CLIP" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.117-INTERSECT-CLIP-FIX" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4572,13 +4572,29 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.116: INTERSECTION-BASED BUILDING FILTER — excludes any building intersecting parcel (not just within)
+    // v72.117: INTERSECTION-BASED BUILDING FILTER — excludes any building intersecting parcel (not just within)
     const applyIntersectFilter = () => {
       try {
         const features = map.querySourceFeatures('composite', { sourceLayer: 'building' });
         const idsToHide = new Set();
+        
+        // Compute bufferedCoords dynamically from parcelCoords (client-side)
+        const parcelCoords = ${JSON.stringify(parcelCoords.map(c => ({lat: c.lat, lon: c.lon})))};
+        const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
+        const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
+        const bufferM = 50;
+        const scaleLat = bufferM / 111000;
+        const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
+        const bufferedCoords = parcelCoords.map(p => {
+          const dx = p.lon - cLon;
+          const dy = p.lat - cLat;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len < 1e-10) return p;
+          return { lat: p.lat + (dy/len)*scaleLat, lon: p.lon + (dx/len)*scaleLon };
+        });
+        
         const parcelPoly = turf.polygon([
-          [${bufferedCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${bufferedCoords[0].lon}, ${bufferedCoords[0].lat}]]
+          bufferedCoords.map(c => [c.lon, c.lat]).concat([[bufferedCoords[0].lon, bufferedCoords[0].lat]])
         ]);
         features.forEach(f => {
           if (!f.geometry) return;
@@ -4595,7 +4611,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         });
         if (idsToHide.size > 0) {
           const idsArr = Array.from(idsToHide);
-          console.log('[SLIDE4 v72.116] INTERSECT-FILTER hiding ' + idsArr.length + ' intersecting buildings');
+          console.log('[SLIDE4 v72.117] INTERSECT-FILTER hiding ' + idsArr.length + ' intersecting buildings');
           map.setFilter('3d-buildings', [
             'all',
             ['==', ['get', 'extrude'], 'true'],
@@ -4603,11 +4619,11 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
             ['!', ['in', ['id'], ['literal', idsArr]]]
           ]);
         } else {
-          console.log('[SLIDE4 v72.116] INTERSECT-FILTER no intersecting buildings found');
+          console.log('[SLIDE4 v72.117] INTERSECT-FILTER no intersecting buildings found');
           map.setFilter('3d-buildings', ['==', ['get', 'extrude'], 'true']);
         }
       } catch (err) {
-        console.warn('[SLIDE4 v72.116] INTERSECT-FILTER error: ' + err.message);
+        console.warn('[SLIDE4 v72.117] INTERSECT-FILTER error: ' + err.message);
       }
     };
     map.once('idle', applyIntersectFilter);
