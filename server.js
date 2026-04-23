@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.117-INTERSECT-CLIP-FIX" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.118-STARTUP-FIXED" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4651,7 +4651,6 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
-<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
   setTimeout(() => { window.__MAP_READY = true; }, 12000);
