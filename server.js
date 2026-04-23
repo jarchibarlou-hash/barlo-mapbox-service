@@ -4,6 +4,7 @@ const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
+const turf = require("@turf/turf");
 const app = express();
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
@@ -136,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.119-STARTUP-STABLE" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.120-FULL-FIX-ABC" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4399,8 +4400,40 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   console.log(`└── end buildCommercePolygon v72.26 ──`);
   return commerceGPS;
 }
+
+
+// ─── PROBLEM B: SERVER-SIDE TILEQUERY + TURF INTERSECTION ──────────────────────
+async function getIntersectingBuildingIds(parcelCoords, mapboxToken) {
+  try {
+    const parcelPoly = turf.polygon([[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]]);
+    const centroid = turf.centroid(parcelPoly);
+    const [lng, lat] = centroid.geometry.coordinates;
+    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=200&limit=50&layers=building&access_token=${mapboxToken}`;
+    const resp = await fetch(url);
+    if (!resp.ok) { console.warn('[INTERSECT-SERVER] tilequery failed:', resp.status); return []; }
+    const data = await resp.json();
+    if (!data.features) return [];
+    const intersectingIds = [];
+    for (const f of data.features) {
+      if (!f.geometry) continue;
+      try {
+        let fPoly;
+        if (f.geometry.type === 'Polygon') fPoly = turf.polygon(f.geometry.coordinates);
+        else if (f.geometry.type === 'MultiPolygon') fPoly = turf.multiPolygon(f.geometry.coordinates);
+        else continue;
+        if (turf.booleanIntersects(fPoly, parcelPoly)) { if (f.id !== undefined && f.id !== null) intersectingIds.push(f.id); }
+      } catch (e) {}
+    }
+    console.log('[INTERSECT-SERVER] found', intersectingIds.length, 'intersecting buildings');
+    return intersectingIds;
+  } catch (err) {
+    console.warn('[INTERSECT-SERVER] error:', err.message);
+    return [];
+  }
+}
+
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
+async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4459,6 +4492,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
+  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4538,6 +4572,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
   });
   map.addControl = function() {};
   map.on('style.load', () => {
+    map.setTerrain(null);
     // v70.5: Lumière directionnelle forte pour ombres marquées
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.70, position: [1.5, 210, 30] });
     const labelLayerId = undefined;
@@ -4576,7 +4611,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       ['==', 'extrude', 'true'],
       ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }, properties: {} }]]
     ]);
-    console.log('[SLIDE4 v72.104] Bati existant masque (parcelle +30m buffer) SYSTEMATIQUEMENT');
+    console.log('[SLIDE4 v72.120] Bati existant filtre via intersection Tilequery+Turf');
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -4605,7 +4640,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 </html>`;
 }
 // ─── HTML MAPBOX GL — MASSING ─────────────────────────────────────────────────
-function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
+async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4639,6 +4674,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
+  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   const hektarStyle = {
     "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
@@ -4678,6 +4714,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
   });
   map.addControl = function() {};
   map.on('style.load', () => {
+    map.setTerrain(null);
     // v71: Lumière douce pour ombres subtiles
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
     map.addLayer({
@@ -4693,19 +4730,8 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     });
     // v72.103: Masquer bâtiments OSM dans parcelle bufferée (via setFilter après rendering)
     setTimeout(() => {
-      if (map && parcelCoords && parcelCoords.length > 0) {
-        const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
-        const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
-        const bufferM = 50; // v72.108: super aggressive // v72.104: aggressive buffer
-        const scaleLat = bufferM / 111000;
-        const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
-        const bufferedCoords = parcelCoords.map(p => {
-          const dx = p.lon - cLon, dy = p.lat - cLat, len = Math.sqrt(dx*dx + dy*dy);
-          if (len < 1e-10) return p;
-          return { lat: p.lat + (dy/len)*scaleLat, lon: p.lon + (dx/len)*scaleLon };
-        });
-        const rings = [bufferedCoords.map(c => [c.lon, c.lat])];
-        rings[0].push(rings[0][0]);
+      if (map && EXCLUDED_IDS.length > 0) {
+        console.log('[MASSING] excluding', EXCLUDED_IDS.length, 'intersecting buildings');
         map.setFilter('3d-buildings', ['all', ['==', 'extrude', 'true'], 
           ['!', ['within', {type: 'Feature', geometry: {type: 'Polygon', coordinates: rings}, properties: {}}]]]);
         console.log('[MASSING v72.103] Bati OSM masque (parcelle +10m buffer)');
@@ -5567,7 +5593,7 @@ app.post("/generate", async (req, res) => {
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite);
+    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -5643,6 +5669,8 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // ── ARCHITECTURAL POLISH PROMPT — matches reference render ─────────
         const polishPrompt = [
+          "ABSOLUTE MINIMAL EDIT MODE: Modify MAXIMUM 10% of pixels. Do NOT redraw anything — only adjust hue/saturation/brightness subtly. Do NOT add textures, details, or features. Do NOT change building shapes, positions, counts, or heights. Do NOT modify the parcel, envelope, or any outline. Do NOT change the ground color significantly. If in doubt — DO NOTHING, return the input almost unchanged. Your job is essentially color grading, NOT redrawing. The result should look 90-95% identical to the input, only with slightly warmer tones and marginally crisper contrast.",
+          "",
           "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
           "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
           "CRITICAL GROUND LEVEL RULE: the parcel (red outline) is just a LINE ON THE GROUND. Do NOT raise the parcel, do NOT add a platform, do NOT add a plateau, do NOT add a pedestal under the parcel. The parcel interior MUST be at the SAME ground level as the surrounding road and grass. Any elevated parcel or raised platform is a HALLUCINATION and FORBIDDEN.",
@@ -5652,15 +5680,7 @@ app.post("/generate", async (req, res) => {
           "Do NOT move, add, remove, or redesign any building.",
           "Do NOT change the camera angle or perspective.",
           "Do NOT add people, vehicles, text, labels, or watermarks.",
-          "Apply ONLY these specific enhancements:",
-          "1. Replace the simple green sphere trees with realistic architectural maquette-style trees (same positions, same sizes, natural leafy canopy).",
-          "2. Add subtle realistic shadows under buildings (soft, natural afternoon light from the south).",
-          "3. Give the white/light buildings a subtle clean matte concrete texture (keep them white/light, do not darken them).",
-          "4. Enhance the green grass ground with subtle natural grass texture (keep the same green tone).",
-          "5. Refine road surfaces with subtle asphalt texture.",
-          "6. Overall warm afternoon lighting with gentle ambient occlusion.",
-          "Style: premium architectural maquette visualization. Clean, professional, minimal. No artistic effects, no painterly style.",
-          "The buildings must remain in the EXACT SAME positions. The layout must be IDENTICAL."
+
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
         const polishResults = await Promise.all(
@@ -6212,7 +6232,7 @@ app.post("/generate-massing", async (req, res) => {
     const pilotisH = (hasPilotisRender && !useSplit3D) ? 3.5 : 0; // SPLIT gère pilotis dans realTotalH
     const totalHWithPilotis = realTotalH + pilotisH;
     // v72.26: En mode SPLIT, massingCoords = logement (en retrait), commerceCoords = devant (depuis enveloppe)
-    const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
+    const html = await generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
       massingCoords,
       { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH,
         split_layout: useSplit3D ? splitLayout : null,
@@ -8240,7 +8260,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.119-STARTUP-STABLE on port ${PORT}`);
+  console.log(`BARLO v72.120-FULL-FIX-ABC on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
