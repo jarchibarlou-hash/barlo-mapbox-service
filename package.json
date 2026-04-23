@@ -12,6 +12,7 @@
     "canvas": "^2.11.2",
     "puppeteer-core": "latest",
     "form-data": "^4.0.0",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "@turf/turf": "^7.0.0"
   }
 }
