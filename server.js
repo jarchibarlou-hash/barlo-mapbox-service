@@ -136,7 +136,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.114-DOUBLE-MASK-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.116-INTERSECT-CLIP" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4451,6 +4451,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
 </style>
 <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
 <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
 </head>
 <body>
 <div id="map"></div>
@@ -4571,12 +4572,50 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.102: Masquer SYSTÉMATIQUEMENT bâtiments OSM dans parcelle BUFFERÉE +5m
-    map.setFilter('3d-buildings', ['all',
-      ['==', 'extrude', 'true'],
-      ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }, properties: {} }]]
-    ]);
-    console.log('[SLIDE4 v72.104] Bati existant masque (parcelle +30m buffer) SYSTEMATIQUEMENT');
+    // v72.116: INTERSECTION-BASED BUILDING FILTER — excludes any building intersecting parcel (not just within)
+    const applyIntersectFilter = () => {
+      try {
+        const features = map.querySourceFeatures('composite', { sourceLayer: 'building' });
+        const idsToHide = new Set();
+        const parcelPoly = turf.polygon([
+          [${bufferedCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${bufferedCoords[0].lon}, ${bufferedCoords[0].lat}]]
+        ]);
+        features.forEach(f => {
+          if (!f.geometry) return;
+          try {
+            const g = f.geometry;
+            let fPoly = null;
+            if (g.type === 'Polygon') fPoly = turf.polygon(g.coordinates);
+            else if (g.type === 'MultiPolygon') fPoly = turf.multiPolygon(g.coordinates);
+            if (!fPoly) return;
+            if (turf.booleanIntersects(fPoly, parcelPoly)) {
+              if (f.id !== undefined && f.id !== null) idsToHide.add(f.id);
+            }
+          } catch (e) { /* ignore individual feature errors */ }
+        });
+        if (idsToHide.size > 0) {
+          const idsArr = Array.from(idsToHide);
+          console.log('[SLIDE4 v72.116] INTERSECT-FILTER hiding ' + idsArr.length + ' intersecting buildings');
+          map.setFilter('3d-buildings', [
+            'all',
+            ['==', ['get', 'extrude'], 'true'],
+            ['>', ['get', 'height'], 0],
+            ['!', ['in', ['id'], ['literal', idsArr]]]
+          ]);
+        } else {
+          console.log('[SLIDE4 v72.116] INTERSECT-FILTER no intersecting buildings found');
+          map.setFilter('3d-buildings', ['==', ['get', 'extrude'], 'true']);
+        }
+      } catch (err) {
+        console.warn('[SLIDE4 v72.116] INTERSECT-FILTER error: ' + err.message);
+      }
+    };
+    map.once('idle', applyIntersectFilter);
+    map.on('sourcedata', (e) => {
+      if (e.sourceId === 'composite' && e.isSourceLoaded) {
+        applyIntersectFilter();
+      }
+    });
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -4596,6 +4635,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
   setTimeout(() => { window.__MAP_READY = true; }, 12000);
@@ -4691,12 +4731,15 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    // v72.103: Masquer bâtiments OSM dans parcelle bufferée (via setFilter après rendering)
-    setTimeout(() => {
-      if (map && parcelCoords && parcelCoords.length > 0) {
+    // v72.116: INTERSECTION-BASED BUILDING FILTER for massing — excludes any building intersecting parcel
+    const applyIntersectFilterMassing = () => {
+      try {
+        const features = map.querySourceFeatures('composite', { sourceLayer: 'building' });
+        const idsToHide = new Set();
+        // Compute buffered coordinates with same algorithm
         const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
         const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
-        const bufferM = 50; // v72.108: super aggressive // v72.104: aggressive buffer
+        const bufferM = 50;
         const scaleLat = bufferM / 111000;
         const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
         const bufferedCoords = parcelCoords.map(p => {
@@ -4704,13 +4747,44 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
           if (len < 1e-10) return p;
           return { lat: p.lat + (dy/len)*scaleLat, lon: p.lon + (dx/len)*scaleLon };
         });
-        const rings = [bufferedCoords.map(c => [c.lon, c.lat])];
-        rings[0].push(rings[0][0]);
-        map.setFilter('3d-buildings', ['all', ['==', 'extrude', 'true'], 
-          ['!', ['within', {type: 'Feature', geometry: {type: 'Polygon', coordinates: rings}, properties: {}}]]]);
-        console.log('[MASSING v72.103] Bati OSM masque (parcelle +10m buffer)');
+        const parcelPoly = turf.polygon([
+          bufferedCoords.map(c => [c.lon, c.lat]).concat([[bufferedCoords[0].lon, bufferedCoords[0].lat]])
+        ]);
+        features.forEach(f => {
+          if (!f.geometry) return;
+          try {
+            const g = f.geometry;
+            let fPoly = null;
+            if (g.type === 'Polygon') fPoly = turf.polygon(g.coordinates);
+            else if (g.type === 'MultiPolygon') fPoly = turf.multiPolygon(g.coordinates);
+            if (!fPoly) return;
+            if (turf.booleanIntersects(fPoly, parcelPoly)) {
+              if (f.id !== undefined && f.id !== null) idsToHide.add(f.id);
+            }
+          } catch (e) { /* ignore individual feature errors */ }
+        });
+        if (idsToHide.size > 0) {
+          const idsArr = Array.from(idsToHide);
+          console.log('[MASSING v72.116] INTERSECT-FILTER hiding ' + idsArr.length + ' intersecting buildings');
+          map.setFilter('3d-buildings', [
+            'all',
+            ['==', ['get', 'extrude'], 'true'],
+            ['!', ['in', ['id'], ['literal', idsArr]]]
+          ]);
+        } else {
+          console.log('[MASSING v72.116] INTERSECT-FILTER no intersecting buildings');
+          map.setFilter('3d-buildings', ['==', ['get', 'extrude'], 'true']);
+        }
+      } catch (err) {
+        console.warn('[MASSING v72.116] INTERSECT-FILTER error: ' + err.message);
       }
-    }, 200);
+    };
+    map.once('idle', applyIntersectFilterMassing);
+    map.on('sourcedata', (e) => {
+      if (e.sourceId === 'composite' && e.isSourceLoaded) {
+        applyIntersectFilterMassing();
+      }
+    });
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     // v72.103: Fond parcelle TRANSPARENT dans massing (évite tinting orange par polish IA)
@@ -4782,11 +4856,13 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
         'fill-extrusion-vertical-gradient': true,
       },
     });
-    // Niveaux habitables logement — commencent AU-DESSUS du pilotis
+    // v72.115: Niveaux habitables logement — commencent AU-DESSUS du pilotis
+    // v72.115: Loop creates EXACTLY logtLevels slabs (strict inequality, no +1, no extra roof)
     for (let f = 0; f < logtLevels; f++) {
       const base = pilotisH + f * etageH;
       const top  = pilotisH + (f + 1) * etageH;
       const baseH = base + gap / 2;
+      // v72.115: topH = final extrusion height for this slab (gaps between floors, not above top floor)
       const topH  = f < logtLevels - 1 ? top - gap / 2 : top;
       map.addLayer({
         id: 'floor-' + f, type: 'fill-extrusion', source: 'massing',
@@ -4801,12 +4877,15 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     }
     ` : `
     // ══ MODE SUPERPOSÉ : étages empilés sur un seul volume ══
+    // v72.115: GHOST FLOOR FIX — ensure drawn floor count = label count = lead floor count
     const totalLevels = ${massingParams.levels};  // v72.22: TOUJOURS utiliser levels du moteur — jamais de fallback calculé
     const commLevels = ${massingParams.commerce_levels || 0};
+    // v72.115: Loop creates EXACTLY totalLevels slabs (strict inequality, no +1, no extra roof)
     for (let f = 0; f < totalLevels; f++) {
       const base = f === 0 ? 0 : rdcH + (f - 1) * etageH;
       const top  = f === 0 ? rdcH : rdcH + f * etageH;
       const baseH = f > 0 ? base + gap / 2 : 0;
+      // v72.115: topH = final extrusion height for this slab (gaps between floors, not above top floor)
       const topH  = f < totalLevels - 1 ? top - gap / 2 : top;
       const isComm = f < commLevels;
       // v70.10: Commerce = ORANGE vif, Logement = BLEU net
@@ -8238,10 +8317,4 @@ app.post("/generate-pptx", async (req, res) => {
   }
 });
 
-// ─── START ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`BARLO v72.114-DOUBLE-MASK-POLISH on port ${PORT}`);
-  console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
-  console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
-  console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
-});
+// ─── START ─────────────────────────────────────────
