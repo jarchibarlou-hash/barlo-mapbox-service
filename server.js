@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.123-NO-SLIDE4-POLISH" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.124-NO-PAD-STRICT-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4652,8 +4652,9 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.0 } });
     // v72.114: DOUBLE-MASK — parcel zone masking layer (flat opaque ground cover to hide Mapbox buildings)
+    // v72.124: Make TRANSPARENT on slide 4 — replaced by intersect filter; remove visual tan pad
     map.addLayer({ id: 'parcel-zone-mask', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#f5f0e1', 'fill-opacity': 1.0 } });
+      paint: { 'fill-color': '#f5f0e1', 'fill-opacity': 0.0 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -5691,7 +5692,7 @@ app.post("/generate", async (req, res) => {
     //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
-    const SLIDE4_AI_POLISH_ENABLED = false; // v72.123: DISABLED — color grading too aggressive, reverting to pure deterministic
+    const SLIDE4_AI_POLISH_ENABLED = true; // v72.124: re-enabled with ultra-strict prompt — no parcel pad to hallucinate
     const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
@@ -5704,19 +5705,28 @@ app.post("/generate", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // ── ARCHITECTURAL POLISH PROMPT — matches reference render ─────────
+        // ── ARCHITECTURAL POLISH PROMPT — v72.124: ULTRA-STRICT ─────────
         const polishPrompt = [
-          "ABSOLUTE MINIMAL EDIT MODE: Modify MAXIMUM 10% of pixels. Do NOT redraw anything — only adjust hue/saturation/brightness subtly. Do NOT add textures, details, or features. Do NOT change building shapes, positions, counts, or heights. Do NOT modify the parcel, envelope, or any outline. Do NOT change the ground color significantly. If in doubt — DO NOTHING, return the input almost unchanged. Your job is essentially color grading, NOT redrawing. The result should look 90-95% identical to the input, only with slightly warmer tones and marginally crisper contrast.",
-          "",
-          "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
-          "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
-          "CRITICAL GROUND LEVEL RULE: the parcel (red outline) is just a LINE ON THE GROUND. Do NOT raise the parcel, do NOT add a platform, do NOT add a plateau, do NOT add a pedestal under the parcel. The parcel interior MUST be at the SAME ground level as the surrounding road and grass. Any elevated parcel or raised platform is a HALLUCINATION and FORBIDDEN.",
-          "The inside of the red parcel outline is an EMPTY LOT with bare ground only — no building, no construction, no volume. Preserve this emptiness exactly.",
-          "The parcel boundary is a FLAT ground-level line. NEVER render it as a raised platform, socle, wall, or extruded volume.",
-          "The red dashed lines are setback zones — purely 2D lines on the ground. Do NOT extrude them.",
-          "Do NOT move, add, remove, or redesign any building.",
+          "CRITICAL IDENTITY-PRESERVING EDIT:",
+          "You are ONLY allowed to do ultra-subtle tonal harmonization.",
+          "Modify AT MOST 5% of pixels.",
+          "Do NOT change ANY colors significantly — no warming, no cooling, no saturating.",
+          "Do NOT recolor the ground, buildings, or vegetation.",
+          "Do NOT add textures, shadows, trees, details, or any content.",
+          "Do NOT redraw or re-interpret any shape.",
           "Do NOT change the camera angle or perspective.",
-          "Do NOT add people, vehicles, text, labels, or watermarks.",
+          "",
+          "The parcel is a FLAT red outline on the ground. NEVER render it as a platform, socle, wall, raised pad, or any volume.",
+          "The inside of the parcel is EMPTY GROUND — no building, no construction, no fill, no pad.",
+          "Preserve the input image at ~95-98% identity.",
+          "If unsure — DO NOTHING, return the input unchanged.",
+          "",
+          "Your only allowed operations are:",
+          "- minuscule contrast adjustment (< 3% delta)",
+          "- tiny edge sharpening (<2% delta)",
+          "- imperceptible hue touch-up (< 1% delta)",
+          "",
+          "Anything more aggressive will be REJECTED by the drift check.",
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
@@ -8297,7 +8307,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.123-NO-SLIDE4-POLISH on port ${PORT}`);
+  console.log(`BARLO v72.124-NO-PAD-STRICT-POLISH on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
