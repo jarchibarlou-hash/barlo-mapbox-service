@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.120-FULL-FIX-ABC" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.122-INTERSECT-SERVER-SIDE" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -617,6 +617,57 @@ function computeBearing(coords, cLat, cLon) {
     if (len > longest) { longest = len; angle = Math.atan2(dx, dy) * 180 / Math.PI; }
   }
   return ((Math.round(angle + 30) % 360) + 360) % 360;
+}
+// v72.122: Server-side intersection filter
+// Uses Mapbox Tilequery API + Turf.js booleanIntersects to find buildings that overlap the parcel (even partially).
+async function getIntersectingBuildingIds(parcelCoordsArray, mapboxToken) {
+  try {
+    if (!parcelCoordsArray || parcelCoordsArray.length < 3) return [];
+    if (!mapboxToken) return [];
+
+    // Ensure closed ring
+    const ring = parcelCoordsArray.slice();
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]]);
+
+    const parcelPoly = turf.polygon([ring]);
+    const centroid = turf.centroid(parcelPoly);
+    const [lng, lat] = centroid.geometry.coordinates;
+
+    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=250&limit=50&layers=building&access_token=${mapboxToken}`;
+
+    // Use fetch (native on Node 18+) or require node-fetch
+    let fetchFn;
+    try { fetchFn = fetch; } catch (e) { fetchFn = require("node-fetch"); }
+
+    const resp = await fetchFn(url);
+    if (!resp.ok) {
+      console.warn(`[INTERSECT-SERVER v72.122] tilequery HTTP ${resp.status}`);
+      return [];
+    }
+    const data = await resp.json();
+    if (!data || !Array.isArray(data.features)) return [];
+
+    const ids = [];
+    for (const f of data.features) {
+      if (!f || !f.geometry) continue;
+      try {
+        let fPoly = null;
+        if (f.geometry.type === "Polygon") fPoly = turf.polygon(f.geometry.coordinates);
+        else if (f.geometry.type === "MultiPolygon") fPoly = turf.multiPolygon(f.geometry.coordinates);
+        if (!fPoly) continue;
+        if (turf.booleanIntersects(fPoly, parcelPoly)) {
+          if (f.id !== undefined && f.id !== null) ids.push(f.id);
+        }
+      } catch (inner) { /* skip bad features */ }
+    }
+    console.log(`[INTERSECT-SERVER v72.122] found ${ids.length} intersecting buildings`);
+    return ids;
+  } catch (err) {
+    console.warn(`[INTERSECT-SERVER v72.122] error: ${err.message}`);
+    return [];
+  }
 }
 // ─── CALCUL DIMENSIONNEL MASSING ──────────────────────────────────────────────
 function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
@@ -4401,37 +4452,6 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   return commerceGPS;
 }
 
-
-// ─── PROBLEM B: SERVER-SIDE TILEQUERY + TURF INTERSECTION ──────────────────────
-async function getIntersectingBuildingIds(parcelCoords, mapboxToken) {
-  try {
-    const parcelPoly = turf.polygon([[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]]);
-    const centroid = turf.centroid(parcelPoly);
-    const [lng, lat] = centroid.geometry.coordinates;
-    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=200&limit=50&layers=building&access_token=${mapboxToken}`;
-    const resp = await fetch(url);
-    if (!resp.ok) { console.warn('[INTERSECT-SERVER] tilequery failed:', resp.status); return []; }
-    const data = await resp.json();
-    if (!data.features) return [];
-    const intersectingIds = [];
-    for (const f of data.features) {
-      if (!f.geometry) continue;
-      try {
-        let fPoly;
-        if (f.geometry.type === 'Polygon') fPoly = turf.polygon(f.geometry.coordinates);
-        else if (f.geometry.type === 'MultiPolygon') fPoly = turf.multiPolygon(f.geometry.coordinates);
-        else continue;
-        if (turf.booleanIntersects(fPoly, parcelPoly)) { if (f.id !== undefined && f.id !== null) intersectingIds.push(f.id); }
-      } catch (e) {}
-    }
-    console.log('[INTERSECT-SERVER] found', intersectingIds.length, 'intersecting buildings');
-    return intersectingIds;
-  } catch (err) {
-    console.warn('[INTERSECT-SERVER] error:', err.message);
-    return [];
-  }
-}
-
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
   const parcelGeoJSON = {
@@ -4472,6 +4492,9 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       lon: p.lon + (dx / len) * scaleLon,
     };
   });
+  // v72.122: compute intersecting building IDs server-side
+  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
+  const EXCLUDED_IDS = await getIntersectingBuildingIds(parcelCoordsArray, mapboxToken);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4611,7 +4634,17 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       ['==', 'extrude', 'true'],
       ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }, properties: {} }]]
     ]);
-    console.log('[SLIDE4 v72.120] Bati existant filtre via intersection Tilequery+Turf');
+    // v72.122: Server-side intersection filter — supplement within filter with intersect exclusion
+    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+      console.log('[CLIENT v72.122] excluding ' + EXCLUDED_IDS.length + ' intersecting buildings');
+      map.setFilter('3d-buildings', [
+        'all',
+        ['==', ['get', 'extrude'], 'true'],
+        ['>', ['get', 'height'], 0],
+        ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
+      ]);
+    }
+    console.log('[SLIDE4 v72.122] Bati existant filtre via within + Tilequery+Turf intersection');
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -4654,6 +4687,9 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
+  // v72.122: compute intersecting building IDs server-side
+  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
+  const EXCLUDED_IDS = await getIntersectingBuildingIds(parcelCoordsArray, mapboxToken);
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
@@ -4728,15 +4764,16 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    // v72.103: Masquer bâtiments OSM dans parcelle bufferée (via setFilter après rendering)
-    setTimeout(() => {
-      if (map && EXCLUDED_IDS.length > 0) {
-        console.log('[MASSING] excluding', EXCLUDED_IDS.length, 'intersecting buildings');
-        map.setFilter('3d-buildings', ['all', ['==', 'extrude', 'true'], 
-          ['!', ['within', {type: 'Feature', geometry: {type: 'Polygon', coordinates: rings}, properties: {}}]]]);
-        console.log('[MASSING v72.103] Bati OSM masque (parcelle +10m buffer)');
-      }
-    }, 200);
+    // v72.122: Server-side intersection filter — supplement within filter with intersect exclusion
+    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+      console.log('[MASSING v72.122] excluding ' + EXCLUDED_IDS.length + ' intersecting buildings');
+      map.setFilter('3d-buildings', [
+        'all',
+        ['==', ['get', 'extrude'], 'true'],
+        ['>', ['get', 'height'], 0],
+        ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
+      ]);
+    }
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     // v72.103: Fond parcelle TRANSPARENT dans massing (évite tinting orange par polish IA)
@@ -8260,7 +8297,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.120-FULL-FIX-ABC on port ${PORT}`);
+  console.log(`BARLO v72.122-INTERSECT-SERVER-SIDE on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
