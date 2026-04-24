@@ -14,7 +14,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // ═══════════════════════════════════════════════════════════════════════════════
-// v72.135-simplified-filter: REMOVE invalid within expressions, APPLY ID-filter ONCE on load, NO re-trigger loops
+// v72.136-try-catch-safe: REMOVE invalid within expressions, APPLY ID-filter ONCE on load, NO re-trigger loops
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
 const POLISH_TIMEOUT_MS = 90000; // 90s per API call
@@ -4358,6 +4358,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
+  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4474,25 +4475,27 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
 
-    // v72.135: apply intersect filter ONCE on load, no re-trigger on sourcedata
-    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-      console.log('[CLIENT v72.135] excluding ' + EXCLUDED_IDS.length + ' buildings');
-      const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
-      buildingLayerIds.forEach(layerId => {
-        try {
-          if (map.getLayer(layerId)) {
-            const existing = map.getFilter(layerId);
-            let newFilter;
-            if (Array.isArray(existing) && existing[0] === 'all') {
-              newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
-            } else if (existing) {
-              newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
-            } else {
-              newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
+    // v72.136: apply intersect filter ONCE on load, no re-trigger on sourcedata
+    try {
+      if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+        console.log('[CLIENT v72.136] excluding ' + EXCLUDED_IDS.length + ' buildings');
+        const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
+        buildingLayerIds.forEach(layerId => {
+          try {
+            if (map.getLayer(layerId)) {
+              const existing = map.getFilter(layerId);
+              let newFilter;
+              if (Array.isArray(existing) && existing[0] === 'all') {
+                newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
+              } else if (existing) {
+                newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
+              } else {
+                newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
+              }
+              map.setFilter(layerId, newFilter);
             }
-            map.setFilter(layerId, newFilter);
-          }
-        } catch (e) {}
+          } catch (e) {}
+    } catch (e) { console.warn('[CLIENT v72.136] filter error:', e.message); }
       });
     }
 
@@ -4564,6 +4567,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
+  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   const hektarStyle = {
     "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
@@ -4605,7 +4609,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   map.on('style.load', () => {
     // v71: Lumière douce pour ombres subtiles
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    map.setTerrain(null);
+    try { map.setTerrain(null); } catch (e) { console.warn(\'setTerrain failed:\', e.message); }
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -4618,25 +4622,27 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
       },
     });
     
-    // v72.135: apply intersect filter ONCE on load, no re-trigger on sourcedata
-    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-      console.log('[CLIENT v72.135] excluding ' + EXCLUDED_IDS.length + ' buildings');
-      const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
-      buildingLayerIds.forEach(layerId => {
-        try {
-          if (map.getLayer(layerId)) {
-            const existing = map.getFilter(layerId);
-            let newFilter;
-            if (Array.isArray(existing) && existing[0] === 'all') {
-              newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
-            } else if (existing) {
-              newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
-            } else {
-              newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
+    // v72.136: apply intersect filter ONCE on load, no re-trigger on sourcedata
+    try {
+      if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+        console.log('[CLIENT v72.136] excluding ' + EXCLUDED_IDS.length + ' buildings');
+        const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
+        buildingLayerIds.forEach(layerId => {
+          try {
+            if (map.getLayer(layerId)) {
+              const existing = map.getFilter(layerId);
+              let newFilter;
+              if (Array.isArray(existing) && existing[0] === 'all') {
+                newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
+              } else if (existing) {
+                newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
+              } else {
+                newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
+              }
+              map.setFilter(layerId, newFilter);
             }
-            map.setFilter(layerId, newFilter);
-          }
-        } catch (e) {}
+          } catch (e) {}
+    } catch (e) { console.warn('[CLIENT v72.136] filter error:', e.message); }
       });
     }
 
