@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.126-WITHIN-FILTER-ALL-BUILDINGS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.128-DRIFT-75" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5778,7 +5778,7 @@ app.post("/generate", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
     const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
-    const SLIDE4_DRIFT_THRESHOLD = 0.55; // 55% — allows photorealistic rendering (~20-35% drift naturally) while catching structural drift
+    const SLIDE4_DRIFT_THRESHOLD = 0.75; // v72.128: raised — photorealistic texture polish naturally causes 60-70% block drift; raised to 75% to let it pass while catching true geometric hallucinations (typically >85%)
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
@@ -8397,7 +8397,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.127-BALANCED-POLISH-TIMEOUT-RACE on port ${PORT}`);
+  console.log(`BARLO v72.128-DRIFT-75 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
