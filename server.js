@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.137-within-building-filter" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.138b-hide-parcel-3d" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4415,7 +4415,7 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
     // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
     map.addLayer({ id: 'parcel-fill-3d', type: 'fill-extrusion', source: 'parcel',
       paint: { 'fill-extrusion-color': '#d4c8a0', 'fill-extrusion-height': 0.15,
-               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.85 } });
+               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.0 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -4435,7 +4435,23 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
           coordinates: [${JSON.stringify(parcelCoords.map(c => [c.lon, c.lat]).concat([[parcelCoords[0].lon, parcelCoords[0].lat]]))}]
         }
       };
-      const buildingLayers = ['3d-buildings', 'building', 'building-top'];
+      const buildingLayers = [
+  '3d-buildings',
+  'building',
+  'building-top',
+  'building-outline',
+  'building-shadow',
+  'building-3d',
+  'building-fill',
+  'building-extrusion',
+  'composite-building',
+  'osm-buildings'
+];
+      try {
+        const allLayers = map.getStyle().layers.map(l => l.id);
+        const buildingRelated = allLayers.filter(id => /build|house|struct/i.test(id));
+        console.log('[CLIENT v72.138] building-related layers in style:', buildingRelated.join(', '));
+      } catch (e) {};
       buildingLayers.forEach(layerId => {
         try {
           if (map.getLayer(layerId)) {
@@ -4553,7 +4569,7 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.60 } }, '3d-buildings');
+      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.0 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#c04020', 'line-width': 5, 'line-opacity': 1.0 } });
     // v71: Zone constructible (reculs) — tirets rouge au-dessus des bâtiments
@@ -4673,7 +4689,23 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
           coordinates: [${JSON.stringify(parcelCoords.map(c => [c.lon, c.lat]).concat([[parcelCoords[0].lon, parcelCoords[0].lat]]))}]
         }
       };
-      const buildingLayers = ['3d-buildings', 'building', 'building-top'];
+      const buildingLayers = [
+  '3d-buildings',
+  'building',
+  'building-top',
+  'building-outline',
+  'building-shadow',
+  'building-3d',
+  'building-fill',
+  'building-extrusion',
+  'composite-building',
+  'osm-buildings'
+];
+      try {
+        const allLayers = map.getStyle().layers.map(l => l.id);
+        const buildingRelated = allLayers.filter(id => /build|house|struct/i.test(id));
+        console.log('[CLIENT v72.138] building-related layers in style:', buildingRelated.join(', '));
+      } catch (e) {};
       buildingLayers.forEach(layerId => {
         try {
           if (map.getLayer(layerId)) {
@@ -6175,7 +6207,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "v72.137-within-building-filter",
+      ok: true, cached: false, server_version: "v72.138b-hide-parcel-3d",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6197,8 +6229,9 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.137-within-building-filter on port ${PORT}`);
+  console.log(`BARLO v72.138b-hide-parcel-3d on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
+
 });
