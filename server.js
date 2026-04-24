@@ -8341,7 +8341,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.129-MASSING-SIMPLIFIED on port ${PORT}`);
+  console.log(`BARLO v72.131-POLISH-ON-MASSING-FAST on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
