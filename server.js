@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.139-puppeteer-timeout-60s" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.140-massing-within-filter" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4662,14 +4662,14 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       try {
         if (map.getLayer(layerId)) {
           let combinedFilter;
-          const withinClause = ['\!', ['within', parcelFeature]];
+          const withinClause = ['!', ['within', parcelFeature]];
 
           if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
             // Combine within filter + ID-based filter for defense in depth
             combinedFilter = [
               'all',
               withinClause,
-              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
+              ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
             ];
             console.log('[CLIENT v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
           } else {
@@ -4837,14 +4837,14 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
       try {
         if (map.getLayer(layerId)) {
           let combinedFilter;
-          const withinClause = ['\!', ['within', parcelFeature]];
+          const withinClause = ['!', ['within', parcelFeature]];
 
           if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
             // Combine within filter + ID-based filter for defense in depth
             combinedFilter = [
               'all',
               withinClause,
-              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
+              ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
             ];
             console.log('[MASSING v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
           } else {
@@ -4974,6 +4974,36 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     // ── Contour emprise au sol : bleu foncé ──
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
       paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
+
+    // v72.140: hide buildings within the parcel polygon (massing only — slide 4 already masks)
+    try {
+      const PARCEL_POLY_FEATURE = {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [${JSON.stringify(parcelCoords.map(c => [c.lon, c.lat]).concat([[parcelCoords[0].lon, parcelCoords[0].lat]]))}]
+        }
+      };
+      const buildingLayers = ['3d-buildings', 'building', 'building-top', 'building-outline', 'building-shadow', 'building-3d', 'building-fill', 'building-extrusion', 'composite-building'];
+      buildingLayers.forEach(layerId => {
+        try {
+          if (map.getLayer(layerId)) {
+            const existing = map.getFilter(layerId);
+            const withinNegation = ['!', ['within', PARCEL_POLY_FEATURE]];
+            let newFilter;
+            if (Array.isArray(existing) && existing[0] === 'all') {
+              newFilter = existing.concat([withinNegation]);
+            } else if (existing) {
+              newFilter = ['all', existing, withinNegation];
+            } else {
+              newFilter = withinNegation;
+            }
+            map.setFilter(layerId, newFilter);
+          }
+        } catch (e) { /* layer not present */ }
+      });
+    } catch (e) { /* never break the massing flow */ }
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -8397,7 +8427,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.139-puppeteer-timeout-60s on port ${PORT}`);
+  console.log(`BARLO v72.140-massing-within-filter on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
