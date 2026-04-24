@@ -4492,9 +4492,15 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       lon: p.lon + (dx / len) * scaleLon,
     };
   });
-  // v72.122: compute intersecting building IDs server-side
+  // v72.127: race Tilequery against 3s timeout for slide 4 to stay under Make 25s budget
   const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await getIntersectingBuildingIds(parcelCoordsArray, mapboxToken);
+  const EXCLUDED_IDS = await Promise.race([
+    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
+    new Promise(resolve => setTimeout(() => {
+      console.warn('[SLIDE4 v72.127] Tilequery timeout 3s — proceeding without exclusion');
+      resolve([]);
+    }, 3000))
+  ]);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4721,9 +4727,15 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  // v72.122: compute intersecting building IDs server-side
+  // v72.127: race Tilequery against 3s timeout for massing to stay under Make 25s budget
   const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await getIntersectingBuildingIds(parcelCoordsArray, mapboxToken);
+  const EXCLUDED_IDS = await Promise.race([
+    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
+    new Promise(resolve => setTimeout(() => {
+      console.warn('[MASSING v72.127] Tilequery timeout 3s — proceeding without exclusion');
+      resolve([]);
+    }, 3000))
+  ]);
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
@@ -5765,8 +5777,8 @@ app.post("/generate", async (req, res) => {
     //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
-    const SLIDE4_AI_POLISH_ENABLED = true; // v72.124: re-enabled with ultra-strict prompt — no parcel pad to hallucinate
-    const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
+    const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
+    const SLIDE4_DRIFT_THRESHOLD = 0.55; // 55% — allows photorealistic rendering (~20-35% drift naturally) while catching structural drift
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
@@ -5778,28 +5790,33 @@ app.post("/generate", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // ── ARCHITECTURAL POLISH PROMPT — v72.124: ULTRA-STRICT ─────────
+        // ── ARCHITECTURAL POLISH PROMPT — v72.127: BALANCED PHOTOREALISM ─────────
         const polishPrompt = [
-          "CRITICAL IDENTITY-PRESERVING EDIT:",
-          "You are ONLY allowed to do ultra-subtle tonal harmonization.",
-          "Modify AT MOST 5% of pixels.",
-          "Do NOT change ANY colors significantly — no warming, no cooling, no saturating.",
-          "Do NOT recolor the ground, buildings, or vegetation.",
-          "Do NOT add textures, shadows, trees, details, or any content.",
-          "Do NOT redraw or re-interpret any shape.",
-          "Do NOT change the camera angle or perspective.",
+          "PHOTOREALISTIC ARCHITECTURAL POLISH — STRICT GEOMETRIC PRESERVATION:",
           "",
-          "The parcel is a FLAT red outline on the ground. NEVER render it as a platform, socle, wall, raised pad, or any volume.",
-          "The inside of the parcel is EMPTY GROUND — no building, no construction, no fill, no pad.",
-          "Preserve the input image at ~95-98% identity.",
-          "If unsure — DO NOTHING, return the input unchanged.",
+          "Your task: transform this Mapbox 3D stylized render into a photorealistic architectural visualization with warm natural lighting, realistic material textures, soft shadows, and lush vegetation detail.",
           "",
-          "Your only allowed operations are:",
-          "- minuscule contrast adjustment (< 3% delta)",
-          "- tiny edge sharpening (<2% delta)",
-          "- imperceptible hue touch-up (< 1% delta)",
+          "ALLOWED (encouraged, needed for realism):",
+          "- Convert geometric tree spheres into leafy realistic trees with foliage detail",
+          "- Add natural material textures to building facades (concrete, plaster, corrugated metal)",
+          "- Apply soft directional sunlight with realistic shadows on ground and façades",
+          "- Harmonize warm atmospheric color palette",
+          "- Add ground texture detail (grass variation, road asphalt grain, dirt paths)",
+          "- Sharpen fine edges while preserving building silhouettes",
           "",
-          "Anything more aggressive will be REJECTED by the drift check.",
+          "FORBIDDEN (absolute, zero tolerance):",
+          "- Do NOT change the position, shape, height, or count of ANY building",
+          "- Do NOT add NEW buildings, structures, walls, or volumes anywhere",
+          "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D line ON the ground",
+          "- The inside of the red parcel outline is EMPTY GROUND (grass or bare earth) — never put a building, platform, socle, pad, or any volume there",
+          "- Do NOT move, delete, or relocate anything",
+          "- Do NOT change the camera angle, perspective, framing, or zoom",
+          "- Do NOT add characters, vehicles, signage, or UI elements",
+          "- Do NOT add a ground socle or elevation under the parcel — it is flat at street level",
+          "",
+          "Key preserved feature: the red parcel outline is JUST A LINE on flat ground. Not a wall. Not a pad. Not a building. Just a flat red line on the earth.",
+          "",
+          "Render as if a professional architectural visualizer did a final photoreal pass — not a redesign.",
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
@@ -8380,7 +8397,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.126-WITHIN-FILTER-ALL-BUILDINGS on port ${PORT}`);
+  console.log(`BARLO v72.127-BALANCED-POLISH-TIMEOUT-RACE on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
