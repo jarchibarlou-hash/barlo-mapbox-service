@@ -4,7 +4,6 @@ const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
-const turf = require("@turf/turf");
 const app = express();
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
@@ -14,7 +13,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // ═══════════════════════════════════════════════════════════════════════════════
-// v72.136-try-catch-safe: REMOVE invalid within expressions, APPLY ID-filter ONCE on load, NO re-trigger loops
+// v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
 const POLISH_TIMEOUT_MS = 90000; // 90s per API call
@@ -135,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.34-parfait-masked" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "PARFAIT-PURE-RESET" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4254,59 +4253,8 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   console.log(`└── end buildCommercePolygon v72.26 ──`);
   return commerceGPS;
 }
-// ─── SERVER-SIDE BUILDING MASK (v72.122 from v72.128) ───────────────────
-async function getIntersectingBuildingIds(parcelCoordsArray, mapboxToken) {
-  try {
-    if (!parcelCoordsArray || parcelCoordsArray.length < 3) return [];
-    if (!mapboxToken) return [];
-
-    // Ensure closed ring
-    const ring = parcelCoordsArray.slice();
-    const first = ring[0];
-    const last = ring[ring.length - 1];
-    if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]]);
-
-    const parcelPoly = turf.polygon([ring]);
-    const centroid = turf.centroid(parcelPoly);
-    const [lng, lat] = centroid.geometry.coordinates;
-
-    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=250&limit=50&layers=building&access_token=${mapboxToken}`;
-
-    // Use fetch (native on Node 18+) or require node-fetch
-    let fetchFn;
-    try { fetchFn = fetch; } catch (e) { fetchFn = require("node-fetch"); }
-
-    const resp = await fetchFn(url);
-    if (!resp.ok) {
-      console.warn(`[INTERSECT-SERVER v72.122] tilequery HTTP ${resp.status}`);
-      return [];
-    }
-    const data = await resp.json();
-    if (!data || !Array.isArray(data.features)) return [];
-
-    const ids = [];
-    for (const f of data.features) {
-      if (!f || !f.geometry) continue;
-      try {
-        let fPoly = null;
-        if (f.geometry.type === "Polygon") fPoly = turf.polygon(f.geometry.coordinates);
-        else if (f.geometry.type === "MultiPolygon") fPoly = turf.multiPolygon(f.geometry.coordinates);
-        if (!fPoly) continue;
-        if (turf.booleanIntersects(fPoly, parcelPoly)) {
-          if (f.id !== undefined && f.id !== null) ids.push(f.id);
-        }
-      } catch (inner) { /* skip bad features */ }
-    }
-    console.log(`[INTERSECT-SERVER v72.122] found ${ids.length} intersecting buildings`);
-    return ids;
-  } catch (err) {
-    console.warn(`[INTERSECT-SERVER v72.122] error: ${err.message}`);
-    return [];
-  }
-}
-
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex) {
+function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4329,15 +4277,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
   };
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
-  // v72.127: race Tilequery against 3s timeout for slide 4 to stay under Make 25s budget
-  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await Promise.race([
-    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
-    new Promise(resolve => setTimeout(() => {
-      console.warn('[SLIDE4 v72.127] Tilequery timeout 3s — proceeding without exclusion');
-      resolve([]);
-    }, 3000))
-  ]);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4358,7 +4297,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
-  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4474,37 +4412,10 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-
-    // v72.136: apply intersect filter ONCE on load, no re-trigger on sourcedata
-    try {
-      if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-        console.log('[CLIENT v72.136] excluding ' + EXCLUDED_IDS.length + ' buildings');
-        const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
-        buildingLayerIds.forEach(layerId => {
-          try {
-            if (map.getLayer(layerId)) {
-              const existing = map.getFilter(layerId);
-              let newFilter;
-              if (Array.isArray(existing) && existing[0] === 'all') {
-                newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
-              } else if (existing) {
-                newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
-              } else {
-                newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
-              }
-              map.setFilter(layerId, newFilter);
-            }
-          } catch (e) {}
-    } catch (e) { console.warn('[CLIENT v72.136] filter error:', e.message); }
-      });
-    }
-
-    // v72.108: parcel-fill transparent
-    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.0 } });
-    // v72.124: Make TRANSPARENT on slide 4 — replaced by intersect filter; remove visual tan pad
-    map.addLayer({ id: 'parcel-zone-mask', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#f5f0e1', 'fill-opacity': 0.0 } });
+    // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
+    map.addLayer({ id: 'parcel-fill-3d', type: 'fill-extrusion', source: 'parcel',
+      paint: { 'fill-extrusion-color': '#d4c8a0', 'fill-extrusion-height': 0.15,
+               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.85 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -4517,14 +4428,14 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
-  setTimeout(() => { window.__MAP_READY = true; }, 18000);
+  setTimeout(() => { window.__MAP_READY = true; }, 12000);
 })();
 </script>
 </body>
 </html>`;
 }
 // ─── HTML MAPBOX GL — MASSING ─────────────────────────────────────────────────
-async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
+function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4540,15 +4451,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   };
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
-  // v72.127: race Tilequery against 3s timeout for massing to stay under Make 25s budget
-  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await Promise.race([
-    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
-    new Promise(resolve => setTimeout(() => {
-      console.warn('[MASSING v72.127] Tilequery timeout 3s — proceeding without exclusion');
-      resolve([]);
-    }, 3000))
-  ]);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4567,7 +4469,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
-  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   const hektarStyle = {
     "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
@@ -4609,7 +4510,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   map.on('style.load', () => {
     // v71: Lumière douce pour ombres subtiles
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    try { map.setTerrain(null); } catch (e) { console.warn(\'setTerrain failed:\', e.message); }
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -4621,36 +4521,10 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    
-    // v72.136: apply intersect filter ONCE on load, no re-trigger on sourcedata
-    try {
-      if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-        console.log('[CLIENT v72.136] excluding ' + EXCLUDED_IDS.length + ' buildings');
-        const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
-        buildingLayerIds.forEach(layerId => {
-          try {
-            if (map.getLayer(layerId)) {
-              const existing = map.getFilter(layerId);
-              let newFilter;
-              if (Array.isArray(existing) && existing[0] === 'all') {
-                newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
-              } else if (existing) {
-                newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
-              } else {
-                newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
-              }
-              map.setFilter(layerId, newFilter);
-            }
-          } catch (e) {}
-    } catch (e) { console.warn('[CLIENT v72.136] filter error:', e.message); }
-      });
-    }
-
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    // v72.103: Fond parcelle TRANSPARENT dans massing (évite tinting orange par polish IA)
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.0 } }, '3d-buildings');
+      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.60 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#c04020', 'line-width': 5, 'line-opacity': 1.0 } });
     // v71: Zone constructible (reculs) — tirets rouge au-dessus des bâtiments
@@ -4763,7 +4637,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
-  setTimeout(() => { window.__MAP_READY = true; }, 18000);
+  setTimeout(() => { window.__MAP_READY = true; }, 12000);
 })();
 </script>
 </body>
@@ -5485,7 +5359,7 @@ app.post("/generate", async (req, res) => {
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
@@ -6040,7 +5914,7 @@ app.post("/generate-massing", async (req, res) => {
         split_layout: useSplit3D ? splitLayout : null,
         commerce_coords: useSplit3D ? commerceCoords : null }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 25000 });
     // v72.22: Attendre un peu plus pour que les tuiles soient bien peintes
     await new Promise(r => setTimeout(r, 1500));
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
@@ -6243,7 +6117,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.34-parfait-masked",
+      ok: true, cached: false, server_version: "PARFAIT-PURE-RESET",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6265,7 +6139,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.34-parfait-masked on port ${PORT}`);
+  console.log(`BARLO vPARFAIT-PURE-RESET on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
