@@ -14,7 +14,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // ═══════════════════════════════════════════════════════════════════════════════
-// v72.134-parfait-masked-notimeout: PUPPETEER TIMEOUT INCREASED 20→60K + fallback 12→18K ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
+// v72.135-simplified-filter: REMOVE invalid within expressions, APPLY ID-filter ONCE on load, NO re-trigger loops
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
 const POLISH_TIMEOUT_MS = 90000; // 90s per API call
@@ -4473,50 +4473,28 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    
-    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
-    // Apply to ALL building-related layers discovered at runtime
-    const buildingLayerIds = [
-      '3d-buildings',
-      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
-      'layer-building', 'feature-building'
-    ];
 
-    // v72.126: Parcel polygon feature for within expression
-    const parcelFeature = {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
-      }
-    };
-
-    buildingLayerIds.forEach(layerId => {
-      try {
-        if (map.getLayer(layerId)) {
-          let combinedFilter;
-          const withinClause = ['!', ['within', parcelFeature]];
-
-          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-            // Combine within filter + ID-based filter for defense in depth
-            combinedFilter = [
-              'all',
-              withinClause,
-              ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-            ];
-            console.log('[CLIENT v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
-          } else {
-            // Just within filter if no EXCLUDED_IDS
-            combinedFilter = withinClause;
-            console.log('[CLIENT v72.126] within-filter applied to', layerId);
+    // v72.135: apply intersect filter ONCE on load, no re-trigger on sourcedata
+    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+      console.log('[CLIENT v72.135] excluding ' + EXCLUDED_IDS.length + ' buildings');
+      const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
+      buildingLayerIds.forEach(layerId => {
+        try {
+          if (map.getLayer(layerId)) {
+            const existing = map.getFilter(layerId);
+            let newFilter;
+            if (Array.isArray(existing) && existing[0] === 'all') {
+              newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
+            } else if (existing) {
+              newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
+            } else {
+              newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
+            }
+            map.setFilter(layerId, newFilter);
           }
-          map.setFilter(layerId, combinedFilter);
-        }
-      } catch (e) { console.warn('[CLIENT v72.126]', layerId, 'filter error:', e.message); }
-    });
-
-    console.log('[SLIDE4 v72.126] Buildings filtered via geometric within + Tilequery intersection');
+        } catch (e) {}
+      });
+    }
 
     // v72.108: parcel-fill transparent
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
@@ -4640,52 +4618,27 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
       },
     });
     
-    // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
-    const allLayers = map.getStyle().layers.map(l => l.id);
-    const buildingLayers = allLayers.filter(id => /build/i.test(id));
-    console.log('[MASSING v72.126] building-related layers in style:', buildingLayers.join(', '));
-
-    // v72.126: Parcel polygon feature for within expression
-    const parcelFeature = {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
-      }
-    };
-
-    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
-    // Apply to ALL building-related layers discovered at runtime
-    const buildingLayerIds = [
-      '3d-buildings',
-      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
-      'layer-building', 'feature-building'
-    ];
-
-    buildingLayerIds.forEach(layerId => {
-      try {
-        if (map.getLayer(layerId)) {
-          let combinedFilter;
-          const withinClause = ['!', ['within', parcelFeature]];
-
-          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-            // Combine within filter + ID-based filter for defense in depth
-            combinedFilter = [
-              'all',
-              withinClause,
-              ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-            ];
-            console.log('[MASSING v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
-          } else {
-            // Just within filter if no EXCLUDED_IDS
-            combinedFilter = withinClause;
-            console.log('[MASSING v72.126] within-filter applied to', layerId);
+    // v72.135: apply intersect filter ONCE on load, no re-trigger on sourcedata
+    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+      console.log('[CLIENT v72.135] excluding ' + EXCLUDED_IDS.length + ' buildings');
+      const buildingLayerIds = ['3d-buildings', 'building', 'building-outline', 'building-top'];
+      buildingLayerIds.forEach(layerId => {
+        try {
+          if (map.getLayer(layerId)) {
+            const existing = map.getFilter(layerId);
+            let newFilter;
+            if (Array.isArray(existing) && existing[0] === 'all') {
+              newFilter = existing.concat([['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]]);
+            } else if (existing) {
+              newFilter = ['all', existing, ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]];
+            } else {
+              newFilter = ['!', ['in', ['id'], ['literal', EXCLUDED_IDS]]];
+            }
+            map.setFilter(layerId, newFilter);
           }
-          map.setFilter(layerId, combinedFilter);
-        }
-      } catch (e) { console.warn('[MASSING v72.126]', layerId, 'filter error:', e.message); }
-    })
+        } catch (e) {}
+      });
+    }
 
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
