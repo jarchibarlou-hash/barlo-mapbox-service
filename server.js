@@ -14,7 +14,7 @@ const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // ═══════════════════════════════════════════════════════════════════════════════
-// v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
+// v72.134-parfait-masked-notimeout: PUPPETEER TIMEOUT INCREASED 20→60K + fallback 12→18K ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
 const POLISH_TIMEOUT_MS = 90000; // 90s per API call
@@ -4536,7 +4536,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
-  setTimeout(() => { window.__MAP_READY = true; }, 12000);
+  setTimeout(() => { window.__MAP_READY = true; }, 18000);
 })();
 </script>
 </body>
@@ -4804,7 +4804,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
-  setTimeout(() => { window.__MAP_READY = true; }, 12000);
+  setTimeout(() => { window.__MAP_READY = true; }, 18000);
 })();
 </script>
 </body>
@@ -5526,7 +5526,7 @@ app.post("/generate", async (req, res) => {
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
@@ -6081,7 +6081,7 @@ app.post("/generate-massing", async (req, res) => {
         split_layout: useSplit3D ? splitLayout : null,
         commerce_coords: useSplit3D ? commerceCoords : null }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 25000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
     // v72.22: Attendre un peu plus pour que les tuiles soient bien peintes
     await new Promise(r => setTimeout(r, 1500));
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
