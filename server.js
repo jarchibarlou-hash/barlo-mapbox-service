@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.125-FILTER-2D-FOOTPRINTS" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.126-WITHIN-FILTER-ALL-BUILDINGS" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4629,37 +4629,55 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.102: Masquer SYSTÉMATIQUEMENT bâtiments OSM dans parcelle BUFFERÉE +5m
-    map.setFilter('3d-buildings', ['all',
-      ['==', 'extrude', 'true'],
-      ['!', ['within', { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }, properties: {} }]]
-    ]);
-    // v72.125: Server-side intersection filter — supplement within filter with intersect exclusion (3D + 2D footprints)
-    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-      console.log('[CLIENT v72.125] excluding ' + EXCLUDED_IDS.length + ' intersecting buildings (3D + footprint)');
+    // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
+    const allLayers = map.getStyle().layers.map(l => l.id);
+    const buildingLayers = allLayers.filter(id => /build/i.test(id));
+    console.log('[CLIENT v72.126] building-related layers in style:', buildingLayers.join(', '));
 
-      // 3D extrusion layer
+    // v72.126: Parcel polygon feature for within expression
+    const parcelFeature = {
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
+      }
+    };
+
+    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
+    // Apply to ALL building-related layers discovered at runtime
+    const buildingLayerIds = [
+      '3d-buildings',
+      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
+      'layer-building', 'feature-building'
+    ];
+
+    buildingLayerIds.forEach(layerId => {
       try {
-        map.setFilter('3d-buildings', [
-          'all',
-          ['==', ['get', 'extrude'], 'true'],
-          ['>', ['get', 'height'], 0],
-          ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-        ]);
-      } catch (e) { console.warn('[CLIENT v72.125] 3d-buildings filter failed:', e.message); }
+        if (map.getLayer(layerId)) {
+          let combinedFilter;
+          const withinClause = ['\!', ['within', parcelFeature]];
 
-      // 2D footprint layers (default Mapbox Streets)
-      const footprintLayerIds = ['building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow'];
-      footprintLayerIds.forEach(layerId => {
-        try {
-          if (map.getLayer(layerId)) {
-            map.setFilter(layerId, ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]);
-            console.log('[CLIENT v72.125] filter applied to', layerId);
+          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+            // Combine within filter + ID-based filter for defense in depth
+            combinedFilter = [
+              'all',
+              withinClause,
+              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
+            ];
+            console.log('[CLIENT v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
+          } else {
+            // Just within filter if no EXCLUDED_IDS
+            combinedFilter = withinClause;
+            console.log('[CLIENT v72.126] within-filter applied to', layerId);
           }
-        } catch (e) { /* layer not found or filter syntax error */ }
-      });
-    }
-    console.log('[SLIDE4 v72.122] Bati existant filtre via within + Tilequery+Turf intersection');
+          map.setFilter(layerId, combinedFilter);
+        }
+      } catch (e) { console.warn('[CLIENT v72.126]', layerId, 'filter error:', e.message); }
+    });
+
+    console.log('[SLIDE4 v72.126] Buildings filtered via geometric within + Tilequery intersection');
+
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -4780,28 +4798,53 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    // v72.125: Server-side intersection filter — supplement within filter with intersect exclusion (3D + 2D footprints)
-    if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-      console.log('[MASSING v72.125] excluding ' + EXCLUDED_IDS.length + ' intersecting buildings (3D + footprint)');
+    // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
+    const allLayers = map.getStyle().layers.map(l => l.id);
+    const buildingLayers = allLayers.filter(id => /build/i.test(id));
+    console.log('[MASSING v72.126] building-related layers in style:', buildingLayers.join(', '));
 
-      // 3D extrusion layer
+    // v72.126: Parcel polygon feature for within expression
+    const parcelFeature = {
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
+      }
+    };
+
+    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
+    // Apply to ALL building-related layers discovered at runtime
+    const buildingLayerIds = [
+      '3d-buildings',
+      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
+      'layer-building', 'feature-building'
+    ];
+
+    buildingLayerIds.forEach(layerId => {
       try {
-        map.setFilter('3d-buildings', [
-          'all',
-          ['==', ['get', 'extrude'], 'true'],
-          ['>', ['get', 'height'], 0],
-          ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-        ]);
-      } catch (e) { console.warn('[MASSING v72.125] 3d-buildings filter failed:', e.message); }
+        if (map.getLayer(layerId)) {
+          let combinedFilter;
+          const withinClause = ['\!', ['within', parcelFeature]];
 
-      // 2D footprint layers (default Mapbox Streets)
-      const footprintLayerIds = ['building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow'];
-      footprintLayerIds.forEach(layerId => {
-        try {
-          if (map.getLayer(layerId)) {
-            map.setFilter(layerId, ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]);
-            console.log('[MASSING v72.125] filter applied to', layerId);
+          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
+            // Combine within filter + ID-based filter for defense in depth
+            combinedFilter = [
+              'all',
+              withinClause,
+              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
+            ];
+            console.log('[MASSING v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
+          } else {
+            // Just within filter if no EXCLUDED_IDS
+            combinedFilter = withinClause;
+            console.log('[MASSING v72.126] within-filter applied to', layerId);
           }
+          map.setFilter(layerId, combinedFilter);
+        }
+      } catch (e) { console.warn('[MASSING v72.126]', layerId, 'filter error:', e.message); }
+    })
+
         } catch (e) { /* layer not found or filter syntax error */ }
       });
     }
@@ -8337,7 +8380,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.125-FILTER-2D-FOOTPRINTS on port ${PORT}`);
+  console.log(`BARLO v72.126-WITHIN-FILTER-ALL-BUILDINGS on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
