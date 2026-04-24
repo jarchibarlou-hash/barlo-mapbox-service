@@ -134,7 +134,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "PARFAIT-PURE-RESET" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.137-within-building-filter" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4425,6 +4425,35 @@ function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, ma
       paint: { 'line-color': '#d04020', 'line-width': 4,
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
+    // v72.137: filter 3d-buildings to exclude any building fully within the parcel polygon
+    try {
+      const PARCEL_POLY_FEATURE = {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [${JSON.stringify(parcelCoords.map(c => [c.lon, c.lat]).concat([[parcelCoords[0].lon, parcelCoords[0].lat]]))}]
+        }
+      };
+      const buildingLayers = ['3d-buildings', 'building', 'building-top'];
+      buildingLayers.forEach(layerId => {
+        try {
+          if (map.getLayer(layerId)) {
+            const existing = map.getFilter(layerId);
+            const withinNegation = ['\!', ['within', PARCEL_POLY_FEATURE]];
+            let newFilter;
+            if (Array.isArray(existing) && existing[0] === 'all') {
+              newFilter = existing.concat([withinNegation]);
+            } else if (existing) {
+              newFilter = ['all', existing, withinNegation];
+            } else {
+              newFilter = withinNegation;
+            }
+            map.setFilter(layerId, newFilter);
+          }
+        } catch (e) { /* layer not present or filter syntax error */ }
+      });
+    } catch (e) { /* never break the parfait flow */ }
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -4634,6 +4663,35 @@ function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords
     // ── Contour emprise au sol : bleu foncé ──
     map.addLayer({ id: 'massing-footprint', type: 'line', source: 'massing',
       paint: { 'line-color': '#1a1a1a', 'line-width': 1.5, 'line-opacity': 0.9 } });
+    // v72.137: filter 3d-buildings to exclude any building fully within the parcel polygon
+    try {
+      const PARCEL_POLY_FEATURE = {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'Polygon',
+          coordinates: [${JSON.stringify(parcelCoords.map(c => [c.lon, c.lat]).concat([[parcelCoords[0].lon, parcelCoords[0].lat]]))}]
+        }
+      };
+      const buildingLayers = ['3d-buildings', 'building', 'building-top'];
+      buildingLayers.forEach(layerId => {
+        try {
+          if (map.getLayer(layerId)) {
+            const existing = map.getFilter(layerId);
+            const withinNegation = ['\!', ['within', PARCEL_POLY_FEATURE]];
+            let newFilter;
+            if (Array.isArray(existing) && existing[0] === 'all') {
+              newFilter = existing.concat([withinNegation]);
+            } else if (existing) {
+              newFilter = ['all', existing, withinNegation];
+            } else {
+              newFilter = withinNegation;
+            }
+            map.setFilter(layerId, newFilter);
+          }
+        } catch (e) { /* layer not present or filter syntax error */ }
+      });
+    } catch (e) { /* never break the parfait flow */ }
   });
   let rendered = false;
   map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
@@ -6117,7 +6175,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "PARFAIT-PURE-RESET",
+      ok: true, cached: false, server_version: "v72.137-within-building-filter",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -6139,7 +6197,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
 });
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO vPARFAIT-PURE-RESET on port ${PORT}`);
+  console.log(`BARLO v72.137-within-building-filter on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
