@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.142-unique-filename-timestamp" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.144-style-diagnostic" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4601,6 +4601,16 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   });
   map.addControl = function() {};
   map.on('style.load', () => {
+    // v72.144: diagnostic — list all layer IDs in current style
+    try {
+      const allLayers = map.getStyle().layers.map(l => l.id + ':' + l.type);
+      console.log('[STYLE-DIAG v72.144]', allLayers.join(' | '));
+      const buildingLike = allLayers.filter(s => /build|house|struct|fill-extrusion/i.test(s));
+      console.log('[STYLE-DIAG v72.144] building-related:', buildingLike.join(' | '));
+    } catch (e) {
+      console.warn('[STYLE-DIAG v72.144] error:', e.message);
+    }
+
     map.setTerrain(null);
     // v70.5: Lumière directionnelle forte pour ombres marquées
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.70, position: [1.5, 210, 30] });
@@ -4796,6 +4806,16 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   });
   map.addControl = function() {};
   map.on('style.load', () => {
+    // v72.144: diagnostic — list all layer IDs in current style
+    try {
+      const allLayers = map.getStyle().layers.map(l => l.id + ':' + l.type);
+      console.log('[STYLE-DIAG v72.144]', allLayers.join(' | '));
+      const buildingLike = allLayers.filter(s => /build|house|struct|fill-extrusion/i.test(s));
+      console.log('[STYLE-DIAG v72.144] building-related:', buildingLike.join(' | '));
+    } catch (e) {
+      console.warn('[STYLE-DIAG v72.144] error:', e.message);
+    }
+
     map.setTerrain(null);
     // v71: Lumière douce pour ombres subtiles
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
@@ -5704,7 +5724,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate v72.142-unique-filename-timestamp (style-ref) ═══");
+  console.log("═══ /generate v72.144-style-diagnostic (style-ref) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -5961,7 +5981,7 @@ app.post("/generate", async (req, res) => {
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate-massing v72.142 ═══");
+  console.log("═══ /generate-massing v72.144-style-diagnostic ═══");
   console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
   console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
@@ -8426,8 +8446,8 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.142-unique-filename-timestamp on port ${PORT}`);
+  console.log(`BARLO v72.144-style-diagnostic on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
-});
+})
