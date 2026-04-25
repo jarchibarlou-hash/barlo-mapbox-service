@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.141-unique-filename-timestamp" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.142-unique-filename-timestamp" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5704,7 +5704,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate v72.141-unique-filename-timestamp (style-ref) ═══");
+  console.log("═══ /generate v72.142-unique-filename-timestamp (style-ref) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -5809,7 +5809,7 @@ app.post("/generate", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
     const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
-    const SLIDE4_DRIFT_THRESHOLD = 0.75; // v72.128: raised — photorealistic texture polish naturally causes 60-70% block drift; raised to 75% to let it pass while catching true geometric hallucinations (typically >85%)
+    const SLIDE4_DRIFT_THRESHOLD = 0.35; // v72.142: tightened — neutral polish should produce <30% drift, anything above is too aggressive
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
@@ -5821,33 +5821,30 @@ app.post("/generate", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // ── ARCHITECTURAL POLISH PROMPT — v72.127: BALANCED PHOTOREALISM ─────────
+        // ── ARCHITECTURAL POLISH PROMPT — v72.142: NEUTRAL TEXTURE POLISH ─────────
         const polishPrompt = [
-          "PHOTOREALISTIC ARCHITECTURAL POLISH — STRICT GEOMETRIC PRESERVATION:",
+          "NEUTRAL TEXTURE POLISH — PRESERVE EXACT LIGHTING:",
           "",
-          "Your task: transform this Mapbox 3D stylized render into a photorealistic architectural visualization with warm natural lighting, realistic material textures, soft shadows, and lush vegetation detail.",
+          "Apply MINIMAL texture refinement to this Mapbox 3D architectural render. Goal: improve material textures and edge clarity without changing the scene's visual character.",
           "",
-          "ALLOWED (encouraged, needed for realism):",
-          "- Convert geometric tree spheres into leafy realistic trees with foliage detail",
-          "- Add natural material textures to building facades (concrete, plaster, corrugated metal)",
-          "- Apply soft directional sunlight with realistic shadows on ground and façades",
-          "- Harmonize warm atmospheric color palette",
-          "- Add ground texture detail (grass variation, road asphalt grain, dirt paths)",
-          "- Sharpen fine edges while preserving building silhouettes",
+          "ALLOWED:",
+          "- Refine building façade textures (subtle concrete, plaster, brick details)",
+          "- Sharpen geometric edges slightly",
+          "- Add minor ground texture variation (grass blades, asphalt grain)",
+          "- Mild color saturation adjustments to existing tones",
           "",
-          "FORBIDDEN (absolute, zero tolerance):",
-          "- Do NOT change the position, shape, height, or count of ANY building",
-          "- Do NOT add NEW buildings, structures, walls, or volumes anywhere",
-          "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D line ON the ground",
-          "- The inside of the red parcel outline is EMPTY GROUND (grass or bare earth) — never put a building, platform, socle, pad, or any volume there",
-          "- Do NOT move, delete, or relocate anything",
-          "- Do NOT change the camera angle, perspective, framing, or zoom",
-          "- Do NOT add characters, vehicles, signage, or UI elements",
-          "- Do NOT add a ground socle or elevation under the parcel — it is flat at street level",
+          "STRICTLY FORBIDDEN:",
+          "- Do NOT add sunset, golden hour, warm orange light, or any dramatic lighting",
+          "- Do NOT add bloom, glow, or atmospheric effects",
+          "- Do NOT change the time of day — keep the neutral daytime look from input",
+          "- Do NOT add or relocate buildings, structures, walls, or volumes",
+          "- Do NOT modify the parcel red outline or its interior",
+          "- The interior of the red parcel outline is EMPTY GROUND — do NOT add any building, roof, structure, or volume inside it",
+          "- Do NOT change the camera angle, perspective, or framing",
           "",
-          "Key preserved feature: the red parcel outline is JUST A LINE on flat ground. Not a wall. Not a pad. Not a building. Just a flat red line on the earth.",
+          "Preserve the input image at ~80-85% identity. Result should look like the same Mapbox render with slightly better material textures, NOT a photorealistic re-rendering.",
           "",
-          "Render as if a professional architectural visualizer did a final photoreal pass — not a redesign.",
+          "If unsure between subtle and dramatic — choose subtle. If unsure between adding detail or preserving emptiness in the parcel — preserve emptiness.",
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
@@ -5964,7 +5961,7 @@ app.post("/generate", async (req, res) => {
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate-massing v72.141 ═══");
+  console.log("═══ /generate-massing v72.142 ═══");
   console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
   console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
@@ -8429,7 +8426,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.141-unique-filename-timestamp on port ${PORT}`);
+  console.log(`BARLO v72.142-unique-filename-timestamp on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
