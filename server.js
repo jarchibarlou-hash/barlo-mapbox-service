@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.144-style-diagnostic" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.145-clean-polish-no-legend-logo" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4604,11 +4604,11 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     // v72.144: diagnostic — list all layer IDs in current style
     try {
       const allLayers = map.getStyle().layers.map(l => l.id + ':' + l.type);
-      console.log('[STYLE-DIAG v72.144]', allLayers.join(' | '));
+      console.log('[STYLE-DIAG v72.145]', allLayers.join(' | '));
       const buildingLike = allLayers.filter(s => /build|house|struct|fill-extrusion/i.test(s));
-      console.log('[STYLE-DIAG v72.144] building-related:', buildingLike.join(' | '));
+      console.log('[STYLE-DIAG v72.145] building-related:', buildingLike.join(' | '));
     } catch (e) {
-      console.warn('[STYLE-DIAG v72.144] error:', e.message);
+      console.warn('[STYLE-DIAG v72.145] error:', e.message);
     }
 
     map.setTerrain(null);
@@ -4809,11 +4809,11 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     // v72.144: diagnostic — list all layer IDs in current style
     try {
       const allLayers = map.getStyle().layers.map(l => l.id + ':' + l.type);
-      console.log('[STYLE-DIAG v72.144]', allLayers.join(' | '));
+      console.log('[STYLE-DIAG v72.145]', allLayers.join(' | '));
       const buildingLike = allLayers.filter(s => /build|house|struct|fill-extrusion/i.test(s));
-      console.log('[STYLE-DIAG v72.144] building-related:', buildingLike.join(' | '));
+      console.log('[STYLE-DIAG v72.145] building-related:', buildingLike.join(' | '));
     } catch (e) {
-      console.warn('[STYLE-DIAG v72.144] error:', e.message);
+      console.warn('[STYLE-DIAG v72.145] error:', e.message);
     }
 
     map.setTerrain(null);
@@ -5081,7 +5081,7 @@ function drawOverlays(ctx, W, H, BH, p) {
     ctx.fillText(item.label, 52, iy + 11);
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
+  ctx.fillText("", 28, 16 + legH - 6);
   const BY = H;
   ctx.fillStyle = "#ffffff"; ctx.fillRect(0, BY, W, BH);
   ctx.beginPath(); ctx.moveTo(0, BY); ctx.lineTo(W, BY);
@@ -5548,7 +5548,7 @@ function drawLegendCompass(ctx, W, H, p) {
     ctx.fillText(item.label, 52, iy + 11);
   });
   ctx.font = "8px Arial"; ctx.fillStyle = "#bbb"; ctx.textAlign = "left";
-  ctx.fillText("© Mapbox  © OpenStreetMap contributors", 28, 16 + legH - 6);
+  ctx.fillText("", 28, 16 + legH - 6);
   // v72.22: Setback labels DISABLED per user request
 }
 // ─── ARC SOLAIRE ──────────────────────────────────────────────────────────────
@@ -5724,7 +5724,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate v72.144-style-diagnostic (style-ref) ═══");
+  console.log("═══ /generate v72.145-clean-polish-no-legend-logo (style-ref) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -5861,6 +5861,11 @@ app.post("/generate", async (req, res) => {
           "- Do NOT modify the parcel red outline or its interior",
           "- The interior of the red parcel outline is EMPTY GROUND — do NOT add any building, roof, structure, or volume inside it",
           "- Do NOT change the camera angle, perspective, or framing",
+          "- Do NOT paint, fill, color, or apply any texture INSIDE the red parcel outline",
+          "- The interior of the red parcel outline is the natural Mapbox background — leave it pixel-identical to input, do not enhance it, do not refine it, do not modify it",
+          "- Do NOT bleed colors or textures across the red parcel boundary",
+          "- Do NOT extend the parcel fill outside its outline",
+          "- Keep the parcel area absolutely SHARP and unmodified",
           "",
           "Preserve the input image at ~80-85% identity. Result should look like the same Mapbox render with slightly better material textures, NOT a photorealistic re-rendering.",
           "",
@@ -5981,7 +5986,7 @@ app.post("/generate", async (req, res) => {
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate-massing v72.144-style-diagnostic ═══");
+  console.log("═══ /generate-massing v72.145-clean-polish-no-legend-logo ═══");
   console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
   console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
@@ -8446,7 +8451,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.144-style-diagnostic on port ${PORT}`);
+  console.log(`BARLO v72.145-clean-polish-no-legend-logo on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
