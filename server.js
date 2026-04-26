@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.145-clean-polish-no-legend-logo" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "v72.146-drift-15-strict" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5724,7 +5724,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
 app.post("/generate", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate v72.145-clean-polish-no-legend-logo (style-ref) ═══");
+  console.log("═══ /generate v72.146-drift-15-strict (style-ref) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
     envelope_w, envelope_d, buildable_fp, setback_front, setback_side, setback_back,
@@ -5829,7 +5829,7 @@ app.post("/generate", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
     const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
-    const SLIDE4_DRIFT_THRESHOLD = 0.35; // v72.142: tightened — neutral polish should produce <30% drift, anything above is too aggressive
+    const SLIDE4_DRIFT_THRESHOLD = 0.15; // v72.146: very strict — most polish runs fall back to deterministic, only ultra-clean polish (drift<15%) accepted
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
@@ -5986,7 +5986,7 @@ app.post("/generate", async (req, res) => {
 app.post("/generate-massing", async (req, res) => {
   const t0 = Date.now();
   const UPLOAD_TS = Date.now();
-  console.log("═══ /generate-massing v72.145-clean-polish-no-legend-logo ═══");
+  console.log("═══ /generate-massing v72.146-drift-15-strict ═══");
   console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
   console.log(`[BODY_RAW] ${JSON.stringify(req.body).slice(0, 500)}`);
@@ -8451,7 +8451,7 @@ app.post("/generate-pptx", async (req, res) => {
 
 // ─── START ─────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.145-clean-polish-no-legend-logo on port ${PORT}`);
+  console.log(`BARLO v72.146-drift-15-strict on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
