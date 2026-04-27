@@ -1933,6 +1933,15 @@ function computeSmartScenarios({
       // si la parcelle est contrainte, pour maximiser les unités/palier.
       // ══════════════════════════════════════════════════════════════════
       const MAX_COMPRESSION = 0.85; // tailles réduites de 15% max
+      // v72.159 HOTFIX: When input_typologies is provided, override target_units with typology count
+      if (input_typologies && typeof input_typologies === 'string' && input_typologies.trim()) {
+        const typologies = parseTypologies(input_typologies);
+        const typoCount = typologies.reduce((sum, t) => sum + (t.count || 0), 0);
+        if (typoCount > 0) {
+          console.log(`│   v72.159 LEVELS-OVERRIDE: target_units ${target_units} → ${typoCount} (from typologies="${input_typologies}")`);
+          target_units = typoCount;
+        }
+      }
       const clientUnits = Math.max(1, target_units || 1);
       // ÉTAPE 1 : Capacité max du plateau (le terrain dicte)
       const fpMaxParcel = Math.min(fpMaxCes, fpMaxEnv, fpMaxRetraits);
@@ -2199,19 +2208,7 @@ function computeSmartScenarios({
       if (effectiveTargetSdp > 0) {
         console.log(`│   v72.156 TYPOLOGY-DRIVEN: input="${inputTypologies}" standing=${standingLevel} → résidentiel=${surfaceResidentielle}m² × 1.15 + commerce=${commerceSize}m² = targetSdp=${effectiveTargetSdp}m²`);
 
-        // FIX 1 (v72.158): Auto-levels from typology
-        let calcLevels = effectiveMaxFloors || 3;
-        if (inputTypologies) {
-          const typo = parseTypologies(inputTypologies);
-          const units = typo.reduce((s,t) => s + t.count, 0);
-          const sn = (standingLevel || 'ECONOMIQUE').toUpperCase();
-          const as = (APARTMENT_SIZE_GRID.T3?.[sn]) || 65;
-          const fpE = Math.min(fpMaxCes, fpMaxEnv) * 0.7;
-          const pf = Math.max(1, Math.floor(fpE / as));
-          calcLevels = Math.ceil(units / pf) + (commerceSize ? 1 : 0);
-          calcLevels = Math.min(calcLevels, effectiveMaxFloors);
-        }
-        const estimatedLevels = calcLevels;
+        const estimatedLevels = effectiveMaxFloors || 3;
         const fpBase = effectiveTargetSdp / estimatedLevels;
         fpRdc = Math.round(fpBase * TARGET_FP_FACTOR[role]);
 
@@ -8467,7 +8464,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.158-architectural-coherence-6-fixes-scenarios on port ${PORT}`);
+  console.log(`BARLO v72.156-typology-driven-scenarios on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
