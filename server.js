@@ -1953,8 +1953,8 @@ function computeSmartScenarios({
       // ══════════════════════════════════════════════════════════════════
       const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.75, PRUDENT: 0.55 };
       const roleFpFactor = ROLE_FP_FACTOR[role] || 1.0;
-      // v72.153: NEW target-anchored factors (when target_surface_m2 provided)
-      const TARGET_FP_FACTOR = { INTENSIFICATION: 1.05, EQUILIBRE: 1.00, PRUDENT: 0.80 };
+      // v72.155: A=closest to program, B=balanced alt, C=prudent
+      const TARGET_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.90, PRUDENT: 0.75 };
       // ══════════════════════════════════════════════════════════════════
       // v57.20 SPLIT_AV_AR : COMMERCE DEVANT (clôture) + LOGEMENT DERRIÈRE
       // ══════════════════════════════════════════════════════════════════
@@ -8367,7 +8367,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.153-target-anchored-scenarios on port ${PORT}`);
+  console.log(`BARLO v72.155-scenario-roles-corrected on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
