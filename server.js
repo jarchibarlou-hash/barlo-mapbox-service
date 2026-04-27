@@ -4522,7 +4522,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
-  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4728,15 +4727,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  // v72.127: race Tilequery against 3s timeout for massing to stay under Make 25s budget
-  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await Promise.race([
-    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
-    new Promise(resolve => setTimeout(() => {
-      console.warn('[MASSING v72.127] Tilequery timeout 3s — proceeding without exclusion');
-      resolve([]);
-    }, 3000))
-  ]);
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
@@ -4757,7 +4747,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
-  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   const hektarStyle = {
     "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
@@ -4816,50 +4805,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     const buildingLayers = allLayers.filter(id => /build/i.test(id));
     console.log('[MASSING v72.126] building-related layers in style:', buildingLayers.join(', '));
 
-    // v72.126: Parcel polygon feature for within expression
-    const parcelFeature = {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
-      }
-    };
-
-    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
-    // Apply to ALL building-related layers discovered at runtime
-    const buildingLayerIds = [
-      '3d-buildings',
-      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
-      'layer-building', 'feature-building'
-    ];
-
-    buildingLayerIds.forEach(layerId => {
-      try {
-        if (map.getLayer(layerId)) {
-          let combinedFilter;
-          const withinClause = ['\!', ['within', parcelFeature]];
-
-          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-            // Combine within filter + ID-based filter for defense in depth
-            combinedFilter = [
-              'all',
-              withinClause,
-              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-            ];
-            console.log('[MASSING v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
-          } else {
-            // Just within filter if no EXCLUDED_IDS
-            combinedFilter = withinClause;
-            console.log('[MASSING v72.126] within-filter applied to', layerId);
-          }
-          map.setFilter(layerId, combinedFilter);
-        }
-      } catch (e) { console.warn('[MASSING v72.126]', layerId, 'filter error:', e.message); }
-    })
-
-        } catch (e) { /* layer not found or filter syntax error */ }
-      });
     }
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
@@ -8401,7 +8346,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.150-stable-no-massing-polish on port ${PORT}`);
+  console.log(`BARLO v72.151-massing-no-polish-no-within on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
