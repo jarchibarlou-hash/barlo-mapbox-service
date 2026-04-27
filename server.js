@@ -1520,6 +1520,9 @@ function computeSmartScenarios({
   layout_mode = "SUPERPOSE", // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
   commerce_depth_m = 6,      // profondeur bande commerciale (défaut 6m, classique Afrique)
   retrait_inter_volumes_m = 4, // distance entre les 2 volumes (passage véhicule/piéton)
+  // v72.157 : typology-driven fields (from /compute-scenarios request)
+  input_typologies = "", // typologies string (e.g., "T2,T3,T4")
+  commerce_size_m2 = 0,  // override commerce surface
 }) {
   // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
   // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
@@ -2181,10 +2184,10 @@ function computeSmartScenarios({
       } else {
             // ── MODE SUPERPOSÉ (défaut) — v72.156: typology-driven or legacy logic ──
       // v72.156: Typology-driven scenario calculation
-      const inputTypologies = String(req.body.input_typologies || req.body.typologies_raw || '');
-      const standingLevel = String(req.body.standing_level || 'ECONOMIQUE');
-      const targetUnitsCount = Number(req.body.target_units) || 2;
-      const commerceOverride = Number(req.body.commerce_size_m2) || 0;
+      const inputTypologies = String(input_typologies || '');
+      const standingLevel = String(standing_level || 'ECONOMIQUE');
+      const targetUnitsCount = Number(target_units) || 2;
+      const commerceOverride = Number(commerce_size_m2) || 0;
 
       const { targetSdp: typoSdp, surfaceResidentielle, commerceSize } = computeTypologyDrivenSdp(
         inputTypologies, standingLevel, targetUnitsCount, commerceOverride
@@ -3788,6 +3791,9 @@ app.post("/compute-scenarios", (req, res) => {
     // v57.20 : disposition spatiale
     layout_mode: p.layout_mode || "SUPERPOSE",
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
+    // v72.157 : typology-driven fields
+    input_typologies: p.input_typologies || "",
+    commerce_size_m2: Number(p.commerce_size_m2) || 0,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
