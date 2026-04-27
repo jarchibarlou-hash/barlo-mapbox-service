@@ -4,7 +4,6 @@ const { createClient } = require("@supabase/supabase-js");
 const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
-const turf = require("@turf/turf");
 const app = express();
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
@@ -17,12 +16,13 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
-const POLISH_TIMEOUT_MS = 120000; // v72.112: 120s per API call (increased from 60s for more reliable polish) (was 90s — too slow for Make.com 300s limit)
+const POLISH_TIMEOUT_MS = 60000; // v72.93: 60s per API call (was 90s — too slow for Make.com 300s limit)
 const POLISH_MAX_RETRIES = 1;    // v72.93: 1 retry only (was 2 — worst case 270s of retries alone)
 const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
 // v72.93: TIME BUDGET — skip polish if endpoint has already spent this many ms
 const POLISH_TIME_BUDGET_MS = 180000; // 180s = leave 120s margin for Make.com 300s timeout
+const MASSING_SKIP_POLISH = true; // v72.149: Disable AI polish on /generate-massing
 
 /**
  * v72.34: Robust single polish API call with retry + timeout + full error logging
@@ -137,7 +137,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.128-DRIFT-75" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.149-MASSING-NO-POLISH" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -617,57 +617,6 @@ function computeBearing(coords, cLat, cLon) {
     if (len > longest) { longest = len; angle = Math.atan2(dx, dy) * 180 / Math.PI; }
   }
   return ((Math.round(angle + 30) % 360) + 360) % 360;
-}
-// v72.122: Server-side intersection filter
-// Uses Mapbox Tilequery API + Turf.js booleanIntersects to find buildings that overlap the parcel (even partially).
-async function getIntersectingBuildingIds(parcelCoordsArray, mapboxToken) {
-  try {
-    if (!parcelCoordsArray || parcelCoordsArray.length < 3) return [];
-    if (!mapboxToken) return [];
-
-    // Ensure closed ring
-    const ring = parcelCoordsArray.slice();
-    const first = ring[0];
-    const last = ring[ring.length - 1];
-    if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]]);
-
-    const parcelPoly = turf.polygon([ring]);
-    const centroid = turf.centroid(parcelPoly);
-    const [lng, lat] = centroid.geometry.coordinates;
-
-    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=250&limit=50&layers=building&access_token=${mapboxToken}`;
-
-    // Use fetch (native on Node 18+) or require node-fetch
-    let fetchFn;
-    try { fetchFn = fetch; } catch (e) { fetchFn = require("node-fetch"); }
-
-    const resp = await fetchFn(url);
-    if (!resp.ok) {
-      console.warn(`[INTERSECT-SERVER v72.122] tilequery HTTP ${resp.status}`);
-      return [];
-    }
-    const data = await resp.json();
-    if (!data || !Array.isArray(data.features)) return [];
-
-    const ids = [];
-    for (const f of data.features) {
-      if (!f || !f.geometry) continue;
-      try {
-        let fPoly = null;
-        if (f.geometry.type === "Polygon") fPoly = turf.polygon(f.geometry.coordinates);
-        else if (f.geometry.type === "MultiPolygon") fPoly = turf.multiPolygon(f.geometry.coordinates);
-        if (!fPoly) continue;
-        if (turf.booleanIntersects(fPoly, parcelPoly)) {
-          if (f.id !== undefined && f.id !== null) ids.push(f.id);
-        }
-      } catch (inner) { /* skip bad features */ }
-    }
-    console.log(`[INTERSECT-SERVER v72.122] found ${ids.length} intersecting buildings`);
-    return ids;
-  } catch (err) {
-    console.warn(`[INTERSECT-SERVER v72.122] error: ${err.message}`);
-    return [];
-  }
 }
 // ─── CALCUL DIMENSIONNEL MASSING ──────────────────────────────────────────────
 function computeMassingDimensions(fp_m2, envelope_w, envelope_d) {
@@ -4451,9 +4400,8 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   console.log(`└── end buildCommercePolygon v72.26 ──`);
   return commerceGPS;
 }
-
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
+function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4476,31 +4424,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
   };
   const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
-  // v72.102: Calcul du buffer +5m pour le masquage bâti slide 4
-  const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
-  const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
-  const bufferM = 50; // v72.108: super aggressive // v72.104: aggressive buffer
-  const scaleLat = bufferM / 111000;
-  const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
-  const bufferedCoords = parcelCoords.map(p => {
-    const dx = p.lon - cLon;
-    const dy = p.lat - cLat;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len < 1e-10) return p;
-    return {
-      lat: p.lat + (dy / len) * scaleLat,
-      lon: p.lon + (dx / len) * scaleLon,
-    };
-  });
-  // v72.127: race Tilequery against 3s timeout for slide 4 to stay under Make 25s budget
-  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await Promise.race([
-    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
-    new Promise(resolve => setTimeout(() => {
-      console.warn('[SLIDE4 v72.127] Tilequery timeout 3s — proceeding without exclusion');
-      resolve([]);
-    }, 3000))
-  ]);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -4521,7 +4444,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   function seededRand(seed) { let s = seed; return function() { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 0xffffffff; }; }
   const rand = seededRand(${seed});
   mapboxgl.accessToken = '${mapboxToken}';
-  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   // ═══════════════════════════════════════════════════════════════════
   // v49 HEKTAR PRO — style avec couleurs intégrées (vert gazon, beige routes)
   // ═══════════════════════════════════════════════════════════════════
@@ -4601,7 +4523,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setTerrain(null);
     // v70.5: Lumière directionnelle forte pour ombres marquées
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.70, position: [1.5, 210, 30] });
     const labelLayerId = undefined;
@@ -4635,65 +4556,21 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
-    // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
-    const allLayers = map.getStyle().layers.map(l => l.id);
-    const buildingLayers = allLayers.filter(id => /build/i.test(id));
-    console.log('[CLIENT v72.126] building-related layers in style:', buildingLayers.join(', '));
-
-    // v72.126: Parcel polygon feature for within expression
-    const parcelFeature = {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
-      }
-    };
-
-    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
-    // Apply to ALL building-related layers discovered at runtime
-    const buildingLayerIds = [
-      '3d-buildings',
-      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
-      'layer-building', 'feature-building'
-    ];
-
-    buildingLayerIds.forEach(layerId => {
-      try {
-        if (map.getLayer(layerId)) {
-          let combinedFilter;
-          const withinClause = ['\!', ['within', parcelFeature]];
-
-          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-            // Combine within filter + ID-based filter for defense in depth
-            combinedFilter = [
-              'all',
-              withinClause,
-              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-            ];
-            console.log('[CLIENT v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
-          } else {
-            // Just within filter if no EXCLUDED_IDS
-            combinedFilter = withinClause;
-            console.log('[CLIENT v72.126] within-filter applied to', layerId);
-          }
-          map.setFilter(layerId, combinedFilter);
-        }
-      } catch (e) { console.warn('[CLIENT v72.126]', layerId, 'filter error:', e.message); }
-    });
-
-    console.log('[SLIDE4 v72.126] Buildings filtered via geometric within + Tilequery intersection');
-
+    // v72.98: Masquer bâtiments OSM à l'intérieur de la parcelle si terrain nu
+    ${hideExistingBuildings ? `
+    map.setFilter('3d-buildings', ['all',
+      ['==', 'extrude', 'true'],
+      ['!', ['within', { type: 'Polygon', coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]] }]]
+    ]);
+    console.log('[SLIDE4 v72.98] Bati existant masque dans la parcelle');
+    ` : ""}
     // v70.7: Pas de tree-canopy Mapbox (blocs verts moches) — l'AI polish ajoute des vrais arbres
-    // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
+    // v70.10: Parcelle — fond AU-DESSUS des bâtiments pour masquer le contenu
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    // v72.108: parcel-fill transparent
-    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.0 } });
-    // v72.114: DOUBLE-MASK — parcel zone masking layer (flat opaque ground cover to hide Mapbox buildings)
-    // v72.124: Make TRANSPARENT on slide 4 — replaced by intersect filter; remove visual tan pad
-    map.addLayer({ id: 'parcel-zone-mask', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#f5f0e1', 'fill-opacity': 0.0 } });
+    // fill-extrusion opaque à hauteur minimale pour couvrir les bâtiments 3D à l'intérieur
+    map.addLayer({ id: 'parcel-fill-3d', type: 'fill-extrusion', source: 'parcel',
+      paint: { 'fill-extrusion-color': '#d4c8a0', 'fill-extrusion-height': 0.15,
+               'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.85 } });
     // Contour parcelle — rouge épais par-dessus
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
@@ -4713,7 +4590,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
 </html>`;
 }
 // ─── HTML MAPBOX GL — MASSING ─────────────────────────────────────────────────
-async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
+function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4727,15 +4604,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     properties: { height: massingParams.total_height, base_height: 0 },
     geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
-  // v72.127: race Tilequery against 3s timeout for massing to stay under Make 25s budget
-  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
-  const EXCLUDED_IDS = await Promise.race([
-    getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
-    new Promise(resolve => setTimeout(() => {
-      console.warn('[MASSING v72.127] Tilequery timeout 3s — proceeding without exclusion');
-      resolve([]);
-    }, 3000))
-  ]);
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
   return `<!DOCTYPE html>
@@ -4756,7 +4624,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
 <script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
-  const EXCLUDED_IDS = ${JSON.stringify(EXCLUDED_IDS)};
   const hektarStyle = {
     "version": 8, "name": "Hektar",
     "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
@@ -4796,7 +4663,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   });
   map.addControl = function() {};
   map.on('style.load', () => {
-    map.setTerrain(null);
     // v71: Lumière douce pour ombres subtiles
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
     map.addLayer({
@@ -4810,61 +4676,10 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true,
       },
     });
-    // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
-    const allLayers = map.getStyle().layers.map(l => l.id);
-    const buildingLayers = allLayers.filter(id => /build/i.test(id));
-    console.log('[MASSING v72.126] building-related layers in style:', buildingLayers.join(', '));
-
-    // v72.126: Parcel polygon feature for within expression
-    const parcelFeature = {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
-      }
-    };
-
-    // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
-    // Apply to ALL building-related layers discovered at runtime
-    const buildingLayerIds = [
-      '3d-buildings',
-      'building', 'building-outline', 'building-footprint', 'building-top', 'building-shadow', 'building-extrusion',
-      'layer-building', 'feature-building'
-    ];
-
-    buildingLayerIds.forEach(layerId => {
-      try {
-        if (map.getLayer(layerId)) {
-          let combinedFilter;
-          const withinClause = ['\!', ['within', parcelFeature]];
-
-          if (EXCLUDED_IDS && EXCLUDED_IDS.length > 0) {
-            // Combine within filter + ID-based filter for defense in depth
-            combinedFilter = [
-              'all',
-              withinClause,
-              ['\!', ['in', ['id'], ['literal', EXCLUDED_IDS]]]
-            ];
-            console.log('[MASSING v72.126] double-filter applied to', layerId, '(within + ID-based for', EXCLUDED_IDS.length, 'buildings)');
-          } else {
-            // Just within filter if no EXCLUDED_IDS
-            combinedFilter = withinClause;
-            console.log('[MASSING v72.126] within-filter applied to', layerId);
-          }
-          map.setFilter(layerId, combinedFilter);
-        }
-      } catch (e) { console.warn('[MASSING v72.126]', layerId, 'filter error:', e.message); }
-    })
-
-        } catch (e) { /* layer not found or filter syntax error */ }
-      });
-    }
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
-    // v72.103: Fond parcelle TRANSPARENT dans massing (évite tinting orange par polish IA)
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.0 } }, '3d-buildings');
+      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.60 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
       paint: { 'line-color': '#c04020', 'line-width': 5, 'line-opacity': 1.0 } });
     // v71: Zone constructible (reculs) — tirets rouge au-dessus des bâtiments
@@ -5545,7 +5360,7 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, fp_rdc_m2, fp_etages_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
   const s = W / 1280;
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
@@ -5652,15 +5467,14 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     for (let f = 0; f < levels; f++) {
       const y = annBaseY + f * annStepY;
       const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-      const floorFp = f === 0 ? (fp_rdc_m2 || fp_m2) : (fp_etages_m2 || fp_m2);
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
       ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
       ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`${floorLabel} : ${floorFp} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.strokeText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
       ctx.fillStyle = "#000000";
-      ctx.fillText(`${floorLabel} : ${floorFp} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillText(`${floorLabel} : ${fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
     }
     // Total SDP en bas — NOIR avec contour blanc
     ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
@@ -5716,9 +5530,9 @@ app.post("/generate", async (req, res) => {
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite);
+    const html = generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 20000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
     console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
@@ -5764,8 +5578,7 @@ app.post("/generate", async (req, res) => {
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-    const UPLOAD_TS = Date.now();
-    const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_${UPLOAD_TS}.png`;
+    const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}.png`;
     const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     if (ue) return res.status(500).json({ error: ue.message });
     const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
@@ -5778,47 +5591,36 @@ app.post("/generate", async (req, res) => {
     //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
-    const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
-    const SLIDE4_DRIFT_THRESHOLD = 0.75; // v72.128: raised — photorealistic texture polish naturally causes 60-70% block drift; raised to 75% to let it pass while catching true geometric hallucinations (typically >85%)
-    // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
-    // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
+    const SLIDE4_AI_POLISH_ENABLED = true;
+    const SLIDE4_DRIFT_THRESHOLD = 0.40; // 40% — allows tree enhancement + texture while catching structural drift
+    // v72.93: TIME BUDGET GUARD
     const slide4Elapsed = Date.now() - t0;
-    console.log(`[SLIDE4-POLISH v72.100] Début polish à ${Math.round(slide4Elapsed/1000)}s`);
-    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
+    if (slide4Elapsed > POLISH_TIME_BUDGET_MS) {
+      console.log(`[SLIDE4-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(slide4Elapsed/1000)}s already spent → SKIPPING polish`);
+    }
+    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY && slide4Elapsed <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[SLIDE4-POLISH] v72.34: Robust hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%, model=${POLISH_MODEL}`);
         // v72.34: Resize for API reliability
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // ── ARCHITECTURAL POLISH PROMPT — v72.127: BALANCED PHOTOREALISM ─────────
+        // ── ARCHITECTURAL POLISH PROMPT — matches reference render ─────────
         const polishPrompt = [
-          "PHOTOREALISTIC ARCHITECTURAL POLISH — STRICT GEOMETRIC PRESERVATION:",
-          "",
-          "Your task: transform this Mapbox 3D stylized render into a photorealistic architectural visualization with warm natural lighting, realistic material textures, soft shadows, and lush vegetation detail.",
-          "",
-          "ALLOWED (encouraged, needed for realism):",
-          "- Convert geometric tree spheres into leafy realistic trees with foliage detail",
-          "- Add natural material textures to building facades (concrete, plaster, corrugated metal)",
-          "- Apply soft directional sunlight with realistic shadows on ground and façades",
-          "- Harmonize warm atmospheric color palette",
-          "- Add ground texture detail (grass variation, road asphalt grain, dirt paths)",
-          "- Sharpen fine edges while preserving building silhouettes",
-          "",
-          "FORBIDDEN (absolute, zero tolerance):",
-          "- Do NOT change the position, shape, height, or count of ANY building",
-          "- Do NOT add NEW buildings, structures, walls, or volumes anywhere",
-          "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D line ON the ground",
-          "- The inside of the red parcel outline is EMPTY GROUND (grass or bare earth) — never put a building, platform, socle, pad, or any volume there",
-          "- Do NOT move, delete, or relocate anything",
-          "- Do NOT change the camera angle, perspective, framing, or zoom",
-          "- Do NOT add characters, vehicles, signage, or UI elements",
-          "- Do NOT add a ground socle or elevation under the parcel — it is flat at street level",
-          "",
-          "Key preserved feature: the red parcel outline is JUST A LINE on flat ground. Not a wall. Not a pad. Not a building. Just a flat red line on the earth.",
-          "",
-          "Render as if a professional architectural visualizer did a final photoreal pass — not a redesign.",
-
+          "STRICT EDIT ONLY. This is a 3D axonometric urban planning site plan render.",
+          "PRESERVE EXACT: camera angle, perspective, building positions, building shapes, building count, road layout, parcel geometry, image framing, image dimensions.",
+          "Do NOT move, add, remove, or redesign any building.",
+          "Do NOT change the camera angle or perspective.",
+          "Do NOT add people, vehicles, text, labels, or watermarks.",
+          "Apply ONLY these specific enhancements:",
+          "1. Replace the simple green sphere trees with realistic architectural maquette-style trees (same positions, same sizes, natural leafy canopy).",
+          "2. Add subtle realistic shadows under buildings (soft, natural afternoon light from the south).",
+          "3. Give the white/light buildings a subtle clean matte concrete texture (keep them white/light, do not darken them).",
+          "4. Enhance the green grass ground with subtle natural grass texture (keep the same green tone).",
+          "5. Refine road surfaces with subtle asphalt texture.",
+          "6. Overall warm afternoon lighting with gentle ambient occlusion.",
+          "Style: premium architectural maquette visualization. Clean, professional, minimal. No artistic effects, no painterly style.",
+          "The buildings must remain in the EXACT SAME positions. The layout must be IDENTICAL."
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
         const polishResults = await Promise.all(
@@ -5904,7 +5706,7 @@ app.post("/generate", async (req, res) => {
           drawLegendCompass(finalCtx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
-          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced_${UPLOAD_TS}.png`;
+          const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced.png`;
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
@@ -6003,33 +5805,6 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.29] LABEL from body scan: "${label}"`);
   }
   console.log(`[v72.29] ═══ LABEL FINAL: "${label}" ═══ (massing_label="${massing_label}", slide_name="${slide_name}")`);
-  // ═══════════════════════════════════════════════════════════════════════════
-  // v72.103 EARLY GUARD — simple mode detection AVANT toute autre logique
-  // Si le client veut pure résidentiel + volume unique, on force simple mode :
-  //   - pas de commerce (commerceLevels sera 0)
-  //   - pas de pilotis (has_pilotis sera false)
-  //   - pas de split (splitLayout sera null)
-  //   - layout_mode forcé à SUPERPOSE
-  // Cela empêche les chemins downstream de ré-activer du commerce/split/pilotis.
-  // ═══════════════════════════════════════════════════════════════════════════
-  try {
-    const _dispoEarly = String((req.body && req.body.Disposition) || (req.body && req.body.disposition) || "").toLowerCase();
-    const _progEarly = String((req.body && req.body.target_program) || "").toLowerCase();
-    const _wantsSingle = /seul\s*b.?timent|un\s*seul|single\s*building/i.test(_dispoEarly);
-    const _isPureResi = /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(_progEarly)
-                      && !/mixte|mixed|commerce|bureau|activite/i.test(_progEarly);
-    if (_wantsSingle && _isPureResi) {
-      console.log(`[v72.103 EARLY GUARD ${label}] ⚡ SIMPLE MODE activé : pure résidentiel + volume unique`);
-      console.log(`  → force layout_mode=SUPERPOSE, commerce_raw=0, skip_split=true`);
-      req.body.layout_mode = "SUPERPOSE";
-      req.body.commerce_levels = 0;
-      req.body.commerce_raw = 0;
-      req.body.consider_site_empty = req.body.consider_site_empty || "true";
-    }
-  } catch (_earlyErr) {
-    console.warn(`[v72.103 EARLY GUARD] non-fatal:`, _earlyErr.message);
-  }
-  // ═══════════════════════════════════════════════════════════════════════════
   // v72.24: DÉTECTION PROPRE programme mixte + disposition SPLIT
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
@@ -6199,65 +5974,65 @@ app.post("/generate-massing", async (req, res) => {
     console.log(`[v72.32] SPLIT levels sync: levels=${levels} (logement seul, depuis splitLayout.volume_logement.levels)`);
   }
   // ═══════════════════════════════════════════════════════════════════════════
-  // v72.101 PROGRAM LOCK (bulletproof + defensive) — Respect strict du programme client
-  // Try/catch + typeof sur TOUTES les variables → jamais de crash runtime.
+  // v72.99 PROGRAM LOCK (bulletproof) — garde-fou final pour respecter strictement le
+  // programme saisi par le client dans son formulaire.
+  // FILTRES :
+  //   F1. Inputs client ≠ mixte/split → commerce=0, pilotis=false, split=null
+  //   F2. Disposition="Tout dans un seul bâtiment" → split=null
+  //   F3. target_program résidentiel pur (Petit collectif, etc.) → commerce=0
+  //   F4. Terrain nu + pas de pilotis demandé → has_pilotis=false
+  //   F5. target_units > résultat moteur → warning log
   // ═══════════════════════════════════════════════════════════════════════════
-  try {
-    const _dispositionRaw = String((req.body && req.body.Disposition) || (req.body && req.body.disposition) || "").toLowerCase();
-    const _targetProgRaw = String((req.body && req.body.target_program) || "").toLowerCase();
-    const _supportTypeRaw = String((req.body && req.body.support_type) || "").toUpperCase();
-    const _clientWantsSingleVolume = /seul\s*b.?timent|seul\s*batiment|un\s*seul|single\s*building/i.test(_dispositionRaw);
-    const _clientProgramIsPureResidential = (
-      /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(_targetProgRaw)
-      && !/mixte|mixed|commerce|bureau|activite/i.test(_targetProgRaw)
-    );
-    const _clientWantsPilotis = /pilotis|rdc.?ouvert|rdc.?libere/i.test(_dispositionRaw);
-    const _isTerrainNu = _supportTypeRaw.includes("TERRAIN_NU");
-    const _before = {
-      commerce: (typeof commerceLevels !== "undefined" ? commerceLevels : 0),
-      pilotis: (typeof has_pilotis !== "undefined" ? has_pilotis : false),
-      split: (typeof splitLayout !== "undefined" && splitLayout ? true : false),
-    };
-    const _bodyHasMixte = (typeof bodyHasMixte !== "undefined") ? bodyHasMixte : false;
-    const _splitActive = (typeof splitActive !== "undefined") ? splitActive : false;
-    if (!_bodyHasMixte && !_splitActive) {
-      if (typeof commerceLevels !== "undefined") commerceLevels = 0;
-      if (typeof splitLayout !== "undefined") splitLayout = null;
-      if (typeof has_pilotis !== "undefined" && !_clientWantsPilotis) has_pilotis = false;
-    }
-    if (_clientWantsSingleVolume && typeof splitLayout !== "undefined") {
-      splitLayout = null;
-    }
-    if (_clientProgramIsPureResidential) {
-      if (typeof commerceLevels !== "undefined") commerceLevels = 0;
-      if (typeof splitLayout !== "undefined") splitLayout = null;
-    }
-    if (_isTerrainNu && !_clientWantsPilotis && typeof has_pilotis !== "undefined") {
-      has_pilotis = false;
-    }
-    const _clientTargetUnits = Number((req.body && req.body.target_units)) || 0;
-    const _totalUnitsResult = (typeof totalUnitsResult !== "undefined") ? totalUnitsResult : 0;
-    let _unitsWarning = "";
-    if (_clientTargetUnits > 0 && _totalUnitsResult > _clientTargetUnits) {
-      _unitsWarning = ` (client ${_clientTargetUnits} logements, moteur ${_totalUnitsResult})`;
-    }
-    const _changed = (_before.commerce !== (typeof commerceLevels !== "undefined" ? commerceLevels : 0))
-                  || (_before.pilotis !== (typeof has_pilotis !== "undefined" ? has_pilotis : false))
-                  || (_before.split !== (typeof splitLayout !== "undefined" && splitLayout ? true : false));
-    if (_changed || _unitsWarning) {
-      const _label = (typeof label !== "undefined") ? label : "?";
-      console.log(`[v72.101 PROGRAM LOCK ${_label}] overrides appliqués :`);
-      console.log(`  commerce : ${_before.commerce} → ${typeof commerceLevels !== "undefined" ? commerceLevels : "undef"}`);
-      console.log(`  pilotis  : ${_before.pilotis} → ${typeof has_pilotis !== "undefined" ? has_pilotis : "undef"}`);
-      console.log(`  split    : ${_before.split} → ${typeof splitLayout !== "undefined" && splitLayout ? true : false}`);
-      if (_unitsWarning) console.log(`  units    :${_unitsWarning}`);
-      console.log(`  [ctx] mixte=${_bodyHasMixte} split=${_splitActive} singleVol=${_clientWantsSingleVolume} pureResi=${_clientProgramIsPureResidential} terrainNu=${_isTerrainNu}`);
-    }
-  } catch (lockErr) {
-    console.error(`[v72.101 PROGRAM LOCK] ERROR non-fatal, render continue:`, lockErr.message);
+  const dispositionRaw = String(req.body.Disposition || req.body.disposition || "").toLowerCase();
+  const targetProgRaw = String(req.body.target_program || "").toLowerCase();
+  const supportTypeRaw = String(req.body.support_type || "").toUpperCase();
+  const clientWantsSingleVolume = /seul\s*b.?timent|seul\s*batiment|un\s*seul|single\s*building/i.test(dispositionRaw);
+  const clientProgramIsPureResidential = (
+    /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(targetProgRaw)
+    && !/mixte|mixed|commerce|bureau|activite/i.test(targetProgRaw)
+  );
+  const clientWantsPilotis = /pilotis|rdc.?ouvert|rdc.?libere/i.test(dispositionRaw);
+  const isTerrainNuMassing = supportTypeRaw.includes("TERRAIN_NU");
+  const lockBefore = { commerce: commerceLevels, pilotis: has_pilotis, split: !!splitLayout, totalUnits: totalUnitsResult };
+  // F1 : pas mixte/split dans inputs client → neutraliser
+  if (!bodyHasMixte && !splitActive) {
+    commerceLevels = 0;
+    splitLayout = null;
+    if (!clientWantsPilotis) has_pilotis = false;
   }
-  // ═══════════════════════════════════════════════════════════════════════════
+  // F2 : volume unique demandé → pas de split
+  if (clientWantsSingleVolume) {
+    splitLayout = null;
+  }
+  // F3 : programme résidentiel pur → pas de commerce
+  if (clientProgramIsPureResidential) {
+    commerceLevels = 0;
+    splitLayout = null;
+  }
+  // F4 : terrain nu + pas de demande explicite pilotis → pas de pilotis
+  if (isTerrainNuMassing && !clientWantsPilotis) {
+    has_pilotis = false;
+  }
+  // F5 : cap des unités
+  try {
+  const clientTargetUnits = Number(req.body.target_units) || 0;
+  let unitsWarning = "";
+  if (clientTargetUnits > 0 && totalUnitsResult > clientTargetUnits) {
+    unitsWarning = ` (client ${clientTargetUnits} logements, moteur ${totalUnitsResult})`;
+  }
+  const lockChanged = (lockBefore.commerce !== commerceLevels) || (lockBefore.pilotis !== has_pilotis) || (lockBefore.split !== !!splitLayout);
+  if (lockChanged || unitsWarning) {
+    console.log(`[v72.99 PROGRAM LOCK (bulletproof) ${label}] overrides:`);
+    if (lockBefore.commerce !== commerceLevels) console.log(`  commerce: ${lockBefore.commerce} → ${commerceLevels}`);
+    if (lockBefore.pilotis !== has_pilotis) console.log(`  pilotis: ${lockBefore.pilotis} → ${has_pilotis}`);
+    if (lockBefore.split !== !!splitLayout) console.log(`  split: ${lockBefore.split} → ${!!splitLayout}`);
+    if (unitsWarning) console.log(`  units:${unitsWarning}`);
+    console.log(`  [contexte] mixte=${bodyHasMixte} split=${splitActive} singleVol=${clientWantsSingleVolume} pureResi=${clientProgramIsPureResidential} terrainNu=${isTerrainNuMassing}`);
+  }
 
+  } catch (lockErr) {
+    console.error(`[v72.99 PROGRAM LOCK] ERROR (non-fatal, continuing render):`, lockErr.message);
+  }
   const slideName = slide_name || ("massing_" + label.toLowerCase());
   const commerceH = commerceLevels * floorH;
   const habitationLevels = splitLayout ? levels : levels - commerceLevels;
@@ -6333,9 +6108,8 @@ app.post("/generate-massing", async (req, res) => {
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const folder = `hektar/${String(lead_id).trim()}_${slug}`;
-    const UPLOAD_TS = Date.now();
-  const basePath = `${folder}/${slideName}_${UPLOAD_TS}.png`;
-  const enhancedPath = `${folder}/${slideName}_enhanced_${UPLOAD_TS}.png`;
+  const basePath = `${folder}/${slideName}.png`;
+  const enhancedPath = `${folder}/${slideName}_enhanced.png`;
   // Cache disabled for debugging
   let browser;
   try {
@@ -6371,13 +6145,14 @@ app.post("/generate-massing", async (req, res) => {
     const pilotisH = (hasPilotisRender && !useSplit3D) ? 3.5 : 0; // SPLIT gère pilotis dans realTotalH
     const totalHWithPilotis = realTotalH + pilotisH;
     // v72.26: En mode SPLIT, massingCoords = logement (en retrait), commerceCoords = devant (depuis enveloppe)
-    const html = await generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
+    const html = generateMassingHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords,
       massingCoords,
       { total_height: totalHWithPilotis, commerce_levels: commerceLevels, floor_height: etageH, rdc_height: rdcH, accent_color: accentColor, levels: levels, has_pilotis: hasPilotisRender, pilotis_height: pilotisH,
         split_layout: useSplit3D ? splitLayout : null,
         commerce_coords: useSplit3D ? commerceCoords : null }, MAPBOX_TOKEN);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
+    // v72.149: Increased timeout from 25s → 40s for massing rendering reliability
+    await page.waitForFunction("window.__MAP_READY === true", { timeout: 40000 });
     // v72.22: Attendre un peu plus pour que les tuiles soient bien peintes
     await new Promise(r => setTimeout(r, 1500));
     // clip en CSS pixels (1280×1280) → Puppeteer produit PNG 2560×2560 grâce à deviceScaleFactor: 2
@@ -6416,18 +6191,12 @@ app.post("/generate-massing", async (req, res) => {
     ctx.drawImage(img, 0, 0, W, H);
     // v65.2: Image SANS overlays pour le polish AI (éviter dédoublement)
     const pngClean = canvas.toBuffer("image/png");
-    // v72.102: fp RDC (pour annotations cohérentes avec engine)
-    const fp_m2_raw_used_rdc = (typeof fp_m2_raw !== "undefined" && fp_m2_raw)
-      ? Number(fp_m2_raw)
-      : (typeof sc !== "undefined" && sc && sc.fp_rdc_m2) ? sc.fp_rdc_m2 : fp;
     // Version avec overlays (fallback si pas d'AI polish)
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
       levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
       total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
       typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
-      fp_rdc_m2: Math.round(Number(fp_m2_raw_used_rdc) || fp),
-      fp_etages_m2: Math.round(fp),
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -6439,19 +6208,16 @@ app.post("/generate-massing", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     const MASSING_VARIATIONS = 1; // v72.93: reduced from 2 → 1 (saves 30-60s, stays in Make.com budget)
     let polishApplied = false;
-    // v72.93: TIME BUDGET GUARD — skip polish if we've already spent too long
+    // v72.149: MASSING ALWAYS SKIPS POLISH — Make.com 60s timeout protection
     const elapsedBeforePolish = Date.now() - t0;
-    const skipPolishFlag = String(skip_polish).toLowerCase() === "true" || skip_polish === true;
-    if (skipPolishFlag) {
+    const skipPolishFlag = String(skip_polish).toLowerCase() === "true" || skip_polish === true || MASSING_SKIP_POLISH === true;
+    if (MASSING_SKIP_POLISH === true) {
+      console.log(`[MASSING-POLISH] v72.149: MASSING_SKIP_POLISH=true → ALWAYS SKIP for Make.com reliability (deterministic only)`);
+    } else if (skipPolishFlag) {
       console.log(`[MASSING-POLISH] v72.93: skip_polish=true → SKIPPING AI polish (deterministic render only)`);
     } else if (elapsedBeforePolish > POLISH_TIME_BUDGET_MS) {
       console.log(`[MASSING-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(elapsedBeforePolish/1000)}s already spent (limit ${POLISH_TIME_BUDGET_MS/1000}s) → SKIPPING polish`);
     }
-    // v72.107: POLISH MASSING DÉSACTIVÉ définitivement pour stabilité maximale.
-    // Le rendu déterministe (Mapbox + overlays) est la seule source de vérité.
-    // Aucune possibilité d'hallucination IA (socle, commerce fantôme, flottement, etc.).
-    // Pour réactiver plus tard : remplacer la condition `false` par l'ancienne.
-    console.log(`[MASSING-POLISH v72.107] ⚡ Polish désactivé pour stabilité max — rendu déterministe uniquement`);
     if (OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[MASSING-POLISH] v72.34: Starting robust multi-render (${MASSING_VARIATIONS} variations) for ${label}... model=${POLISH_MODEL}`);
@@ -6459,36 +6225,21 @@ app.post("/generate-massing", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[MASSING-POLISH] ${label} input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // v72.105: Adaptive prompt — no mention of orange if commerce=0 (évite hallucination IA)
-        const _colorInstruction = (commerceLevels === 0)
-          ? `STRICT COLOR AND GROUNDING CONSTRAINT: The building has ONLY BLUE floors (100% residential, NO commerce).
-- ALL floors are BLUE (#3a7ac0) — there is NO ORANGE anywhere in the building.
-- Do NOT add any orange, brown, red, or warm-colored elements to the building.
-- The building is a pure BLUE volume, period. Any orange/warm tone = HALLUCINATION = FORBIDDEN.
-GROUNDING RULES (CRITICAL):
-- The building MUST sit DIRECTLY on the ground (grass or parcel surface). NO gap, NO shadow gap, NO raised socle.
-- Do NOT add any platform, plinth, pedestal, base, raised floor, colored slab, or elevated plateau under the building.
-- Do NOT fill the parcel area with any colored surface that would appear raised above ground level.
-- The parcel outline (red dashed line) is JUST a line on the ground — do NOT extrude it, do NOT fill it, do NOT add texture to it.
-- The building's bottom edge MUST touch the ground plane — zero elevation, zero floating.
-- If you render any platform or raised surface under the building, that is a HALLUCINATION and FORBIDDEN.
-- Ground (grass/parcel) may have natural warm tones, but there must be NO visible raised element between the ground and the building.`
-          : `CRITICAL COLOR PRESERVATION:
-- The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
-- These colors MUST remain vivid and clearly distinguishable after polish.
-- Do NOT wash out, desaturate, or unify the floor colors.
-- Do NOT turn orange or blue floors into beige, gray, or white.
-- The color difference between floor types is essential information — preserve it exactly.`;
-        let massingPolishPrompt = `STRICT EDIT ONLY. VERY SUBTLE, GENTLE, NON-AGGRESSIVE POLISH ONLY.
-Your polish must be BARELY VISIBLE — only slight tonal harmonization, minimal contrast improvement, soft ambient occlusion.
-Do NOT make dramatic changes. Do NOT add new elements. Do NOT reinterpret the scene.
+        // v72.4: Stronger color preservation for floor coding
+        let massingPolishPrompt = `STRICT EDIT ONLY.
 
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
 Do NOT modify, move, add, or remove ANY element.
 Do NOT change building shapes, positions, sizes, count.
 Do NOT reinterpret, redesign, or restyle the scene.
 NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
-${_colorInstruction}
+
+CRITICAL COLOR PRESERVATION:
+- The building has colored floor bands: ORANGE floors (commerce) and BLUE floors (habitation).
+- These colors MUST remain vivid and clearly distinguishable after polish.
+- Do NOT wash out, desaturate, or unify the floor colors.
+- Do NOT turn orange or blue floors into beige, gray, or white.
+- The color difference between floor types is essential information — preserve it exactly.
 
 Apply ONLY these subtle non-structural adjustments:
 - Very slight tonal harmonization (uniform warm balance) — but KEEP floor colors intact
@@ -6540,8 +6291,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
           }
           const enhancedBuf = Buffer.from(result.b64, "base64");
           // Massing uses default threshold (0.25) — light polish
-          // v72.108: drift threshold 0.15
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.15);
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H);
           // v72.22: COLOR PRESERVATION CHECK — verify orange and blue floor bands survived
           let colorCheckPassed = true;
           let colorLog = "";
@@ -6596,7 +6346,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
             typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
           });
           const finalPng = finalCtx.canvas.toBuffer("image/png");
-          const enhancedPath = `${folder}/${slideName}_enhanced_${UPLOAD_TS}.png`;
+          const enhancedPath = `${folder}/${slideName}_enhanced.png`;
           const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
           if (!ue2) {
             const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
@@ -6613,9 +6363,9 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
     } else {
       console.warn(`[MASSING-POLISH] OPENAI_API_KEY not set — skipping polish`);
     }
-    console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
+    console.log(`[MASSING] v72.149: ${label} complete — polish=DISABLED (deterministic only) (${Date.now() - t0}ms)`);
     return res.json({
-      ok: true, cached: false, server_version: "72.34-SUPERVISOR",
+      ok: true, cached: false, server_version: "72.149-MASSING-NO-POLISH",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
       polish_applied: polishApplied,
       massing_label: label, fp_m2: fp,
@@ -8397,10 +8147,4 @@ app.post("/generate-pptx", async (req, res) => {
   }
 });
 
-// ─── START ─────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`BARLO v72.148-stable on port ${PORT}`);
-  console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
-  console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
-  console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
-});
+// ─── START ────────────────────────────────────────────────────�
