@@ -2119,7 +2119,7 @@ function computeSmartScenarios({
 
       if (targetSdp > 0) {
         // Target-anchored: divide target SDP by estimated levels to derive footprint
-        const estimatedLevels = max_levels_cap || 3;
+        const estimatedLevels = effectiveMaxFloors || 3;
         const fpBase = targetSdp / estimatedLevels;
         fpRdc = Math.round(fpBase * TARGET_FP_FACTOR[role]);
 
