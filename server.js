@@ -138,7 +138,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.153-target-anchored" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.156-typology-driven" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -754,6 +754,26 @@ const ETAGE_EXTENSION_BY_ROLE = {
   EQUILIBRE: 1.00,         // fp_etages = fp_rdc (pas d'extension)
   PRUDENT: 1.00,           // v72.82: fp_etages = fp_rdc (pas de réduction, T3 doit rentrer)
 };
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.156: TYPOLOGY-DRIVEN SCENARIO CALCULATION
+// Apartment sizes by typology and standing level (architect's programme is source of truth)
+// ══════════════════════════════════════════════════════════════════════════════
+const APARTMENT_SIZE_GRID = {
+  T1: { ECONOMIQUE: 30, STANDARD: 35, CONFORT: 40, PREMIUM: 45 },
+  T2: { ECONOMIQUE: 45, STANDARD: 50, CONFORT: 60, PREMIUM: 70 },
+  T3: { ECONOMIQUE: 65, STANDARD: 75, CONFORT: 90, PREMIUM: 105 },
+  T4: { ECONOMIQUE: 80, STANDARD: 90, CONFORT: 110, PREMIUM: 135 },
+  T5: { ECONOMIQUE: 95, STANDARD: 105, CONFORT: 130, PREMIUM: 160 }
+};
+
+const COMMERCE_SIZE_BY_STANDING = {
+  ECONOMIQUE: 40,
+  STANDARD: 50,
+  CONFORT: 60,
+  PREMIUM: 80
+};
+
+const CIRCULATION_COEFFICIENT = 1.15;
 // ══════════════════════════════════════════════════════════════════════════════
 // Le CES réglementaire = max autorisé, PAS ce qu'on doit construire.
 // En pratique, on réserve toujours de l'espace au sol pour :
@@ -1425,6 +1445,52 @@ function levelMultiplier(role) {
 // EQUILIBRE vise 70-90% du COS
 // PRUDENT ne dépasse jamais 80% du COS
 const COS_CAP_BY_ROLE = { INTENSIFICATION: 1.05, EQUILIBRE: 0.90, PRUDENT: 0.80 };
+// ══════════════════════════════════════════════════════════════════════════════
+// v72.156: Typology parser and SDP computation
+// ══════════════════════════════════════════════════════════════════════════════
+function parseTypologies(typologiesString) {
+  if (!typologiesString || typeof typologiesString !== 'string') return [];
+  // Parse "T3=2; T2=4" → [{type:"T3",count:2},{type:"T2",count:4}]
+  return typologiesString
+    .split(/[;,\s]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .map(s => {
+      const m = s.match(/^(T[1-5])\s*=\s*(\d+)$/i);
+      if (!m) return null;
+      return { type: m[1].toUpperCase(), count: parseInt(m[2], 10) };
+    })
+    .filter(Boolean);
+}
+
+function computeTypologyDrivenSdp(typologiesString, standing, targetUnitsFallback, commerceOverride) {
+  const standingNorm = (standing || 'ECONOMIQUE').toUpperCase();
+  let typologies = parseTypologies(typologiesString);
+
+  // Fallback: if empty, use T3 × target_units
+  if (typologies.length === 0 && targetUnitsFallback > 0) {
+    typologies = [{ type: 'T3', count: targetUnitsFallback }];
+  }
+
+  // Sum residential surface
+  let surfaceResidentielle = 0;
+  for (const { type, count } of typologies) {
+    const sizeRow = APARTMENT_SIZE_GRID[type];
+    if (!sizeRow) continue;
+    const size = sizeRow[standingNorm] || sizeRow.ECONOMIQUE;
+    surfaceResidentielle += count * size;
+  }
+
+  // Commerce
+  const commerceSize = (commerceOverride && commerceOverride > 0)
+    ? commerceOverride
+    : (COMMERCE_SIZE_BY_STANDING[standingNorm] || 40);
+
+  // Total with circulation coefficient
+  const targetSdp = Math.round(surfaceResidentielle * CIRCULATION_COEFFICIENT + commerceSize);
+  return { targetSdp, surfaceResidentielle, commerceSize };
+}
+
 function computeSmartScenarios({
   site_area, envelope_w, envelope_d, envelope_area: env_area_override,
   zoning_type = "URBAIN", floor_height = 3.2,
@@ -2113,26 +2179,35 @@ function computeSmartScenarios({
         console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
         console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
       } else {
-      // ── MODE SUPERPOSÉ (défaut) — v72.153: target-anchored or legacy logic ──
-      // v72.153: NEW target-anchored scenario calculation
-      const targetSdp = Number(target_surface_m2) || 0;
+            // ── MODE SUPERPOSÉ (défaut) — v72.156: typology-driven or legacy logic ──
+      // v72.156: Typology-driven scenario calculation
+      const inputTypologies = String(req.body.input_typologies || req.body.typologies_raw || '');
+      const standingLevel = String(req.body.standing_level || 'ECONOMIQUE');
+      const targetUnitsCount = Number(req.body.target_units) || 2;
+      const commerceOverride = Number(req.body.commerce_size_m2) || 0;
 
-      if (targetSdp > 0) {
-        // Target-anchored: divide target SDP by estimated levels to derive footprint
+      const { targetSdp: typoSdp, surfaceResidentielle, commerceSize } = computeTypologyDrivenSdp(
+        inputTypologies, standingLevel, targetUnitsCount, commerceOverride
+      );
+
+      // Use typology-driven targetSdp (overrides any user-provided target_surface_m2 if typology is given)
+      const effectiveTargetSdp = typoSdp > 0 ? typoSdp : (Number(target_surface_m2) || 0);
+
+      if (effectiveTargetSdp > 0) {
+        console.log(`│   v72.156 TYPOLOGY-DRIVEN: input="${inputTypologies}" standing=${standingLevel} → résidentiel=${surfaceResidentielle}m² × 1.15 + commerce=${commerceSize}m² = targetSdp=${effectiveTargetSdp}m²`);
+
         const estimatedLevels = effectiveMaxFloors || 3;
-        const fpBase = targetSdp / estimatedLevels;
+        const fpBase = effectiveTargetSdp / estimatedLevels;
         fpRdc = Math.round(fpBase * TARGET_FP_FACTOR[role]);
 
-        // Safety bounds: don't exceed legal max, don't go below economically viable
-        const floor = Math.round(fpMaxEnv * 0.40);
+        // Lighter safety bounds (don't override architect's wish too aggressively)
         const ceiling = fpMaxEnv;
-        fpRdc = Math.max(floor, Math.min(fpRdc, ceiling));
-
-        console.log(`│   v72.153 TARGET-ANCHORED: targetSdp=${targetSdp}m² / ${estimatedLevels}niv = fpBase=${Math.round(fpBase)}m² × TARGET_FP_FACTOR[${role}]=${TARGET_FP_FACTOR[role]} → fpRdc=${fpRdc}m² (bounded [${floor}, ${ceiling}])`);
+        fpRdc = Math.min(fpRdc, ceiling);
+        // No floor: respect architect's choice even if it's compact
       } else {
-        // Fallback: legacy logic (% of programme)
+        // Legacy fallback
         fpRdc = Math.round(fpProgramme * roleFpFactor);
-        console.log(`│   v72.153 LEGACY FALLBACK: no targetSdp → fpRdc = fpProgramme×roleFpFactor = ${fpProgramme}×${roleFpFactor} = ${fpRdc}m²`);
+        console.log(`│   v72.156 LEGACY FALLBACK: no typology/target → fpProgramme=${fpProgramme}×${roleFpFactor} = ${fpRdc}m²`);
       }
 
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
@@ -2140,11 +2215,18 @@ function computeSmartScenarios({
       // v72.82 FIX: fpMinForRole BASÉ SUR LE PROGRAMME RÉEL
       // Garantit que 1 unité résidentielle rentre physiquement par étage
       // La différenciation A/B/C vient des TAILLES d'unités (avgResSize), pas d'un ratio arbitraire
-      const minEmpriseForOneUnit = Math.ceil(avgResSize / (1 - circRatio));
-      const fpMinForRole = Math.max(fpMinViable, minEmpriseForOneUnit);
-      fpRdc = Math.max(fpRdc, fpMinForRole);
+      // v72.156: GUARD — only apply minimum viable rule if typology-driven calc NOT used (legacy mode)
+      if (effectiveTargetSdp === 0) {
+        // Legacy mode: apply floor constraint
+        const minEmpriseForOneUnit = Math.ceil(avgResSize / (1 - circRatio));
+        const fpMinForRole = Math.max(fpMinViable, minEmpriseForOneUnit);
+        fpRdc = Math.max(fpRdc, fpMinForRole);
+        console.log(`│   v72.82 FIX: avgResSize=${avgResSize} → minEmprise1Unit=${minEmpriseForOneUnit} fpMinViable=${fpMinViable} → fpMinForRole=${fpMinForRole} → fpRdc=${fpRdc}`);
+      } else {
+        // Typology-driven mode: trust architect's input, don't force floor
+        console.log(`│   v72.156 TYPOLOGY-MODE: skip v72.82 floor constraint (trust architect's programme)`);
+      }
       fpRdc = Math.round(fpRdc);
-      console.log(`│   v72.82 FIX: avgResSize=${avgResSize} → minEmprise1Unit=${minEmpriseForOneUnit} fpMinViable=${fpMinViable} → fpMinForRole=${fpMinForRole} → fpRdc=${fpRdc}`);
       }
       const cesPctResult = Math.round((splitLayout ? (splitLayout.volume_commerce.fp_m2 + fpRdc) : fpRdc) / site_area * 100);
       const cesVsExpert = expertCesPct > 0 ? (cesPctResult >= expertCesPct ? "≥expert" : "<expert") : "";
@@ -8367,7 +8449,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.155-scenario-roles-corrected on port ${PORT}`);
+  console.log(`BARLO v72.156-typology-driven-scenarios on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
