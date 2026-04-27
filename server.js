@@ -4805,7 +4805,6 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     const buildingLayers = allLayers.filter(id => /build/i.test(id));
     console.log('[MASSING v72.126] building-related layers in style:', buildingLayers.join(', '));
 
-    }
     // v71: Parcelle — fond beige/sable + contour rouge
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     // v72.103: Fond parcelle TRANSPARENT dans massing (évite tinting orange par polish IA)
@@ -8346,7 +8345,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.151-massing-no-polish-no-within on port ${PORT}`);
+  console.log(`BARLO v72.152-massing-client-clean on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
