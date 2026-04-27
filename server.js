@@ -138,7 +138,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.128-DRIFT-75" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "72.153-target-anchored" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -1953,6 +1953,8 @@ function computeSmartScenarios({
       // ══════════════════════════════════════════════════════════════════
       const ROLE_FP_FACTOR = { INTENSIFICATION: 1.00, EQUILIBRE: 0.75, PRUDENT: 0.55 };
       const roleFpFactor = ROLE_FP_FACTOR[role] || 1.0;
+      // v72.153: NEW target-anchored factors (when target_surface_m2 provided)
+      const TARGET_FP_FACTOR = { INTENSIFICATION: 1.05, EQUILIBRE: 1.00, PRUDENT: 0.80 };
       // ══════════════════════════════════════════════════════════════════
       // v57.20 SPLIT_AV_AR : COMMERCE DEVANT (clôture) + LOGEMENT DERRIÈRE
       // ══════════════════════════════════════════════════════════════════
@@ -2111,8 +2113,28 @@ function computeSmartScenarios({
         console.log(`│     VOL.2 LOGEMENT: ${logtWidth}m×${logtDepthUsed}m = ${fpLogtFinal}m² × ${levelsLogt}niv (${totalResiUnits} logts)`);
         console.log(`│     CES total: ${cesTotalPct}% | espace arrière: ${espaceArriere}m²`);
       } else {
-      // ── MODE SUPERPOSÉ (défaut) — logique existante ──
-      fpRdc = Math.round(fpProgramme * roleFpFactor);
+      // ── MODE SUPERPOSÉ (défaut) — v72.153: target-anchored or legacy logic ──
+      // v72.153: NEW target-anchored scenario calculation
+      const targetSdp = Number(target_surface_m2) || 0;
+
+      if (targetSdp > 0) {
+        // Target-anchored: divide target SDP by estimated levels to derive footprint
+        const estimatedLevels = max_levels_cap || 3;
+        const fpBase = targetSdp / estimatedLevels;
+        fpRdc = Math.round(fpBase * TARGET_FP_FACTOR[role]);
+
+        // Safety bounds: don't exceed legal max, don't go below economically viable
+        const floor = Math.round(fpMaxEnv * 0.40);
+        const ceiling = fpMaxEnv;
+        fpRdc = Math.max(floor, Math.min(fpRdc, ceiling));
+
+        console.log(`│   v72.153 TARGET-ANCHORED: targetSdp=${targetSdp}m² / ${estimatedLevels}niv = fpBase=${Math.round(fpBase)}m² × TARGET_FP_FACTOR[${role}]=${TARGET_FP_FACTOR[role]} → fpRdc=${fpRdc}m² (bounded [${floor}, ${ceiling}])`);
+      } else {
+        // Fallback: legacy logic (% of programme)
+        fpRdc = Math.round(fpProgramme * roleFpFactor);
+        console.log(`│   v72.153 LEGACY FALLBACK: no targetSdp → fpRdc = fpProgramme×roleFpFactor = ${fpProgramme}×${roleFpFactor} = ${fpRdc}m²`);
+      }
+
       // Plafonds réglementaires (le terrain ne peut jamais aller au-delà)
       fpRdc = Math.min(fpRdc, fpMaxCes, fpMaxEnv, fpMaxRetraits);
       // v72.82 FIX: fpMinForRole BASÉ SUR LE PROGRAMME RÉEL
@@ -8345,7 +8367,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.152-massing-client-clean on port ${PORT}`);
+  console.log(`BARLO v72.153-target-anchored-scenarios on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
