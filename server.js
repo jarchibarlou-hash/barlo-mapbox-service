@@ -2199,7 +2199,19 @@ function computeSmartScenarios({
       if (effectiveTargetSdp > 0) {
         console.log(`│   v72.156 TYPOLOGY-DRIVEN: input="${inputTypologies}" standing=${standingLevel} → résidentiel=${surfaceResidentielle}m² × 1.15 + commerce=${commerceSize}m² = targetSdp=${effectiveTargetSdp}m²`);
 
-        const estimatedLevels = effectiveMaxFloors || 3;
+        // FIX 1 (v72.158): Auto-levels from typology
+        let calcLevels = effectiveMaxFloors || 3;
+        if (inputTypologies) {
+          const typo = parseTypologies(inputTypologies);
+          const units = typo.reduce((s,t) => s + t.count, 0);
+          const sn = (standingLevel || 'ECONOMIQUE').toUpperCase();
+          const as = (APARTMENT_SIZE_GRID.T3?.[sn]) || 65;
+          const fpE = Math.min(fpMaxCes, fpMaxEnv) * 0.7;
+          const pf = Math.max(1, Math.floor(fpE / as));
+          calcLevels = Math.ceil(units / pf) + (commerceSize ? 1 : 0);
+          calcLevels = Math.min(calcLevels, effectiveMaxFloors);
+        }
+        const estimatedLevels = calcLevels;
         const fpBase = effectiveTargetSdp / estimatedLevels;
         fpRdc = Math.round(fpBase * TARGET_FP_FACTOR[role]);
 
@@ -8455,7 +8467,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v72.156-typology-driven-scenarios on port ${PORT}`);
+  console.log(`BARLO v72.158-architectural-coherence-6-fixes-scenarios on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
