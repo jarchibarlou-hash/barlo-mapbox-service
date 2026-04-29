@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.1-zoom-x2" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.2-sdp-fix" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -2323,10 +2323,13 @@ function computeSmartScenarios({
     const totalLevelsWithPilotis = levels + pilotisLevels;
     const pilotisH = hasPilotis ? PILOTIS_CONFIG.PILOTIS_HEIGHT_M : 0;
     const height = Math.round((levels * floor_height + pilotisH) * 10) / 10;
-    // SDP duale : RDC + étages (si fpRdc/fpEtages définis), sinon classique
-    const sdp = (fpRdc && fpEtages && levels > 1)
-      ? fpRdc + fpEtages * (levels - 1)
-      : fp * levels;
+    // v73.1.2: SDP finale = target_sdp_programme (calcul propre v73) en mode program-driven
+    // Sinon (regulation-driven) : ancienne logique fpRdc + fpEtages × (levels-1) ou fp × levels
+    const sdp = (isProgramDriven && typeof target_sdp_programme === 'number' && target_sdp_programme > 0)
+      ? target_sdp_programme
+      : ((fpRdc && fpEtages && levels > 1)
+        ? fpRdc + fpEtages * (levels - 1)
+        : fp * levels);
     const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
     let compliance;
     if (cosRatio <= 1.05) compliance = "CONFORME";
@@ -8323,7 +8326,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.1-zoom-x2 on port ${PORT}`);
+  console.log(`BARLO v73.1.2-sdp-fix on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
