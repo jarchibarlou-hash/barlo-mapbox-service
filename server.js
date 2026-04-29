@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.6-debug-logs" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.7-sc-scope-fix" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5993,6 +5993,8 @@ app.post("/generate-massing", async (req, res) => {
   console.log(`[MASSING v72.25] └── FIN DÉTECTION ──`);
   // ── Déterminer les paramètres du scénario ──
   let fp, levels, totalH, commerceLevels, scenarioRole, accentColor, splitLayout = null, scenarioSdp = 0;
+  // v73.1.7: exporter sc.fp_rdc_m2 et sc.fp_etages_m2 hors du bloc if (sinon hors-scope)
+  let scFpRdc = null, scFpEtages = null;
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
@@ -6053,6 +6055,9 @@ app.post("/generate-massing", async (req, res) => {
     accentColor = sc.accent_color;
     splitLayout = sc.split_layout || null;
     scenarioSdp = sc.sdp_m2 || 0;  // v72.87: SDP réel du moteur (pour annotations)
+    // v73.1.7: exporter pour usage hors du bloc
+    scFpRdc = sc.fp_rdc_m2 || null;
+    scFpEtages = sc.fp_etages_m2 || null;
     console.log(`SMART MODE: ${label} → fp=${fp}m² levels=${levels} h=${totalH}m commerce=${commerceLevels} pilotis=${has_pilotis} layout=${splitLayout ? splitLayout.mode : "SUPERPOSE"} sdp=${scenarioSdp}m² (${sc.cos_compliance})`);
   } else {
     // MODE CLASSIQUE : valeurs de la sheet
@@ -6352,16 +6357,13 @@ app.post("/generate-massing", async (req, res) => {
     // v65.2: Image SANS overlays pour le polish AI (éviter dédoublement)
     const pngClean = canvas.toBuffer("image/png");
     // v72.102: fp RDC (pour annotations cohérentes avec engine)
-    // v73.1.5: en mode compute_scenario, prioriser sc.fp_rdc_m2 (valeur v73 propre)
-    // sur fp_m2_raw (valeur obsolète du payload). Sinon on perd la distinction commerce/logement
-    // pour C en SUPERPOSE (RDC=50 commerce vs étages=75 logement).
-    const fp_m2_raw_used_rdc = (compute_scenario && typeof sc !== "undefined" && sc && sc.fp_rdc_m2)
-      ? sc.fp_rdc_m2
+    // v73.1.7: utilise scFpRdc (exporté du bloc if) — sc lui-même est hors scope ici
+    const fp_m2_raw_used_rdc = (compute_scenario && scFpRdc)
+      ? scFpRdc
       : (typeof fp_m2_raw !== "undefined" && fp_m2_raw)
         ? Number(fp_m2_raw)
-        : (typeof sc !== "undefined" && sc && sc.fp_rdc_m2) ? sc.fp_rdc_m2 : fp;
-    // v73.1.6 DEBUG : tracer les valeurs critiques pour diagnostiquer pourquoi RDC C != 50
-    console.log(`[v73.1.6 DEBUG ${label}] compute_scenario=${compute_scenario} fp_m2_raw=${fp_m2_raw} | sc.fp_m2=${sc?.fp_m2} sc.fp_rdc_m2=${sc?.fp_rdc_m2} sc.fp_etages_m2=${sc?.fp_etages_m2} | fp(local)=${fp} | RESULT fp_m2_raw_used_rdc=${fp_m2_raw_used_rdc} → fp_rdc_m2_passed=${Math.round(Number(fp_m2_raw_used_rdc) || fp)} fp_etages_m2_passed=${Math.round(fp)}`);
+        : (scFpRdc) ? scFpRdc : fp;
+    // v73.1.7: log retiré (v73.1.6 utilisait sc hors-scope → crash).
     // Version avec overlays (fallback si pas d'AI polish)
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
@@ -6369,7 +6371,7 @@ app.post("/generate-massing", async (req, res) => {
       total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
       typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
       fp_rdc_m2: Math.round(Number(fp_m2_raw_used_rdc) || fp),
-      fp_etages_m2: Math.round(fp),
+      fp_etages_m2: Math.round((compute_scenario && scFpEtages) ? scFpEtages : fp),
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -8343,7 +8345,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.6-debug-logs on port ${PORT}`);
+  console.log(`BARLO v73.1.7-sc-scope-fix on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
