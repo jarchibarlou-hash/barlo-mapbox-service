@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.2-slide4-top-view" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.3-slide4-satellite" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4387,7 +4387,8 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
 }
 
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings, pitch = 58) {
+// v73.2.3 : ajout param mapStyle ('hektar' default | 'satellite' pour vue top)
+async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings, pitch = 58, mapStyle = "hektar") {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4559,7 +4560,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     ]
   };
   const map = new mapboxgl.Map({
-    container: 'map', style: hektarStyle,
+    container: 'map', style: ${mapStyle === "satellite" ? '"mapbox://styles/mapbox/satellite-streets-v12"' : 'hektarStyle'},
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: ${pitch},
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
@@ -5608,7 +5609,7 @@ app.post("/generate", async (req, res) => {
   const isTopView = String(view).toLowerCase() === "top";
   const effectivePitch = isTopView ? 0 : 58;
   const effectiveSlideName = isTopView ? "slide_4_top" : slide_name;
-  if (isTopView) console.log(`[GENERATE v73.2.2] view='top' → pitch=0, slide_name='slide_4_top', polish IA SKIP`);
+  if (isTopView) console.log(`[GENERATE v73.2.3] view='top' → pitch=0, style=satellite-streets-v12, slide_name='slide_4_top', polish IA SKIP`);
   // v72.98: terrain nu / démolition → masquer bâti existant
   const isEmptySite = String(support_type || "").toUpperCase().includes("TERRAIN_NU") ||
                       /DEMOLITION/i.test(String(project_type || "")) ||
@@ -5639,7 +5640,8 @@ app.post("/generate", async (req, res) => {
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite, effectivePitch);
+    const effectiveMapStyle = isTopView ? "satellite" : "hektar";
+    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite, effectivePitch, effectiveMapStyle);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -8367,9 +8369,8 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.2-slide4-top-view on port ${PORT}`);
+  console.log(`BARLO v73.2.3-slide4-satellite on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
 });
-
