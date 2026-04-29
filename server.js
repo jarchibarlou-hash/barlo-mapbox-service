@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.7-sc-scope-fix" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.8-clean-aerial-prompt" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5720,33 +5720,49 @@ app.post("/generate", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // ── ARCHITECTURAL POLISH PROMPT — v72.127: BALANCED PHOTOREALISM ─────────
+        // ── ARCHITECTURAL POLISH PROMPT — v73.1.8: CLEAN AERIAL (no informal settlement) ─────────
         const polishPrompt = [
-          "PHOTOREALISTIC ARCHITECTURAL POLISH — STRICT GEOMETRIC PRESERVATION:",
+          "PHOTOREALISTIC ARCHITECTURAL POLISH — CLEAN AERIAL VIEW STYLE:",
           "",
-          "Your task: transform this Mapbox 3D stylized render into a photorealistic architectural visualization with warm natural lighting, realistic material textures, soft shadows, and lush vegetation detail.",
+          "Your task: transform this Mapbox 3D stylized render into a clean, orderly, professional aerial visualization. Think 'contemporary suburban residential photography from a drone' — well-maintained middle-class neighborhood, NOT an informal settlement.",
           "",
-          "ALLOWED (encouraged, needed for realism):",
-          "- Convert geometric tree spheres into leafy realistic trees with foliage detail",
-          "- Add natural material textures to building facades (concrete, plaster, corrugated metal)",
-          "- Apply soft directional sunlight with realistic shadows on ground and façades",
-          "- Harmonize warm atmospheric color palette",
-          "- Add ground texture detail (grass variation, road asphalt grain, dirt paths)",
-          "- Sharpen fine edges while preserving building silhouettes",
+          "BUILDING STYLE (encouraged):",
+          "- Clean flat or low-slope roofs in concrete slab, painted metal sheet, or smooth tile — uniform, well-maintained",
+          "- White, beige, or light gray facades — coherent palette across all buildings",
+          "- Modern residential aesthetic: orderly, regular, finished construction quality",
+          "- ABSOLUTELY NO corrugated metal, NO rusty tin sheets, NO tarps, NO debris on roofs, NO patchwork, NO informal/slum/shanty aesthetic",
+          "",
+          "GROUND & VEGETATION (encouraged):",
+          "- Uniform mowed green grass — flat, healthy, even tone",
+          "- Round simple trees with uniform single-tone foliage (no wild bushy clumps)",
+          "- Clean smooth asphalt or concrete roads in light gray",
+          "- Subtle ground texture only — no gravel piles, dirt patches, or debris",
+          "",
+          "LIGHTING & ATMOSPHERE:",
+          "- NEUTRAL daylight (midday or overcast) — NOT golden hour, NOT warm sunset, NOT sepia",
+          "- Soft minimal shadows just enough to read volumes",
+          "- NO sun glare, NO bloom, NO atmospheric haze, NO orange/amber tint",
+          "- Daylight white balance, cool-to-neutral color temperature",
           "",
           "FORBIDDEN (absolute, zero tolerance):",
           "- Do NOT change the position, shape, height, or count of ANY building",
           "- Do NOT add NEW buildings, structures, walls, or volumes anywhere",
           "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D line ON the ground",
-          "- The inside of the red parcel outline is EMPTY GROUND (grass or bare earth) — never put a building, platform, socle, pad, or any volume there",
+          "- Do NOT alter the red setback band (semi-transparent red zone along one side of the parcel) — keep it visible and clean",
+          "- Do NOT modify or hallucinate the 'Recul Xm' text label — keep it readable in red",
+          "- The inside of the red parcel outline is EMPTY GROUND (grass) — never put a building, platform, socle, pad, or any volume there",
           "- Do NOT move, delete, or relocate anything",
           "- Do NOT change the camera angle, perspective, framing, or zoom",
           "- Do NOT add characters, vehicles, signage, or UI elements",
           "- Do NOT add a ground socle or elevation under the parcel — it is flat at street level",
+          "- Do NOT add any informal settlement aesthetic, slum elements, or chaotic textures",
           "",
-          "Key preserved feature: the red parcel outline is JUST A LINE on flat ground. Not a wall. Not a pad. Not a building. Just a flat red line on the earth.",
+          "Key preserved features:",
+          "- Red parcel outline = thin 2D red line on flat ground (not a wall, not a pad)",
+          "- Red semi-transparent setback band on the front edge",
+          "- 'Recul Xm' text label centered on the setback band",
           "",
-          "Render as if a professional architectural visualizer did a final photoreal pass — not a redesign.",
+          "Render as if a professional architectural visualizer did a final clean photoreal pass — orderly suburban, uniform, lisible.",
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
@@ -8345,7 +8361,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.7-sc-scope-fix on port ${PORT}`);
+  console.log(`BARLO v73.1.8-clean-aerial-prompt on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
