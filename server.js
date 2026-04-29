@@ -150,7 +150,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.4-slide4-top-pure" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.5-slide4-static-satellite" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4387,6 +4387,37 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   return commerceGPS;
 }
 
+// ─── v73.2.5 : Mapbox Static Images API (vraie raster satellite, pas vectoriel) ───
+async function fetchMapboxStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCoords, mapboxToken, width = 1280, height = 1280 }) {
+  const parcelArr = [...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]];
+  const envelopeArr = [...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]];
+  const geojson = {
+    type: "FeatureCollection",
+    features: [
+      // Parcelle : contour rouge, fill orange/sable transparent
+      { type: "Feature",
+        properties: { stroke: "#c84828", "stroke-width": 4, "stroke-opacity": 1, fill: "#e0c890", "fill-opacity": 0.30 },
+        geometry: { type: "Polygon", coordinates: [parcelArr] } },
+      // Zone constructible (recul) : contour beige fonce, fill beige plus opaque
+      { type: "Feature",
+        properties: { stroke: "#a07840", "stroke-width": 2, "stroke-opacity": 0.9, fill: "#b89860", "fill-opacity": 0.55 },
+        geometry: { type: "Polygon", coordinates: [envelopeArr] } }
+    ]
+  };
+  const encoded = encodeURIComponent(JSON.stringify(geojson));
+  // satellite-v9 = pure raster Maxar/DigitalGlobe (PAS satellite-streets-v12 vectoriel)
+  const url = `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/geojson(${encoded})/${cLon},${cLat},${zoom}/${width}x${height}@2x?access_token=${mapboxToken}`;
+  console.log(`[STATIC-TOP v73.2.5] URL length=${url.length}, fetching...`);
+  const r = await fetch(url);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`Mapbox Static API HTTP ${r.status}: ${text.slice(0, 200)}`);
+  }
+  const arrayBuffer = await r.arrayBuffer();
+  console.log(`[STATIC-TOP v73.2.5] OK ${arrayBuffer.byteLength} bytes`);
+  return Buffer.from(arrayBuffer);
+}
+
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
 // v73.2.3 : ajout param mapStyle ('hektar' default | 'satellite' pour vue top)
 async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings, pitch = 58, mapStyle = "hektar") {
@@ -5642,6 +5673,45 @@ app.post("/generate", async (req, res) => {
   // v70.1: Slide 4 TOUJOURS orienté nord en haut (bearing=0) pour repérage facile
   const bearing = 0;
   console.log(`zoom=${zoom} bearing=${bearing}° (NORD EN HAUT) pitch=${effectivePitch}° view=${view}`);
+
+    // v73.2.5 : view='top' → utiliser Mapbox Static Images API (vraie photo satellite raster)
+    // bypass complet du pipeline puppeteer/GL JS pour la slide 4 top view
+    if (isTopView) {
+      try {
+        const staticBuf = await fetchMapboxStaticTop({
+          cLat, cLon, zoom,
+          parcelCoords: coords,
+          envelopeCoords,
+          mapboxToken: MAPBOX_TOKEN,
+          width: 1280, height: 1280
+        });
+        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+        const UPLOAD_TS = Date.now();
+        const basePath = `hektar/${String(lead_id).trim()}_${slug}/${effectiveSlideName}_${UPLOAD_TS}.png`;
+        const { error: ue } = await sb.storage.from("massing-images").upload(basePath, staticBuf, { contentType: "image/png", upsert: true });
+        if (ue) {
+          console.error(`[STATIC-TOP v73.2.5] Supabase upload error: ${ue.message}`);
+          return res.status(500).json({ error: ue.message });
+        }
+        const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
+        const cb = `?v=${Date.now()}`;
+        console.log(`[STATIC-TOP v73.2.5] DONE in ${Date.now() - t0}ms — ${pd.publicUrl}`);
+        return res.json({
+          ok: true,
+          public_url: pd.publicUrl + cb,
+          enhanced_url: pd.publicUrl + cb,
+          path: basePath,
+          centroid: { lat: cLat, lon: cLon },
+          view: { zoom, bearing, pitch: 0, mode: "static-satellite-v9" },
+          duration_ms: Date.now() - t0
+        });
+      } catch (e) {
+        console.error(`[STATIC-TOP v73.2.5] ERROR: ${e.message}\n${e.stack}`);
+        return res.status(500).json({ error: `Static top view failed: ${e.message}` });
+      }
+    }
+
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
@@ -8417,7 +8487,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.4-slide4-top-pure on port ${PORT}`);
+  console.log(`BARLO v73.2.5-slide4-static-satellite on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
