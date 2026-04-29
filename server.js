@@ -605,9 +605,11 @@ function computeZoom(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  const mpp = (ext * 3.0) / 1280;
+  // v73.1.1: zoom ×2 — parcelle ~2/3 de l'image au lieu de 1/3 (multiplier 3.0 → 1.5)
+  // Bornes élargies de [16, 17.5] vers [17, 18.5] pour permettre le zoom plus serré
+  const mpp = (ext * 1.5) / 1280;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(17.5, Math.max(16, Math.round(z * 4) / 4));
+  return Math.min(18.5, Math.max(17, Math.round(z * 4) / 4));
 }
 function computeZoomMassing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
