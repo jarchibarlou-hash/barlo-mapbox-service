@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.0-pptx-pipeline" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.2-slide4-top-view" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4387,7 +4387,7 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
 }
 
 // ─── HTML MAPBOX GL — SLIDE 4 AXO ─────────────────────────────────────────────
-async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings) {
+async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings, pitch = 58) {
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
@@ -4560,7 +4560,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   };
   const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
-    center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
+    center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: ${pitch},
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
@@ -5601,7 +5601,14 @@ app.post("/generate", async (req, res) => {
     support_type,
     project_type,
     consider_site_empty,
+    // v73.2.2 : view='top' produit une vue verticale (pitch=0) sans polish IA, slide_name auto
+    view = "axo",
   } = req.body;
+  // v73.2.2 : si view='top' on force la vue verticale et un slide_name dedie
+  const isTopView = String(view).toLowerCase() === "top";
+  const effectivePitch = isTopView ? 0 : 58;
+  const effectiveSlideName = isTopView ? "slide_4_top" : slide_name;
+  if (isTopView) console.log(`[GENERATE v73.2.2] view='top' → pitch=0, slide_name='slide_4_top', polish IA SKIP`);
   // v72.98: terrain nu / démolition → masquer bâti existant
   const isEmptySite = String(support_type || "").toUpperCase().includes("TERRAIN_NU") ||
                       /DEMOLITION/i.test(String(project_type || "")) ||
@@ -5625,14 +5632,14 @@ app.post("/generate", async (req, res) => {
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   // v70.1: Slide 4 TOUJOURS orienté nord en haut (bearing=0) pour repérage facile
   const bearing = 0;
-  console.log(`zoom=${zoom} bearing=${bearing}° (NORD EN HAUT) pitch=58°`);
+  console.log(`zoom=${zoom} bearing=${bearing}° (NORD EN HAUT) pitch=${effectivePitch}° view=${view}`);
   let browser;
   try {
     browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
     console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
-    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite);
+    const html = await generateMapHTML({ lat: cLat, lon: cLon }, zoom, bearing, coords, envelopeCoords, MAPBOX_TOKEN, frontEdgeIndex, isEmptySite, effectivePitch);
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
@@ -5700,7 +5707,7 @@ app.post("/generate", async (req, res) => {
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
     console.log(`[SLIDE4-POLISH v72.100] Début polish à ${Math.round(slide4Elapsed/1000)}s`);
-    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY) {
+    if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY && !isTopView) {
       try {
         console.log(`[SLIDE4-POLISH] v72.34: Robust hybrid pipeline — ${SLIDE4_VARIATIONS} variations, drift threshold ${SLIDE4_DRIFT_THRESHOLD * 100}%, model=${POLISH_MODEL}`);
         // v72.34: Resize for API reliability
@@ -8360,8 +8367,9 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.0-pptx-pipeline on port ${PORT}`);
+  console.log(`BARLO v73.2.2-slide4-top-view on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
 });
+
