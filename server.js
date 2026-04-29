@@ -170,9 +170,9 @@ app.post("/diag-massing", async (req, res) => {
     // v70: front_edge en paramètre = override, sinon détection OSM
     const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
       ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
-      : await findNearestRoadEdge(coords, cLat, cLon);
+      : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
     // Enveloppe
-    const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
+    const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
     const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
     const envMinX = Math.min(...envM.map(p => p.x)), envMaxX = Math.max(...envM.map(p => p.x));
     const envMinY = Math.min(...envM.map(p => p.y)), envMaxY = Math.max(...envM.map(p => p.y));
@@ -4388,6 +4388,38 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
+  // v73.1: Zone de recul front matérialisée visuellement
+  // (bande entre arête 0 du polygone et arête 0 de l'enveloppe — convention "premier segment = front de rue")
+  const setbackFrontGeoJSON = {
+    type: "Feature",
+    geometry: {
+      type: "Polygon",
+      coordinates: [[
+        [parcelCoords[0].lon, parcelCoords[0].lat],
+        [parcelCoords[1].lon, parcelCoords[1].lat],
+        [envelopeCoords[1].lon, envelopeCoords[1].lat],
+        [envelopeCoords[0].lon, envelopeCoords[0].lat],
+        [parcelCoords[0].lon, parcelCoords[0].lat],
+      ]]
+    },
+  };
+  const _refLat73 = parcelCoords[0].lat;
+  const sbFrontM = Math.round(Math.sqrt(
+    Math.pow((parcelCoords[0].lat - envelopeCoords[0].lat) * 111000, 2) +
+    Math.pow((parcelCoords[0].lon - envelopeCoords[0].lon) * 111000 * Math.cos(_refLat73 * Math.PI / 180), 2)
+  ));
+  const setbackLabelGeoJSON = {
+    type: "Feature",
+    properties: { label: "Recul " + sbFrontM + "m" },
+    geometry: {
+      type: "Point",
+      coordinates: [
+        (parcelCoords[0].lon + parcelCoords[1].lon + envelopeCoords[0].lon + envelopeCoords[1].lon) / 4,
+        (parcelCoords[0].lat + parcelCoords[1].lat + envelopeCoords[0].lat + envelopeCoords[1].lat) / 4,
+      ],
+    },
+  };
+  console.log("│ SLIDE4 v73.1: zone de recul front " + sbFrontM + "m matérialisée");
   // v49: accès principal auto-détecté
   const access = computeAccessPoint(parcelCoords, center.lat, center.lon, frontEdgeIndex);
   const arrowLen = 8;
@@ -4627,6 +4659,26 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
       paint: { 'line-color': '#d04020', 'line-width': 4,
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
+    // v73.1: Zone de recul front — fill semi-transparent + contour pointillé + label "Recul Xm"
+    map.addSource('setback-front', { type: 'geojson', data: ${JSON.stringify(setbackFrontGeoJSON)} });
+    map.addLayer({ id: 'setback-front-fill', type: 'fill', source: 'setback-front',
+      paint: { 'fill-color': '#d04020', 'fill-opacity': 0.18 } });
+    map.addLayer({ id: 'setback-front-outline', type: 'line', source: 'setback-front',
+      paint: { 'line-color': '#d04020', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.7 } });
+    map.addSource('setback-label', { type: 'geojson', data: ${JSON.stringify(setbackLabelGeoJSON)} });
+    map.addLayer({ id: 'setback-label', type: 'symbol', source: 'setback-label',
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-size': 18,
+        'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+        'text-allow-overlap': true,
+      },
+      paint: {
+        'text-color': '#d04020',
+        'text-halo-color': '#ffffff',
+        'text-halo-width': 2.5,
+      }
+    });
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
   let rendered = false;
@@ -5574,8 +5626,8 @@ app.post("/generate", async (req, res) => {
   // v70: front_edge en paramètre = override, sinon détection OSM
   const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
     ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
-    : await findNearestRoadEdge(coords, cLat, cLon);
-  const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
+    : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
+  const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   // v70.1: Slide 4 TOUJOURS orienté nord en haut (bearing=0) pour repérage facile
   const bearing = 0;
@@ -6154,8 +6206,8 @@ app.post("/generate-massing", async (req, res) => {
   // v70: front_edge en paramètre = override, sinon détection OSM
   const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
     ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
-    : await findNearestRoadEdge(coords, cLat, cLon);
-  const envelopeCoords = computeEnvelope(coords, cLat, cLon, Number(setback_front), Number(setback_side), Number(setback_back), frontEdgeIndex);
+    : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
+  const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
   // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
   const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const envMinX = Math.min(...envPtsDbg.map(p => p.x)), envMaxX = Math.max(...envPtsDbg.map(p => p.x));
