@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.5-fp-rdc-C-zoom" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.6-debug-logs" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -6360,6 +6360,8 @@ app.post("/generate-massing", async (req, res) => {
       : (typeof fp_m2_raw !== "undefined" && fp_m2_raw)
         ? Number(fp_m2_raw)
         : (typeof sc !== "undefined" && sc && sc.fp_rdc_m2) ? sc.fp_rdc_m2 : fp;
+    // v73.1.6 DEBUG : tracer les valeurs critiques pour diagnostiquer pourquoi RDC C != 50
+    console.log(`[v73.1.6 DEBUG ${label}] compute_scenario=${compute_scenario} fp_m2_raw=${fp_m2_raw} | sc.fp_m2=${sc?.fp_m2} sc.fp_rdc_m2=${sc?.fp_rdc_m2} sc.fp_etages_m2=${sc?.fp_etages_m2} | fp(local)=${fp} | RESULT fp_m2_raw_used_rdc=${fp_m2_raw_used_rdc} → fp_rdc_m2_passed=${Math.round(Number(fp_m2_raw_used_rdc) || fp)} fp_etages_m2_passed=${Math.round(fp)}`);
     // Version avec overlays (fallback si pas d'AI polish)
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
@@ -8341,7 +8343,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.5-fp-rdc-C-zoom on port ${PORT}`);
+  console.log(`BARLO v73.1.6-debug-logs on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
