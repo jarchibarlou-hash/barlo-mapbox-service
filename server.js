@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.9-photoreal-no-text" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.10-axo-arch-style" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4652,15 +4652,14 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     // v72.100: Parcelle au niveau 0 — fond flat, pas d'extrusion
     map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
     // v72.108: parcel-fill transparent
+    // v73.1.10: parcelle SABLE/BEIGE (style image enhanced) + contour rouge pointillés
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
-      paint: { 'fill-color': '#d4c8a0', 'fill-opacity': 0.0 } });
-    // v72.114: DOUBLE-MASK — parcel zone masking layer (flat opaque ground cover to hide Mapbox buildings)
-    // v72.124: Make TRANSPARENT on slide 4 — replaced by intersect filter; remove visual tan pad
+      paint: { 'fill-color': '#e0c890', 'fill-opacity': 0.75 } });
     map.addLayer({ id: 'parcel-zone-mask', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#f5f0e1', 'fill-opacity': 0.0 } });
-    // Contour parcelle — rouge épais par-dessus
+    // Contour parcelle — rouge fin en pointillés (style axonométrie urbanistique)
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
-      paint: { 'line-color': '#d04020', 'line-width': 6, 'line-opacity': 1.0 } });
+      paint: { 'line-color': '#c84828', 'line-width': 3, 'line-dasharray': [4, 3], 'line-opacity': 1.0 } });
     // v70.8: Zone constructible (reculs) — tirets bien visibles
     map.addSource('envelope', { type: 'geojson', data: ${JSON.stringify(envelopeGeoJSON)} });
     map.addLayer({ id: 'envelope-outline', type: 'line', source: 'envelope',
@@ -4668,10 +4667,11 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
                'line-dasharray': [5, 3], 'line-opacity': 1.0 } });
     // v73.1: Zone de recul front — fill semi-transparent + contour pointillé + label "Recul Xm"
     map.addSource('setback-front', { type: 'geojson', data: ${JSON.stringify(setbackFrontGeoJSON)} });
+    // v73.1.10: zone de recul = bande BEIGE plus FONCÉ que le fond parcelle (contraste subtil)
     map.addLayer({ id: 'setback-front-fill', type: 'fill', source: 'setback-front',
-      paint: { 'fill-color': '#d04020', 'fill-opacity': 0.30 } });
+      paint: { 'fill-color': '#b89860', 'fill-opacity': 0.85 } });
     map.addLayer({ id: 'setback-front-outline', type: 'line', source: 'setback-front',
-      paint: { 'line-color': '#d04020', 'line-width': 2.5, 'line-dasharray': [3, 2], 'line-opacity': 0.9 } });
+      paint: { 'line-color': '#a07840', 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': 0.9 } });
     // v73.1.9: layer setback-label RETIRÉE (le label texte était systématiquement halluciné par le polish IA en gibberish style 'Nion 6br', 'RECULF'. La zone de recul reste visible via setback-front-fill + outline et la légende en haut à gauche du canvas.)
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
@@ -5709,54 +5709,56 @@ app.post("/generate", async (req, res) => {
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
         // ── ARCHITECTURAL POLISH PROMPT — v73.1.9: PHOTOREALISTIC CLEAN (sober, no painterly) ─────────
         const polishPrompt = [
-          "PHOTOREALISTIC AERIAL POLISH — CONTEMPORARY ARCHITECTURAL PHOTOGRAPHY:",
+          "ARCHITECTURAL AXONOMETRIC POLISH — CLEAN PROFESSIONAL 3D RENDER:",
           "",
-          "Your task: transform this Mapbox 3D stylized render into a SHARP photorealistic aerial photograph of a contemporary residential neighborhood. The output must look like a real drone photo, NOT a painting, NOT a sketch, NOT a comic illustration.",
+          "Your task: transform this Mapbox 3D base into a clean, professional architectural axonometric render — the visual style of a contemporary urban planning visualization (think SOM, BIG, or MVRDV master plan rendering). NOT a photo, NOT a painting, NOT a sketch — a clean 3D architectural render.",
           "",
-          "REQUIRED PHOTOGRAPHIC QUALITIES:",
-          "- Crisp sharp building edges with clean geometric lines (no painterly bleed, no fuzzy outlines)",
-          "- Realistic detailed material textures: smooth concrete, painted plaster, clean tile or painted metal roofs",
-          "- Photographic depth and clarity — like a 24MP DSLR aerial shot",
-          "- Subtle realistic shadows from soft midday daylight (not warm/golden, not stylized)",
-          "- Photorealistic but sober color palette: white, beige, light gray facades; muted greens for vegetation; light gray roads",
+          "REQUIRED VISUAL QUALITIES:",
+          "- Clean simple white-to-light-beige building volumes with crisp geometric edges",
+          "- Soft volumetric shadows on facades and ground — gentle, neutral grey",
+          "- Smooth uniform ground surfaces (no chaotic textures, no debris)",
+          "- Sober coherent palette: white/beige buildings, even green grass, light gray asphalt roads",
+          "- Professional architectural model rendering quality (V-Ray / Lumion-style clean output)",
           "",
           "BUILDING STYLE:",
-          "- Clean flat or low-slope roofs (concrete slab, painted metal, or smooth tile)",
-          "- Uniform finished construction quality — well-maintained middle-class residential",
-          "- Coherent palette across the neighborhood",
-          "- ZERO informal settlement aesthetic: NO corrugated metal, NO rusty tin, NO tarps, NO patchwork roofs, NO debris, NO chaotic textures",
+          "- Simple cubic volumes with flat or low-slope roofs",
+          "- White, light beige, or very light gray facades — uniform palette",
+          "- Crisp building edges, no painterly bleed",
+          "- ZERO informal settlement: NO corrugated metal, NO rusty tin, NO tarps, NO patchwork, NO chaotic textures",
+          "- Volume hierarchy preserved: keep the size/height differences between buildings",
           "",
-          "GROUND & VEGETATION (PHOTOREALISTIC, NOT STYLIZED):",
-          "- Real grass texture — green but realistic (mixed natural tones, not flat cartoon green)",
-          "- Realistic trees with detailed leaves but compact orderly canopies",
-          "- Smooth real asphalt and concrete with photographic surface detail",
-          "- Avoid both extremes: NO cartoon-flat ground, NO chaotic dirt/debris",
+          "GROUND & VEGETATION (CLEAN AXONOMETRIC STYLE):",
+          "- Uniform medium-green grass — even tone, slight subtle texture, NOT cartoon-flat NOT chaotic",
+          "- Simple round green trees with single-tone foliage — orderly placement",
+          "- Smooth light gray asphalt roads with clean edges",
+          "- Subtle ground definition between paved and green areas",
+          "",
+          "PARCEL & SETBACK ZONE — CRITICAL TO PRESERVE EXACTLY:",
+          "- The parcel is filled with a SAND/BEIGE color (#d4b878 area) — keep this beige fill EXACTLY as is, do NOT replace it with grass",
+          "- The parcel has a thin RED DASHED outline — keep this red dashed line EXACTLY visible, do NOT thicken into a wall",
+          "- Inside the parcel: SAND/BEIGE flat ground (NOT grass, NOT a building, NOT a platform) — represents an empty buildable plot",
+          "- A separate setback band along the front edge of the parcel — keep its color contrast visible",
           "",
           "LIGHTING:",
-          "- NEUTRAL midday daylight or soft overcast — daylight white balance",
-          "- Realistic soft shadows for volumetric clarity",
+          "- NEUTRAL daylight (midday or soft overcast) — daylight white balance",
+          "- Soft uniform volumetric shadows for depth perception",
           "- NO warm sepia tint, NO golden hour, NO amber atmosphere, NO sun bloom",
           "- Cool-to-neutral color temperature throughout",
           "",
           "FORBIDDEN (zero tolerance):",
           "- Do NOT change the position, shape, height, or count of ANY building",
           "- Do NOT add NEW buildings, walls, structures, volumes, or pads",
-          "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D red line ON flat ground",
-          "- Do NOT alter the semi-transparent red setback band along the front edge — keep it crisp and franchement visible",
-          "- The inside of the parcel outline is EMPTY ground (grass) — no building, no socle, no pad",
+          "- Do NOT modify the parcel beige fill or its red dashed outline — keep them EXACTLY as in the input",
+          "- Do NOT alter the setback band — keep its color visible",
           "- Do NOT move, delete, or relocate anything",
           "- Do NOT change camera angle, perspective, framing, or zoom",
-          "- Do NOT add characters, vehicles, signage, text, or UI elements",
+          "- Do NOT add characters, vehicles, signage, or UI elements",
+          "- Do NOT add ANY text annotation, label, number, or hallucinated lettering anywhere in the image",
           "- Do NOT add ground elevation/socle under the parcel — flat at street level",
-          "- Do NOT add ANY text annotation, label, or hallucinated lettering anywhere in the image",
-          "- Do NOT use painterly, sketchy, watercolor, or comic-book styles — strict photographic realism only",
+          "- Do NOT use painterly, sketchy, watercolor, or comic-book styles",
+          "- Do NOT make it look like a real photograph — keep the clean architectural render aesthetic",
           "",
-          "Key preserved features:",
-          "- Red parcel outline = thin 2D red line on flat ground (not a wall, not a pad)",
-          "- Red semi-transparent setback band on the front edge — visible and clean",
-          "- NO TEXT inside or near the parcel — pure visual",
-          "",
-          "Render as if you applied a professional photoreal pass over the Mapbox base — sharp, sober, photographic, NEVER stylized as a painting or illustration.",
+          "REFERENCE STYLE: clean architectural axonometric urban planning render — like a high-quality 3D model rendering from a professional architecture office, with sober materials, neutral lighting, and absolute geometric clarity.",
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
@@ -8355,7 +8357,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.9-photoreal-no-text on port ${PORT}`);
+  console.log(`BARLO v73.1.10-axo-arch-style on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
