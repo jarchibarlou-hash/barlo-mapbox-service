@@ -20,6 +20,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY; // v73.2.6 : Google Maps Static API pour vue top haute qualite
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
@@ -150,7 +151,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.5-slide4-static-satellite" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.6-slide4-google-static" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4387,6 +4388,36 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   return commerceGPS;
 }
 
+// ─── v73.2.6 : Google Maps Static API (qualite satellite superieure pour Afrique) ───
+async function fetchGoogleStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCoords, googleKey, width = 640, height = 640 }) {
+  // Google Maps Static API : path overlays
+  // Format : path=color:0xRRGGBBAA|fillcolor:0xRRGGBBAA|weight:N|lat1,lng1|lat2,lng2|...
+  // Note : Google attend lat,lng (pas lng,lat comme Mapbox)
+  const parcelPath = `color:0xC84828FF|fillcolor:0xE0C89055|weight:4|` +
+    parcelCoords.map(c => `${c.lat},${c.lon}`).join("|") +
+    `|${parcelCoords[0].lat},${parcelCoords[0].lon}`;
+  const envelopePath = `color:0xA07840E0|fillcolor:0xB8986080|weight:2|` +
+    envelopeCoords.map(c => `${c.lat},${c.lon}`).join("|") +
+    `|${envelopeCoords[0].lat},${envelopeCoords[0].lon}`;
+  // Google Maps zoom max = 21. Notre zoom est calcule pour Mapbox (peut etre 19-20)
+  const gZoom = Math.min(21, Math.round(zoom));
+  // scale=2 pour double resolution (640x640 -> 1280x1280 effective)
+  const url = `https://maps.googleapis.com/maps/api/staticmap?` +
+    `center=${cLat},${cLon}&zoom=${gZoom}&size=${width}x${height}&scale=2&maptype=satellite` +
+    `&path=${encodeURIComponent(parcelPath)}` +
+    `&path=${encodeURIComponent(envelopePath)}` +
+    `&key=${googleKey}`;
+  console.log(`[GOOGLE-STATIC v73.2.6] URL length=${url.length}, zoom=${gZoom}, fetching...`);
+  const r = await fetch(url);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`Google Static API HTTP ${r.status}: ${text.slice(0, 300)}`);
+  }
+  const arrayBuffer = await r.arrayBuffer();
+  console.log(`[GOOGLE-STATIC v73.2.6] OK ${arrayBuffer.byteLength} bytes`);
+  return Buffer.from(arrayBuffer);
+}
+
 // ─── v73.2.5 : Mapbox Static Images API (vraie raster satellite, pas vectoriel) ───
 async function fetchMapboxStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCoords, mapboxToken, width = 1280, height = 1280 }) {
   const parcelArr = [...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]];
@@ -5678,13 +5709,40 @@ app.post("/generate", async (req, res) => {
     // bypass complet du pipeline puppeteer/GL JS pour la slide 4 top view
     if (isTopView) {
       try {
-        const staticBuf = await fetchMapboxStaticTop({
-          cLat, cLon, zoom,
-          parcelCoords: coords,
-          envelopeCoords,
-          mapboxToken: MAPBOX_TOKEN,
-          width: 1280, height: 1280
-        });
+        // v73.2.6 : Google Maps Static API si cle presente (qualite superieure), sinon fallback Mapbox satellite-v9
+        let staticBuf;
+        let usedSource = "mapbox-satellite-v9";
+        if (GOOGLE_MAPS_API_KEY) {
+          try {
+            staticBuf = await fetchGoogleStaticTop({
+              cLat, cLon, zoom,
+              parcelCoords: coords,
+              envelopeCoords,
+              googleKey: GOOGLE_MAPS_API_KEY,
+              width: 640, height: 640  // x scale=2 = 1280x1280 effective
+            });
+            usedSource = "google-static-satellite";
+            console.log(`[STATIC-TOP v73.2.6] Google source OK`);
+          } catch (gErr) {
+            console.warn(`[STATIC-TOP v73.2.6] Google failed (${gErr.message}), fallback Mapbox`);
+            staticBuf = await fetchMapboxStaticTop({
+              cLat, cLon, zoom,
+              parcelCoords: coords,
+              envelopeCoords,
+              mapboxToken: MAPBOX_TOKEN,
+              width: 1280, height: 1280
+            });
+          }
+        } else {
+          console.log(`[STATIC-TOP v73.2.6] GOOGLE_MAPS_API_KEY absent, fallback Mapbox`);
+          staticBuf = await fetchMapboxStaticTop({
+            cLat, cLon, zoom,
+            parcelCoords: coords,
+            envelopeCoords,
+            mapboxToken: MAPBOX_TOKEN,
+            width: 1280, height: 1280
+          });
+        }
         const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
         const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
         const UPLOAD_TS = Date.now();
@@ -5703,7 +5761,7 @@ app.post("/generate", async (req, res) => {
           enhanced_url: pd.publicUrl + cb,
           path: basePath,
           centroid: { lat: cLat, lon: cLon },
-          view: { zoom, bearing, pitch: 0, mode: "static-satellite-v9" },
+          view: { zoom, bearing, pitch: 0, mode: usedSource },
           duration_ms: Date.now() - t0
         });
       } catch (e) {
@@ -8487,8 +8545,9 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.5-slide4-static-satellite on port ${PORT}`);
+  console.log(`BARLO v73.2.6-slide4-google-static on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
+  console.log(`Google Maps: ${GOOGLE_MAPS_API_KEY ? "OK" : "MISSING (fallback Mapbox satellite)"}`);
 });
