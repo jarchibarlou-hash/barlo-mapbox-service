@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.3-typology-fix" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.4-v57-21-neutralized" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -3224,21 +3224,25 @@ function computeSmartScenarios({
     }
   }
   // v57.21 SAFETY NET: enforce A.fp_m2 >= B.fp_m2 >= C.fp_m2
-  // The core calculation should always produce this, but post-processing
-  // or edge cases might break it. This is the last line of defense.
-  if (r.A.fp_m2 < r.B.fp_m2) {
-    console.log(`│ ⚠️ v57.21: fp inversion A(${r.A.fp_m2}) < B(${r.B.fp_m2}) → fixing A=B`);
-    r.A.fp_m2 = r.B.fp_m2;
-    r.A.fp_rdc_m2 = Math.max(r.A.fp_rdc_m2 || 0, r.B.fp_rdc_m2 || 0);
-    r.A.fp_etages_m2 = Math.max(r.A.fp_etages_m2 || 0, r.B.fp_etages_m2 || 0);
-    recalcSdp(r.A);
-  }
-  if (r.B.fp_m2 < r.C.fp_m2) {
-    console.log(`│ ⚠️ v57.21: fp inversion B(${r.B.fp_m2}) < C(${r.C.fp_m2}) → fixing C=B*0.85`);
-    r.C.fp_m2 = Math.max(50, Math.round(r.B.fp_m2 * 0.85));
-    r.C.fp_rdc_m2 = Math.max(50, Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.85));
-    r.C.fp_etages_m2 = Math.max(50, Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.85));
-    recalcSdp(r.C);
+  // v73.1.4: NEUTRALISÉ en mode program-driven (B<C en fp est légitime quand
+  // A/B sont en SPLIT logement-seul et C en SUPERPOSE incluant commerce)
+  if (!isProgramDriven) {
+    if (r.A.fp_m2 < r.B.fp_m2) {
+      console.log(`│ ⚠️ v57.21: fp inversion A(${r.A.fp_m2}) < B(${r.B.fp_m2}) → fixing A=B`);
+      r.A.fp_m2 = r.B.fp_m2;
+      r.A.fp_rdc_m2 = Math.max(r.A.fp_rdc_m2 || 0, r.B.fp_rdc_m2 || 0);
+      r.A.fp_etages_m2 = Math.max(r.A.fp_etages_m2 || 0, r.B.fp_etages_m2 || 0);
+      recalcSdp(r.A);
+    }
+    if (r.B.fp_m2 < r.C.fp_m2) {
+      console.log(`│ ⚠️ v57.21: fp inversion B(${r.B.fp_m2}) < C(${r.C.fp_m2}) → fixing C=B*0.85`);
+      r.C.fp_m2 = Math.max(50, Math.round(r.B.fp_m2 * 0.85));
+      r.C.fp_rdc_m2 = Math.max(50, Math.round((r.B.fp_rdc_m2 || r.B.fp_m2) * 0.85));
+      r.C.fp_etages_m2 = Math.max(50, Math.round((r.B.fp_etages_m2 || r.B.fp_m2) * 0.85));
+      recalcSdp(r.C);
+    }
+  } else {
+    console.log(`│ v73.1.4: v57.21 fp inversion check NEUTRALISÉ (program-driven mode)`);
   }
   // Recalc COS ratios after post-processing
   for (const lbl of ["A", "B", "C"]) {
@@ -8332,7 +8336,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.3-typology-fix on port ${PORT}`);
+  console.log(`BARLO v73.1.4-v57-21-neutralized on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
