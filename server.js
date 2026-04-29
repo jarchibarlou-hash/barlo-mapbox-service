@@ -2140,7 +2140,7 @@ function computeSmartScenarios({
   const rules = programKey ? PROGRAM_RULES[programKey] : null;
   const stdKey = standingKey(standing_level);
   const sizeKey = standingSizeKey(standing_level);
-  const isProgramDriven = !!(rules && target_units > 0);
+  let isProgramDriven = !!(rules && target_units > 0);  // v73 patch : let pour permettre réassignation depuis le shim
   console.log(`┌── SCENARIO ENGINE v57.20 (PROGRAMME-DRIVEN${isProgramDriven ? "" : " → FALLBACK REGULATION"}) ──`);
   console.log(`│ site=${site_area}m² envelope=${envelope_w}×${envelope_d} bbox=${envelope_bbox}m² polyArea=${envelope_area}m²`);
   console.log(`│ zoning=${zoning_type} CES=${ces} max_fp=${Math.round(max_fp)}m² | COS=${cos} max_sdp=${Math.round(max_sdp)}m²`);
@@ -2303,7 +2303,7 @@ function computeSmartScenarios({
     // Ne pas supprimer tant que le code aval n'a pas été refactoré pour
     // consommer directement le résultat v73Result.
     // ─────────────────────────────────────────────────────────────────────────
-    const isProgramDriven = !v73Result.isUnsupported;
+    isProgramDriven = !v73Result.isUnsupported || isProgramDriven; // v73 patch : assigne au scope externe (sticky : true reste true si au moins un scenario v73 OK)
     const standingKeyV84 = String(standing_level || "ECONOMIQUE").toUpperCase();
     const _COST_PER_M2_ROLE_V73COMPAT = {
       ECONOMIQUE: { A: 250000, B: 215000, C: 175000 },
