@@ -34,7 +34,8 @@ const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
 // v72.93: TIME BUDGET — skip polish if endpoint has already spent this many ms
 const POLISH_TIME_BUDGET_MS = 180000; // 180s = leave 120s margin for Make.com 300s timeout
-const MASSING_SKIP_POLISH = true; // v72.150: Disable AI polish on /generate-massing for Make.com reliability
+// v73.2.4 hold-back: polish massing reste DÉSACTIVÉ (priorité = fix slide 4 top satellite pure d'abord). Le nouveau prompt OFF-WHITE est codé mais dormant.
+const MASSING_SKIP_POLISH = true; // v72.150 maintenu
 
 /**
  * v72.34: Robust single polish API call with retry + timeout + full error logging
@@ -149,7 +150,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.3-slide4-satellite" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.4-slide4-top-pure" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4567,10 +4568,14 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   map.addControl = function() {};
   map.on('style.load', () => {
     map.setTerrain(null);
+    // v73.2.4 : flag injecté côté serveur pour skip overlays en mode satellite (slide 4 top pure)
+    const __isSatellite = ${mapStyle === "satellite" ? "true" : "false"};
     // v70.5: Lumière directionnelle forte pour ombres marquées
     map.setLight({ anchor: 'map', color: '#fff8f0', intensity: 0.70, position: [1.5, 210, 30] });
     const labelLayerId = undefined;
     // v70.5: BÂTIMENTS 3D — posés au sol (base=0), hauteurs réalistes
+    // v73.2.4: SKIP en mode satellite (slide 4 top) — on garde l'imagerie pure sans blocs ajoutés
+    if (!__isSatellite) {
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
@@ -4600,6 +4605,9 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
         'fill-extrusion-vertical-gradient': true,
       },
     }, labelLayerId);
+    } else {
+      console.log('[SLIDE4-TOP v73.2.4] 3d-buildings layer SKIPPED for satellite mode');
+    }
     // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
     const allLayers = map.getStyle().layers.map(l => l.id);
     const buildingLayers = allLayers.filter(id => /build/i.test(id));
@@ -6446,48 +6454,88 @@ GROUNDING RULES (CRITICAL):
 - Do NOT wash out, desaturate, or unify the floor colors.
 - Do NOT turn orange or blue floors into beige, gray, or white.
 - The color difference between floor types is essential information — preserve it exactly.`;
-        let massingPolishPrompt = `STRICT EDIT ONLY. VERY SUBTLE, GENTLE, NON-AGGRESSIVE POLISH ONLY.
-Your polish must be BARELY VISIBLE — only slight tonal harmonization, minimal contrast improvement, soft ambient occlusion.
-Do NOT make dramatic changes. Do NOT add new elements. Do NOT reinterpret the scene.
-
+        // v73.2.4 : prompt OFF-WHITE (blanc cassé) — environnement sobre + bandes colorées préservées
+        let massingPolishPrompt = `ARCHITECTURAL AXONOMETRIC POLISH — CLEAN OFF-WHITE 3D MASSING RENDER.
+STRICT EDIT ONLY. SUBTLE polish only — light tonal harmonization, soft ambient occlusion, crisp edges.
 PRESERVE EXACT GEOMETRY. PRESERVE EXACT CAMERA. PRESERVE EXACT COMPOSITION.
-Do NOT modify, move, add, or remove ANY element.
-Do NOT change building shapes, positions, sizes, count.
-Do NOT reinterpret, redesign, or restyle the scene.
-NO STRUCTURAL MODIFICATION. NO CAMERA CHANGE. NO REINTERPRETATION.
+Do NOT modify, move, add, or remove ANY element. Do NOT reinterpret the scene.
 ${_colorInstruction}
 
-Apply ONLY these subtle non-structural adjustments:
-- Very slight tonal harmonization (uniform warm balance) — but KEEP floor colors intact
-- Minimal contrast improvement for visual clarity
-- Subtle soft shadows under the building volume
-- Gentle ambient occlusion at ground contact
-- Clean, professional finish
-- KEEP IMAGE SHARP — do not soften or blur any edges
+REQUIRED VISUAL QUALITIES:
+- Clean simple OFF-WHITE / very light beige existing context buildings with crisp geometric edges
+- Soft volumetric shadows on facades and ground — gentle, neutral grey
+- Smooth uniform ground surfaces (no chaotic textures, no debris)
+- Sober coherent OFF-WHITE palette throughout the environment
 
-Do NOT change the maquette/model aesthetic — keep the clean architectural model look.
-This is a WARM BEIGE architectural maquette with colored floor bands. The background is warm beige (#eae8e4), buildings are cream (#f0ede8), roads are gray (#808080). PRESERVE THESE EXACT TONES. Do NOT shift to white, gray, or cool tones. The warm beige palette is essential.
+CRITICAL — NEW PROJECT BUILDING (the massing scenario):
+- The NEW building has COLORED FLOOR BANDS — these MUST stay vivid and clearly distinguishable
+- ORANGE bands = commerce floors / BLUE bands = habitation floors
+- Do NOT wash out, desaturate, or unify the floor colors of the new building
+- Do NOT turn orange or blue floors into beige, gray, or white
+- The new building's colored bands are the visual identity of the scenario — preserve them exactly
 
-CONSISTENCY IS CRITICAL: This image is one of a set (A, B, C). All must look identical in WARM BEIGE tone and style. Do NOT make the scene cooler or whiter.`;
+EXISTING CONTEXT BUILDINGS:
+- Simple cubic volumes with flat or low-slope roofs
+- OFF-WHITE / very light beige facades — uniform palette (#e8e6e2 to #efeae0)
+- Crisp building edges, no painterly bleed
+- ZERO informal settlement: NO corrugated metal, NO rusty tin, NO tarps, NO patchwork
+- Volume hierarchy preserved: keep the size/height differences
+
+GROUND & VEGETATION (BLANC CASSÉ AXONOMETRIC STYLE):
+- LIGHT CREAM-BEIGE ground surface (#ece8e0 area) — NOT bright green, NOT cartoon-flat, NOT warm sepia
+- Simple light-tone trees if visible — orderly placement, single-tone foliage
+- Smooth light gray asphalt roads (#aaaaaa) with clean edges
+
+PARCEL OUTLINE — PRESERVE EXACTLY:
+- The parcel has a thin RED DASHED outline — keep this red dashed line EXACTLY visible, do NOT thicken into a wall
+
+LIGHTING:
+- NEUTRAL daylight (midday or soft overcast) — daylight white balance
+- Soft uniform volumetric shadows for depth perception
+- NO warm sepia tint, NO golden hour, NO amber atmosphere, NO sun bloom
+- Cool-to-neutral color temperature throughout
+
+GROUNDING (ZERO TOLERANCE FOR FLOATING):
+- The new building MUST sit DIRECTLY on the ground. NO gap, NO shadow gap, NO raised socle
+- Do NOT add any platform, plinth, pedestal, base, raised floor, colored slab, or elevated plateau under the building
+- Do NOT fill the parcel area with any colored surface that would appear raised above ground level
+- The building's bottom edge MUST touch the ground plane — zero elevation, zero floating
+
+FORBIDDEN (zero tolerance):
+- Do NOT change the position, shape, height, or count of ANY building (existing or new)
+- Do NOT add NEW buildings, walls, structures, volumes, or pads
+- Do NOT modify the parcel red dashed outline
+- Do NOT alter the new building's colored bands — keep ORANGE and BLUE vivid
+- Do NOT change camera angle, perspective, framing, or zoom
+- Do NOT add characters, vehicles, signage, or UI elements
+- Do NOT add ANY text annotation, label, number, or hallucinated lettering
+- Do NOT use painterly, sketchy, watercolor styles
+- Do NOT make it look like a real photograph — keep the clean architectural render aesthetic
+- Do NOT shift the environment to warm beige, sepia, or amber — keep it COOL OFF-WHITE
+
+REFERENCE STYLE: clean OFF-WHITE architectural axonometric urban planning render with COLORED bands ONLY on the new project building — sober, neutral lighting, geometrically precise.
+CONSISTENCY: This image is one of a set (A, B, C). All MUST look identical in COOL OFF-WHITE tone with the new building's COLORED bands as the only chromatic accent. Do NOT make the scene warmer.`;
 
         // v72.35: Extra warm-tone enforcement for small volumes (C scenario)
         // Small buildings = more background pixels = AI tends to shift cool/gray
         const totalBuildingLevels = (habitationLevels || 0) + (commerceLevels || 0);
         if (totalBuildingLevels <= 2 || label === "C") {
-          const warmEnforcement = `
+          // v73.2.4: COOL OFF-WHITE enforcement (au lieu de WARM BEIGE) pour cohérence avec le nouveau prompt blanc cassé
+          const offWhiteEnforcement = `
 
-CRITICAL WARM TONE ENFORCEMENT:
+CRITICAL COOL OFF-WHITE ENFORCEMENT:
 This is a SMALL building variant. The image is dominated by surrounding context (roads, other buildings, ground).
-You MUST maintain the EXACT SAME warm beige tone (#eae8e4) across the ENTIRE image.
-Do NOT let the large background area become gray, white, cool, or desaturated.
-The surrounding buildings must stay warm cream (#f0ede8), NOT gray or white.
-The ground must stay warm beige, NOT cool gray.
-Roads must stay warm gray (#808080 with slight warmth), NOT cool blue-gray.
-Compare mentally with a warm sunset-lit architectural model — THAT is the target tone.
-ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`;
+You MUST maintain a UNIFORM COOL OFF-WHITE tone across the ENTIRE environment.
+Do NOT let any area drift to warm beige, sepia, amber, or golden tones.
+The surrounding existing buildings must stay OFF-WHITE / very light beige (#e8e6e2 to #efeae0), NOT warm cream NOT gray.
+The ground must stay LIGHT CREAM-BEIGE (#ece8e0), NOT warm sepia, NOT bright green.
+Roads must stay LIGHT GRAY (#aaaaaa), neutral, NOT warm.
+The ONLY chromatic accent in the image must be the NEW project building's ORANGE/BLUE colored bands.
+Compare mentally with a clean architectural model under neutral overcast daylight — THAT is the target tone.
+ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE except the new building's vivid bands.`;
           // Append to prompt
-          massingPolishPrompt += warmEnforcement;
-          console.log(`[MASSING-POLISH] ${label} v72.35: Warm-tone enforcement ACTIVE (levels=${totalBuildingLevels})`);
+          massingPolishPrompt += offWhiteEnforcement;
+          console.log(`[MASSING-POLISH] ${label} v73.2.4: Cool off-white enforcement ACTIVE (levels=${totalBuildingLevels})`);
         }
 
         // v72.34: Launch all variations with robust retry engine
@@ -8369,7 +8417,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.3-slide4-satellite on port ${PORT}`);
+  console.log(`BARLO v73.2.4-slide4-top-pure on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
