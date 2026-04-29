@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.4-v57-21-neutralized" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.5-fp-rdc-C-zoom" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -605,10 +605,10 @@ function computeZoom(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  // v73.1.1: zoom ×2 — parcelle ~2/3 de l'image au lieu de 1/3
-  const mpp = (ext * 1.5) / 1280;
+  // v73.1.5: zoom ×3 vs original — parcelle plus grande encore (multiplier 1.5 → 1.0)
+  const mpp = (ext * 1.0) / 1280;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
-  return Math.min(18.5, Math.max(17, Math.round(z * 4) / 4));
+  return Math.min(19, Math.max(17.5, Math.round(z * 4) / 4));
 }
 function computeZoomMassing(coords, cLat, cLon) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
@@ -6352,9 +6352,14 @@ app.post("/generate-massing", async (req, res) => {
     // v65.2: Image SANS overlays pour le polish AI (éviter dédoublement)
     const pngClean = canvas.toBuffer("image/png");
     // v72.102: fp RDC (pour annotations cohérentes avec engine)
-    const fp_m2_raw_used_rdc = (typeof fp_m2_raw !== "undefined" && fp_m2_raw)
-      ? Number(fp_m2_raw)
-      : (typeof sc !== "undefined" && sc && sc.fp_rdc_m2) ? sc.fp_rdc_m2 : fp;
+    // v73.1.5: en mode compute_scenario, prioriser sc.fp_rdc_m2 (valeur v73 propre)
+    // sur fp_m2_raw (valeur obsolète du payload). Sinon on perd la distinction commerce/logement
+    // pour C en SUPERPOSE (RDC=50 commerce vs étages=75 logement).
+    const fp_m2_raw_used_rdc = (compute_scenario && typeof sc !== "undefined" && sc && sc.fp_rdc_m2)
+      ? sc.fp_rdc_m2
+      : (typeof fp_m2_raw !== "undefined" && fp_m2_raw)
+        ? Number(fp_m2_raw)
+        : (typeof sc !== "undefined" && sc && sc.fp_rdc_m2) ? sc.fp_rdc_m2 : fp;
     // Version avec overlays (fallback si pas d'AI polish)
     drawMassingOverlays(ctx, W, H, {
       site_area: Number(site_area), bearing, label,
@@ -8336,7 +8341,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.4-v57-21-neutralized on port ${PORT}`);
+  console.log(`BARLO v73.1.5-fp-rdc-C-zoom on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
