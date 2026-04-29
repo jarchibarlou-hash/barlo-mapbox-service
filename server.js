@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.8-clean-aerial-prompt" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.9-photoreal-no-text" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -4669,23 +4669,10 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     // v73.1: Zone de recul front — fill semi-transparent + contour pointillé + label "Recul Xm"
     map.addSource('setback-front', { type: 'geojson', data: ${JSON.stringify(setbackFrontGeoJSON)} });
     map.addLayer({ id: 'setback-front-fill', type: 'fill', source: 'setback-front',
-      paint: { 'fill-color': '#d04020', 'fill-opacity': 0.18 } });
+      paint: { 'fill-color': '#d04020', 'fill-opacity': 0.30 } });
     map.addLayer({ id: 'setback-front-outline', type: 'line', source: 'setback-front',
-      paint: { 'line-color': '#d04020', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.7 } });
-    map.addSource('setback-label', { type: 'geojson', data: ${JSON.stringify(setbackLabelGeoJSON)} });
-    map.addLayer({ id: 'setback-label', type: 'symbol', source: 'setback-label',
-      layout: {
-        'text-field': ['get', 'label'],
-        'text-size': 18,
-        'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-        'text-allow-overlap': true,
-      },
-      paint: {
-        'text-color': '#d04020',
-        'text-halo-color': '#ffffff',
-        'text-halo-width': 2.5,
-      }
-    });
+      paint: { 'line-color': '#d04020', 'line-width': 2.5, 'line-dasharray': [3, 2], 'line-opacity': 0.9 } });
+    // v73.1.9: layer setback-label RETIRÉE (le label texte était systématiquement halluciné par le polish IA en gibberish style 'Nion 6br', 'RECULF'. La zone de recul reste visible via setback-front-fill + outline et la légende en haut à gauche du canvas.)
     // v49: Accès principal — DÉSACTIVÉ (annotation retirée)
   });
   let rendered = false;
@@ -5720,49 +5707,56 @@ app.post("/generate", async (req, res) => {
         const resized = await resizeForPolish(pngClean, POLISH_MAX_IMAGE_DIM);
         const b64Input = resized.buf.toString("base64");
         console.log(`[SLIDE4-POLISH] Input: ${(resized.buf.length / 1024).toFixed(0)}KB (${resized.w}×${resized.h})`);
-        // ── ARCHITECTURAL POLISH PROMPT — v73.1.8: CLEAN AERIAL (no informal settlement) ─────────
+        // ── ARCHITECTURAL POLISH PROMPT — v73.1.9: PHOTOREALISTIC CLEAN (sober, no painterly) ─────────
         const polishPrompt = [
-          "PHOTOREALISTIC ARCHITECTURAL POLISH — CLEAN AERIAL VIEW STYLE:",
+          "PHOTOREALISTIC AERIAL POLISH — CONTEMPORARY ARCHITECTURAL PHOTOGRAPHY:",
           "",
-          "Your task: transform this Mapbox 3D stylized render into a clean, orderly, professional aerial visualization. Think 'contemporary suburban residential photography from a drone' — well-maintained middle-class neighborhood, NOT an informal settlement.",
+          "Your task: transform this Mapbox 3D stylized render into a SHARP photorealistic aerial photograph of a contemporary residential neighborhood. The output must look like a real drone photo, NOT a painting, NOT a sketch, NOT a comic illustration.",
           "",
-          "BUILDING STYLE (encouraged):",
-          "- Clean flat or low-slope roofs in concrete slab, painted metal sheet, or smooth tile — uniform, well-maintained",
-          "- White, beige, or light gray facades — coherent palette across all buildings",
-          "- Modern residential aesthetic: orderly, regular, finished construction quality",
-          "- ABSOLUTELY NO corrugated metal, NO rusty tin sheets, NO tarps, NO debris on roofs, NO patchwork, NO informal/slum/shanty aesthetic",
+          "REQUIRED PHOTOGRAPHIC QUALITIES:",
+          "- Crisp sharp building edges with clean geometric lines (no painterly bleed, no fuzzy outlines)",
+          "- Realistic detailed material textures: smooth concrete, painted plaster, clean tile or painted metal roofs",
+          "- Photographic depth and clarity — like a 24MP DSLR aerial shot",
+          "- Subtle realistic shadows from soft midday daylight (not warm/golden, not stylized)",
+          "- Photorealistic but sober color palette: white, beige, light gray facades; muted greens for vegetation; light gray roads",
           "",
-          "GROUND & VEGETATION (encouraged):",
-          "- Uniform mowed green grass — flat, healthy, even tone",
-          "- Round simple trees with uniform single-tone foliage (no wild bushy clumps)",
-          "- Clean smooth asphalt or concrete roads in light gray",
-          "- Subtle ground texture only — no gravel piles, dirt patches, or debris",
+          "BUILDING STYLE:",
+          "- Clean flat or low-slope roofs (concrete slab, painted metal, or smooth tile)",
+          "- Uniform finished construction quality — well-maintained middle-class residential",
+          "- Coherent palette across the neighborhood",
+          "- ZERO informal settlement aesthetic: NO corrugated metal, NO rusty tin, NO tarps, NO patchwork roofs, NO debris, NO chaotic textures",
           "",
-          "LIGHTING & ATMOSPHERE:",
-          "- NEUTRAL daylight (midday or overcast) — NOT golden hour, NOT warm sunset, NOT sepia",
-          "- Soft minimal shadows just enough to read volumes",
-          "- NO sun glare, NO bloom, NO atmospheric haze, NO orange/amber tint",
-          "- Daylight white balance, cool-to-neutral color temperature",
+          "GROUND & VEGETATION (PHOTOREALISTIC, NOT STYLIZED):",
+          "- Real grass texture — green but realistic (mixed natural tones, not flat cartoon green)",
+          "- Realistic trees with detailed leaves but compact orderly canopies",
+          "- Smooth real asphalt and concrete with photographic surface detail",
+          "- Avoid both extremes: NO cartoon-flat ground, NO chaotic dirt/debris",
           "",
-          "FORBIDDEN (absolute, zero tolerance):",
+          "LIGHTING:",
+          "- NEUTRAL midday daylight or soft overcast — daylight white balance",
+          "- Realistic soft shadows for volumetric clarity",
+          "- NO warm sepia tint, NO golden hour, NO amber atmosphere, NO sun bloom",
+          "- Cool-to-neutral color temperature throughout",
+          "",
+          "FORBIDDEN (zero tolerance):",
           "- Do NOT change the position, shape, height, or count of ANY building",
-          "- Do NOT add NEW buildings, structures, walls, or volumes anywhere",
-          "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D line ON the ground",
-          "- Do NOT alter the red setback band (semi-transparent red zone along one side of the parcel) — keep it visible and clean",
-          "- Do NOT modify or hallucinate the 'Recul Xm' text label — keep it readable in red",
-          "- The inside of the red parcel outline is EMPTY GROUND (grass) — never put a building, platform, socle, pad, or any volume there",
+          "- Do NOT add NEW buildings, walls, structures, volumes, or pads",
+          "- Do NOT modify, thicken, raise, or fill the red parcel outline — it stays a thin 2D red line ON flat ground",
+          "- Do NOT alter the semi-transparent red setback band along the front edge — keep it crisp and franchement visible",
+          "- The inside of the parcel outline is EMPTY ground (grass) — no building, no socle, no pad",
           "- Do NOT move, delete, or relocate anything",
-          "- Do NOT change the camera angle, perspective, framing, or zoom",
-          "- Do NOT add characters, vehicles, signage, or UI elements",
-          "- Do NOT add a ground socle or elevation under the parcel — it is flat at street level",
-          "- Do NOT add any informal settlement aesthetic, slum elements, or chaotic textures",
+          "- Do NOT change camera angle, perspective, framing, or zoom",
+          "- Do NOT add characters, vehicles, signage, text, or UI elements",
+          "- Do NOT add ground elevation/socle under the parcel — flat at street level",
+          "- Do NOT add ANY text annotation, label, or hallucinated lettering anywhere in the image",
+          "- Do NOT use painterly, sketchy, watercolor, or comic-book styles — strict photographic realism only",
           "",
           "Key preserved features:",
           "- Red parcel outline = thin 2D red line on flat ground (not a wall, not a pad)",
-          "- Red semi-transparent setback band on the front edge",
-          "- 'Recul Xm' text label centered on the setback band",
+          "- Red semi-transparent setback band on the front edge — visible and clean",
+          "- NO TEXT inside or near the parcel — pure visual",
           "",
-          "Render as if a professional architectural visualizer did a final clean photoreal pass — orderly suburban, uniform, lisible.",
+          "Render as if you applied a professional photoreal pass over the Mapbox base — sharp, sober, photographic, NEVER stylized as a painting or illustration.",
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
@@ -8361,7 +8355,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.8-clean-aerial-prompt on port ${PORT}`);
+  console.log(`BARLO v73.1.9-photoreal-no-text on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
