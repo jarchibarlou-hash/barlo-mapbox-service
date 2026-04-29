@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.10-axo-arch-style" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.0-pptx-pipeline" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -8080,6 +8080,9 @@ app.post("/generate-pptx", async (req, res) => {
       layout_mode: p.layout_mode || "SUPERPOSE",
       commerce_depth_m: Number(p.commerce_depth_m) || 6,
       retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
+      // v73.1.11: typology-driven fields (sinon fallback target_units → mauvais mix dans les textes)
+      input_typologies: p.input_typologies || "",
+      commerce_size_m2: Number(p.commerce_size_m2) || 0,
     });
 
     // Step 2: Flatten + generate texts (same as /generate-texts)
@@ -8357,9 +8360,8 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.10-axo-arch-style on port ${PORT}`);
+  console.log(`BARLO v73.2.0-pptx-pipeline on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
 });
-
