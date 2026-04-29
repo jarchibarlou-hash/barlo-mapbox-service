@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.0-front-edge-recul" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.1-zoom-x2" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -605,8 +605,7 @@ function computeZoom(coords, cLat, cLon) {
     Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
     Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
-  // v73.1.1: zoom ×2 — parcelle ~2/3 de l'image au lieu de 1/3 (multiplier 3.0 → 1.5)
-  // Bornes élargies de [16, 17.5] vers [17, 18.5] pour permettre le zoom plus serré
+  // v73.1.1: zoom ×2 — parcelle ~2/3 de l'image au lieu de 1/3
   const mpp = (ext * 1.5) / 1280;
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(18.5, Math.max(17, Math.round(z * 4) / 4));
@@ -4391,7 +4390,6 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
   // v73.1: Zone de recul front matérialisée visuellement
-  // (bande entre arête 0 du polygone et arête 0 de l'enveloppe — convention "premier segment = front de rue")
   const setbackFrontGeoJSON = {
     type: "Feature",
     geometry: {
@@ -8325,7 +8323,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.0-front-edge-recul on port ${PORT}`);
+  console.log(`BARLO v73.1.1-zoom-x2 on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
