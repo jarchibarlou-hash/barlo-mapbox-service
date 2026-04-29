@@ -35,14 +35,41 @@ const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
 // v72.93: TIME BUDGET — skip polish if endpoint has already spent this many ms
 const POLISH_TIME_BUDGET_MS = 180000; // 180s = leave 120s margin for Make.com 300s timeout
-// v73.2.4 hold-back: polish massing reste DÉSACTIVÉ (priorité = fix slide 4 top satellite pure d'abord). Le nouveau prompt OFF-WHITE est codé mais dormant.
-const MASSING_SKIP_POLISH = true; // v72.150 maintenu
+// v73.2.7 : polish massing REACTIVE par defaut avec prompt OFF-WHITE (style maquette hektar blanc casse + bandes colorees preservees).
+// Override possible via env var MASSING_SKIP_POLISH=true pour rollback rapide.
+const MASSING_SKIP_POLISH = process.env.MASSING_SKIP_POLISH === "true";
+
+// v73.2.7 : reference visuelle pour le polish slide 5 axo (image enhanced model committed dans le repo)
+let _referenceAxoB64 = null;
+function getReferenceAxoB64() {
+  if (_referenceAxoB64 !== null) {
+    return _referenceAxoB64 === "" ? null : _referenceAxoB64;
+  }
+  try {
+    const path = require("path");
+    const fs = require("fs");
+    const refPath = path.join(__dirname, "reference_axo.png");
+    if (!fs.existsSync(refPath)) {
+      console.warn(`[REFERENCE-AXO v73.2.7] reference_axo.png absent dans ${__dirname} — polish slide 5 sera sans reference visuelle`);
+      _referenceAxoB64 = "";
+      return null;
+    }
+    const buf = fs.readFileSync(refPath);
+    _referenceAxoB64 = buf.toString("base64");
+    console.log(`[REFERENCE-AXO v73.2.7] reference_axo.png loaded ${(buf.length/1024).toFixed(0)}KB`);
+    return _referenceAxoB64;
+  } catch (e) {
+    console.warn(`[REFERENCE-AXO v73.2.7] Could not load reference_axo.png: ${e.message}`);
+    _referenceAxoB64 = "";
+    return null;
+  }
+}
 
 /**
  * v72.34: Robust single polish API call with retry + timeout + full error logging
  * Returns { b64: string } on success or { error: string, details: string } on failure
  */
-async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 1) {
+async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 1, referenceB64 = null) {
   const tag = `[POLISH-API] ${label}/v${variationIndex}`;
   const controller = new (typeof AbortController !== "undefined" ? AbortController : require("abort-controller"))();
   const timer = setTimeout(() => controller.abort(), POLISH_TIMEOUT_MS);
@@ -57,10 +84,15 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
       signal: controller.signal,
       body: JSON.stringify({
         model: POLISH_MODEL,
-        input: [{ role: "user", content: [
-          { type: "input_image", image_url: `data:image/png;base64,${b64Input}` },
-          { type: "input_text", text: prompt }
-        ]}],
+        // v73.2.7 : si referenceB64 fourni, on ajoute l'image de reference visuelle (multimodal)
+        input: [{ role: "user", content: (() => {
+          const c = [{ type: "input_image", image_url: `data:image/png;base64,${b64Input}` }];
+          if (referenceB64) {
+            c.push({ type: "input_image", image_url: `data:image/png;base64,${referenceB64}` });
+          }
+          c.push({ type: "input_text", text: prompt });
+          return c;
+        })() }],
         tools: [{ type: "image_generation", input_fidelity: "high" }]
       })
     });
@@ -75,13 +107,13 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
         const retryAfter = parseInt(resp.headers.get("retry-after") || "3", 10) * 1000;
         console.log(`${tag} Rate limited — waiting ${retryAfter}ms before retry...`);
         await new Promise(r => setTimeout(r, retryAfter));
-        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1, referenceB64);
       }
       // Server error (5xx) → retry
       if (resp.status >= 500 && attempt <= POLISH_MAX_RETRIES) {
         console.log(`${tag} Server error — retrying in ${POLISH_RETRY_DELAY_MS}ms...`);
         await new Promise(r => setTimeout(r, POLISH_RETRY_DELAY_MS));
-        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1, referenceB64);
       }
       return { error: `HTTP ${resp.status}`, details: errMsg };
     }
@@ -93,7 +125,7 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
       if (attempt <= POLISH_MAX_RETRIES) {
         console.log(`${tag} Retrying in ${POLISH_RETRY_DELAY_MS}ms...`);
         await new Promise(r => setTimeout(r, POLISH_RETRY_DELAY_MS));
-        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1, referenceB64);
       }
       return { error: "API error", details: errMsg };
     }
@@ -113,7 +145,7 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
       if (attempt <= POLISH_MAX_RETRIES) {
         console.log(`${tag} Retrying (no image)...`);
         await new Promise(r => setTimeout(r, POLISH_RETRY_DELAY_MS));
-        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+        return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1, referenceB64);
       }
       return { error: "no_image", details: outputSummary };
     }
@@ -128,7 +160,7 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
       const delay = isTimeout ? POLISH_RETRY_DELAY_MS * 2 : POLISH_RETRY_DELAY_MS;
       console.log(`${tag} Retrying in ${delay}ms after ${errType}...`);
       await new Promise(r => setTimeout(r, delay));
-      return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1);
+      return callPolishAPI(b64Input, prompt, label, variationIndex, attempt + 1, referenceB64);
     }
     return { error: errType, details: err.message };
   }
@@ -151,7 +183,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.6-slide4-google-static" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.7-slide5-multimodal-massings-polish" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5856,6 +5888,12 @@ app.post("/generate", async (req, res) => {
         const polishPrompt = [
           "ARCHITECTURAL AXONOMETRIC POLISH — CLEAN PROFESSIONAL 3D RENDER:",
           "",
+          "INPUT IMAGES:",
+          "- IMAGE 1 (the one to transform): Mapbox 3D base render — preserve EXACTLY its geometry, camera angle, building positions, parcel polygon, setback zone",
+          "- IMAGE 2 (visual reference if provided): the EXACT visual style to match — clean axonometric urban planning render with off-white buildings, even green grass, sober palette, neutral lighting. STUDY this reference carefully and apply its aesthetic to image 1.",
+          "",
+          "If a reference image is provided as IMAGE 2, your output MUST visually resemble it in: building tones, ground treatment, lighting, palette, line crispness, and overall sober architectural maquette feel.",
+          "",
           "Your task: transform this Mapbox 3D base into a clean, professional architectural axonometric render — the visual style of a contemporary urban planning visualization (think SOM, BIG, or MVRDV master plan rendering). NOT a photo, NOT a painting, NOT a sketch — a clean 3D architectural render.",
           "",
           "REQUIRED VISUAL QUALITIES:",
@@ -5907,9 +5945,16 @@ app.post("/generate", async (req, res) => {
 
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
+        // v73.2.7 : polish slide 5 axo avec image reference enhanced (multimodal)
+        const refAxoB64 = getReferenceAxoB64();
+        if (refAxoB64) {
+          console.log(`[SLIDE4-POLISH v73.2.7] Reference enhanced image LOADED (${(refAxoB64.length*0.75/1024).toFixed(0)}KB) → multimodal polish`);
+        } else {
+          console.log(`[SLIDE4-POLISH v73.2.7] No reference image — polish prompt-only (fallback)`);
+        }
         const polishResults = await Promise.all(
           Array.from({ length: SLIDE4_VARIATIONS }, (_, v) =>
-            callPolishAPI(b64Input, polishPrompt, "SLIDE4", v + 1)
+            callPolishAPI(b64Input, polishPrompt, "SLIDE4", v + 1, 1, refAxoB64)
           )
         );
         console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls completed (${Date.now() - t0}ms)`);
@@ -8545,7 +8590,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.6-slide4-google-static on port ${PORT}`);
+  console.log(`BARLO v73.2.7-slide5-multimodal-massings-polish on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
