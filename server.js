@@ -149,7 +149,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.2-sdp-fix" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.1.3-typology-fix" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -5897,6 +5897,9 @@ app.post("/generate-massing", async (req, res) => {
     retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
     // v72.93: Performance — skip AI polish to stay within Make.com 300s timeout
     skip_polish = false,
+    // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
+    input_typologies = "",
+    commerce_size_m2 = 0,
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -6025,6 +6028,9 @@ app.post("/generate-massing", async (req, res) => {
       layout_mode: effectiveLayoutMode,
       commerce_depth_m: Number(commerce_depth_m) || 6,
       retrait_inter_volumes_m: Number(retrait_inter_volumes_m) || 4,
+      // v73.1.3: typology-driven fields (sinon fallback target_units → mauvais mix)
+      input_typologies: input_typologies || "",
+      commerce_size_m2: Number(commerce_size_m2) || 0,
     });
     const sc = scenarios[label] || scenarios.A;
     // v72.28: LOG les 3 scénarios pour vérifier la différenciation
@@ -8326,8 +8332,9 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.1.2-sdp-fix on port ${PORT}`);
+  console.log(`BARLO v73.1.3-typology-fix on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
 });
+
