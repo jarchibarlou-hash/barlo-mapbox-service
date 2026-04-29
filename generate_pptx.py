@@ -488,8 +488,10 @@ def assemble_pptx(data, template_path, output_path):
                     img_key = placeholder_key
                     img_path = downloaded_images.get(img_key)
                     if img_path:
-                        maintain_aspect = 'massing' in placeholder
-                        replace_shape_with_image(slide, shape, img_path, maintain_aspect_ratio=maintain_aspect)
+                        # v73.2.1 : maintain_aspect_ratio=True pour TOUTES les images
+                        # (axo brute slide 4, axo enhanced slide 5, massings A/B/C)
+                        # Evite la deformation horizontale (homothetie respectee)
+                        replace_shape_with_image(slide, shape, img_path, maintain_aspect_ratio=True)
                     else:
                         clear_shape_text(shape)
                     continue
