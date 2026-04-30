@@ -8853,9 +8853,14 @@ app.post("/generate-pptx", async (req, res) => {
         cost_vrd_amenagements: (vent.vrd_fcfa || 0) + (vent.amenagements_ext_fcfa || 0),
       };
       // v72.72: FIX — recommendation_score est 0.0–1.0 dans le moteur → convertir en 0–100
+      // v73.7 FIX RADARS: risk_scores en échelle 0-100 (PAS 1-5) — generate_charts.py expects 0-100
+      // Preuves côté Python: set_ylim(0,100) sur radar, _severity_color(scale=100), docstring "(0-100)".
+      // L'ancien bloc convertissait 0-100 → 1-5 (tâche au centre du radar) puis envoyait riskScores15.
+      // → on envoie maintenant riskMetrics tel quel (déjà calculé en 0-100 lignes 8838-8844).
       return {
         ...riskMetrics,
         ...costBreakdown,
+        risk_scores: { ...riskMetrics },
         recommendation_score: Math.round((sc.recommendation_score || 0.5) * 100),
         sdp_m2: sc.sdp_m2 || 0,
         surface_habitable_m2: sc.surface_habitable_m2 || sc.hab_m2_total || 0,
