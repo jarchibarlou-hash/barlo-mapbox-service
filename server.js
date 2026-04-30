@@ -183,7 +183,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.7-slide5-multimodal-massings-polish" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.9-massing-drift-permissive" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
@@ -6595,11 +6595,8 @@ app.post("/generate-massing", async (req, res) => {
     } else if (elapsedBeforePolish > POLISH_TIME_BUDGET_MS) {
       console.log(`[MASSING-POLISH] v72.93: TIME BUDGET EXCEEDED — ${Math.round(elapsedBeforePolish/1000)}s already spent (limit ${POLISH_TIME_BUDGET_MS/1000}s) → SKIPPING polish`);
     }
-    // v72.107: POLISH MASSING DÉSACTIVÉ définitivement pour stabilité maximale.
-    // Le rendu déterministe (Mapbox + overlays) est la seule source de vérité.
-    // Aucune possibilité d'hallucination IA (socle, commerce fantôme, flottement, etc.).
-    // Pour réactiver plus tard : remplacer la condition `false` par l'ancienne.
-    console.log(`[MASSING-POLISH v72.107] ⚡ Polish désactivé pour stabilité max — rendu déterministe uniquement`);
+    // v73.2.8 : DEBUG explicite pour diagnostiquer pourquoi polish skip
+    console.log(`[MASSING-POLISH-DEBUG v73.2.8] ${label}: OPENAI_API_KEY=${OPENAI_API_KEY ? "SET("+String(OPENAI_API_KEY).substring(0,7)+"...)" : "EMPTY"} skipPolishFlag=${skipPolishFlag} MASSING_SKIP_POLISH=${MASSING_SKIP_POLISH} elapsedBeforePolish=${elapsedBeforePolish}ms budget=${POLISH_TIME_BUDGET_MS}ms`);
     if (OPENAI_API_KEY && !skipPolishFlag && elapsedBeforePolish <= POLISH_TIME_BUDGET_MS) {
       try {
         console.log(`[MASSING-POLISH] v72.34: Starting robust multi-render (${MASSING_VARIATIONS} variations) for ${label}... model=${POLISH_MODEL}`);
@@ -6727,9 +6724,10 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
             continue;
           }
           const enhancedBuf = Buffer.from(result.b64, "base64");
-          // Massing uses default threshold (0.25) — light polish
-          // v72.108: drift threshold 0.15
-          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.15);
+          // v73.2.9 : drift threshold remonte 0.15 -> 0.45 pour permettre le changement de palette OFF-WHITE
+          // Le prompt v73.2.4 OFF-WHITE change le sol vert herbe -> cream/beige, ce qui cause naturellement >15% drift
+          // Tests prod : drift=18-37% sur prompts OFF-WHITE legitimes (pas d'hallucination geometrique)
+          const drift = await detectDriftFromBuffers(pngClean, enhancedBuf, W, H, 0.45);
           // v72.22: COLOR PRESERVATION CHECK — verify orange and blue floor bands survived
           let colorCheckPassed = true;
           let colorLog = "";
@@ -6799,7 +6797,12 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
         console.error(`[MASSING-POLISH] ${label} EXCEPTION:`, polishErr.message, polishErr.stack);
       }
     } else {
-      console.warn(`[MASSING-POLISH] OPENAI_API_KEY not set — skipping polish`);
+      // v73.2.8 : afficher TOUTES les raisons du skip, pas juste OPENAI_API_KEY
+      const reasons = [];
+      if (!OPENAI_API_KEY) reasons.push("OPENAI_API_KEY empty/undefined");
+      if (skipPolishFlag) reasons.push(`skipPolishFlag=true (skip_polish body=${skip_polish}, MASSING_SKIP_POLISH=${MASSING_SKIP_POLISH})`);
+      if (elapsedBeforePolish > POLISH_TIME_BUDGET_MS) reasons.push(`time budget exceeded (${elapsedBeforePolish}ms > ${POLISH_TIME_BUDGET_MS}ms)`);
+      console.warn(`[MASSING-POLISH v73.2.8] ${label} SKIPPED — reasons: ${reasons.join(", ") || "UNKNOWN"}`);
     }
     console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
@@ -8590,7 +8593,7 @@ app.post("/generate-pptx", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v73.2.7-slide5-multimodal-massings-polish on port ${PORT}`);
+  console.log(`BARLO v73.2.9-massing-drift-permissive on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
