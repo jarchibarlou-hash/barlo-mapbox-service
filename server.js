@@ -4392,8 +4392,8 @@ async function fetchGoogleStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCo
 }
 // ─── v73.2.5 : Mapbox Static Images API (vraie raster satellite, pas vectoriel) ───
 async function fetchMapboxStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCoords, mapboxToken, width = 1280, height = 1280 }) {
-  const parcelArr = ...[parcelCoords.map(c => c.lon, [c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]];
-  const envelopeArr = ...[envelopeCoords.map(c => c.lon, [c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]];
+  const parcelArr = [...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]];
+  const envelopeArr = [...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]];
   const geojson = {
     type: "FeatureCollection",
     features: [
@@ -4425,11 +4425,11 @@ async function fetchMapboxStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCo
 async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings, pitch = 58, mapStyle = "hektar") {
   const parcelGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [...[parcelCoords.map(c => c.lon, [c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
   };
   const envelopeGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [...[envelopeCoords.map(c => c.lon, [c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
   // v73.1: Zone de recul front matérialisée visuellement
   const setbackFrontGeoJSON = {
@@ -4469,7 +4469,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   const accEndLon = access.lon + (arrowLen / (R_EARTH * Math.cos(access.lat * Math.PI / 180))) * 180 / Math.PI * Math.sin(access.bearing * Math.PI / 180);
   const accessLineGeoJSON = {
     type: "Feature", properties: {},
-    geometry: { type: "LineString", coordinates: [access.lon, [access.lat], [accEndLon, accEndLat]] },
+    geometry: { type: "LineString", coordinates: [[access.lon, access.lat], [accEndLon, accEndLat]] },
   };
   const accessPointGeoJSON = {
     type: "Feature", properties: { label: "Accès" },
@@ -4493,7 +4493,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
     };
   });
   // v72.127: race Tilequery against 3s timeout for slide 4 to stay under Make 25s budget
-  const parcelCoordsArray = parcelCoords.map(c => c.lon, [c.lat]);
+  const parcelCoordsArray = parcelCoords.map(c => [c.lon, c.lat]);
   const EXCLUDED_IDS = await Promise.race([
     getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
     new Promise(resolve => setTimeout(() => {
@@ -4595,7 +4595,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   };
   const map = new mapboxgl.Map({
     container: 'map', style: ${mapStyle === "satellite" ? '"mapbox://styles/mapbox/satellite-streets-v12"' : 'hektarStyle'},
-    center: ${center.lon}, ${[center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: ${pitch},
+    center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: ${pitch},
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
@@ -4651,7 +4651,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       properties: {},
       geometry: {
         type: 'Polygon',
-        coordinates: [${[parcelCoords.map(c => `${c.lon}, ${[c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
+        coordinates: [[${parcelCoords.map(c => `[${c.lon}, ${c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
       }
     };
     // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
@@ -4723,16 +4723,16 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
 async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
   const parcelGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [...[parcelCoords.map(c => c.lon, [c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
   };
   const envelopeGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [...[envelopeCoords.map(c => c.lon, [c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [[...envelopeCoords.map(c => [c.lon, c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
   const massingGeoJSON = {
     type: "Feature",
     properties: { height: massingParams.total_height, base_height: 0 },
-    geometry: { type: "Polygon", coordinates: [...[massingCoords.map(c => c.lon, [c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [[...massingCoords.map(c => [c.lon, c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
@@ -4788,7 +4788,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
   };
   const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
-    center: ${center.lon}, ${[center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
+    center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
@@ -4833,7 +4833,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     const commerceGeoJSON = ${JSON.stringify({
       type: "Feature",
       properties: { height: rdcH, base_height: 0 },
-      geometry: { type: "Polygon", coordinates: [...massingParams.commerce_[coords.map(c => c.lon, [c.lat]), [massingParams.commerce_coords[0].lon, massingParams.commerce_coords[0].lat]]] },
+      geometry: { type: "Polygon", coordinates: [[...massingParams.commerce_coords.map(c => [c.lon, c.lat]), [massingParams.commerce_coords[0].lon, massingParams.commerce_coords[0].lat]]] },
     })};
     map.addSource('commerce-volume', { type: 'geojson', data: commerceGeoJSON });
     // Commerce : 1 niveau ORANGE en avant
@@ -6564,6 +6564,7 @@ ANTI-HALLUCINATION RULES (CRITICAL):
 - Do NOT add underground/basement levels or visible foundation slabs.
 - Do NOT widen, extend, or reshape any floor band.
 - The building has EXACTLY the floor bands shown — do NOT add or merge any.
+
 ${_colorInstruction}
 REQUIRED VISUAL QUALITIES:
 - Clean simple OFF-WHITE / very light beige existing context buildings with crisp geometric edges
@@ -7081,7 +7082,7 @@ function sanitizePremiumTexts(texts, flat) {
       cv.vrdPct = flat[`${recSc}_ventil_vrd_pct`] || "";
       // Replace [montant] FCFA ([%]) patterns sequentially
       let montantIdx = 0;
-      const montants = cv.go, cv.go, [cv.so, cv.vrd, cv.lt]; // fondations≈GO, GO, SO, VRD, LT
+      const montants = [cv.go, cv.go, cv.so, cv.vrd, cv.lt]; // fondations≈GO, GO, SO, VRD, LT
       const pcts = [cv.goPct, cv.goPct, cv.soPct, cv.vrdPct, cv.ltPct];
       text = text.replace(/\[montant\]\s*FCFA\s*\(\[%\]\)/g, () => {
         const m = montants[montantIdx] || "N/A";
@@ -8345,4 +8346,3 @@ app.listen(PORT, () => {
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
   console.log(`Google Maps: ${GOOGLE_MAPS_API_KEY ? "OK" : "MISSING (fallback Mapbox satellite)"}`);
 });
- _ voici donc ce que j'ai copié
