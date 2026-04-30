@@ -128,7 +128,7 @@
                     <div class="detail-meta" id="dMeta">—</div>
                 </div>
                 <div class="detail-buttons">
-                    <button class="btn-process" id="processBtn" onclick="processLead()">⚙ Traiter le lead (8A→8D)</button>
+                    <button class="btn-process" id="processBtn" onclick="processLead()">⚙ Traiter le lead (8A→8F)</button>
                     <button class="btn-generate" id="generateBtn" onclick="generatePPTX()" disabled>📄 Générer le PPTX</button>
                 </div>
             </div>
@@ -220,15 +220,15 @@ function selectFormLead(lead) {
     renderInbox(); hideAll(); $("panelRight").classList.add("active");
     $("dRef").textContent=lead.ref||"—"; $("dClient").textContent=lead.client||"—";
     $("dMeta").textContent=[lead.city,lead.country,lead.date].filter(Boolean).join(" · ");
-    $("processBtn").disabled=lead.processed;
-    $("processBtn").textContent=lead.processed?"✓ Déjà traité":"⚙ Traiter le lead (8A→8D)";
+    $("processBtn").disabled=false;
+    $("processBtn").textContent=lead.processed?"↻ Retraiter (8A→8F)":"⚙ Traiter le lead (8A→8F)";
     $("generateBtn").disabled=!lead.processed;
     if (lead.processed) { loadPipelineData(lead.ref); } else { clearCards(); showDetail(); }
 }
 
 async function selectPipeLead(ref) {
     selectedLead={ref,_tab:"pipeline"}; leadProcessed=true; renderInbox(); hideAll();
-    $("panelRight").classList.add("active"); $("processBtn").disabled=true; $("processBtn").textContent="✓ Déjà traité";
+    $("panelRight").classList.add("active"); $("processBtn").disabled=false; $("processBtn").textContent="↻ Retraiter (8A→8F)";
     loadPipelineData(ref);
 }
 
@@ -243,21 +243,25 @@ async function loadPipelineData(ref) {
 }
 
 async function processLead() {
-    if (!selectedLead||!selectedLead.formRow) return;
+    if (!selectedLead) return;
+    if (!selectedLead.formRow && !selectedLead.ref) return;
+    const isReprocess = leadProcessed;
     const btn=$("processBtn"); btn.disabled=true;
-    btn.innerHTML='<div class="spinner" style="width:15px;height:15px;border-width:2px;margin:0"></div> Traitement...';
-    showGenLog("Traitement du lead (8A → 8D)",[{id:"8a",label:"8A — Intégration form → PIPELINE"},{id:"8b",label:"8B — Récupération polygon GPS"},{id:"8c",label:"8C — Calcul enveloppe & faisabilité"},{id:"8d",label:"8D — Calcul des scénarios A/B/C"},{id:"write",label:"Écriture des résultats"}]);
+    btn.innerHTML='<div class="spinner" style="width:15px;height:15px;border-width:2px;margin:0"></div> '+(isReprocess?'Retraitement...':'Traitement...');
+    showGenLog((isReprocess?"Retraitement du lead":"Traitement du lead")+" (8A → 8F)",[{id:"8a",label:"8A — Intégration form → PIPELINE"},{id:"8b",label:"8B — Récupération polygon GPS"},{id:"8c",label:"8C — Calcul enveloppe & faisabilité"},{id:"8d",label:"8D — Calcul des scénarios A/B/C"},{id:"8e",label:"8E — Slide 4 satellite + slide 5 axo IA"},{id:"8f",label:"8F — Massings A / B / C"},{id:"write",label:"Écriture des résultats"}]);
     stepState("8a","active");
     try {
-        const steps=["8a","8b","8c","8d","write"]; let si=0;
-        const timer=setInterval(()=>{if(si<steps.length-1){stepState(steps[si],"done");si++;stepState(steps[si],"active");}},5000);
-        const r=await fetch(`${API}/api/process-lead`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({formRow:selectedLead.formRow})});
+        const steps=["8a","8b","8c","8d","8e","8f","write"]; let si=0;
+        const timer=setInterval(()=>{if(si<steps.length-1){stepState(steps[si],"done");si++;stepState(steps[si],"active");}},15000);
+        const payload = selectedLead.formRow ? {formRow:selectedLead.formRow} : {ref:selectedLead.ref};
+        const r=await fetch(`${API}/api/process-lead`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
         clearInterval(timer); const d=await r.json();
         if (!r.ok||!d.ok) throw new Error(d.error||"Échec");
         steps.forEach(s=>stepState(s,"done"));
         leadProcessed=true; currentBody8D=d.body8D;
         renderDetail({...d.body8D,...d.display,_ref:d.ref});
-        btn.textContent="✓ Traité"; $("generateBtn").disabled=false; fetchAll();
+        btn.disabled=false; btn.textContent="↻ Retraiter (8A→8F)";
+        $("generateBtn").disabled=false; fetchAll();
     } catch(e) {
         document.querySelectorAll(".gen-step.active").forEach(s=>{s.classList.remove("active");s.classList.add("error");s.querySelector(".icon").textContent="✕";});
         showError(`Erreur : ${e.message}`); btn.disabled=false; btn.textContent="⚙ Réessayer";
