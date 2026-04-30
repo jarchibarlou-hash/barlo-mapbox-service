@@ -18,7 +18,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "2mb", type: () => true }));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const GOOGLE_MAPS_API_KEY = [process.env.GOOGLE](http://process.env.GOOGLE)_MAPS_API_KEY; // v73.2.6 : Google Maps Static API pour vue top haute qualite
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY; // v73.2.6 : Google Maps Static API pour vue top haute qualite
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
@@ -27,12 +27,12 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
 const POLISH_MODEL = process.env.OPENAI_POLISH_MODEL || "gpt-4o";
-const POLISH_TIMEOUT_MS = 120000; // v72.112: 120s per API call (increased from 60s for more reliable polish) (was 90s — too slow for [Make.com](http://Make.com) 300s limit)
+const POLISH_TIMEOUT_MS = 120000; // v72.112: 120s per API call (increased from 60s for more reliable polish) (was 90s — too slow for Make.com 300s limit)
 const POLISH_MAX_RETRIES = 1;    // v72.93: 1 retry only (was 2 — worst case 270s of retries alone)
 const POLISH_RETRY_DELAY_MS = 2000; // 2s between retries
 const POLISH_MAX_IMAGE_DIM = 1536;  // resize to max 1536px before sending
 // v72.93: TIME BUDGET — skip polish if endpoint has already spent this many ms
-const POLISH_TIME_BUDGET_MS = 180000; // 180s = leave 120s margin for [Make.com](http://Make.com) 300s timeout
+const POLISH_TIME_BUDGET_MS = 180000; // 180s = leave 120s margin for Make.com 300s timeout
 // v73.2.7 : polish massing REACTIVE par defaut avec prompt OFF-WHITE (style maquette hektar blanc casse + bandes colorees preservees).
 // Override possible via env var MASSING_SKIP_POLISH=true pour rollback rapide.
 const MASSING_SKIP_POLISH = process.env.MASSING_SKIP_POLISH === "true";
@@ -149,7 +149,7 @@ async function callPolishAPI(b64Input, prompt, label, variationIndex, attempt = 
     return { b64: polishedB64 };
   } catch (err) {
     clearTimeout(timer);
-    const isTimeout = [err.name](http://err.name) === "AbortError";
+    const isTimeout = err.name === "AbortError";
     const errType = isTimeout ? "TIMEOUT" : "NETWORK";
     console.error(`${tag} ${errType}: ${err.message}`);
     if (attempt <= POLISH_MAX_RETRIES) {
@@ -179,7 +179,7 @@ async function resizeForPolish(pngBuf, maxDim) {
 }
 app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.8-ghost-floor-fix-anti-hallucination" }));
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
-[app.post](http://app.post)("/diag-massing", async (req, res) => {
+app.post("/diag-massing", async (req, res) => {
   try {
     const { polygon_points, site_area, setback_front = 3, setback_side = 3, setback_back = 3,
       fp_m2 = 1147, envelope_w = 24, envelope_d = 24, front_edge } = req.body;
@@ -187,23 +187,23 @@ app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbo
     const coords = polygon_points.split("|").map(pt => {
       const [lat, lon] = pt.trim().split(",").map(Number);
       return { lat, lon };
-    }).filter(p => !isNaN([p.lat](http://p.lat)) && !isNaN(p.lon));
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
     if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
-    const cLat = coords.reduce((s, p) => s + [p.lat](http://p.lat), 0) / coords.length;
+    const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
     const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
     // Parcelle en mètres
-    const parcelM = [coords.map](http://coords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
-    const parcelMinX = Math.min(...[parcelM.map](http://parcelM.map)(p => p.x)), parcelMaxX = Math.max(...[parcelM.map](http://parcelM.map)(p => p.x));
-    const parcelMinY = Math.min(...[parcelM.map](http://parcelM.map)(p => p.y)), parcelMaxY = Math.max(...[parcelM.map](http://parcelM.map)(p => p.y));
+    const parcelM = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
+    const parcelMinX = Math.min(...parcelM.map(p => p.x)), parcelMaxX = Math.max(...parcelM.map(p => p.x));
+    const parcelMinY = Math.min(...parcelM.map(p => p.y)), parcelMaxY = Math.max(...parcelM.map(p => p.y));
     // v70: front_edge en paramètre = override, sinon détection OSM
     const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
       ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
       : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
     // Enveloppe
     const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
-    const envM = [envelopeCoords.map](http://envelopeCoords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
-    const envMinX = Math.min(...[envM.map](http://envM.map)(p => p.x)), envMaxX = Math.max(...[envM.map](http://envM.map)(p => p.x));
-    const envMinY = Math.min(...[envM.map](http://envM.map)(p => p.y)), envMaxY = Math.max(...[envM.map](http://envM.map)(p => p.y));
+    const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+    const envMinX = Math.min(...envM.map(p => p.x)), envMaxX = Math.max(...envM.map(p => p.x));
+    const envMinY = Math.min(...envM.map(p => p.y)), envMaxY = Math.max(...envM.map(p => p.y));
     // Aire réelle enveloppe
     let envAreaShoelace = 0;
     for (let i = 0; i < envM.length; i++) {
@@ -219,9 +219,9 @@ app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbo
       project_type: "NEUF", existing_fp_m2: 0,
     });
     // Massing en mètres pour vérifier les dimensions
-    const massingM = [massingCoords.map](http://massingCoords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
-    const masMinX = Math.min(...[massingM.map](http://massingM.map)(p => p.x)), masMaxX = Math.max(...[massingM.map](http://massingM.map)(p => p.x));
-    const masMinY = Math.min(...[massingM.map](http://massingM.map)(p => p.y)), masMaxY = Math.max(...[massingM.map](http://massingM.map)(p => p.y));
+    const massingM = massingCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+    const masMinX = Math.min(...massingM.map(p => p.x)), masMaxX = Math.max(...massingM.map(p => p.x));
+    const masMinY = Math.min(...massingM.map(p => p.y)), masMaxY = Math.max(...massingM.map(p => p.y));
     let masAreaShoelace = 0;
     for (let i = 0; i < massingM.length; i++) {
       const j = (i + 1) % massingM.length;
@@ -234,14 +234,14 @@ app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbo
       parcel: {
         centroid: { lat: cLat, lon: cLon },
         bbox_m: { w: (parcelMaxX - parcelMinX).toFixed(1), d: (parcelMaxY - parcelMinY).toFixed(1) },
-        vertices_m: [parcelM.map](http://parcelM.map)(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+        vertices_m: parcelM.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
       },
       envelope: {
         vertices_count: envelopeCoords.length,
         bbox_m: { w: (envMaxX - envMinX).toFixed(1), d: (envMaxY - envMinY).toFixed(1) },
         area_m2: +envAreaShoelace.toFixed(0),
-        vertices_m: [envM.map](http://envM.map)(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
-        vertices_gps: [envelopeCoords.map](http://envelopeCoords.map)(c => ({ lat: +[c.lat](http://c.lat).toFixed(7), lon: +c.lon.toFixed(7) })),
+        vertices_m: envM.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+        vertices_gps: envelopeCoords.map(c => ({ lat: +c.lat.toFixed(7), lon: +c.lon.toFixed(7) })),
       },
       massing: {
         typology: massingCoords._typology,
@@ -250,8 +250,8 @@ app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbo
         area_m2: +masAreaShoelace.toFixed(0),
         fill_ratio: +(masAreaShoelace / envAreaShoelace).toFixed(3),
         target_ratio: +(fp / envAreaShoelace).toFixed(3),
-        vertices_m: [massingM.map](http://massingM.map)(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
-        vertices_gps: massingCoords.filter(c => [c.lat](http://c.lat)).map(c => ({ lat: +[c.lat](http://c.lat).toFixed(7), lon: +c.lon.toFixed(7) })),
+        vertices_m: massingM.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })),
+        vertices_gps: massingCoords.filter(c => c.lat).map(c => ({ lat: +c.lat.toFixed(7), lon: +c.lon.toFixed(7) })),
       },
       sheet_vs_real: {
         sheet_envelope: { w: Number(envelope_w), d: Number(envelope_d), area: Number(envelope_w) * Number(envelope_d) },
@@ -264,7 +264,7 @@ app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbo
 });
 // ─── DIAGNOSTIC : tester compute-scenarios avec des valeurs par défaut ──────
 app.get("/diag-scenarios", (req, res) => {
-  const sa = Number([req.query.site](http://req.query.site)_area) || 1950;
+  const sa = Number(req.query.site_area) || 1950;
   const ew = Number(req.query.ew) || 55;
   const ed = Number(req.query.ed) || 55;
   const zt = req.query.zoning || "URBAIN";
@@ -301,9 +301,9 @@ function toM(lat, lon, cLat, cLon) {
 }
 function brng(p1, p2) {
   const dLon = (p2.lon - p1.lon) * Math.PI / 180;
-  const y = Math.sin(dLon) * Math.cos([p2.lat](http://p2.lat) * Math.PI / 180);
-  const x = Math.cos([p1.lat](http://p1.lat) * Math.PI / 180) * Math.sin([p2.lat](http://p2.lat) * Math.PI / 180) -
-    Math.sin([p1.lat](http://p1.lat) * Math.PI / 180) * Math.cos([p2.lat](http://p2.lat) * Math.PI / 180) * Math.cos(dLon);
+  const y = Math.sin(dLon) * Math.cos(p2.lat * Math.PI / 180);
+  const x = Math.cos(p1.lat * Math.PI / 180) * Math.sin(p2.lat * Math.PI / 180) -
+    Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
 // ── v69.0: Détection route — Overpass (2 miroirs) + Nominatim fallback ──
@@ -368,7 +368,7 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       probeResults.push({ edgeIdx: i, probeLat, probeLon, midLat, midLon });
     }
     // Lancer les requêtes Tilequery en parallèle (max 4 arêtes, on les fait toutes)
-    const tqPromises = [probeResults.map](http://probeResults.map)(async (probe) => {
+    const tqPromises = probeResults.map(async (probe) => {
       const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${probe.probeLon},${probe.probeLat}.json?radius=50&limit=10&layers=road&access_token=${MAPBOX_TOKEN}`;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
@@ -378,12 +378,12 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
         if (!resp.ok) return { ...probe, roads: [], error: `HTTP ${resp.status}` };
         const data = await resp.json();
         const features = (data.features || []).filter(f =>
-          [f.properties](http://f.properties) && [f.properties](http://f.properties).class && ROAD_CLASS_WEIGHT[[f.properties](http://f.properties).class] > 0
+          f.properties && f.properties.class && ROAD_CLASS_WEIGHT[f.properties.class] > 0
         );
         return { ...probe, roads: features, error: null };
       } catch (e) {
         clearTimeout(timer);
-        return { ...probe, roads: [], error: [e.name](http://e.name) === "AbortError" ? "TIMEOUT" : e.message };
+        return { ...probe, roads: [], error: e.name === "AbortError" ? "TIMEOUT" : e.message };
       }
     });
     const results = await Promise.all(tqPromises);
@@ -415,9 +415,9 @@ async function tryMapboxTilequery(coords, cLat, cLon) {
       let bestClassNormal = "?", bestDistNormal = 999;
       let bestClassAll = "?", bestDistAll = 999;
       for (const feat of r.roads) {
-        const cls = [feat.properties](http://feat.properties).class || "service";
+        const cls = feat.properties.class || "service";
         const weight = ROAD_CLASS_WEIGHT[cls] || 1;
-        const dist = [feat.properties](http://feat.properties).tilequery?.distance || 50;
+        const dist = feat.properties.tilequery?.distance || 50;
         const sc = weight * 100 / Math.max(1, dist);
         // Score ALL (incluant ruelles)
         if (sc > scoreAll) { scoreAll = sc; bestClassAll = cls; bestDistAll = dist; }
@@ -480,8 +480,8 @@ async function tryNominatim(coords, cLat, cLon) {
     clearTimeout(timer);
     if (!resp.ok) { console.warn(`│ NOMINATIM: HTTP ${resp.status}`); return null; }
     const data = await resp.json();
-    if (!data || ![data.lat](http://data.lat) || !data.lon) { console.warn("│ NOMINATIM: pas de coordonnées"); return null; }
-    const roadLat = parseFloat([data.lat](http://data.lat));
+    if (!data || !data.lat || !data.lon) { console.warn("│ NOMINATIM: pas de coordonnées"); return null; }
+    const roadLat = parseFloat(data.lat);
     const roadLon = parseFloat(data.lon);
     const roadName = data.display_name || "?";
     console.log(`│ NOMINATIM: route → "${roadName.substring(0, 60)}" à (${roadLat.toFixed(6)}, ${roadLon.toFixed(6)})`);
@@ -495,7 +495,7 @@ async function tryNominatim(coords, cLat, cLon) {
     console.log(`│ NOMINATIM: ✓ front = arête ${bestEdge} (à ${bestDist.toFixed(1)}m)`);
     return bestEdge;
   } catch (err) {
-    console.warn(`│ NOMINATIM: ${[err.name](http://err.name) === "AbortError" ? "TIMEOUT 4s" : err.message}`);
+    console.warn(`│ NOMINATIM: ${err.name === "AbortError" ? "TIMEOUT 4s" : err.message}`);
     return null;
   }
 }
@@ -534,7 +534,7 @@ function computeAccessPoint(coords, cLat, cLon, frontEdgeIndex) {
   return { lat: midLat, lon: midLon, bearing: outBrng };
 }
 function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) {
-  const pts = [coords.map](http://coords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const n = pts.length;
   // ── v56.3 FIX: Détecter le sens de rotation (CW vs CCW) ──
   // Shoelace sign: positif = CCW, négatif = CW
@@ -599,7 +599,7 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
   }
   const segs = [];
   for (let i = 0; i < n; i++) segs.push(offSeg(pts[i], pts[(i + 1) % n], setSB(i)));
-  const envM = [segs.map](http://segs.map)((_, i) => intersect(segs[(i + n - 1) % n], segs[i]));
+  const envM = segs.map((_, i) => intersect(segs[(i + n - 1) % n], segs[i]));
   // ── v56.3 VALIDATION: vérifier que l'enveloppe est PLUS PETITE que la parcelle ──
   let envArea = 0, parcelArea = 0;
   for (let i = 0; i < envM.length; i++) {
@@ -609,12 +609,12 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
   envArea = Math.abs(envArea) / 2;
   parcelArea = Math.abs(windingSum) / 2;
   console.log(`│ Envelope area=${envArea.toFixed(0)}m² vs Parcel area=${parcelArea.toFixed(0)}m² → ${envArea < parcelArea ? "OK (inside)" : "⚠ PROBLÈME (outside!)"}`);
-  const result = [envM.map](http://envM.map)(m => ({
+  const result = envM.map(m => ({
     lat: cLat + m.y / R_EARTH * 180 / Math.PI,
     lon: cLon + m.x / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
   }));
   // v70: Log GPS de chaque vertex d'enveloppe pour debug visuel
-  result.forEach((p, i) => console.log(`│ Envelope GPS V${i}: ${[p.lat](http://p.lat).toFixed(6)},${p.lon.toFixed(6)}`));
+  result.forEach((p, i) => console.log(`│ Envelope GPS V${i}: ${p.lat.toFixed(6)},${p.lon.toFixed(6)}`));
   // Log des distances parcelle→enveloppe par arête
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
@@ -628,10 +628,10 @@ function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) 
   return result;
 }
 function computeZoom(coords, cLat, cLon) {
-  const pts = [coords.map](http://coords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const ext = Math.max(
-    Math.max(...[pts.map](http://pts.map)(p => p.x)) - Math.min(...[pts.map](http://pts.map)(p => p.x)),
-    Math.max(...[pts.map](http://pts.map)(p => p.y)) - Math.min(...[pts.map](http://pts.map)(p => p.y)), 20
+    Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
+    Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
   // v73.1.5: zoom ×3 vs original — parcelle plus grande encore (multiplier 1.5 → 1.0)
   const mpp = (ext * 1.0) / 1280;
@@ -639,17 +639,17 @@ function computeZoom(coords, cLat, cLon) {
   return Math.min(19, Math.max(17.5, Math.round(z * 4) / 4));
 }
 function computeZoomMassing(coords, cLat, cLon) {
-  const pts = [coords.map](http://coords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const ext = Math.max(
-    Math.max(...[pts.map](http://pts.map)(p => p.x)) - Math.min(...[pts.map](http://pts.map)(p => p.x)),
-    Math.max(...[pts.map](http://pts.map)(p => p.y)) - Math.min(...[pts.map](http://pts.map)(p => p.y)), 20
+    Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x)),
+    Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y)), 20
   );
   const mpp = (ext * 0.45) / 1280;  // v72.85: zoom ×2 sur bâtiment principal — cadrage serré
   const z = Math.log2(156543.03 * Math.cos(cLat * Math.PI / 180) / mpp);
   return Math.min(19.5, Math.max(17.5, Math.round(z * 4) / 4));
 }
 function computeBearing(coords, cLat, cLon) {
-  const pts = [coords.map](http://coords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
+  const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   let longest = 0, angle = 0;
   for (let i = 0; i < pts.length; i++) {
     const j = (i + 1) % pts.length;
@@ -693,7 +693,7 @@ async function getIntersectingBuildingIds(parcelCoordsArray, mapboxToken) {
         else if (f.geometry.type === "MultiPolygon") fPoly = turf.multiPolygon(f.geometry.coordinates);
         if (!fPoly) continue;
         if (turf.booleanIntersects(fPoly, parcelPoly)) {
-          if ([f.id](http://f.id) !== undefined && [f.id](http://f.id) !== null) ids.push([f.id](http://f.id));
+          if (f.id !== undefined && f.id !== null) ids.push(f.id);
         }
       } catch (inner) { /* skip bad features */ }
     }
@@ -1623,7 +1623,7 @@ function buildMixB_logements_V73(typologies) {
   const nKeep = Math.ceil(N / 2);
   const nDowngrade = N - nKeep;
   const sorted = [...allUnits].sort((a, b) => TYPO_ORDER_V73.indexOf(a) - TYPO_ORDER_V73.indexOf(b));
-  const result = [sorted.map](http://sorted.map)((t, i) => i < nDowngrade ? downgradeTypeV73(t) : t);
+  const result = sorted.map((t, i) => i < nDowngrade ? downgradeTypeV73(t) : t);
   const counts = {};
   for (const t of result) counts[t] = (counts[t] || 0) + 1;
   return Object.keys(counts)
@@ -1761,8 +1761,8 @@ function computeProgramDrivenScenarioV73(params) {
     mixA_logements = []; mixB_logements = []; mixC_logements = [];
   } else if (programType === "MAISON") {
     mixA_logements = typologiesA_logements;
-    mixB_logements = consolidateTypologiesV73(typologiesA_[logements.map](http://logements.map)(t => ({ type: downgradeTypeV73(t.type), count: t.count })));
-    mixC_logements = consolidateTypologiesV73(typologiesA_[logements.map](http://logements.map)(t => ({ type: downgradeTypeV73(downgradeTypeV73(t.type)), count: t.count })));
+    mixB_logements = consolidateTypologiesV73(typologiesA_logements.map(t => ({ type: downgradeTypeV73(t.type), count: t.count })));
+    mixC_logements = consolidateTypologiesV73(typologiesA_logements.map(t => ({ type: downgradeTypeV73(downgradeTypeV73(t.type)), count: t.count })));
   } else {
     mixA_logements = typologiesA_logements;
     mixB_logements = buildMixB_logements_V73(typologiesA_logements);
@@ -2017,7 +2017,7 @@ function computeSmartScenarios({
     // Si format "X–Y M FCFA", prendre le Y (dernier nombre avant M FCFA)
     const allFcfaM = [...rawBudget.matchAll(/(\d[\d\s.,]*)\s*M\s*FCFA/gi)];
     if (allFcfaM.length > 0) {
-      detectedMaxFCFA = Math.max(...[allFcfaM.map](http://allFcfaM.map)(m => parseFloat(m[1].replace(/[\s,]/g, '').replace(',', '.')) * 1000000));
+      detectedMaxFCFA = Math.max(...allFcfaM.map(m => parseFloat(m[1].replace(/[\s,]/g, '').replace(',', '.')) * 1000000));
     }
   }
   if (!detectedMaxFCFA) {
@@ -2241,8 +2241,8 @@ function computeSmartScenarios({
     levels = v73Result.levels;
     unitMix = v73Result.unit_mix;
     unitMixDetail = v73Result.unit_mix_detail;
-    totalUnitsResult = [v73Result.total](http://v73Result.total)_units;
-    totalUseful = [v73Result.total](http://v73Result.total)_useful;
+    totalUnitsResult = v73Result.total_units;
+    totalUseful = v73Result.total_useful;
     hasPilotis = v73Result.has_pilotis;
     pilotisLevels = hasPilotis ? 1 : 0;
     splitLayout = v73Result.split_layout;
@@ -2695,7 +2695,7 @@ function computeSmartScenarios({
     const bFp = Math.round(r.B.fp_m2), cFp = Math.round(r.C.fp_m2);
     const bSdp = Math.round(r.B.sdp_m2), cSdp = Math.round(r.C.sdp_m2);
     // v72.82: calcul du SDP min pour que le programme C rentre
-    const cTotalUseful = [r.C.total](http://r.C.total)_useful_m2 || r.C.surface_habitable_m2 || 0;
+    const cTotalUseful = r.C.total_useful_m2 || r.C.surface_habitable_m2 || 0;
     const cMinSdp = cTotalUseful > 0 ? Math.ceil(cTotalUseful / (1 - 0.15)) : 0;
     if (bLev === cLev && bFp === cFp) {
       console.log(`│ ⚠️ v70.10 ANTI-COLLAPSE: B(${bLev}niv,${bFp}m²) === C(${cLev}niv,${cFp}m²) → différenciation`);
@@ -2738,7 +2738,7 @@ function computeSmartScenarios({
     const sdp = Math.round(sc_data.sdp);
     const ces = sc_data.ces_fill_pct;
     const niv = sc_data.levels;
-    const libre = Math.round(sc_[data.free](http://data.free)_ground_m2);
+    const libre = Math.round(sc_data.free_ground_m2);
     if (label === "A") {
       return `Intensification : exploitation maximale du potentiel constructible du terrain. Emprise au sol de ${ces}%, developpant ${sdp}m² de SDP sur ${niv} niveaux. Cette option maximise la surface construite et le nombre d'unites, au prix d'un sol libre reduit (${libre}m²).`;
     } else if (label === "B") {
@@ -2758,12 +2758,12 @@ function computeSmartScenarios({
       sdp_m2: sc.sdp_m2,
       surface_habitable_m2: sc.surface_habitable_m2 || 0,
       ratio_efficacite_pct: sc.ratio_efficacite_pct || 0,
-      unites: [sc.total](http://sc.total)_units,
+      unites: sc.total_units,
       m2_par_logement: sc.m2_habitable_par_logement || 0,
       cout_total_fcfa: sc.cost_total_fcfa || sc.estimated_cost,
       cout_par_unite: sc.cost_per_unit || 0,
       cout_par_m2_sdp: sc.cost_per_m2_sdp || 0,
-      cout_par_m2_marche: [sc.market](http://sc.market)_cost_per_m2 || 0,
+      cout_par_m2_marche: sc.market_cost_per_m2 || 0,
       cout_par_m2_ajuste: sc.cost_per_m2 || 0,
       cost_adjusted: sc.cost_adjusted || false,
       cout_par_m2_habitable: sc.cost_per_m2_habitable || 0,
@@ -2773,8 +2773,8 @@ function computeSmartScenarios({
       budget_fit: sc.budget_fit,
       parking: sc.parking_spots_estimate,
       parking_detail: sc.parking_detail || {},
-      sol_libre_m2: [sc.free](http://sc.free)_ground_m2,
-      sol_libre_pct: [sc.free](http://sc.free)_ground_m2 > 0 ? Math.round([sc.free](http://sc.free)_ground_m2 / site_area * 100) : 0,
+      sol_libre_m2: sc.free_ground_m2,
+      sol_libre_pct: sc.free_ground_m2 > 0 ? Math.round(sc.free_ground_m2 / site_area * 100) : 0,
       espace_degage: sc.espace_degage || {},
       mitoyennete_detail: sc.mitoyennete_detail || {},
       // v57.6 : coût fourchette + complexité + risque (diagnostic scope)
@@ -2919,7 +2919,7 @@ function computeSmartScenarios({
     const costM = Math.round((sc.cost_total_fcfa || sc.estimated_cost) / 1e6);
     const costBas = sc.cout_fourchette ? Math.round(sc.cout_fourchette.bas / 1e6) : Math.round(costM * 0.85);
     const costHaut = sc.cout_fourchette ? Math.round(sc.cout_fourchette.haut / 1e6) : Math.round(costM * 1.2);
-    const habM2 = sc.surface_habitable_m2 || [sc.total](http://sc.total)_useful_m2 || 0;
+    const habM2 = sc.surface_habitable_m2 || sc.total_useful_m2 || 0;
     const m2Logt = sc.m2_habitable_par_logement || 0;
     const coutLogt = sc.cost_per_unit ? Math.round(sc.cost_per_unit / 1e6) : 0;
     const reg = sc.regulatory || {};
@@ -2932,7 +2932,7 @@ function computeSmartScenarios({
     let contrainteDominante = "equilibre"; // default
     let contrainteExplication = "";
     const budgetMaxCtx = ctx.budgetMax || 0;
-    const solLibrePct = [sc.free](http://sc.free)_ground_m2 > 0 ? [sc.free](http://sc.free)_ground_m2 / [ctx.site](http://ctx.site)_area : 1;
+    const solLibrePct = sc.free_ground_m2 > 0 ? sc.free_ground_m2 / ctx.site_area : 1;
     if (sc.budget_fit === "HORS_BUDGET" && budgetMaxCtx > 0) {
       contrainteDominante = "budget";
       contrainteExplication = `le budget disponible (${Math.round(budgetMaxCtx / 1e6)}M FCFA) est le facteur limitant principal de ce projet`;
@@ -2942,9 +2942,9 @@ function computeSmartScenarios({
     } else if (solLibrePct < 0.25 || setbackReductionPct > 20) {
       contrainteDominante = "terrain";
       contrainteExplication = `la geometrie du terrain et les retraits reglementaires (${setbackReductionPct}% de reduction d'emprise) sont les contraintes majeures de l'implantation`;
-    } else if ([ctx.target](http://ctx.target)_units > 0 && [sc.total](http://sc.total)_units < [ctx.target](http://ctx.target)_units * 0.80) {
+    } else if (ctx.target_units > 0 && sc.total_units < ctx.target_units * 0.80) {
       contrainteDominante = "programme";
-      contrainteExplication = `le terrain ne permet pas d'atteindre les ${[ctx.target](http://ctx.target)_units} unites souhaitees dans les regles — ${[sc.total](http://sc.total)_units} unites sont realisables`;
+      contrainteExplication = `le terrain ne permet pas d'atteindre les ${ctx.target_units} unites souhaitees dans les regles — ${sc.total_units} unites sont realisables`;
     } else {
       contrainteExplication = `le projet s'inscrit dans un equilibre favorable entre terrain, budget et reglementation`;
     }
@@ -2966,7 +2966,7 @@ function computeSmartScenarios({
     parts.push(`◆ VERDICT — Le scenario ${noms[recommended]} est recommande pour votre projet (score ${sc.recommendation_score}/1). ${verdictRaison}`);
     // ── 1b. CONTEXTE DU SITE avec orientation solaire + mitoyenneté ──
     const contexte = [];
-    contexte.push(`Sur votre terrain de ${[ctx.site](http://ctx.site)_area}m² en zone ${zoning_type} (${climaticZone.toLowerCase()})`);
+    contexte.push(`Sur votre terrain de ${ctx.site_area}m² en zone ${zoning_type} (${climaticZone.toLowerCase()})`);
     if (setbackReductionPct > 5) {
       contexte.push(`les retraits reglementaires (avant ${rAvant}m, lateral ${rLateral}m, arriere ${rArriere}m) reduisent l'emprise constructible de ${setbackReductionPct}%`);
     }
@@ -2993,8 +2993,8 @@ function computeSmartScenarios({
       implantation.push(`etages elargis a ${sc.fp_etages_m2}m² (extension${nbMitoyens > 0 ? " en appui sur les mitoyennetes" : " vers les limites separatives"})`);
     }
     implantation.push(`${sc.sdp_m2}m² de surface de plancher dont ${habM2}m² habitables (efficacite ${sc.ratio_efficacite_pct || 0}%)`);
-    if ([sc.total](http://sc.total)_units > 1) {
-      implantation.push(`${[sc.total](http://sc.total)_units} logements — ${sc.unit_mix_detail || "mix standard"}`);
+    if (sc.total_units > 1) {
+      implantation.push(`${sc.total_units} logements — ${sc.unit_mix_detail || "mix standard"}`);
       if (m2Logt > 0) implantation.push(`${m2Logt}m² habitables par logement`);
     }
     parts.push(`◆ CE QUE VOUS CONSTRUISEZ — ${implantation.join(" ; ")}.`);
@@ -3015,7 +3015,7 @@ function computeSmartScenarios({
     extParts.push(`Stationnement : ${parkingLine.join(". ")}`);
     // Espace dégagé (v57.13: ratio parking/espace basé sur requis)
     const espaceLine = [];
-    espaceLine.push(`${espDet.sol_libre_total_m2 || [sc.free](http://sc.free)_ground_m2}m² libres au sol (${espDet.sol_libre_pct || Math.round(solLibrePct * 100)}% du terrain)`);
+    espaceLine.push(`${espDet.sol_libre_total_m2 || sc.free_ground_m2}m² libres au sol (${espDet.sol_libre_pct || Math.round(solLibrePct * 100)}% du terrain)`);
     if (pkDet.source !== "PILOTIS") {
       espaceLine.push(`repartition : ${espDet.ratio_parking_espace || "33/67"} (parking/espaces verts) — ${pkDet.m2_parking || 0}m² de parking, ${espDet.espace_vert_m2 || 0}m² d'espace degage (${espDet.espace_vert_pct || 0}% du terrain)`);
     } else {
@@ -3032,7 +3032,7 @@ function computeSmartScenarios({
     const honoBasM = Math.round((honoObj.bas_fcfa || 0) / 1e6);
     const honoHautM = Math.round((honoObj.haut_fcfa || 0) / 1e6);
     const honoMedianM = Math.round((honoObj.median_fcfa || 0) / 1e6);
-    const fraisAnnM = vent.frais_annexes ? Math.round(vent.frais_[annexes.total](http://annexes.total)_frais_annexes_fcfa / 1e6) : 0;
+    const fraisAnnM = vent.frais_annexes ? Math.round(vent.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0;
     const malusSolaireM = vent.malus_orientation_solaire_fcfa ? Math.round(vent.malus_orientation_solaire_fcfa / 1e6) : 0;
     cout.push(`Cout global du projet estime : ${globalM}M FCFA`);
     let honoText = `honoraires architecte ${honoMedianM}M (fourchette ${honoBasM}M a ${honoHautM}M, soit ${honoObj.taux_bas_pct || 0}% a ${honoObj.taux_haut_pct || 0}% — bareme degressif)`;
@@ -3044,7 +3044,7 @@ function computeSmartScenarios({
       cout.push(`Ventilation construction : gros oeuvre ${Math.round(vent.gros_oeuvre_fcfa / 1e6)}M (55%), second oeuvre ${Math.round(vent.second_oeuvre_fcfa / 1e6)}M (25%), lots techniques ${Math.round(vent.lots_techniques_fcfa / 1e6)}M (15%), VRD ${Math.round(vent.vrd_fcfa / 1e6)}M`);
     }
     cout.push(`${Math.round((sc.cost_per_m2_sdp || 0) / 1000)}k FCFA/m² SDP`);
-    if (coutLogt > 0 && [sc.total](http://sc.total)_units > 1) cout.push(`${coutLogt}M FCFA par logement (construction seule)`);
+    if (coutLogt > 0 && sc.total_units > 1) cout.push(`${coutLogt}M FCFA par logement (construction seule)`);
     if (sc.budget_fit === "DANS_BUDGET") {
       cout.push(`Ce montant s'inscrit dans votre enveloppe budgetaire`);
     } else if (sc.budget_fit === "BUDGET_TENDU") {
@@ -3062,7 +3062,7 @@ function computeSmartScenarios({
       const osc = r_results[o];
       const oCostM = Math.round((osc.cost_total_fcfa || osc.estimated_cost) / 1e6);
       const deltaSdp = osc.sdp_m2 - sc.sdp_m2;
-      const deltaUnits = [osc.total](http://osc.total)_units - [sc.total](http://sc.total)_units;
+      const deltaUnits = osc.total_units - sc.total_units;
       const deltaCost = oCostM - costM;
       const deltaSdpPct = sc.sdp_m2 > 0 ? Math.round(Math.abs(deltaSdp) / sc.sdp_m2 * 100) : 0;
       const deltaCostPct = costM > 0 ? Math.round(Math.abs(deltaCost) / costM * 100) : 0;
@@ -3101,7 +3101,7 @@ function computeSmartScenarios({
     if (sc.cos_ratio_pct > 90) risques.push(`Densite elevee : COS a ${sc.cos_ratio_pct}% — marges d'evolution limitees`);
     if (solLibrePct < 0.25) risques.push(`Emprise importante : seulement ${Math.round(solLibrePct * 100)}% du terrain libre — contrainte pour parking et acces`);
     if ((sc.complexite || {}).score >= 4) risques.push(`Complexite technique ${(sc.complexite || {}).label} : maitrise d'oeuvre experimentee requise`);
-    if ([sc.total](http://sc.total)_units > [ctx.target](http://ctx.target)_units * 1.3) risques.push(`Surdimensionnement (+${Math.round(([sc.total](http://sc.total)_units / [ctx.target](http://ctx.target)_units - 1) * 100)}% vs besoin) : investissement supplementaire sans garantie de demande`);
+    if (sc.total_units > ctx.target_units * 1.3) risques.push(`Surdimensionnement (+${Math.round((sc.total_units / ctx.target_units - 1) * 100)}% vs besoin) : investissement supplementaire sans garantie de demande`);
     if (setbackReductionPct > 25) risques.push(`Terrain contraint : retraits reglementaires reduisent l'emprise de ${setbackReductionPct}%`);
     if (risques.length === 0) risques.push("Risque maitrise : projet conforme, budget coherent, complexite raisonnable");
     parts.push(`◆ ANALYSE DE RISQUE — ${risques.join(". ")}.`);
@@ -3125,7 +3125,7 @@ function computeSmartScenarios({
       conseil.push(`Recommandation : sur ce terrain contraint, privilegiez la densite verticale plutot que l'etalement. Chaque niveau supplementaire ajoute de la surface sans consommer d'emprise au sol`);
     } else if (contrainteDominante === "reglementation") {
       conseil.push(`Recommandation : le COS est presque atteint. Toute evolution future (surelevation, extension) necessitera une derogation ou un changement de zonage`);
-    } else if (recommended === "A" && [sc.total](http://sc.total)_units > [ctx.target](http://ctx.target)_units * 1.2) {
+    } else if (recommended === "A" && sc.total_units > ctx.target_units * 1.2) {
       conseil.push(`Recommandation : vous pouvez construire plus que votre cible initiale. Verifiez que le marche local absorbe ce surplus avant de maximiser`);
     } else {
       conseil.push(`Recommandation : le projet est bien dimensionne pour votre profil. Lancez les etudes de sol (geotechnique) et le permis de construire pour securiser le calendrier`);
@@ -3153,7 +3153,7 @@ function computeSmartScenarios({
     // v5.4 FIX: Ne PAS capper total_units entre scénarios.
     // B peut avoir PLUS de logements que A si les logements sont plus compacts (UNIT_SIZES plus petits).
     // La hiérarchie A >= B >= C s'applique aux NIVEAUX et à la SDP, pas au nombre de logements.
-    // L'ancien code écrasait [B.total](http://B.total)_units = [A.total](http://A.total)_units SANS recalculer unit_mix_detail,
+    // L'ancien code écrasait B.total_units = A.total_units SANS recalculer unit_mix_detail,
     // surf_hab et m2_par_logt, ce qui créait une incohérence (unit_mix=10 mais total_units=8).
     // Supprimé — le nombre de logements est un RÉSULTAT du dimensionnement, pas une contrainte.
     // SDP check (original logic preserved)
@@ -3267,7 +3267,7 @@ function computeSmartScenarios({
     // 4. CAPACITY ADEQUACY (0.15): Measure how CLOSE to target, not how BIG
     // Oversizing (50% over target) is as bad as undersizing (30% under target)
     const targetUnits = Math.max(1, target_units || 1);
-    const ratio = [sc.total](http://sc.total)_units / targetUnits;
+    const ratio = sc.total_units / targetUnits;
     let capAdequacyScore = 0;
     if (ratio >= 0.85 && ratio <= 1.20) {
       // Ideal: 85-120% of target
@@ -3361,7 +3361,7 @@ function computeSmartScenarios({
       if (s >= 0.5) return "Phasage possible mais moins flexible. La structure doit etre concue des le depart pour la totalite.";
       return "Scenario peu phasable — l'investissement doit etre mobilise en une seule fois. Si le phasage est important, privilegiez un scenario plus compact.";
     }
-    const targetRatio = [sc.total](http://sc.total)_units / Math.max(1, target_units || 1);
+    const targetRatio = sc.total_units / Math.max(1, target_units || 1);
     sc.score_detail = {
       budget_fit:        { score: Math.round(budgetScore * 100) / 100, poids: scoreWeights_v57_5.budget_fit, contribution: Math.round(budgetScore * scoreWeights_v57_5.budget_fit * 1000) / 1000, explication: explBudget(budgetScore, sc.budget_fit) },
       risk_alignment:    { score: Math.round(riskAlignScore * 100) / 100, poids: scoreWeights_v57_5.risk_alignment, contribution: Math.round(riskAlignScore * scoreWeights_v57_5.risk_alignment * 1000) / 1000, explication: explRisk(riskAlignScore, feasibility_posture) },
@@ -3392,7 +3392,7 @@ function computeSmartScenarios({
   if (feasibility_posture === "PRUDENT" && recommended === "B") reasons.push("equilibre entre ambitieux et prudent");
   if (feasibility_posture === "PRUDENT" && recommended === "C") reasons.push("approche conservative, risque maitrise");
   if (feasibility_posture === "AMBITIEUX" && recommended === "A") reasons.push("maximise la capacite");
-  if ([recSc.total](http://recSc.total)_units >= target_units * 0.85 && [recSc.total](http://recSc.total)_units <= target_units * 1.20) reasons.push("proche du besoin exprime");
+  if (recSc.total_units >= target_units * 0.85 && recSc.total_units <= target_units * 1.20) reasons.push("proche du besoin exprime");
   const recommendation_reason = reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
   const meta = {
     engine_version: "57.20",
@@ -3528,22 +3528,22 @@ function computeSmartScenarios({
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
-[app.post](http://app.post)("/compute-scenarios", (req, res) => {
+app.post("/compute-scenarios", (req, res) => {
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
-  if (![p.site](http://p.site)_area || !p.envelope_w || !p.envelope_d) {
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
   // v56: LOG COMPLET des paramètres reçus par 8D pour diagnostic
   console.log(`\n╔══ /compute-scenarios RECEIVED (v56.3) ══╗`);
-  console.log(`║ site_area=${[p.site](http://p.site)_area} envelope_w=${p.envelope_w} envelope_d=${p.envelope_d}`);
+  console.log(`║ site_area=${p.site_area} envelope_w=${p.envelope_w} envelope_d=${p.envelope_d}`);
   console.log(`║ envelope_area=${p.envelope_area} (${p.envelope_area ? "OVERRIDE REÇU" : "non fourni → w×d"})`);
   console.log(`║ zoning=${p.zoning_type} driver=${p.primary_driver} standing=${p.standing_level}`);
   console.log(`║ max_floors=${p.max_floors} max_height=${p.max_height_m} floor_h=${p.floor_height}`);
   console.log(`║ budget_tension=${p.budget_tension} budget_band=${p.budget_band}`);
-  console.log(`║ program=${p.program_main} target_sdp=${[p.target](http://p.target)_surface_m2} units=${[p.target](http://p.target)_units}`);
+  console.log(`║ program=${p.program_main} target_sdp=${p.target_surface_m2} units=${p.target_units}`);
   console.log(`╚════════════════════════════════════════╝\n`);
   const scenarios = computeSmartScenarios({
-    site_area: Number([p.site](http://p.site)_area),
+    site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
     envelope_d: Number(p.envelope_d),
     envelope_area: Number(p.envelope_area) || undefined,
@@ -3553,9 +3553,9 @@ function computeSmartScenarios({
     max_floors: Number(p.max_floors) || 99,
     max_height_m: Number(p.max_height_m) || 99,
     program_main: p.program_main || p.project_type || "",
-    target_surface_m2: Number([p.target](http://p.target)_surface_m2) || 0,
-    site_saturation_level: [p.site](http://p.site)_saturation_level || "MEDIUM",
-    financial_rigidity_score: Number([p.financial](http://p.financial)_rigidity_score) || 0,
+    target_surface_m2: Number(p.target_surface_m2) || 0,
+    site_saturation_level: p.site_saturation_level || "MEDIUM",
+    financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
     density_band: p.density_band || "",
     risk_adjusted: Number(p.risk_adjusted) || 0,
     feasibility_posture: p.feasibility_posture || "BALANCED",
@@ -3567,8 +3567,8 @@ function computeSmartScenarios({
     budget_band: p.budget_band || "",
     budget_tension: Number(p.budget_tension) || 0,
     standing_level: p.standing_level || "STANDARD",
-    target_units: Number([p.target](http://p.target)_units) || 0,
-    rent_score: Number([p.rent](http://p.rent)_score) || 0,
+    target_units: Number(p.target_units) || 0,
+    rent_score: Number(p.rent_score) || 0,
     capacity_score: Number(p.capacity_score) || 0,
     mix_score: Number(p.mix_score) || 0,
     phase_score: Number(p.phase_score) || 0,
@@ -3584,7 +3584,7 @@ function computeSmartScenarios({
     commerce_size_m2: Number(p.commerce_size_m2) || 0,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
-  // v57.22: champs diagnostic APLATIS pour [Make.com](http://Make.com) (évite {object} dans Google Sheets)
+  // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
   const comp = diag.comparatif || {};
   const deltas = comp.deltas || {};
@@ -3595,7 +3595,7 @@ function computeSmartScenarios({
   const orient = diag.orientation_solaire || {};
   const retr = diag.retraits_reglementaires || {};
   const profil = diag.profil_client || {};
-  const siteDiag = [diag.site](http://diag.site) || {};
+  const siteDiag = diag.site || {};
   const sA = scenarios.A || {};
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
@@ -3605,25 +3605,25 @@ function computeSmartScenarios({
     rec_scenario: (diag.recommandation || {}).scenario || "",
     rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100), // v72.80 FIX: 0-1 → 0-100
     // ── COMPARATIF DELTAS (texte plat) ──
-    delta_BA_sdp: `${[dBA.delta](http://dBA.delta)_sdp_m2 || 0} m² (${[dBA.delta](http://dBA.delta)_sdp_pct || 0}%)`,
-    delta_BA_cout: `${[dBA.delta](http://dBA.delta)_cout_fcfa ? Math.round([dBA.delta](http://dBA.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dBA.delta](http://dBA.delta)_cout_pct || 0}%)`,
-    delta_BA_unites: `${[dBA.delta](http://dBA.delta)_unites || 0} logements`,
+    delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
+    delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
+    delta_BA_unites: `${dBA.delta_unites || 0} logements`,
     delta_BA_valeur_marginale: `${dBA.valeur_marginale_fcfa_par_m2 ? Math.round(dBA.valeur_marginale_fcfa_par_m2 / 1000) : 0}k FCFA/m²`,
     delta_BA_commentaire: dBA.commentaire || "",
     delta_BA_conseil: dBA.conseil_marginale || "",
-    delta_CA_sdp: `${[dCA.delta](http://dCA.delta)_sdp_m2 || 0} m² (${[dCA.delta](http://dCA.delta)_sdp_pct || 0}%)`,
-    delta_CA_cout: `${[dCA.delta](http://dCA.delta)_cout_fcfa ? Math.round([dCA.delta](http://dCA.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dCA.delta](http://dCA.delta)_cout_pct || 0}%)`,
-    delta_CA_unites: `${[dCA.delta](http://dCA.delta)_unites || 0} logements`,
+    delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
+    delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
+    delta_CA_unites: `${dCA.delta_unites || 0} logements`,
     delta_CA_commentaire: dCA.commentaire || "",
-    delta_CB_sdp: `${[dCB.delta](http://dCB.delta)_sdp_m2 || 0} m² (${[dCB.delta](http://dCB.delta)_sdp_pct || 0}%)`,
-    delta_CB_cout: `${[dCB.delta](http://dCB.delta)_cout_fcfa ? Math.round([dCB.delta](http://dCB.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dCB.delta](http://dCB.delta)_cout_pct || 0}%)`,
-    delta_CB_unites: `${[dCB.delta](http://dCB.delta)_unites || 0} logements`,
+    delta_CB_sdp: `${dCB.delta_sdp_m2 || 0} m² (${dCB.delta_sdp_pct || 0}%)`,
+    delta_CB_cout: `${dCB.delta_cout_fcfa ? Math.round(dCB.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCB.delta_cout_pct || 0}%)`,
+    delta_CB_unites: `${dCB.delta_unites || 0} logements`,
     // ── PHASAGE (texte plat) ──
     phasage_text: phasage.text || "",
     phasage_duree_mois: String((phasage.structured || {}).duree_totale_mois || ""),
     phasage_nb_phases: String((phasage.structured || {}).phases ? phasage.structured.phases.length : 1),
     // ── ORIENTATION SOLAIRE (texte plat) ──
-    orient_zone: [orient.zone](http://orient.zone)_climatique || "",
+    orient_zone: orient.zone_climatique || "",
     orient_facade_optimale: orient.facade_optimale || "",
     orient_facade_proteger: orient.facade_a_proteger || "",
     orient_ventilation: orient.ventilation_traversante ? "OUI" : "NON",
@@ -3640,25 +3640,25 @@ function computeSmartScenarios({
     // ── SCENARIO A (champs plats) ──
     A_fp: String(sA.fp_m2 || 0), A_fp_rdc: String(sA.fp_rdc_m2 || 0),
     A_levels: String(Math.max(0, (sA.levels || 1) - 1)), A_height: String(sA.height_m || 0),
-    A_sdp: String(sA.sdp_m2 || 0), A_units: String([sA.total](http://sA.total)_units || 0),
+    A_sdp: String(sA.sdp_m2 || 0), A_units: String(sA.total_units || 0),
     A_unit_mix: sA.unit_mix_detail || "", A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
     A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
     A_cost_bas: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M`,
     A_cost_haut: `${sA.cout_fourchette ? Math.round(sA.cout_fourchette.haut / 1e6) : 0}M`,
     A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
-    A_cost_m2_marche: `${[sA.market](http://sA.market)_cost_per_m2 ? Math.round([sA.market](http://sA.market)_cost_per_m2 / 1000) : 0}k`,
+    A_cost_m2_marche: `${sA.market_cost_per_m2 ? Math.round(sA.market_cost_per_m2 / 1000) : 0}k`,
     A_cost_m2_ajuste: `${sA.cost_per_m2 ? Math.round(sA.cost_per_m2 / 1000) : 0}k`,
     A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
     A_budget_fit: sA.budget_fit || "",
     A_ces_pct: String(sA.ces_fill_pct || 0), A_cos_pct: String(sA.cos_ratio_pct || 0),
     A_cos_compliance: sA.cos_compliance || "",
-    A_free_ground: `${[sA.free](http://sA.free)_ground_m2 || 0} m²`,
+    A_free_ground: `${sA.free_ground_m2 || 0} m²`,
     A_parking_places: String((sA.parking_detail || {}).places_disponibles || 0),
     A_parking_deficit: String((sA.parking_detail || {}).deficit || 0),
     A_parking_source: (sA.parking_detail || {}).source || "",
     A_duree_chantier: `${sA.duree_chantier_mois || 0} mois`,
     A_score: String(Math.round((sA.recommendation_score || 0) * 100)), // v72.80 FIX: 0-1 → 0-100
-    A_hab_m2: String(sA.surface_habitable_m2 || [sA.total](http://sA.total)_useful_m2 || 0),
+    A_hab_m2: String(sA.surface_habitable_m2 || sA.total_useful_m2 || 0),
     A_efficacite: `${sA.ratio_efficacite_pct || 0}%`,
     A_ventil_go: `${(sA.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sA.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
     A_ventil_so: `${(sA.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sA.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
@@ -3669,7 +3669,7 @@ function computeSmartScenarios({
     A_ventil_hono_haut: `${(sA.cout_ventilation || {}).honoraires_architecte ? Math.round(((sA.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa / 1e6) : 0}M`,
     A_hono_taux_bas: `${((sA.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 0}%`,
     A_hono_taux_haut: `${((sA.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 0}%`,
-    A_frais_annexes: `${(sA.cout_ventilation || {}).frais_annexes ? Math.round(sA.cout_ventilation.frais_[annexes.total](http://annexes.total)_frais_annexes_fcfa / 1e6) : 0}M`,
+    A_frais_annexes: `${(sA.cout_ventilation || {}).frais_annexes ? Math.round(sA.cout_ventilation.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0}M`,
     A_frais_permis: `${(sA.cout_ventilation || {}).frais_annexes ? Math.round(sA.cout_ventilation.frais_annexes.permis_construire_fcfa / 1e6) : 0}M`,
     A_frais_assurance: `${(sA.cout_ventilation || {}).frais_annexes ? Math.round(sA.cout_ventilation.frais_annexes.assurance_dommage_ouvrage_fcfa / 1e6) : 0}M`,
     A_frais_etudes: `${(sA.cout_ventilation || {}).frais_annexes ? Math.round(sA.cout_ventilation.frais_annexes.etudes_techniques_fcfa / 1e6) : 0}M`,
@@ -3678,25 +3678,25 @@ function computeSmartScenarios({
     // ── SCENARIO B (champs plats) ──
     B_fp: String(sB.fp_m2 || 0), B_fp_rdc: String(sB.fp_rdc_m2 || 0),
     B_levels: String(Math.max(0, (sB.levels || 1) - 1)), B_height: String(sB.height_m || 0),
-    B_sdp: String(sB.sdp_m2 || 0), B_units: String([sB.total](http://sB.total)_units || 0),
+    B_sdp: String(sB.sdp_m2 || 0), B_units: String(sB.total_units || 0),
     B_unit_mix: sB.unit_mix_detail || "", B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
     B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
     B_cost_bas: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M`,
     B_cost_haut: `${sB.cout_fourchette ? Math.round(sB.cout_fourchette.haut / 1e6) : 0}M`,
     B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
-    B_cost_m2_marche: `${[sB.market](http://sB.market)_cost_per_m2 ? Math.round([sB.market](http://sB.market)_cost_per_m2 / 1000) : 0}k`,
+    B_cost_m2_marche: `${sB.market_cost_per_m2 ? Math.round(sB.market_cost_per_m2 / 1000) : 0}k`,
     B_cost_m2_ajuste: `${sB.cost_per_m2 ? Math.round(sB.cost_per_m2 / 1000) : 0}k`,
     B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
     B_budget_fit: sB.budget_fit || "",
     B_ces_pct: String(sB.ces_fill_pct || 0), B_cos_pct: String(sB.cos_ratio_pct || 0),
     B_cos_compliance: sB.cos_compliance || "",
-    B_free_ground: `${[sB.free](http://sB.free)_ground_m2 || 0} m²`,
+    B_free_ground: `${sB.free_ground_m2 || 0} m²`,
     B_parking_places: String((sB.parking_detail || {}).places_disponibles || 0),
     B_parking_deficit: String((sB.parking_detail || {}).deficit || 0),
     B_parking_source: (sB.parking_detail || {}).source || "",
     B_duree_chantier: `${sB.duree_chantier_mois || 0} mois`,
     B_score: String(Math.round((sB.recommendation_score || 0) * 100)), // v72.80 FIX: 0-1 → 0-100
-    B_hab_m2: String(sB.surface_habitable_m2 || [sB.total](http://sB.total)_useful_m2 || 0),
+    B_hab_m2: String(sB.surface_habitable_m2 || sB.total_useful_m2 || 0),
     B_efficacite: `${sB.ratio_efficacite_pct || 0}%`,
     B_ventil_go: `${(sB.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sB.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
     B_ventil_so: `${(sB.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sB.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
@@ -3707,7 +3707,7 @@ function computeSmartScenarios({
     B_ventil_hono_haut: `${(sB.cout_ventilation || {}).honoraires_architecte ? Math.round(((sB.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa / 1e6) : 0}M`,
     B_hono_taux_bas: `${((sB.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 0}%`,
     B_hono_taux_haut: `${((sB.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 0}%`,
-    B_frais_annexes: `${(sB.cout_ventilation || {}).frais_annexes ? Math.round(sB.cout_ventilation.frais_[annexes.total](http://annexes.total)_frais_annexes_fcfa / 1e6) : 0}M`,
+    B_frais_annexes: `${(sB.cout_ventilation || {}).frais_annexes ? Math.round(sB.cout_ventilation.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0}M`,
     B_frais_permis: `${(sB.cout_ventilation || {}).frais_annexes ? Math.round(sB.cout_ventilation.frais_annexes.permis_construire_fcfa / 1e6) : 0}M`,
     B_frais_assurance: `${(sB.cout_ventilation || {}).frais_annexes ? Math.round(sB.cout_ventilation.frais_annexes.assurance_dommage_ouvrage_fcfa / 1e6) : 0}M`,
     B_frais_etudes: `${(sB.cout_ventilation || {}).frais_annexes ? Math.round(sB.cout_ventilation.frais_annexes.etudes_techniques_fcfa / 1e6) : 0}M`,
@@ -3716,25 +3716,25 @@ function computeSmartScenarios({
     // ── SCENARIO C (champs plats) ──
     C_fp: String(sC.fp_m2 || 0), C_fp_rdc: String(sC.fp_rdc_m2 || 0),
     C_levels: String(Math.max(0, (sC.levels || 1) - 1)), C_height: String(sC.height_m || 0),
-    C_sdp: String(sC.sdp_m2 || 0), C_units: String([sC.total](http://sC.total)_units || 0),
+    C_sdp: String(sC.sdp_m2 || 0), C_units: String(sC.total_units || 0),
     C_unit_mix: sC.unit_mix_detail || "", C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
     C_cost_total: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
     C_cost_bas: `${sC.cout_fourchette ? Math.round(sC.cout_fourchette.bas / 1e6) : 0}M`,
     C_cost_haut: `${sC.cout_fourchette ? Math.round(sC.cout_fourchette.haut / 1e6) : 0}M`,
     C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
-    C_cost_m2_marche: `${[sC.market](http://sC.market)_cost_per_m2 ? Math.round([sC.market](http://sC.market)_cost_per_m2 / 1000) : 0}k`,
+    C_cost_m2_marche: `${sC.market_cost_per_m2 ? Math.round(sC.market_cost_per_m2 / 1000) : 0}k`,
     C_cost_m2_ajuste: `${sC.cost_per_m2 ? Math.round(sC.cost_per_m2 / 1000) : 0}k`,
     C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
     C_budget_fit: sC.budget_fit || "",
     C_ces_pct: String(sC.ces_fill_pct || 0), C_cos_pct: String(sC.cos_ratio_pct || 0),
     C_cos_compliance: sC.cos_compliance || "",
-    C_free_ground: `${[sC.free](http://sC.free)_ground_m2 || 0} m²`,
+    C_free_ground: `${sC.free_ground_m2 || 0} m²`,
     C_parking_places: String((sC.parking_detail || {}).places_disponibles || 0),
     C_parking_deficit: String((sC.parking_detail || {}).deficit || 0),
     C_parking_source: (sC.parking_detail || {}).source || "",
     C_duree_chantier: `${sC.duree_chantier_mois || 0} mois`,
     C_score: String(Math.round((sC.recommendation_score || 0) * 100)), // v72.80 FIX: 0-1 → 0-100
-    C_hab_m2: String(sC.surface_habitable_m2 || [sC.total](http://sC.total)_useful_m2 || 0),
+    C_hab_m2: String(sC.surface_habitable_m2 || sC.total_useful_m2 || 0),
     C_efficacite: `${sC.ratio_efficacite_pct || 0}%`,
     C_ventil_go: `${(sC.cout_ventilation || {}).gros_oeuvre_fcfa ? Math.round(sC.cout_ventilation.gros_oeuvre_fcfa / 1e6) : 0}M`,
     C_ventil_so: `${(sC.cout_ventilation || {}).second_oeuvre_fcfa ? Math.round(sC.cout_ventilation.second_oeuvre_fcfa / 1e6) : 0}M`,
@@ -3745,7 +3745,7 @@ function computeSmartScenarios({
     C_ventil_hono_haut: `${(sC.cout_ventilation || {}).honoraires_architecte ? Math.round(((sC.cout_ventilation || {}).honoraires_architecte || {}).haut_fcfa / 1e6) : 0}M`,
     C_hono_taux_bas: `${((sC.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 0}%`,
     C_hono_taux_haut: `${((sC.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 0}%`,
-    C_frais_annexes: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_[annexes.total](http://annexes.total)_frais_annexes_fcfa / 1e6) : 0}M`,
+    C_frais_annexes: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0}M`,
     C_frais_permis: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.permis_construire_fcfa / 1e6) : 0}M`,
     C_frais_assurance: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.assurance_dommage_ouvrage_fcfa / 1e6) : 0}M`,
     C_frais_etudes: `${(sC.cout_ventilation || {}).frais_annexes ? Math.round(sC.cout_ventilation.frais_annexes.etudes_techniques_fcfa / 1e6) : 0}M`,
@@ -4004,10 +4004,10 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   console.log(`┌── computeMassingPolygon v72.27 (ROAD_BEARING + RÔLE + SOLAR + SPLIT) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
   // ── 1. Centroïde et conversion mètres ──
-  const eLat = envelopeCoords.reduce((s, p) => s + [p.lat](http://p.lat), 0) / envelopeCoords.length;
+  const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
   const eLon = envelopeCoords.reduce((s, p) => s + p.lon, 0) / envelopeCoords.length;
-  const envM = [envelopeCoords.map](http://envelopeCoords.map)(c => toM([c.lat](http://c.lat), c.lon, eLat, eLon));
-  envelopeCoords.forEach((c, i) => console.log(`│ Env[${i}]: ${[c.lat](http://c.lat).toFixed(7)}, ${c.lon.toFixed(7)}`));
+  const envM = envelopeCoords.map(c => toM(c.lat, c.lon, eLat, eLon));
+  envelopeCoords.forEach((c, i) => console.log(`│ Env[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   // ── 2. Détecter la façade rue ──
   // v56.7: Si road_bearing est fourni par la Sheet, on cherche le bord de l'enveloppe
   // dont l'azimut est le PLUS PROCHE du road_bearing (= parallèle à la route).
@@ -4070,12 +4070,12 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   console.log(`│ Bioclimatic: zone=${climateZone} lat=${eLat.toFixed(2)}° streetDeviation=${streetSunDeviation.toFixed(0)}°`);
   console.log(`│ Orientation: favorBarre=${solarFavorBarre} favorDepth=${solarFavorDepth}`);
   // ── 4. Projeter l'enveloppe en repère local ──
-  const envLocal = [envM.map](http://envM.map)(p => ({
+  const envLocal = envM.map(p => ({
     u: p.x * sUx + p.y * sUy,
     v: p.x * nUx + p.y * nUy,
   }));
-  const minU = Math.min(...[envLocal.map](http://envLocal.map)(p => p.u)), maxU = Math.max(...[envLocal.map](http://envLocal.map)(p => p.u));
-  const minV = Math.min(...[envLocal.map](http://envLocal.map)(p => p.v)), maxV = Math.max(...[envLocal.map](http://envLocal.map)(p => p.v));
+  const minU = Math.min(...envLocal.map(p => p.u)), maxU = Math.max(...envLocal.map(p => p.u));
+  const minV = Math.min(...envLocal.map(p => p.v)), maxV = Math.max(...envLocal.map(p => p.v));
   const availW = maxU - minU;
   const availD = maxV - minV;
   const envAspect = availW / Math.max(1, availD);
@@ -4097,7 +4097,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   let maxW = Math.max(8, availW - 2 * margin);
   let maxD = Math.max(8, availD - 2 * margin);
   // v72.27: En mode SPLIT, réduire maxD pour que le logement tienne derrière le commerce
-  if (split_context && split_[context.is](http://context.is)_split) {
+  if (split_context && split_context.is_split) {
     const commD = split_context.commerce_depth_m || 6;
     const gapD = split_context.retrait_inter_m || 4;
     const commMargin = 0.5;
@@ -4111,7 +4111,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // Le centre du logement = marge + commDepth + interGap + bD/2 (calculé après forme)
   let depthPct;
   let splitForcePosition = false; // v72.27: flag pour forcer la position APRÈS calcul forme
-  if (split_context && split_[context.is](http://context.is)_split) {
+  if (split_context && split_context.is_split) {
     // Mode SPLIT : le logement doit commencer APRÈS la zone commerce + gap
     const commD = split_context.commerce_depth_m || 6;
     const gapD = split_context.retrait_inter_m || 4;
@@ -4237,14 +4237,14 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   function localToMeter(p) {
     return { x: p.u * sUx + p.v * nUx, y: p.u * sUy + p.v * nUy };
   }
-  const finalPts = [bPts.map](http://bPts.map)(p => ({ u: p.u + cU, v: p.v + cV }));
-  const finalM = [finalPts.map](http://finalPts.map)(localToMeter);
+  const finalPts = bPts.map(p => ({ u: p.u + cU, v: p.v + cV }));
+  const finalM = finalPts.map(localToMeter);
   // ── 8. Conversion GPS ──
-  const result = [finalM.map](http://finalM.map)(p => ({
+  const result = finalM.map(p => ({
     lat: eLat + p.y / R_EARTH * 180 / Math.PI,
     lon: eLon + p.x / (R_EARTH * Math.cos(eLat * Math.PI / 180)) * 180 / Math.PI,
   }));
-  result.forEach((c, i) => console.log(`│ Massing[${i}]: ${[c.lat](http://c.lat).toFixed(7)}, ${c.lon.toFixed(7)}`));
+  result.forEach((c, i) => console.log(`│ Massing[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   const actualFp = Math.abs(finalM.reduce((s, p, i) => {
     const j = (i + 1) % finalM.length;
     return s + p.x * finalM[j].y - finalM[j].x * p.y;
@@ -4271,10 +4271,10 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   console.log(`┌── buildCommercePolygon v72.27 ──`);
   console.log(`│ commDepth=${commDepth}m  commWidth=${commWidth}m  envVertices=${envelopeCoords.length}`);
   // Centroïde de l'enveloppe
-  const cLat = envelopeCoords.reduce((s, p) => s + [p.lat](http://p.lat), 0) / envelopeCoords.length;
+  const cLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
   const cLon = envelopeCoords.reduce((s, p) => s + p.lon, 0) / envelopeCoords.length;
   // Convertir en mètres
-  const envM = [envelopeCoords.map](http://envelopeCoords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
+  const envM = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
   // Trouver le bord "façade rue" (même logique que computeMassingPolygon)
   let frontIdx = 0;
   if (roadBearing != null && !isNaN(roadBearing)) {
@@ -4310,14 +4310,14 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
   const midFX = (envM[fi].x + envM[fj].x) / 2, midFY = (envM[fi].y + envM[fj].y) / 2;
   if (nUx * (0 - midFX) + nUy * (0 - midFY) < 0) { nUx = -nUx; nUy = -nUy; }
   // Projeter l'enveloppe en repère local (u = rue, v = profondeur)
-  const envLocal = [envM.map](http://envM.map)(p => ({
+  const envLocal = envM.map(p => ({
     u: p.x * sUx + p.y * sUy,
     v: p.x * nUx + p.y * nUy,
   }));
-  const minU = Math.min(...[envLocal.map](http://envLocal.map)(p => p.u));
-  const maxU = Math.max(...[envLocal.map](http://envLocal.map)(p => p.u));
-  const minV = Math.min(...[envLocal.map](http://envLocal.map)(p => p.v));
-  const maxV = Math.max(...[envLocal.map](http://envLocal.map)(p => p.v));
+  const minU = Math.min(...envLocal.map(p => p.u));
+  const maxU = Math.max(...envLocal.map(p => p.u));
+  const minV = Math.min(...envLocal.map(p => p.v));
+  const maxV = Math.max(...envLocal.map(p => p.v));
   const envWidth = maxU - minU;
   const envDepth = maxV - minV;
   console.log(`│ Envelope local: W=${envWidth.toFixed(1)}m × D=${envDepth.toFixed(1)}m`);
@@ -4356,8 +4356,8 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
       lon: cLon + mx / (R_EARTH * Math.cos(cLat * Math.PI / 180)) * 180 / Math.PI,
     };
   }
-  const commerceGPS = [commLocal.map](http://commLocal.map)(localToGPS);
-  commerceGPS.forEach((c, i) => console.log(`│ Commerce[${i}]: ${[c.lat](http://c.lat).toFixed(7)}, ${c.lon.toFixed(7)}`));
+  const commerceGPS = commLocal.map(localToGPS);
+  commerceGPS.forEach((c, i) => console.log(`│ Commerce[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`└── end buildCommercePolygon v72.26 ──`);
   return commerceGPS;
 }
@@ -4367,10 +4367,10 @@ async function fetchGoogleStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCo
   // Format : path=color:0xRRGGBBAA|fillcolor:0xRRGGBBAA|weight:N|lat1,lng1|lat2,lng2|...
   // Note : Google attend lat,lng (pas lng,lat comme Mapbox)
   const parcelPath = `color:0xC84828FF|fillcolor:0xE0C89055|weight:4|` +
-    [parcelCoords.map](http://parcelCoords.map)(c => `${[c.lat](http://c.lat)},${c.lon}`).join("|") +
+    parcelCoords.map(c => `${c.lat},${c.lon}`).join("|") +
     `|${parcelCoords[0].lat},${parcelCoords[0].lon}`;
   const envelopePath = `color:0xA07840E0|fillcolor:0xB8986080|weight:2|` +
-    [envelopeCoords.map](http://envelopeCoords.map)(c => `${[c.lat](http://c.lat)},${c.lon}`).join("|") +
+    envelopeCoords.map(c => `${c.lat},${c.lon}`).join("|") +
     `|${envelopeCoords[0].lat},${envelopeCoords[0].lon}`;
   // Google Maps zoom max = 21. Notre zoom est calcule pour Mapbox (peut etre 19-20)
   const gZoom = Math.min(21, Math.round(zoom));
@@ -4392,8 +4392,8 @@ async function fetchGoogleStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCo
 }
 // ─── v73.2.5 : Mapbox Static Images API (vraie raster satellite, pas vectoriel) ───
 async function fetchMapboxStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCoords, mapboxToken, width = 1280, height = 1280 }) {
-  const parcelArr = [...[parcelCoords.map](http://parcelCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [parcelCoords[0].lon, parcelCoords[0].lat]];
-  const envelopeArr = [...[envelopeCoords.map](http://envelopeCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [envelopeCoords[0].lon, envelopeCoords[0].lat]];
+  const parcelArr = ...[parcelCoords.map(c => c.lon, [c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]];
+  const envelopeArr = ...[envelopeCoords.map(c => c.lon, [c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]];
   const geojson = {
     type: "FeatureCollection",
     features: [
@@ -4425,11 +4425,11 @@ async function fetchMapboxStaticTop({ cLat, cLon, zoom, parcelCoords, envelopeCo
 async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoords, mapboxToken, frontEdgeIndex, hideExistingBuildings, pitch = 58, mapStyle = "hektar") {
   const parcelGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...[parcelCoords.map](http://parcelCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [...[parcelCoords.map(c => c.lon, [c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
   };
   const envelopeGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...[envelopeCoords.map](http://envelopeCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [...[envelopeCoords.map(c => c.lon, [c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
   // v73.1: Zone de recul front matérialisée visuellement
   const setbackFrontGeoJSON = {
@@ -4463,37 +4463,37 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
   };
   console.log("│ SLIDE4 v73.1: zone de recul front " + sbFrontM + "m matérialisée");
   // v49: accès principal auto-détecté
-  const access = computeAccessPoint(parcelCoords, [center.lat](http://center.lat), center.lon, frontEdgeIndex);
+  const access = computeAccessPoint(parcelCoords, center.lat, center.lon, frontEdgeIndex);
   const arrowLen = 8;
-  const accEndLat = [access.lat](http://access.lat) + (arrowLen / R_EARTH) * 180 / Math.PI * Math.cos(access.bearing * Math.PI / 180);
-  const accEndLon = access.lon + (arrowLen / (R_EARTH * Math.cos([access.lat](http://access.lat) * Math.PI / 180))) * 180 / Math.PI * Math.sin(access.bearing * Math.PI / 180);
+  const accEndLat = access.lat + (arrowLen / R_EARTH) * 180 / Math.PI * Math.cos(access.bearing * Math.PI / 180);
+  const accEndLon = access.lon + (arrowLen / (R_EARTH * Math.cos(access.lat * Math.PI / 180))) * 180 / Math.PI * Math.sin(access.bearing * Math.PI / 180);
   const accessLineGeoJSON = {
     type: "Feature", properties: {},
-    geometry: { type: "LineString", coordinates: [[access.lon, [access.lat](http://access.lat)], [accEndLon, accEndLat]] },
+    geometry: { type: "LineString", coordinates: [access.lon, [access.lat], [accEndLon, accEndLat]] },
   };
   const accessPointGeoJSON = {
     type: "Feature", properties: { label: "Accès" },
     geometry: { type: "Point", coordinates: [accEndLon, accEndLat] },
   };
-  const seed = Math.round(Math.abs([center.lat](http://center.lat) * 137.508 + center.lon * 251.663) * 1000) % 99999;
+  const seed = Math.round(Math.abs(center.lat * 137.508 + center.lon * 251.663) * 1000) % 99999;
   // v72.102: Calcul du buffer +5m pour le masquage bâti slide 4
-  const cLat = parcelCoords.reduce((s, p) => s + [p.lat](http://p.lat), 0) / parcelCoords.length;
+  const cLat = parcelCoords.reduce((s, p) => s + p.lat, 0) / parcelCoords.length;
   const cLon = parcelCoords.reduce((s, p) => s + p.lon, 0) / parcelCoords.length;
   const bufferM = 50; // v72.108: super aggressive // v72.104: aggressive buffer
   const scaleLat = bufferM / 111000;
   const scaleLon = bufferM / (111000 * Math.cos(cLat * Math.PI / 180));
-  const bufferedCoords = [parcelCoords.map](http://parcelCoords.map)(p => {
+  const bufferedCoords = parcelCoords.map(p => {
     const dx = p.lon - cLon;
-    const dy = [p.lat](http://p.lat) - cLat;
+    const dy = p.lat - cLat;
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1e-10) return p;
     return {
-      lat: [p.lat](http://p.lat) + (dy / len) * scaleLat,
+      lat: p.lat + (dy / len) * scaleLat,
       lon: p.lon + (dx / len) * scaleLon,
     };
   });
   // v72.127: race Tilequery against 3s timeout for slide 4 to stay under Make 25s budget
-  const parcelCoordsArray = [parcelCoords.map](http://parcelCoords.map)(c => [c.lon, [c.lat](http://c.lat)]);
+  const parcelCoordsArray = parcelCoords.map(c => c.lon, [c.lat]);
   const EXCLUDED_IDS = await Promise.race([
     getIntersectingBuildingIds(parcelCoordsArray, mapboxToken),
     new Promise(resolve => setTimeout(() => {
@@ -4593,9 +4593,9 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       }
     ]
   };
-  const map = new [mapboxgl.Map](http://mapboxgl.Map)({
+  const map = new mapboxgl.Map({
     container: 'map', style: ${mapStyle === "satellite" ? '"mapbox://styles/mapbox/satellite-streets-v12"' : 'hektarStyle'},
-    center: [${center.lon}, ${[center.lat](http://center.lat)}], zoom: ${zoom}, bearing: ${bearing}, pitch: ${pitch},
+    center: ${center.lon}, ${[center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: ${pitch},
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
@@ -4642,7 +4642,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       console.log('[SLIDE4-TOP v73.2.4] 3d-buildings layer SKIPPED for satellite mode');
     }
     // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
-    const allLayers = map.getStyle().[layers.map](http://layers.map)(l => [l.id](http://l.id));
+    const allLayers = map.getStyle().layers.map(l => l.id);
     const buildingLayers = allLayers.filter(id => /build/i.test(id));
     console.log('[CLIENT v72.126] building-related layers in style:', buildingLayers.join(', '));
     // v72.126: Parcel polygon feature for within expression
@@ -4651,7 +4651,7 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
       properties: {},
       geometry: {
         type: 'Polygon',
-        coordinates: [[${[parcelCoords.map](http://parcelCoords.map)(c => `[${c.lon}, ${[c.lat](http://c.lat)}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
+        coordinates: [${[parcelCoords.map(c => `${c.lon}, ${[c.lat}]`).join(", ")}, [${parcelCoords[0].lon}, ${parcelCoords[0].lat}]]]
       }
     };
     // v72.126: GEOMETRIC FILTER using within expression + server-side EXCLUDED_IDS (belt-and-suspenders)
@@ -4723,16 +4723,16 @@ async function generateMapHTML(center, zoom, bearing, parcelCoords, envelopeCoor
 async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelopeCoords, massingCoords, massingParams, mapboxToken) {
   const parcelGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...[parcelCoords.map](http://parcelCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [...[parcelCoords.map(c => c.lon, [c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] },
   };
   const envelopeGeoJSON = {
     type: "Feature",
-    geometry: { type: "Polygon", coordinates: [[...[envelopeCoords.map](http://envelopeCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
+    geometry: { type: "Polygon", coordinates: [...[envelopeCoords.map(c => c.lon, [c.lat]), [envelopeCoords[0].lon, envelopeCoords[0].lat]]] },
   };
   const massingGeoJSON = {
     type: "Feature",
-    properties: { height: [massingParams.total](http://massingParams.total)_height, base_height: 0 },
-    geometry: { type: "Polygon", coordinates: [[...[massingCoords.map](http://massingCoords.map)(c => [c.lon, [c.lat](http://c.lat)]), [massingCoords[0].lon, massingCoords[0].lat]]] },
+    properties: { height: massingParams.total_height, base_height: 0 },
+    geometry: { type: "Polygon", coordinates: [...[massingCoords.map(c => c.lon, [c.lat]), [massingCoords[0].lon, massingCoords[0].lat]]] },
   };
   const rdcH = 3.0;  // v71: tous les niveaux = 3m
   const etageH = massingParams.floor_height || 3.0;
@@ -4786,9 +4786,9 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
         "paint": { "line-color": "#989898", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48, 19, 64] } }
     ]
   };
-  const map = new [mapboxgl.Map](http://mapboxgl.Map)({
+  const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
-    center: [${center.lon}, ${[center.lat](http://center.lat)}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
+    center: ${center.lon}, ${[center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false,
   });
   map.addControl = function() {};
@@ -4808,7 +4808,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
       },
     });
     // v72.126: DIAGNOSTIC — list all layers in style to find what actually exists
-    const allLayers = map.getStyle().[layers.map](http://layers.map)(l => [l.id](http://l.id));
+    const allLayers = map.getStyle().layers.map(l => l.id);
     const buildingLayers = allLayers.filter(id => /build/i.test(id));
     console.log('[MASSING v72.126] building-related layers in style:', buildingLayers.join(', '));
     // v71: Parcelle — fond beige/sable + contour rouge
@@ -4833,7 +4833,7 @@ async function generateMassingHTML(center, zoom, bearing, parcelCoords, envelope
     const commerceGeoJSON = ${JSON.stringify({
       type: "Feature",
       properties: { height: rdcH, base_height: 0 },
-      geometry: { type: "Polygon", coordinates: [[...massingParams.commerce_[coords.map](http://coords.map)(c => [c.lon, [c.lat](http://c.lat)]), [massingParams.commerce_coords[0].lon, massingParams.commerce_coords[0].lat]]] },
+      geometry: { type: "Polygon", coordinates: [...massingParams.commerce_[coords.map(c => c.lon, [c.lat]), [massingParams.commerce_coords[0].lon, massingParams.commerce_coords[0].lat]]] },
     })};
     map.addSource('commerce-volume', { type: 'geojson', data: commerceGeoJSON });
     // Commerce : 1 niveau ORANGE en avant
@@ -4939,7 +4939,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   const { site_area, land_width, land_depth, buildable_fp,
     setback_front, setback_side, setback_back,
     city, district, zoning, terrain_context, bearing } = p;
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
   ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
@@ -4961,7 +4961,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   ];
   const legPad = 14, legLH = 26, legW = 300;
   const legH = legPad * 2 + legItems.length * legLH + 10;
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
   ctx.fillStyle = "rgba(255,255,255,0.97)";
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
@@ -4969,7 +4969,7 @@ function drawOverlays(ctx, W, H, BH, p) {
   ctx.restore();
   legItems.forEach((item, i) => {
     const iy = 16 + legPad + i * legLH;
-    [ctx.save](http://ctx.save)();
+    ctx.save();
     if (item.type === "rect") {
       ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
@@ -5016,7 +5016,7 @@ function applyColorRemap(ctx, W, H) {
   // NO ground→grass or road→sandy remap needed — that was for the old beige style.
   // This function now ONLY whitens building rooftops for a premium concrete look.
   const imgData = ctx.getImageData(0, 0, W, H);
-  const d = [imgData.data](http://imgData.data);
+  const d = imgData.data;
   // ─── STEP 1: Build rooftop mask ──────────────────────────────────────────
   // In 3D axonometric view, building rooftops have darker building-side pixels
   // directly below them. Ground does NOT have this brightness drop.
@@ -5092,7 +5092,7 @@ function applyColorRemap(ctx, W, H) {
 // If yes → darken the grass to simulate shadow projection
 function applyDeterministicShadows(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
-  const d = [imgData.data](http://imgData.data);
+  const d = imgData.data;
   const SHADOW_DIST = 18; // pixels to check for building occlusion
   const SHADOW_DARKEN = 0.7; // shadow intensity (0.7 = 30% darker)
   for (let y = SHADOW_DIST; y < H; y++) {
@@ -5123,7 +5123,7 @@ function applyDeterministicShadows(ctx, W, H) {
 // ─── v72.17 WARM COLOR GRADING — subtle warm tone shift ─────────────────────
 function applyWarmGrading(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
-  const d = [imgData.data](http://imgData.data);
+  const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
     // Slight warm shift: +3R, +1G, -2B
     d[i]   = Math.min(255, d[i] + 3);
@@ -5221,8 +5221,8 @@ async function detectDriftFromBuffers(cleanPngBuf, polishedPngBuf, W, H, customT
 // crisp edges without introducing halo artifacts.
 function applySharpen(ctx, W, H, amount = 0.35) {
   const imageData = ctx.getImageData(0, 0, W, H);
-  const src = new Uint8ClampedArray([imageData.data](http://imageData.data)); // copy of original
-  const dst = [imageData.data](http://imageData.data);
+  const src = new Uint8ClampedArray(imageData.data); // copy of original
+  const dst = imageData.data;
   const a = amount;
   const center = 1 + 4 * a;
   for (let y = 1; y < H - 1; y++) {
@@ -5248,7 +5248,7 @@ function applySharpen(ctx, W, H, amount = 0.35) {
 function drawParcelZone(ctx, W, H, parcelScreenPts, envelopeScreenPts) {
   if (!parcelScreenPts || parcelScreenPts.length < 3) return;
   // 1. Semi-transparent fill inside parcel — sand/beige to "clear" the grass invasion
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.beginPath();
   ctx.moveTo(parcelScreenPts[0].x, parcelScreenPts[0].y);
   for (let i = 1; i < parcelScreenPts.length; i++) {
@@ -5296,7 +5296,7 @@ function seedRandom(seed) {
 }
 function drawTrees(ctx, W, H) {
   const imgData = ctx.getImageData(0, 0, W, H);
-  const d = [imgData.data](http://imgData.data);
+  const d = imgData.data;
   const treePositions = [];
   const step = 28; // v72: tighter grid for more tree candidates
   const minTreeDist = 22; // minimum distance between tree centers
@@ -5404,7 +5404,7 @@ function drawTrees(ctx, W, H) {
 // ─── LÉGENDE + BOUSSOLE — SLIDE 4 AXO ────────────────────────────────────────
 function drawLegendCompass(ctx, W, H, p) {
   const { site_area, bearing, setback_front, setback_side, setback_back } = p;
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.translate(W - 58, 58);
   ctx.shadowColor = "rgba(0,0,0,0.15)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
   ctx.beginPath(); ctx.arc(0, 0, 28, 0, 2 * Math.PI);
@@ -5426,7 +5426,7 @@ function drawLegendCompass(ctx, W, H, p) {
   ];
   const legPad = 14, legLH = 26, legW = 300;
   const legH = legPad * 2 + legItems.length * legLH + 10;
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.08)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
   ctx.fillStyle = "rgba(255,255,255,0.97)";
   ctx.beginPath(); ctx.roundRect(16, 16, legW, legH, 8); ctx.fill();
@@ -5434,7 +5434,7 @@ function drawLegendCompass(ctx, W, H, p) {
   ctx.restore();
   legItems.forEach(function(item, i) {
     const iy = 16 + legPad + i * legLH;
-    [ctx.save](http://ctx.save)();
+    ctx.save();
     if (item.type === "rect") {
       ctx.fillStyle = item.fill; ctx.beginPath(); ctx.roundRect(28, iy, 16, 13, 2); ctx.fill();
       ctx.strokeStyle = item.stroke; ctx.lineWidth = 1.5; ctx.stroke();
@@ -5454,7 +5454,7 @@ function drawLegendCompass(ctx, W, H, p) {
 function drawSolarArc(ctx, W, H, p) {
   const { bearing } = p;
   const SX = W - 110, SY = H - 110, SR = 68;
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.10)"; ctx.shadowBlur = 10;
   ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.beginPath(); ctx.arc(SX, SY, SR + 12, 0, 2 * Math.PI); ctx.fill();
@@ -5497,7 +5497,7 @@ function drawSolarArc(ctx, W, H, p) {
 function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, fp_rdc_m2, fp_etages_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
   const s = W / 1280;
   // ── BOUSSOLE N en bas à droite ──
-  [ctx.save](http://ctx.save)();
+  ctx.save();
   ctx.translate(W - 60*s, H - 60*s);
   ctx.shadowColor = "rgba(0,0,0,0.12)"; ctx.shadowBlur = 6*s; ctx.shadowOffsetY = 2*s;
   ctx.beginPath(); ctx.arc(0, 0, 32*s, 0, 2 * Math.PI);
@@ -5619,8 +5619,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   }
 }
 // ─── ENDPOINT /generate — SLIDE 4 AXO ────────────────────────────────────────
-[app.post](http://app.post)("/generate", async (req, res) => {
-  const t0 = [Date.now](http://Date.now)();
+app.post("/generate", async (req, res) => {
+  const t0 = Date.now();
   console.log("═══ /generate v49 (style-ref) ═══");
   const {
     lead_id, client_name, polygon_points, site_area, land_width, land_depth,
@@ -5652,9 +5652,9 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   const coords = polygon_points.split("|").map(pt => {
     const [lat, lon] = pt.trim().split(",").map(Number);
     return { lat, lon };
-  }).filter(p => !isNaN([p.lat](http://p.lat)) && !isNaN(p.lon));
+  }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
-  const cLat = coords.reduce((s, p) => s + [p.lat](http://p.lat), 0) / coords.length;
+  const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
   // v70: front_edge en paramètre = override, sinon détection OSM
   const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
@@ -5705,16 +5705,16 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
         }
         const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
         const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-        const UPLOAD_TS = [Date.now](http://Date.now)();
+        const UPLOAD_TS = Date.now();
         const basePath = `hektar/${String(lead_id).trim()}_${slug}/${effectiveSlideName}_${UPLOAD_TS}.png`;
-        const { error: ue } = await [sb.storage](http://sb.storage).from("massing-images").upload(basePath, staticBuf, { contentType: "image/png", upsert: true });
+        const { error: ue } = await sb.storage.from("massing-images").upload(basePath, staticBuf, { contentType: "image/png", upsert: true });
         if (ue) {
           console.error(`[STATIC-TOP v73.2.5] Supabase upload error: ${ue.message}`);
           return res.status(500).json({ error: ue.message });
         }
-        const { data: pd } = [sb.storage](http://sb.storage).from("massing-images").getPublicUrl(basePath);
-        const cb = `?v=${[Date.now](http://Date.now)()}`;
-        console.log(`[STATIC-TOP v73.2.5] DONE in ${[Date.now](http://Date.now)() - t0}ms — ${pd.publicUrl}`);
+        const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
+        const cb = `?v=${Date.now()}`;
+        console.log(`[STATIC-TOP v73.2.5] DONE in ${Date.now() - t0}ms — ${pd.publicUrl}`);
         return res.json({
           ok: true,
           public_url: pd.publicUrl + cb,
@@ -5722,7 +5722,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
           path: basePath,
           centroid: { lat: cLat, lon: cLon },
           view: { zoom, bearing, pitch: 0, mode: usedSource },
-          duration_ms: [Date.now](http://Date.now)() - t0
+          duration_ms: Date.now() - t0
         });
       } catch (e) {
         console.error(`[STATIC-TOP v73.2.5] ERROR: ${e.message}\n${e.stack}`);
@@ -5731,8 +5731,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     }
   let browser;
   try {
-    browser = await puppeteer.connect({ browserWSEndpoint: `wss://[chrome.browserless.io](http://chrome.browserless.io)?token=${BROWSERLESS_TOKEN}` });
-    console.log(`Connected (${[Date.now](http://Date.now)() - t0}ms)`);
+    browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
+    console.log(`Connected (${Date.now() - t0}ms)`);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 1 });
     const effectiveMapStyle = isTopView ? "satellite" : "hektar";
@@ -5740,7 +5740,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
     const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
-    console.log(`Screenshot: ${screenshotBuf.length} bytes (${[Date.now](http://Date.now)() - t0}ms)`);
+    console.log(`Screenshot: ${screenshotBuf.length} bytes (${Date.now() - t0}ms)`);
     await page.close();
     const W = 1280, H = 1280;
     const canvas = createCanvas(W, H);
@@ -5761,7 +5761,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     applyWarmGrading(ctx, W, H);
     console.log(`[SLIDE4] v72: Applying light sharpening...`);
     applySharpen(ctx, W, H, 0.25);
-    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${[Date.now](http://Date.now)() - t0}ms)`);
+    console.log(`[SLIDE4] v72: Deterministic pipeline complete (${Date.now() - t0}ms)`);
     // pngClean = Mapbox screenshot + color remap + trees — NO extra canvas drawings
     // Mapbox already draws the parcel + envelope in the HTML — don't duplicate
     const pngClean = canvas.toBuffer("image/png");
@@ -5777,19 +5777,19 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
       const cosPitch = Math.cos(pitchRad);
       return { x: W / 2 + px, y: H / 2 + py * cosPitch };
     }
-    const parcelScreenPts = [coords.map](http://coords.map)(c => gpsToScreen([c.lat](http://c.lat), c.lon));
-    const envelopeScreenPts = [envelopeCoords.map](http://envelopeCoords.map)(c => gpsToScreen([c.lat](http://c.lat), c.lon));
+    const parcelScreenPts = coords.map(c => gpsToScreen(c.lat, c.lon));
+    const envelopeScreenPts = envelopeCoords.map(c => gpsToScreen(c.lat, c.lon));
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
     const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-    const UPLOAD_TS = [Date.now](http://Date.now)();
+    const UPLOAD_TS = Date.now();
     const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_${UPLOAD_TS}.png`;
-    const { error: ue } = await [sb.storage](http://sb.storage).from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
+    const { error: ue } = await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
     if (ue) return res.status(500).json({ error: ue.message });
-    const { data: pd } = [sb.storage](http://sb.storage).from("massing-images").getPublicUrl(basePath);
-    const cacheBust2 = `?v=${[Date.now](http://Date.now)()}`;
+    const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
+    const cacheBust2 = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust2;
     // ═══════════════════════════════════════════════════════════════════════════
     // v72.20: HYBRID AI POLISH — strict stability protocol
@@ -5801,8 +5801,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
     const SLIDE4_DRIFT_THRESHOLD = 0.75; // v72.128: raised — photorealistic texture polish naturally causes 60-70% block drift; raised to 75% to let it pass while catching true geometric hallucinations (typically >85%)
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
-    // (si ça déborde [Make.com](http://Make.com), on aura au moins la version déterministe en fallback)
-    const slide4Elapsed = [Date.now](http://Date.now)() - t0;
+    // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
+    const slide4Elapsed = Date.now() - t0;
     console.log(`[SLIDE4-POLISH v72.100] Début polish à ${Math.round(slide4Elapsed/1000)}s`);
     if (SLIDE4_AI_POLISH_ENABLED && OPENAI_API_KEY && !isTopView) {
       try {
@@ -5883,7 +5883,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
             callPolishAPI(b64Input, polishPrompt, "SLIDE4", v + 1, 1, refAxoB64)
           )
         );
-        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls completed (${[Date.now](http://Date.now)() - t0}ms)`);
+        console.log(`[SLIDE4-POLISH] ${SLIDE4_VARIATIONS} API calls completed (${Date.now() - t0}ms)`);
         // ── DRIFT SCORING — pick best under threshold ───────────────────────
         let bestVariation = null;
         let bestDriftScore = 1.0;
@@ -5906,7 +5906,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
             bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
           }
         }
-        console.log(`[SLIDE4-POLISH] v72.20 Multi-render results (${[Date.now](http://Date.now)() - t0}ms):\n${variationLog.join("\n")}`);
+        console.log(`[SLIDE4-POLISH] v72.20 Multi-render results (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
         if (bestVariation) {
           console.log(`[SLIDE4-POLISH] ✓ ACCEPTED v${bestVariation.index} (drift=${(bestDriftScore * 100).toFixed(1)}% < ${SLIDE4_DRIFT_THRESHOLD * 100}% threshold)`);
           const polishedImg = await loadImage(bestVariation.buf);
@@ -5962,11 +5962,11 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
           drawSolarArc(finalCtx, W, H, { bearing });
           const finalPng = finalCanvas.toBuffer("image/png");
           const enhancedPath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_enhanced_${UPLOAD_TS}.png`;
-          const { error: ue2 } = await [sb.storage](http://sb.storage).from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
           if (!ue2) {
-            const { data: pd2 } = [sb.storage](http://sb.storage).from("massing-images").getPublicUrl(enhancedPath);
-            enhancedUrl = pd2.publicUrl + `?v=${[Date.now](http://Date.now)()}`;
-            console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${[Date.now](http://Date.now)() - t0}ms)`);
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
+            console.log(`✓ [SLIDE4-POLISH] Enhanced uploaded: ${enhancedUrl} (${Date.now() - t0}ms)`);
           }
         } else {
           console.log(`⚠ [SLIDE4-POLISH] ALL ${SLIDE4_VARIATIONS} variations FAILED drift check (>${SLIDE4_DRIFT_THRESHOLD * 100}%) — using deterministic fallback`);
@@ -5979,7 +5979,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     } else {
       if (!OPENAI_API_KEY) console.log("[SLIDE4-POLISH] OPENAI_API_KEY absent — using deterministic render");
     }
-    return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: [Date.now](http://Date.now)() - t0 });
+    return res.json({ ok: true, public_url: pd.publicUrl + cacheBust2, enhanced_url: enhancedUrl, path: basePath, centroid: { lat: cLat, lon: cLon }, view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0 });
   } catch (e) {
     console.error("Error:", e.message || e);
     return res.status(500).json({ error: String(e.message || e) });
@@ -5988,8 +5988,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   }
 });
 // ─── ENDPOINT /generate-massing — SCÉNARIOS A/B/C ────────────────────────────
-[app.post](http://app.post)("/generate-massing", async (req, res) => {
-  const t0 = [Date.now](http://Date.now)();
+app.post("/generate-massing", async (req, res) => {
+  const t0 = Date.now();
   console.log("═══ /generate-massing v72.29 ═══");
   console.log(`[BODY] massing_label="${req.body.massing_label}" slide_name="${req.body.slide_name}" compute_scenario="${req.body.compute_scenario}"`);
   console.log(`[BODY] lead_id="${req.body.lead_id}" layout_mode="${req.body.layout_mode}" commerce_depth_m="${req.body.commerce_depth_m}"`);
@@ -6027,7 +6027,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     layout_mode,           // SUPERPOSE (défaut) | SPLIT_AV_AR | SPLIT_LAT | LINEAIRE
     commerce_depth_m,      // profondeur bande commerciale (défaut 6m)
     retrait_inter_volumes_m, // distance entre les 2 volumes (défaut 4m)
-    // v72.93: Performance — skip AI polish to stay within [Make.com](http://Make.com) 300s timeout
+    // v72.93: Performance — skip AI polish to stay within Make.com 300s timeout
     skip_polish = false,
     // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
     input_typologies = "",
@@ -6039,7 +6039,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   const envD = Number(envelope_d);
   const floorH = Number(fh_raw) || 3.2;
   // v72.29: DÉTECTION ROBUSTE DU LABEL (A/B/C) — PRIORITÉ À slide_name
-  // [Make.com](http://Make.com) envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
+  // Make.com envoie souvent massing_label="A" pour les 3 requêtes → INUTILISABLE.
   // Le slide_name est TOUJOURS différent (sinon les images s'écrasent) → SOURCE DE VÉRITÉ.
   let label = "A"; // défaut
   const slideStr = String(slide_name || "").toUpperCase();
@@ -6074,7 +6074,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   // ═══════════════════════════════════════════════════════════════════════════
   try {
     const _dispoEarly = String((req.body && req.body.Disposition) || (req.body && req.body.disposition) || "").toLowerCase();
-    const _progEarly = String((req.body && [req.body.target](http://req.body.target)_program) || "").toLowerCase();
+    const _progEarly = String((req.body && req.body.target_program) || "").toLowerCase();
     const _wantsSingle = /seul\s*b.?timent|un\s*seul|single\s*building/i.test(_dispoEarly);
     const _isPureResi = /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(_progEarly)
                       && !/mixte|mixed|commerce|bureau|activite/i.test(_progEarly);
@@ -6094,7 +6094,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   // On examine les VALEURS des champs, pas les noms (pour éviter les faux positifs)
   // ── Détection MIXTE : on examine les valeurs textuelles des champs pertinents ──
   const fieldValues = Object.values(req.body).map(v => String(v).toLowerCase()).join(" ");
-  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de [Make.com](http://Make.com) qui peut envoyer
+  // v72.25: DÉTECTION ROBUSTE — ne plus dépendre de Make.com qui peut envoyer
   // des bodies différents pour A/B/C. Tout signal de mixte/split = ON pour les 3.
   // ── Détection MIXTE ──
   const bodyHasMixte = /mixte|mixed|usage.?mixte/i.test(fieldValues);
@@ -6272,8 +6272,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   // ═══════════════════════════════════════════════════════════════════════════
   try {
     const _dispositionRaw = String((req.body && req.body.Disposition) || (req.body && req.body.disposition) || "").toLowerCase();
-    const _targetProgRaw = String((req.body && [req.body.target](http://req.body.target)_program) || "").toLowerCase();
-    const _supportTypeRaw = String((req.body && [req.body.support](http://req.body.support)_type) || "").toUpperCase();
+    const _targetProgRaw = String((req.body && req.body.target_program) || "").toLowerCase();
+    const _supportTypeRaw = String((req.body && req.body.support_type) || "").toUpperCase();
     const _clientWantsSingleVolume = /seul\s*b.?timent|seul\s*batiment|un\s*seul|single\s*building/i.test(_dispositionRaw);
     const _clientProgramIsPureResidential = (
       /petit.?collectif|collectif|immeuble.?rapport|villa|individuel|maison/i.test(_targetProgRaw)
@@ -6303,7 +6303,7 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     if (_isTerrainNu && !_clientWantsPilotis && typeof has_pilotis !== "undefined") {
       has_pilotis = false;
     }
-    const _clientTargetUnits = Number((req.body && [req.body.target](http://req.body.target)_units)) || 0;
+    const _clientTargetUnits = Number((req.body && req.body.target_units)) || 0;
     const _totalUnitsResult = (typeof totalUnitsResult !== "undefined") ? totalUnitsResult : 0;
     let _unitsWarning = "";
     if (_clientTargetUnits > 0 && _totalUnitsResult > _clientTargetUnits) {
@@ -6344,9 +6344,9 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   const coords = polygon_points.split("|").map(pt => {
     const [lat, lon] = pt.trim().split(",").map(Number);
     return { lat, lon };
-  }).filter(p => !isNaN([p.lat](http://p.lat)) && !isNaN(p.lon));
+  }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
   if (coords.length < 3) return res.status(400).json({ error: "polygon invalide" });
-  const cLat = coords.reduce((s, p) => s + [p.lat](http://p.lat), 0) / coords.length;
+  const cLat = coords.reduce((s, p) => s + p.lat, 0) / coords.length;
   const cLon = coords.reduce((s, p) => s + p.lon, 0) / coords.length;
   // v70: front_edge en paramètre = override, sinon détection OSM
   const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
@@ -6354,16 +6354,16 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
   const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
   // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
-  const envPtsDbg = [envelopeCoords.map](http://envelopeCoords.map)(c => toM([c.lat](http://c.lat), c.lon, cLat, cLon));
-  const envMinX = Math.min(...[envPtsDbg.map](http://envPtsDbg.map)(p => p.x)), envMaxX = Math.max(...[envPtsDbg.map](http://envPtsDbg.map)(p => p.x));
-  const envMinY = Math.min(...[envPtsDbg.map](http://envPtsDbg.map)(p => p.y)), envMaxY = Math.max(...[envPtsDbg.map](http://envPtsDbg.map)(p => p.y));
+  const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
+  const envMinX = Math.min(...envPtsDbg.map(p => p.x)), envMaxX = Math.max(...envPtsDbg.map(p => p.x));
+  const envMinY = Math.min(...envPtsDbg.map(p => p.y)), envMaxY = Math.max(...envPtsDbg.map(p => p.y));
   const actualEnvW = envMaxX - envMinX, actualEnvD = envMaxY - envMinY;
   console.log(`┌── ENVELOPE DIAGNOSTIC ──`);
   console.log(`│ Sheet envelope: ${envW}m × ${envD}m`);
   console.log(`│ Actual computed envelope bbox: ${actualEnvW.toFixed(1)}m × ${actualEnvD.toFixed(1)}m`);
   console.log(`│ Parcel centroid: ${cLat.toFixed(7)}, ${cLon.toFixed(7)}`);
   console.log(`│ Setbacks: front=${setback_front} side=${setback_side} back=${setback_back}`);
-  coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${[c.lat](http://c.lat).toFixed(7)}, ${c.lon.toFixed(7)}`));
+  coords.forEach((c, i) => console.log(`│ Parcel[${i}]: ${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}`));
   console.log(`└── end ENVELOPE DIAGNOSTIC ──`);
   // ── Calcul aire réelle de l'enveloppe (Shoelace formula en mètres) ──
   let envelopeAreaReal = 0;
@@ -6400,13 +6400,13 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const folder = `hektar/${String(lead_id).trim()}_${slug}`;
-    const UPLOAD_TS = [Date.now](http://Date.now)();
+    const UPLOAD_TS = Date.now();
   const basePath = `${folder}/${slideName}_${UPLOAD_TS}.png`;
   const enhancedPath = `${folder}/${slideName}_enhanced_${UPLOAD_TS}.png`;
   // Cache disabled for debugging
   let browser;
   try {
-    browser = await puppeteer.connect({ browserWSEndpoint: `wss://[chrome.browserless.io](http://chrome.browserless.io)?token=${BROWSERLESS_TOKEN}` });
+    browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
     const page = await browser.newPage();
     // ── PIPELINE HEKTAR : capture HD x2 ──
     await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
@@ -6501,20 +6501,20 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
       fp_etages_m2: Math.round((compute_scenario && scFpEtages) ? scFpEtages : fp),
     });
     const png = canvas.toBuffer("image/png");
-    await [sb.storage](http://sb.storage).from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
-    const { data: pd } = [sb.storage](http://sb.storage).from("massing-images").getPublicUrl(basePath);
-    const cacheBust = `?v=${[Date.now](http://Date.now)()}`;
+    await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
+    const { data: pd } = sb.storage.from("massing-images").getPublicUrl(basePath);
+    const cacheBust = `?v=${Date.now()}`;
     let enhancedUrl = pd.publicUrl + cacheBust;
     // ═══════════════════════════════════════════════════════════════════════════
     // v72.34: ROBUST MULTI-RENDER MASSING POLISH — model fallback, retry, timeout
     // ═══════════════════════════════════════════════════════════════════════════
-    const MASSING_VARIATIONS = 1; // v72.93: reduced from 2 → 1 (saves 30-60s, stays in [Make.com](http://Make.com) budget)
+    const MASSING_VARIATIONS = 1; // v72.93: reduced from 2 → 1 (saves 30-60s, stays in Make.com budget)
     let polishApplied = false;
     // v72.93: TIME BUDGET GUARD — skip polish if we've already spent too long
-    const elapsedBeforePolish = [Date.now](http://Date.now)() - t0;
+    const elapsedBeforePolish = Date.now() - t0;
     const skipPolishFlag = String(skip_polish).toLowerCase() === "true" || skip_polish === true || MASSING_SKIP_POLISH === true;
     if (MASSING_SKIP_POLISH === true) {
-      console.log(`[MASSING-POLISH] v72.150: MASSING_SKIP_POLISH=true → ALWAYS SKIP for [Make.com](http://Make.com) reliability (deterministic only)`);
+      console.log(`[MASSING-POLISH] v72.150: MASSING_SKIP_POLISH=true → ALWAYS SKIP for Make.com reliability (deterministic only)`);
     } else if (skipPolishFlag) {
       console.log(`[MASSING-POLISH] v72.93: skip_polish=true → SKIPPING AI polish (deterministic render only)`);
     } else if (elapsedBeforePolish > POLISH_TIME_BUDGET_MS) {
@@ -6688,7 +6688,7 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
             bestVariation = { buf: enhancedBuf, drift, index: v + 1 };
           }
         }
-        console.log(`[MASSING-POLISH] ${label} multi-render (${[Date.now](http://Date.now)() - t0}ms):\n${variationLog.join("\n")}`);
+        console.log(`[MASSING-POLISH] ${label} multi-render (${Date.now() - t0}ms):\n${variationLog.join("\n")}`);
         if (bestVariation) {
           console.log(`[MASSING-POLISH] ${label} ✓ Best: v${bestVariation.index} (drift=${(bestVariation.drift.driftScore * 100).toFixed(2)}%)`);
           const finalCanvas = createCanvas(W, H);
@@ -6705,12 +6705,12 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
           });
           const finalPng = finalCtx.canvas.toBuffer("image/png");
           const enhancedPath = `${folder}/${slideName}_enhanced_${UPLOAD_TS}.png`;
-          const { error: ue2 } = await [sb.storage](http://sb.storage).from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
+          const { error: ue2 } = await sb.storage.from("massing-images").upload(enhancedPath, finalPng, { contentType: "image/png", upsert: true, cacheControl: "0" });
           if (!ue2) {
-            const { data: pd2 } = [sb.storage](http://sb.storage).from("massing-images").getPublicUrl(enhancedPath);
-            enhancedUrl = pd2.publicUrl + `?v=${[Date.now](http://Date.now)()}`;
+            const { data: pd2 } = sb.storage.from("massing-images").getPublicUrl(enhancedPath);
+            enhancedUrl = pd2.publicUrl + `?v=${Date.now()}`;
             polishApplied = true;
-            console.log(`✓ [MASSING-POLISH] ${label} enhanced uploaded (${[Date.now](http://Date.now)() - t0}ms)`);
+            console.log(`✓ [MASSING-POLISH] ${label} enhanced uploaded (${Date.now() - t0}ms)`);
           }
         } else {
           console.warn(`⚠ [MASSING-DRIFT] ${label}: ALL ${MASSING_VARIATIONS} variations rejected — deterministic fallback`);
@@ -6721,7 +6721,7 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
     } else {
       console.warn(`[MASSING-POLISH] OPENAI_API_KEY not set — skipping polish`);
     }
-    console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${[Date.now](http://Date.now)() - t0}ms)`);
+    console.log(`[MASSING] v72.34: ${label} complete — polish=${polishApplied ? "APPLIED" : "DETERMINISTIC_FALLBACK"} (${Date.now() - t0}ms)`);
     return res.json({
       ok: true, cached: false, server_version: "72.34-SUPERVISOR",
       public_url: pd.publicUrl + cacheBust, enhanced_url: enhancedUrl,
@@ -6734,7 +6734,7 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
       levels, total_height: totalH, commerce_levels: commerceLevels,
       scenario_role: scenarioRole, accent_color: accentColor,
       centroid: { lat: cLat, lon: cLon },
-      view: { zoom, bearing, pitch: 58 }, duration_ms: [Date.now](http://Date.now)() - t0,
+      view: { zoom, bearing, pitch: 58 }, duration_ms: Date.now() - t0,
     });
   } catch (e) {
     console.error("Error:", e.message);
@@ -6901,9 +6901,9 @@ function buildTemplateTexts(flat, scenarios) {
   texts.success_financial_text = texts.invisible_financial_text;
   texts.success_strategic_text = texts.invisible_strategic_text;
   // ── SLIDE 19: Next steps ──
-  [texts.next](http://texts.next)_step_intro_text = `Suite a la recommandation du Scenario ${rec}, voici les etudes et demarches a engager pour passer a la phase operationnelle du projet.`;
-  [texts.next](http://texts.next)_step_scope_text = `Perimetre des etudes a lancer pour la phase suivante :\n\n- APS (Avant-Projet Sommaire) : definition des volumes, implantation, choix structurels. Validation de la faisabilite technique et affinage du budget. Delai : 3-4 semaines.\n\n- APD (Avant-Projet Definitif) : plans detailles, dimensionnement structure, choix des materiaux. Base pour le chiffrage definitif. Delai : 4-6 semaines.\n\n- Etudes geotechniques : sondages et essais de sol pour dimensionner les fondations. Indispensable avant le depot de permis. Delai : 2-3 semaines.\n\n- Dossier de permis de construire : constitution du dossier administratif complet. Delai d'instruction : 2-4 mois selon la commune.\n\n- Consultation des entreprises : appel d'offres restreint ou consultation directe. Prevoir 3-4 semaines pour reception et analyse des devis.`;
-  [texts.next](http://texts.next)_step_outcome_text = `Les livrables attendus a l'issue de cette phase sont : un APS valide, un budget affine a +/- 10%, un rapport geotechnique, et un dossier de permis de construire complet pret pour depot.`;
+  texts.next_step_intro_text = `Suite a la recommandation du Scenario ${rec}, voici les etudes et demarches a engager pour passer a la phase operationnelle du projet.`;
+  texts.next_step_scope_text = `Perimetre des etudes a lancer pour la phase suivante :\n\n- APS (Avant-Projet Sommaire) : definition des volumes, implantation, choix structurels. Validation de la faisabilite technique et affinage du budget. Delai : 3-4 semaines.\n\n- APD (Avant-Projet Definitif) : plans detailles, dimensionnement structure, choix des materiaux. Base pour le chiffrage definitif. Delai : 4-6 semaines.\n\n- Etudes geotechniques : sondages et essais de sol pour dimensionner les fondations. Indispensable avant le depot de permis. Delai : 2-3 semaines.\n\n- Dossier de permis de construire : constitution du dossier administratif complet. Delai d'instruction : 2-4 mois selon la commune.\n\n- Consultation des entreprises : appel d'offres restreint ou consultation directe. Prevoir 3-4 semaines pour reception et analyse des devis.`;
+  texts.next_step_outcome_text = `Les livrables attendus a l'issue de cette phase sont : un APS valide, un budget affine a +/- 10%, un rapport geotechnique, et un dossier de permis de construire complet pret pour depot.`;
   // ── SLIDE 20: Conclusion ──
   texts.conclusion_summary_text = `Ce diagnostic a permis d'analyser le potentiel d'un terrain de ${f("site_area")} m2 a ${f("city")} sous trois scenarios contrastes : ${f("A_role")} (A), ${f("B_role")} (B) et ${f("C_role")} (C). Chacun repond au programme cible de ${f("target_units")} unites en usage ${f("program_main")} en standing ${f("standing_level").toLowerCase()}.\n\nLe Scenario ${rec} est recommande avec un score de ${f("rec_score")}/100. Il offre le meilleur compromis entre le respect du programme, la proximite avec l'enveloppe budgetaire (${f("rec_cost_total")} vs ${f("budget_fcfa")} vises), la conformite urbanistique, et la simplicite de mise en oeuvre d'un R+${f("rec_levels")}. La prochaine etape consiste a lancer les etudes de faisabilite (APS/APD) et l'etude geotechnique pour confirmer ces hypotheses.`;
   texts.conclusion_positioning_text = `Le scenario ${rec} est le meilleur compromis entre cout maitrise (${f("rec_cost_total")}), conformite urbanistique (COS utilise a ${f("rec_cos_pct")} %), et adequation avec les objectifs du client. Il permet de livrer les ${f("target_units")} unites demandees dans un gabarit R+${f("rec_levels")} sobre et realiste.`;
@@ -6922,12 +6922,12 @@ function enrichFlatForTemplates(flat, p, scenarios) {
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
   const diag = scenarios.diagnostic || {};
-  const siteDiag = [diag.site](http://diag.site) || {};
+  const siteDiag = diag.site || {};
   // ── Basic params ──
-  [flat.site](http://flat.site)_area = [flat.site](http://flat.site)_area || String([p.site](http://p.site)_area || "");
-  [flat.city](http://flat.city) = [flat.city](http://flat.city) || [p.city](http://p.city) || "Douala";
+  flat.site_area = flat.site_area || String(p.site_area || "");
+  flat.city = flat.city || p.city || "Douala";
   flat.standing_level = flat.standing_level || p.standing_level || "STANDARD";
-  [flat.target](http://flat.target)_units = [flat.target](http://flat.target)_units || String([p.target](http://p.target)_units || 0);
+  flat.target_units = flat.target_units || String(p.target_units || 0);
   flat.program_main = flat.program_main || p.program_main || p.project_type || "MIXTE";
   flat.envelope_w = flat.envelope_w || String(p.envelope_w || "");
   flat.envelope_d = flat.envelope_d || String(p.envelope_d || "");
@@ -6950,8 +6950,8 @@ function enrichFlatForTemplates(flat, p, scenarios) {
     flat.feasibility_posture_fr = ({ AGGRESSIVE: "ambitieuse", BALANCED: "equilibree", CONSERVATIVE: "prudente" })[p2] || p2.toLowerCase() || "equilibree";
   }
   // ── Site SDPmax ──
-  if (![flat.site](http://flat.site)_sdp_max) {
-    [flat.site](http://flat.site)_sdp_max = `${siteDiag.sdp_max_m2 || Math.round(Number([p.site](http://p.site)_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`;
+  if (!flat.site_sdp_max) {
+    flat.site_sdp_max = `${siteDiag.sdp_max_m2 || Math.round(Number(p.site_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`;
   }
   // ── Per-scenario: score, hab_m2_total, ventil_*_pct ──
   for (const [key, sc] of [["A", sA], ["B", sB], ["C", sC]]) {
@@ -6959,7 +6959,7 @@ function enrichFlatForTemplates(flat, p, scenarios) {
       flat[`${key}_score`] = String(Math.round((sc.recommendation_score || 0) * 100));
     }
     if (!flat[`${key}_hab_m2_total`]) {
-      flat[`${key}_hab_m2_total`] = String(sc.surface_habitable_m2 || [sc.total](http://sc.total)_useful_m2 || sc.hab_m2_total || 0);
+      flat[`${key}_hab_m2_total`] = String(sc.surface_habitable_m2 || sc.total_useful_m2 || sc.hab_m2_total || 0);
     }
     // Ventilation percentages (calculated from actual values)
     const cv = sc.cout_ventilation || {};
@@ -6990,7 +6990,7 @@ function enrichFlatForTemplates(flat, p, scenarios) {
   flat.rec_ventil_so_pct = flat.rec_ventil_so_pct || flat[`${rec}_ventil_so_pct`] || "";
   flat.rec_ventil_lt_pct = flat.rec_ventil_lt_pct || flat[`${rec}_ventil_lt_pct`] || "";
   flat.rec_ventil_vrd_pct = flat.rec_ventil_vrd_pct || flat[`${rec}_ventil_vrd_pct`] || "";
-  console.log(`│ ✅ enrichFlatForTemplates: ${Object.keys(flat).length} clés (site_area=${[flat.site](http://flat.site)_area}, city=${[flat.city](http://flat.city)}, budget=${flat.budget_fcfa}, rec=${rec})`);
+  console.log(`│ ✅ enrichFlatForTemplates: ${Object.keys(flat).length} clés (site_area=${flat.site_area}, city=${flat.city}, budget=${flat.budget_fcfa}, rec=${rec})`);
   return flat;
 }
 // ─── PREMIUM GATE v1.0 — Post-GPT sanitization ─────────────────────────────
@@ -7002,7 +7002,7 @@ function sanitizePremiumTexts(texts, flat) {
   const sanitized = { ...texts };
   // Build replacement map from flat data
   const replacements = {};
-  // Score fixes: "[0.XXX/100](http://0.XXX/100)" → "XX/100"
+  // Score fixes: "0.XXX/100" → "XX/100"
   const scoreRegex = /\b0\.(\d{2,3})\/100\b/g;
   // Budget label translations
   const LABEL_TR = {
@@ -7072,8 +7072,8 @@ function sanitizePremiumTexts(texts, flat) {
     if (text.includes("[montant]") || text.includes("[%]") || text.includes("[X]M") || text.includes("[calcul]")) {
       const cv = {};
       cv.go = flat[`${recSc}_ventil_go`] || "0M";
-      [cv.so](http://cv.so) = flat[`${recSc}_ventil_so`] || "0M";
-      [cv.lt](http://cv.lt) = flat[`${recSc}_ventil_lt`] || "0M";
+      cv.so = flat[`${recSc}_ventil_so`] || "0M";
+      cv.lt = flat[`${recSc}_ventil_lt`] || "0M";
       cv.vrd = flat[`${recSc}_ventil_vrd`] || "0M";
       cv.goPct = flat[`${recSc}_ventil_go_pct`] || "";
       cv.soPct = flat[`${recSc}_ventil_so_pct`] || "";
@@ -7081,7 +7081,7 @@ function sanitizePremiumTexts(texts, flat) {
       cv.vrdPct = flat[`${recSc}_ventil_vrd_pct`] || "";
       // Replace [montant] FCFA ([%]) patterns sequentially
       let montantIdx = 0;
-      const montants = [cv.go, cv.go, [cv.so](http://cv.so), cv.vrd, [cv.lt](http://cv.lt)]; // fondations≈GO, GO, SO, VRD, LT
+      const montants = cv.go, cv.go, [cv.so, cv.vrd, cv.lt]; // fondations≈GO, GO, SO, VRD, LT
       const pcts = [cv.goPct, cv.goPct, cv.soPct, cv.vrdPct, cv.ltPct];
       text = text.replace(/\[montant\]\s*FCFA\s*\(\[%\]\)/g, () => {
         const m = montants[montantIdx] || "N/A";
@@ -7103,7 +7103,7 @@ function sanitizePremiumTexts(texts, flat) {
       text = text.replace(/\[X\]M/g, `${Math.abs(delta)}M`);
       text = text.replace(/\[calcul\]/g, delta > 0 ? `${Math.round(delta * 1e6 / 130)}` : "N/A");
     }
-    // 6. TROPICAL → tropical (EVERYWHERE in flowing text — zone labels handled by generate_[pptx.py](http://pptx.py))
+    // 6. TROPICAL → tropical (EVERYWHERE in flowing text — zone labels handled by generate_pptx.py)
     text = text.replace(/\bTROPICAL\b/g, "tropical");
     // EQUILIBREE/AMBITIEUSE/PRUDENTE → minuscules dans texte courant
     text = text.replace(/\bEQUILIBREE\b/g, "equilibree");
@@ -7208,9 +7208,9 @@ function validateConformity(flat, scenarios, texts) {
       if (unreplaced && unreplaced.length > 0) {
         warnings.push(`Text "${key}" contient ${unreplaced.length} variable(s) non remplacée(s): ${unreplaced.slice(0, 3).join(", ")}`);
       }
-      // Check for raw [0.XXX](http://0.XXX) scores
+      // Check for raw 0.XXX scores
       if (/\b0\.\d{2,}\/100\b/.test(text)) {
-        errors.push(`Text "${key}" contient un score au format float "[0.XXX/100](http://0.XXX/100)" au lieu de "XX/100"`);
+        errors.push(`Text "${key}" contient un score au format float "0.XXX/100" au lieu de "XX/100"`);
       }
       // Check for uppercase TROPICAL/EQUILIBREE in flowing text
       if (/\bTROPICAL\b/.test(text) && !/titre|TITRE/.test(key)) {
@@ -7503,18 +7503,18 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
   const orient = diag.orientation_solaire || {};
   const phasage = diag.strategie_phasage || {};
   const profil = diag.profil_client || {};
-  const siteDiag = [diag.site](http://diag.site) || {};
+  const siteDiag = diag.site || {};
   const rec = diag.recommandation || {};
   return JSON.stringify({
     // Site
-    site_area: [p.site](http://p.site)_area, city: [p.city](http://p.city) || "Douala",
+    site_area: p.site_area, city: p.city || "Douala",
     envelope_w: p.envelope_w, envelope_d: p.envelope_d,
-    envelope_area: [flat.site](http://flat.site)_emprise_max || `${Number(p.envelope_w) * Number(p.envelope_d)} m²`,
+    envelope_area: flat.site_emprise_max || `${Number(p.envelope_w) * Number(p.envelope_d)} m²`,
     zoning_type: p.zoning_type,
     max_floors: p.max_floors, max_height_m: p.max_height_m,
-    site_cos_regl: [flat.site](http://flat.site)_cos_regl || "2.5",
-    site_ces_regl: [flat.site](http://flat.site)_ces_regl || "60%",
-    site_sdp_max: [flat.site](http://flat.site)_sdp_max || `${Math.round(Number([p.site](http://p.site)_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`,
+    site_cos_regl: flat.site_cos_regl || "2.5",
+    site_ces_regl: flat.site_ces_regl || "60%",
+    site_sdp_max: flat.site_sdp_max || `${Math.round(Number(p.site_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`,
     // Retraits
     retrait_avant: flat.retrait_avant, retrait_lateral: flat.retrait_lateral,
     retrait_arriere: flat.retrait_arriere,
@@ -7528,12 +7528,12 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
     // Client profile
     program_main: p.program_main, primary_driver: p.primary_driver,
     standing_level: p.standing_level,
-    target_surface_m2: [p.target](http://p.target)_surface_m2, target_units: [p.target](http://p.target)_units,
+    target_surface_m2: p.target_surface_m2, target_units: p.target_units,
     budget_range: p.budget_range, budget_band: p.budget_band,
     budget_tension: p.budget_tension,
     feasibility_posture: flat.profil_posture || p.feasibility_posture,
     // Scores
-    rent_score: [p.rent](http://p.rent)_score, capacity_score: p.capacity_score,
+    rent_score: p.rent_score, capacity_score: p.capacity_score,
     mix_score: p.mix_score, phase_score: p.phase_score, risk_score: p.risk_score,
     // Phasage
     phasage_text: flat.phasage_text,
@@ -7622,9 +7622,9 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
     B_score: String(Math.round((sB.recommendation_score || 0) * 100)),
     C_score: String(Math.round((sC.recommendation_score || 0) * 100)),
     // v72.80: hab_m2_total per scenario
-    A_hab_m2_total: String(sA.surface_habitable_m2 || [sA.total](http://sA.total)_useful_m2 || 0),
-    B_hab_m2_total: String(sB.surface_habitable_m2 || [sB.total](http://sB.total)_useful_m2 || 0),
-    C_hab_m2_total: String(sC.surface_habitable_m2 || [sC.total](http://sC.total)_useful_m2 || 0),
+    A_hab_m2_total: String(sA.surface_habitable_m2 || sA.total_useful_m2 || 0),
+    B_hab_m2_total: String(sB.surface_habitable_m2 || sB.total_useful_m2 || 0),
+    C_hab_m2_total: String(sC.surface_habitable_m2 || sC.total_useful_m2 || 0),
     // v72.80: Ventilation percentages (pre-calculated for GPT)
     A_ventil_go_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.gros_oeuvre_fcfa || 0) / t * 100)}%`; })(),
     A_ventil_so_pct: (() => { const cv = sA.cout_ventilation || {}; const t = sA.cost_total_fcfa || 1; return `${Math.round((cv.second_oeuvre_fcfa || 0) / t * 100)}%`; })(),
@@ -7657,9 +7657,9 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
       return { AGGRESSIVE: "AMBITIEUSE", BALANCED: "EQUILIBREE", CONSERVATIVE: "PRUDENTE" }[p2] || p2;
     })(),
     // Deltas
-    delta_BA_sdp: [flat.delta](http://flat.delta)_BA_sdp, delta_BA_cout: [flat.delta](http://flat.delta)_BA_cout,
-    delta_CA_sdp: [flat.delta](http://flat.delta)_CA_sdp, delta_CA_cout: [flat.delta](http://flat.delta)_CA_cout,
-    delta_CB_sdp: [flat.delta](http://flat.delta)_CB_sdp || "", delta_CB_cout: [flat.delta](http://flat.delta)_CB_cout || "",
+    delta_BA_sdp: flat.delta_BA_sdp, delta_BA_cout: flat.delta_BA_cout,
+    delta_CA_sdp: flat.delta_CA_sdp, delta_CA_cout: flat.delta_CA_cout,
+    delta_CB_sdp: flat.delta_CB_sdp || "", delta_CB_cout: flat.delta_CB_cout || "",
     // v72.84: Pre-computed budget delta for slides 17/18
     rec_budget_delta_M: (() => {
       const recKey = flat.rec_scenario || "C";
@@ -7681,7 +7681,7 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
  * Call GPT-4o to generate all diagnostic texts
  */
 async function generateDiagnosticTexts(dataContext, rules) {
-  const t0 = [Date.now](http://Date.now)();
+  const t0 = Date.now();
   const controller = new (typeof AbortController !== "undefined" ? AbortController : require("abort-controller"))();
   const timer = setTimeout(() => controller.abort(), GPT_TEXT_TIMEOUT_MS);
   try {
@@ -7708,11 +7708,11 @@ async function generateDiagnosticTexts(dataContext, rules) {
     if (!resp.ok) {
       const errText = await resp.text();
       console.error(`[GENERATE-TEXTS] GPT error ${resp.status}: ${errText.substring(0, 500)}`);
-      return { error: `GPT ${resp.status}`, elapsed_ms: [Date.now](http://Date.now)() - t0 };
+      return { error: `GPT ${resp.status}`, elapsed_ms: Date.now() - t0 };
     }
     const json = await resp.json();
     const content = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || "{}";
-    const elapsed = [Date.now](http://Date.now)() - t0;
+    const elapsed = Date.now() - t0;
     console.log(`[GENERATE-TEXTS] GPT responded in ${elapsed}ms, ${content.length} chars`);
     try {
       const texts = JSON.parse(content);
@@ -7726,19 +7726,19 @@ async function generateDiagnosticTexts(dataContext, rules) {
   } catch (err) {
     clearTimeout(timer);
     console.error(`[GENERATE-TEXTS] Error: ${err.message}`);
-    return { error: err.message, elapsed_ms: [Date.now](http://Date.now)() - t0 };
+    return { error: err.message, elapsed_ms: Date.now() - t0 };
   }
 }
-[app.post](http://app.post)("/generate-texts", async (req, res) => {
-  const t0 = [Date.now](http://Date.now)();
+app.post("/generate-texts", async (req, res) => {
+  const t0 = Date.now();
   console.log(`\n═══ /generate-texts v3.0-PREMIUM ═══`);
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
-  if (![p.site](http://p.site)_area || !p.envelope_w || !p.envelope_d) {
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
   // Step 1: Compute scenarios (reuse existing engine)
   const scenarios = computeSmartScenarios({
-    site_area: Number([p.site](http://p.site)_area),
+    site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
     envelope_d: Number(p.envelope_d),
     envelope_area: Number(p.envelope_area) || undefined,
@@ -7748,9 +7748,9 @@ async function generateDiagnosticTexts(dataContext, rules) {
     max_floors: Number(p.max_floors) || 99,
     max_height_m: Number(p.max_height_m) || 99,
     program_main: p.program_main || p.project_type || "",
-    target_surface_m2: Number([p.target](http://p.target)_surface_m2) || 0,
-    site_saturation_level: [p.site](http://p.site)_saturation_level || "MEDIUM",
-    financial_rigidity_score: Number([p.financial](http://p.financial)_rigidity_score) || 0,
+    target_surface_m2: Number(p.target_surface_m2) || 0,
+    site_saturation_level: p.site_saturation_level || "MEDIUM",
+    financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
     density_band: p.density_band || "",
     risk_adjusted: Number(p.risk_adjusted) || 0,
     feasibility_posture: p.feasibility_posture || "BALANCED",
@@ -7762,8 +7762,8 @@ async function generateDiagnosticTexts(dataContext, rules) {
     budget_band: p.budget_band || "",
     budget_tension: Number(p.budget_tension) || 0,
     standing_level: p.standing_level || "STANDARD",
-    target_units: Number([p.target](http://p.target)_units) || 0,
-    rent_score: Number([p.rent](http://p.rent)_score) || 0,
+    target_units: Number(p.target_units) || 0,
+    rent_score: Number(p.rent_score) || 0,
     capacity_score: Number(p.capacity_score) || 0,
     mix_score: Number(p.mix_score) || 0,
     phase_score: Number(p.phase_score) || 0,
@@ -7786,7 +7786,7 @@ async function generateDiagnosticTexts(dataContext, rules) {
   const orient = diag.orientation_solaire || {};
   const retr = diag.retraits_reglementaires || {};
   const profil = diag.profil_client || {};
-  const siteDiag = [diag.site](http://diag.site) || {};
+  const siteDiag = diag.site || {};
   const sA = scenarios.A || {};
   const sB = scenarios.B || {};
   const sC = scenarios.C || {};
@@ -7794,16 +7794,16 @@ async function generateDiagnosticTexts(dataContext, rules) {
     diagnostic_narrative: (diag.recommandation || {}).narrative || "",
     rec_scenario: (diag.recommandation || {}).scenario || "",
     rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100), // v72.80 FIX: 0-1 → 0-100
-    delta_BA_sdp: `${[dBA.delta](http://dBA.delta)_sdp_m2 || 0} m² (${[dBA.delta](http://dBA.delta)_sdp_pct || 0}%)`,
-    delta_BA_cout: `${[dBA.delta](http://dBA.delta)_cout_fcfa ? Math.round([dBA.delta](http://dBA.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dBA.delta](http://dBA.delta)_cout_pct || 0}%)`,
-    delta_BA_unites: `${[dBA.delta](http://dBA.delta)_unites || 0} logements`,
-    delta_CA_sdp: `${[dCA.delta](http://dCA.delta)_sdp_m2 || 0} m² (${[dCA.delta](http://dCA.delta)_sdp_pct || 0}%)`,
-    delta_CA_cout: `${[dCA.delta](http://dCA.delta)_cout_fcfa ? Math.round([dCA.delta](http://dCA.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dCA.delta](http://dCA.delta)_cout_pct || 0}%)`,
-    delta_CA_unites: `${[dCA.delta](http://dCA.delta)_unites || 0} logements`,
-    delta_CB_sdp: `${[dCB.delta](http://dCB.delta)_sdp_m2 || 0} m² (${[dCB.delta](http://dCB.delta)_sdp_pct || 0}%)`,
-    delta_CB_cout: `${[dCB.delta](http://dCB.delta)_cout_fcfa ? Math.round([dCB.delta](http://dCB.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dCB.delta](http://dCB.delta)_cout_pct || 0}%)`,
+    delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
+    delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
+    delta_BA_unites: `${dBA.delta_unites || 0} logements`,
+    delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
+    delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
+    delta_CA_unites: `${dCA.delta_unites || 0} logements`,
+    delta_CB_sdp: `${dCB.delta_sdp_m2 || 0} m² (${dCB.delta_sdp_pct || 0}%)`,
+    delta_CB_cout: `${dCB.delta_cout_fcfa ? Math.round(dCB.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCB.delta_cout_pct || 0}%)`,
     phasage_text: phasage.text || "",
-    orient_zone: [orient.zone](http://orient.zone)_climatique || "",
+    orient_zone: orient.zone_climatique || "",
     orient_facade_optimale: orient.facade_optimale || "",
     orient_recommandation: orient.recommandation || "",
     retrait_avant: `${retr.avant_m || 0}m`,
@@ -7821,12 +7821,12 @@ async function generateDiagnosticTexts(dataContext, rules) {
     profil_programme: profil.programme || "",
     A_role: sA.role || "", A_fp: String(sA.fp_m2 || 0), A_levels: String(sA.levels || 0),
     A_height: String(sA.height_m || 0), A_sdp: String(sA.sdp_m2 || 0),
-    A_units: String([sA.total](http://sA.total)_units || 0), A_unit_summary: sA.unit_mix_detail || "",
+    A_units: String(sA.total_units || 0), A_unit_summary: sA.unit_mix_detail || "",
     A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
     A_has_pilotis: String(sA.has_pilotis || false),
     A_cost_total: `${sA.cost_total_fcfa ? Math.round(sA.cost_total_fcfa / 1e6) : 0}M FCFA`,
     A_cost_m2: `${sA.cost_per_m2_sdp ? Math.round(sA.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
-    A_cost_m2_marche: `${[sA.market](http://sA.market)_cost_per_m2 ? Math.round([sA.market](http://sA.market)_cost_per_m2 / 1000) : 0}k`,
+    A_cost_m2_marche: `${sA.market_cost_per_m2 ? Math.round(sA.market_cost_per_m2 / 1000) : 0}k`,
     A_cost_m2_ajuste: `${sA.cost_per_m2 ? Math.round(sA.cost_per_m2 / 1000) : 0}k`,
     A_fourchette_text: `entre ${sA.cout_fourchette ? Math.round(sA.cout_fourchette.bas / 1e6) : 0}M et ${sA.cout_fourchette ? Math.round(sA.cout_fourchette.haut / 1e6) : 0}M FCFA`,
     A_budget_fit: sA.budget_fit || "", A_cos_pct: String(sA.cos_ratio_pct || 0),
@@ -7846,7 +7846,7 @@ async function generateDiagnosticTexts(dataContext, rules) {
     A_hono_taux_bas: `${((sA.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 10}%`,
     A_hono_taux_haut: `${((sA.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 15}%`,
     A_cost_unit: `${sA.cost_per_unit ? Math.round(sA.cost_per_unit / 1e6) : 0}M FCFA`,
-    A_free_ground: `${[sA.free](http://sA.free)_ground_m2 || 0} m²`,
+    A_free_ground: `${sA.free_ground_m2 || 0} m²`,
     A_budget_equation: sA.budget_equation || "",
     A_gabarit: sA.gabarit_desc || "",
     A_accent_color: sA.accent_color || "#2a5298",
@@ -7862,12 +7862,12 @@ async function generateDiagnosticTexts(dataContext, rules) {
     A_frais_M: `${sA.frais_annexes ? Math.round(sA.frais_annexes / 1e6) : 0}M`,
     B_role: sB.role || "", B_fp: String(sB.fp_m2 || 0), B_levels: String(sB.levels || 0),
     B_height: String(sB.height_m || 0), B_sdp: String(sB.sdp_m2 || 0),
-    B_units: String([sB.total](http://sB.total)_units || 0), B_unit_summary: sB.unit_mix_detail || "",
+    B_units: String(sB.total_units || 0), B_unit_summary: sB.unit_mix_detail || "",
     B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
     B_has_pilotis: String(sB.has_pilotis || false),
     B_cost_total: `${sB.cost_total_fcfa ? Math.round(sB.cost_total_fcfa / 1e6) : 0}M FCFA`,
     B_cost_m2: `${sB.cost_per_m2_sdp ? Math.round(sB.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
-    B_cost_m2_marche: `${[sB.market](http://sB.market)_cost_per_m2 ? Math.round([sB.market](http://sB.market)_cost_per_m2 / 1000) : 0}k`,
+    B_cost_m2_marche: `${sB.market_cost_per_m2 ? Math.round(sB.market_cost_per_m2 / 1000) : 0}k`,
     B_cost_m2_ajuste: `${sB.cost_per_m2 ? Math.round(sB.cost_per_m2 / 1000) : 0}k`,
     B_fourchette_text: `entre ${sB.cout_fourchette ? Math.round(sB.cout_fourchette.bas / 1e6) : 0}M et ${sB.cout_fourchette ? Math.round(sB.cout_fourchette.haut / 1e6) : 0}M FCFA`,
     B_budget_fit: sB.budget_fit || "", B_cos_pct: String(sB.cos_ratio_pct || 0),
@@ -7886,7 +7886,7 @@ async function generateDiagnosticTexts(dataContext, rules) {
     B_hono_taux_bas: `${((sB.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 10}%`,
     B_hono_taux_haut: `${((sB.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 15}%`,
     B_cost_unit: `${sB.cost_per_unit ? Math.round(sB.cost_per_unit / 1e6) : 0}M FCFA`,
-    B_free_ground: `${[sB.free](http://sB.free)_ground_m2 || 0} m²`,
+    B_free_ground: `${sB.free_ground_m2 || 0} m²`,
     B_budget_equation: sB.budget_equation || "",
     B_gabarit: sB.gabarit_desc || "",
     B_accent_color: sB.accent_color || "#1e8449",
@@ -7901,12 +7901,12 @@ async function generateDiagnosticTexts(dataContext, rules) {
     B_frais_M: `${sB.frais_annexes ? Math.round(sB.frais_annexes / 1e6) : 0}M`,
     C_role: sC.role || "", C_fp: String(sC.fp_m2 || 0), C_levels: String(sC.levels || 0),
     C_height: String(sC.height_m || 0), C_sdp: String(sC.sdp_m2 || 0),
-    C_units: String([sC.total](http://sC.total)_units || 0), C_unit_summary: sC.unit_mix_detail || "",
+    C_units: String(sC.total_units || 0), C_unit_summary: sC.unit_mix_detail || "",
     C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
     C_has_pilotis: String(sC.has_pilotis || false),
     C_cost_total: `${sC.cost_total_fcfa ? Math.round(sC.cost_total_fcfa / 1e6) : 0}M FCFA`,
     C_cost_m2: `${sC.cost_per_m2_sdp ? Math.round(sC.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`,
-    C_cost_m2_marche: `${[sC.market](http://sC.market)_cost_per_m2 ? Math.round([sC.market](http://sC.market)_cost_per_m2 / 1000) : 0}k`,
+    C_cost_m2_marche: `${sC.market_cost_per_m2 ? Math.round(sC.market_cost_per_m2 / 1000) : 0}k`,
     C_cost_m2_ajuste: `${sC.cost_per_m2 ? Math.round(sC.cost_per_m2 / 1000) : 0}k`,
     C_fourchette_text: `entre ${sC.cout_fourchette ? Math.round(sC.cout_fourchette.bas / 1e6) : 0}M et ${sC.cout_fourchette ? Math.round(sC.cout_fourchette.haut / 1e6) : 0}M FCFA`,
     C_budget_fit: sC.budget_fit || "", C_cos_pct: String(sC.cos_ratio_pct || 0),
@@ -7925,7 +7925,7 @@ async function generateDiagnosticTexts(dataContext, rules) {
     C_hono_taux_bas: `${((sC.cout_ventilation || {}).honoraires_architecte || {}).taux_bas_pct || 10}%`,
     C_hono_taux_haut: `${((sC.cout_ventilation || {}).honoraires_architecte || {}).taux_haut_pct || 15}%`,
     C_cost_unit: `${sC.cost_per_unit ? Math.round(sC.cost_per_unit / 1e6) : 0}M FCFA`,
-    C_free_ground: `${[sC.free](http://sC.free)_ground_m2 || 0} m²`,
+    C_free_ground: `${sC.free_ground_m2 || 0} m²`,
     C_budget_equation: sC.budget_equation || "",
     C_gabarit: sC.gabarit_desc || "",
     C_accent_color: sC.accent_color || "#d35400",
@@ -8024,9 +8024,9 @@ async function generateDiagnosticTexts(dataContext, rules) {
     gpt_model: generatedTexts._gpt_model || GPT_TEXT_MODEL,
     conformity_check: conformity,
     server_version: "72.87-CONFORMITY-GATE",
-    total_duration_ms: [Date.now](http://Date.now)() - t0,
+    total_duration_ms: Date.now() - t0,
   };
-  console.log(`═══ /generate-texts DONE in ${[Date.now](http://Date.now)() - t0}ms ═══\n`);
+  console.log(`═══ /generate-texts DONE in ${Date.now() - t0}ms ═══\n`);
   return res.json(response);
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -8035,17 +8035,17 @@ async function generateDiagnosticTexts(dataContext, rules) {
 const { execSync, exec } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-[app.post](http://app.post)("/generate-pptx", async (req, res) => {
-  const t0 = [Date.now](http://Date.now)();
+app.post("/generate-pptx", async (req, res) => {
+  const t0 = Date.now();
   console.log(`\n═══ /generate-pptx v3.0-PREMIUM ═══`);
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
-  if (![p.site](http://p.site)_area || !p.envelope_w || !p.envelope_d) {
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
   try {
     // Step 1: Compute scenarios
     const scenarios = computeSmartScenarios({
-      site_area: Number([p.site](http://p.site)_area),
+      site_area: Number(p.site_area),
       envelope_w: Number(p.envelope_w),
       envelope_d: Number(p.envelope_d),
       envelope_area: Number(p.envelope_area) || undefined,
@@ -8055,9 +8055,9 @@ const fs = require("fs");
       max_floors: Number(p.max_floors) || 99,
       max_height_m: Number(p.max_height_m) || 99,
       program_main: p.program_main || p.project_type || "",
-      target_surface_m2: Number([p.target](http://p.target)_surface_m2) || 0,
-      site_saturation_level: [p.site](http://p.site)_saturation_level || "MEDIUM",
-      financial_rigidity_score: Number([p.financial](http://p.financial)_rigidity_score) || 0,
+      target_surface_m2: Number(p.target_surface_m2) || 0,
+      site_saturation_level: p.site_saturation_level || "MEDIUM",
+      financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
       density_band: p.density_band || "",
       risk_adjusted: Number(p.risk_adjusted) || 0,
       feasibility_posture: p.feasibility_posture || "BALANCED",
@@ -8069,8 +8069,8 @@ const fs = require("fs");
       budget_band: p.budget_band || "",
       budget_tension: Number(p.budget_tension) || 0,
       standing_level: p.standing_level || "STANDARD",
-      target_units: Number([p.target](http://p.target)_units) || 0,
-      rent_score: Number([p.rent](http://p.rent)_score) || 0,
+      target_units: Number(p.target_units) || 0,
+      rent_score: Number(p.rent_score) || 0,
       capacity_score: Number(p.capacity_score) || 0,
       mix_score: Number(p.mix_score) || 0,
       phase_score: Number(p.phase_score) || 0,
@@ -8108,13 +8108,13 @@ const fs = require("fs");
       retrait_mitoyennete: String(retrD.mitoyennete_cotes || 0),
       retrait_emprise_constructible: `${retrD.emprise_constructible_m2 || 0} m²`,
       retrait_reduction_pct: `${retrD.reduction_pct || 0}%`,
-      site_cos_regl: String(([diag.site](http://diag.site) || {}).cos_regl || "2.5"),
-      site_ces_regl: String(([diag.site](http://diag.site) || {}).ces_regl_pct || "60"),
-      orient_zone: [orientD.zone](http://orientD.zone)_climatique || "",
-      delta_BA_sdp: `${[dBA.delta](http://dBA.delta)_sdp_m2 || 0} m² (${[dBA.delta](http://dBA.delta)_sdp_pct || 0}%)`,
-      delta_BA_cout: `${[dBA.delta](http://dBA.delta)_cout_fcfa ? Math.round([dBA.delta](http://dBA.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dBA.delta](http://dBA.delta)_cout_pct || 0}%)`,
-      delta_CA_sdp: `${[dCA.delta](http://dCA.delta)_sdp_m2 || 0} m² (${[dCA.delta](http://dCA.delta)_sdp_pct || 0}%)`,
-      delta_CA_cout: `${[dCA.delta](http://dCA.delta)_cout_fcfa ? Math.round([dCA.delta](http://dCA.delta)_cout_fcfa / 1e6) : 0}M FCFA (${[dCA.delta](http://dCA.delta)_cout_pct || 0}%)`,
+      site_cos_regl: String((diag.site || {}).cos_regl || "2.5"),
+      site_ces_regl: String((diag.site || {}).ces_regl_pct || "60"),
+      orient_zone: orientD.zone_climatique || "",
+      delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
+      delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
+      delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
+      delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
       profil_posture: (diag.profil_client || {}).posture || "BALANCED",
     };
     // Add per-scenario flat fields
@@ -8123,7 +8123,7 @@ const fs = require("fs");
       flat[`${key}_fp`] = String(s.fp_m2 || 0);
       flat[`${key}_levels`] = String(Math.max(0, (s.levels || 1) - 1)); // v72.80 FIX: R+X = levels-1
       flat[`${key}_sdp`] = String(s.sdp_m2 || 0);
-      flat[`${key}_units`] = String([s.total](http://s.total)_units || 0);
+      flat[`${key}_units`] = String(s.total_units || 0);
       flat[`${key}_unit_summary`] = s.unit_mix_detail || "";
       flat[`${key}_m2_par_logt`] = String(s.m2_habitable_par_logement || 0);
       flat[`${key}_has_pilotis`] = String(s.has_pilotis || false);
@@ -8133,7 +8133,7 @@ const fs = require("fs");
       flat[`${key}_layout_mode`] = s.layout_mode || "SUPERPOSE";
       flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
       flat[`${key}_cost_m2`] = `${s.cost_per_m2_sdp ? Math.round(s.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`;
-      flat[`${key}_cost_m2_marche`] = `${[s.market](http://s.market)_cost_per_m2 ? Math.round([s.market](http://s.market)_cost_per_m2 / 1000) : 0}k`;
+      flat[`${key}_cost_m2_marche`] = `${s.market_cost_per_m2 ? Math.round(s.market_cost_per_m2 / 1000) : 0}k`;
       flat[`${key}_cost_m2_ajuste`] = `${s.cost_per_m2 ? Math.round(s.cost_per_m2 / 1000) : 0}k`;
       flat[`${key}_budget_fit`] = s.budget_fit || "";
       flat[`${key}_cos_pct`] = String(s.cos_ratio_pct || 0);
@@ -8151,7 +8151,7 @@ const fs = require("fs");
       flat[`${key}_hono_taux_bas`] = `${ha.taux_bas_pct || 10}%`;
       flat[`${key}_hono_taux_haut`] = `${ha.taux_haut_pct || 15}%`;
       flat[`${key}_cost_unit`] = `${s.cost_per_unit ? Math.round(s.cost_per_unit / 1e6) : 0}M FCFA`;
-      flat[`${key}_free_ground`] = `${[s.free](http://s.free)_ground_m2 || 0} m²`;
+      flat[`${key}_free_ground`] = `${s.free_ground_m2 || 0} m²`;
       flat[`${key}_budget_equation`] = s.budget_equation || "";
       flat[`${key}_gabarit`] = s.gabarit_desc || "";
       // v72.72: FIX — cout_ventilation (pas ventilation), sous-clés _fcfa
@@ -8182,7 +8182,7 @@ const fs = require("fs");
       generatedTexts.slide_5_text = gptTexts.slide_5_text;
     }
     // Template slide_5_text is already complete — no fallback needed
-    // v72.93: SLIDE 17/18 TEXT ALIASES — generate_[pptx.py](http://pptx.py) uses SLIDE_SPECIFIC_TEXT
+    // v72.93: SLIDE 17/18 TEXT ALIASES — generate_pptx.py uses SLIDE_SPECIFIC_TEXT
     // mapping that expects _s17 and _s18 suffixed keys
     generatedTexts.invisible_technical_text_s17 = generatedTexts.invisible_technical_text || "";
     generatedTexts.invisible_financial_text_s17 = generatedTexts.invisible_financial_text || "";
@@ -8195,7 +8195,7 @@ const fs = require("fs");
     const conformity = validateConformity(flat, scenarios, generatedTexts);
     // Step 4: Map server data to EXACT keys expected by Python scripts
     // ═══════════════════════════════════════════════════════════════
-    // generate_[charts.py](http://charts.py) expects per-scenario:
+    // generate_charts.py expects per-scenario:
     //   RISK (0-100): budget_fit, complexite_structurelle, risque_permis,
     //                 ratio_efficacite, densite_cos, phasabilite, cout_m2
     //   GAUGE: recommendation_score
@@ -8242,7 +8242,7 @@ const fs = require("fs");
         surface_habitable_m2: sc.surface_habitable_m2 || sc.hab_m2_total || 0,
         niveaux: sc.levels || 0,
         levels: sc.levels || 0,
-        total_units: [sc.total](http://sc.total)_units || 0,
+        total_units: sc.total_units || 0,
         cost_total_fcfa: costTotal,
         duree_chantier_mois: sc.duree_chantier_mois || 0,
         fp_m2: sc.fp_m2 || 0,
@@ -8257,30 +8257,30 @@ const fs = require("fs");
         accent_color: sc.accent_color || "#888888",
         budget_fit_label: sc.budget_fit || "",
         parking_detail: sc.parking_detail || {},
-        free_ground_m2: [sc.free](http://sc.free)_ground_m2 || 0,
+        free_ground_m2: sc.free_ground_m2 || 0,
         circulation_ratio_pct: sc.circulation_ratio_pct || 0,
         rendement_brut_pct: sc.rendement_brut_pct || 0,
       };
     }
     // Step 5: Prepare data JSON for Python
-    // generate_[pptx.py](http://pptx.py) reads: data['texts'], data['images'], data['scenarios'],
+    // generate_pptx.py reads: data['texts'], data['images'], data['scenarios'],
     //   data['client_name'], data['recommended']
     const pptxData = {
       ...flat,
       client_name: p.client_name || "",
-      site_area: [p.site](http://p.site)_area,
-      // Texts MUST be nested under 'texts' key (generate_[pptx.py](http://pptx.py) line 379)
+      site_area: p.site_area,
+      // Texts MUST be nested under 'texts' key (generate_pptx.py line 379)
       texts: { ...generatedTexts },
-      // Images MUST be nested under 'images' key (generate_[pptx.py](http://pptx.py) line 369)
+      // Images MUST be nested under 'images' key (generate_pptx.py line 369)
       images: p.images || {},
-      // Scenarios with all keys mapped for charts (generate_[charts.py](http://charts.py))
+      // Scenarios with all keys mapped for charts (generate_charts.py)
       scenarios: {
         A: mapScenarioForPython(sA),
         B: mapScenarioForPython(sB),
         C: mapScenarioForPython(sC),
       },
       scores: {
-        rent_score: Number([p.rent](http://p.rent)_score) || 0,
+        rent_score: Number(p.rent_score) || 0,
         capacity_score: Number(p.capacity_score) || 0,
         mix_score: Number(p.mix_score) || 0,
         phase_score: Number(p.phase_score) || 0,
@@ -8288,17 +8288,17 @@ const fs = require("fs");
       },
       rec_scenario: flat.rec_scenario,
       rec_score: flat.rec_score,
-      // Top-level 'recommended' key (generate_[charts.py](http://charts.py) line 614)
+      // Top-level 'recommended' key (generate_charts.py line 614)
       recommended: flat.rec_scenario || "A",
     };
     // Step 5: Write data to temp file and call Python
-    const tmpDir = `/tmp/pptx_${[Date.now](http://Date.now)()}`;
+    const tmpDir = `/tmp/pptx_${Date.now()}`;
     fs.mkdirSync(tmpDir, { recursive: true });
     const dataPath = path.join(tmpDir, "data.json");
     fs.writeFileSync(dataPath, JSON.stringify(pptxData, null, 2));
     const scriptDir = __dirname;
     const templatePath = path.join(scriptDir, "template_diagnostic.pptx");
-    const pythonCmd = `cd "${scriptDir}" && python3 generate_[pptx.py](http://pptx.py) "${dataPath}" "${templatePath}" "${tmpDir}/output.pptx" 2>&1`;
+    const pythonCmd = `cd "${scriptDir}" && python3 generate_pptx.py "${dataPath}" "${templatePath}" "${tmpDir}/output.pptx" 2>&1`;
     console.log(`[GENERATE-PPTX] Running: ${pythonCmd}`);
     // Check prerequisites
     if (!fs.existsSync(templatePath)) {
@@ -8313,7 +8313,7 @@ const fs = require("fs");
       const stdout = pyErr.stdout ? pyErr.stdout.toString() : "";
       console.error(`[GENERATE-PPTX] Python FAILED:\nSTDOUT: ${stdout}\nSTDERR: ${stderr}`);
       return res.status(500).json({
-        error: "Python generate_[pptx.py](http://pptx.py) failed",
+        error: "Python generate_pptx.py failed",
         stdout: stdout.substring(0, 2000),
         stderr: stderr.substring(0, 2000),
         hint: "Check that python3, python-pptx, matplotlib, and lxml are installed on Render"
@@ -8332,7 +8332,7 @@ const fs = require("fs");
     res.send(pptxBuffer);
     // Cleanup
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    console.log(`═══ /generate-pptx DONE in ${[Date.now](http://Date.now)() - t0}ms ═══\n`);
+    console.log(`═══ /generate-pptx DONE in ${Date.now() - t0}ms ═══\n`);
   } catch (err) {
     console.error(`[GENERATE-PPTX] Error: ${err.message}\n${err.stack}`);
     return res.status(500).json({ error: err.message });
