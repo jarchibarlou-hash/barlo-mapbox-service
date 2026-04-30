@@ -7726,7 +7726,7 @@ ABSOLUTELY NO COOL SHIFT. ABSOLUTELY NO GRAY SHIFT. KEEP EVERYTHING WARM BEIGE.`
   }
 });
 // ══════════════════════════════════════════════════════════════════════════════
-// v72.67: ENDPOINT /generate-pptx — GÉNÉRATION POWERPOINT CÔTÉ SERVEUR
+// v72.68: ENDPOINT /generate-pptx — GÉNÉRATION POWERPOINT CÔTÉ SERVEUR
 // Reçoit le même body que /compute-scenarios (données client)
 // + optionnel: images URLs (massing, terrain) et textes pré-générés
 // Le serveur:
@@ -7745,7 +7745,7 @@ app.post("/generate-pptx", async (req, res) => {
   let tmpDir = null;
 
   try {
-    console.log("[v72.67] /generate-pptx — START");
+    console.log("[v72.68] /generate-pptx — START");
 
     // ─── 1) RÉCUPÉRER LES TEXTES + SCÉNARIOS ───
     // Si le body contient déjà 'texts' et 'scenarios', on les utilise directement
@@ -7754,14 +7754,14 @@ app.post("/generate-pptx", async (req, res) => {
 
     if (req.body.texts && req.body.scenarios) {
       // Mode direct: le caller fournit tout
-      console.log("[v72.67] Mode direct — textes et scénarios fournis dans le body");
+      console.log("[v72.68] Mode direct — textes et scénarios fournis dans le body");
       texts = req.body.texts;
       scenarios = req.body.scenarios;
       clientName = req.body.client_name || "";
       images = req.body.images || {};
     } else {
       // Mode pipeline: on appelle /generate-texts puis on extrait
-      console.log("[v72.67] Mode pipeline — appel interne /generate-texts");
+      console.log("[v72.68] Mode pipeline — appel interne /generate-texts");
       const localUrl = `http://localhost:${PORT}/generate-texts`;
       const intResponse = await fetch(localUrl, {
         method: "POST",
@@ -7771,14 +7771,14 @@ app.post("/generate-pptx", async (req, res) => {
 
       if (!intResponse.ok) {
         const errText = await intResponse.text();
-        console.error(`[v72.67] /generate-texts a échoué (${intResponse.status}):`, errText);
+        console.error(`[v72.68] /generate-texts a échoué (${intResponse.status}):`, errText);
         return res.status(500).json({ ok: false, error: "generate-texts failed", detail: errText });
       }
 
       const textsResponse = await intResponse.json();
 
       if (!textsResponse || !textsResponse.ok) {
-        console.error("[v72.67] /generate-texts réponse invalide");
+        console.error("[v72.68] /generate-texts réponse invalide");
         return res.status(500).json({ ok: false, error: "generate-texts returned invalid data" });
       }
 
@@ -7794,12 +7794,12 @@ app.post("/generate-pptx", async (req, res) => {
           }
         }
       }
-      console.log(`[v72.67] Texts extracted: ${Object.keys(texts).length} keys — ${Object.keys(texts).join(", ")}`);
+      console.log(`[v72.68] Texts extracted: ${Object.keys(texts).length} keys — ${Object.keys(texts).join(", ")}`);
       clientName = req.body.client_name || req.body.nom_client || "";
       images = req.body.images || {};
 
       // Récupérer les scénarios depuis /compute-scenarios directement
-      console.log("[v72.67] Appel interne /compute-scenarios pour données scénarios");
+      console.log("[v72.68] Appel interne /compute-scenarios pour données scénarios");
       const scenResponse = await fetch(`http://localhost:${PORT}/compute-scenarios`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7847,17 +7847,17 @@ app.post("/generate-pptx", async (req, res) => {
     };
 
     fs.writeFileSync(inputJsonPath, JSON.stringify(pptxData, null, 2), "utf-8");
-    console.log(`[v72.67] JSON écrit: ${inputJsonPath} (${(JSON.stringify(pptxData).length / 1024).toFixed(1)} KB)`);
+    console.log(`[v72.68] JSON écrit: ${inputJsonPath} (${(JSON.stringify(pptxData).length / 1024).toFixed(1)} KB)`);
 
     // ─── 3) VÉRIFIER QUE LE TEMPLATE EXISTE ───
     if (!fs.existsSync(PPTX_TEMPLATE_PATH)) {
-      console.error(`[v72.67] Template PPTX introuvable: ${PPTX_TEMPLATE_PATH}`);
+      console.error(`[v72.68] Template PPTX introuvable: ${PPTX_TEMPLATE_PATH}`);
       return res.status(500).json({ ok: false, error: `Template PPTX not found: ${PPTX_TEMPLATE_PATH}` });
     }
 
     // ─── 4) APPELER LE SCRIPT PYTHON ───
     const pythonScript = path.join(PYTHON_SCRIPTS_DIR, "generate_pptx.py");
-    console.log(`[v72.67] Lancement Python: ${pythonScript}`);
+    console.log(`[v72.68] Lancement Python: ${pythonScript}`);
 
     const pptxBuffer = await new Promise((resolve, reject) => {
       const proc = execFile("python3", [
@@ -7870,11 +7870,11 @@ app.post("/generate-pptx", async (req, res) => {
         timeout: 120000,  // 2 minutes max
         maxBuffer: 10 * 1024 * 1024,  // 10MB stdout buffer
       }, (error, stdout, stderr) => {
-        if (stderr) console.log(`[v72.67] Python stderr:\n${stderr}`);
-        if (stdout) console.log(`[v72.67] Python stdout:\n${stdout}`);
+        if (stderr) console.log(`[v72.68] Python stderr:\n${stderr}`);
+        if (stdout) console.log(`[v72.68] Python stdout:\n${stdout}`);
 
         if (error) {
-          console.error(`[v72.67] Python error:`, error.message);
+          console.error(`[v72.68] Python error:`, error.message);
           return reject(new Error(`Python script failed: ${error.message}`));
         }
 
@@ -7889,7 +7889,7 @@ app.post("/generate-pptx", async (req, res) => {
     });
 
     const durationMs = Date.now() - t0;
-    console.log(`[v72.67] PPTX généré en ${durationMs}ms (${(pptxBuffer.length / 1024).toFixed(0)} KB)`);
+    console.log(`[v72.68] PPTX généré en ${durationMs}ms (${(pptxBuffer.length / 1024).toFixed(0)} KB)`);
 
     // ─── 5) RETOURNER LE RÉSULTAT ───
     // Par défaut: retourner le fichier PPTX directement
@@ -7913,7 +7913,7 @@ app.post("/generate-pptx", async (req, res) => {
     return res.send(pptxBuffer);
 
   } catch (e) {
-    console.error("[v72.67] /generate-pptx ERROR:", e.message);
+    console.error("[v72.68] /generate-pptx ERROR:", e.message);
     return res.status(500).json({ ok: false, error: e.message });
   } finally {
     // Cleanup temp files
@@ -7968,7 +7968,7 @@ function _findRecommendedScenario(scenarios) {
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`BARLO v72.67-PPTX on port ${PORT}`);
+  console.log(`BARLO v72.68-PPTX on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
