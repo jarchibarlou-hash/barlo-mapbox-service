@@ -177,7 +177,7 @@ async function resizeForPolish(pngBuf, maxDim) {
   console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.3.0-premium-texts-charts" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.6.0-apps-script" }));
 // ─── STUDIO v6.0 — Interface diagnostic premium ─────────────────────────────
 app.get("/studio", (req, res) => {
   const studioPath = path.join(__dirname, "studio.html");
@@ -185,6 +185,493 @@ app.get("/studio", (req, res) => {
     res.sendFile(studioPath);
   } else {
     res.status(404).send("Studio HTML not found. Deploy studio.html alongside server.js.");
+  }
+});
+// ═══════════════════════════════════════════════════════════════════════════════
+// v73.6.0: STUDIO ENGINE — Google Apps Script Proxy + Process Lead (8A→8D) + PPTX
+// ═══════════════════════════════════════════════════════════════════════════════
+const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || "";    // Google Apps Script Web App URL
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+
+// ─── Apps Script Proxy helpers ──────────────────────────────────────────────
+// All Google Sheets operations go through the Apps Script Web App — no OAuth needed
+async function gasGet(action, params = {}) {
+  const qs = new URLSearchParams({ action, ...params }).toString();
+  const r = await fetch(`${APPS_SCRIPT_URL}?${qs}`, { redirect: "follow" });
+  const data = await r.json();
+  if (data.error) throw new Error(`GAS ${action}: ${data.error}`);
+  return data;
+}
+
+async function gasPost(action, body = {}, params = {}) {
+  const qs = new URLSearchParams({ action, ...params }).toString();
+  const r = await fetch(`${APPS_SCRIPT_URL}?${qs}`, {
+    method: "POST",
+    redirect: "follow",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  if (data.error) throw new Error(`GAS ${action}: ${data.error}`);
+  return data;
+}
+
+// ─── PIPELINE column mapping ─────────────────────────────────────────────────
+const PIPELINE_TO_BODY = {
+  "site_area_m2": "site_area", "envelope_w_m": "envelope_w", "envelope_d_m": "envelope_d",
+  "envelope_area_m2": "envelope_area", "zoning_type": "zoning_type", "primary_driver": "primary_driver",
+  "max_floors": "max_floors", "max_height_m": "max_height_m", "target_program": "program_main",
+  "target_surface_m2": "target_surface_m2", "target_units": "target_units",
+  "site_saturation_level": "site_saturation_level", "financial_rigidity_score": "financial_rigidity_score",
+  "density_band": "density_band", "risk_adjusted": "risk_adjusted",
+  "feasibility_posture_calc": "feasibility_posture", "scenario_A_role": "scenario_A_role",
+  "scenario_B_role": "scenario_B_role", "scenario_C_role": "scenario_C_role",
+  "budget_range": "budget_range", "budget_band": "budget_band", "budget_tension_calc": "budget_tension",
+  "standing_level": "standing_level", "rent_score": "rent_score", "capacity_score": "capacity_score",
+  "mix_score": "mix_score", "phase_score": "phase_score", "risk_score": "risk_score",
+  "density_pressure_factor": "density_pressure_factor", "driver_intensity": "driver_intensity",
+  "strategic_position_calc": "strategic_position", "layout_mode": "layout_mode",
+  "commerce_depth_m": "commerce_depth_m", "retrait_inter_volumes_m": "retrait_inter_volumes_m",
+  "cf": "lead_id", "client_name": "client_name", "project_city": "city", "project_district": "district",
+  "land_width_m": "land_width", "land_depth_m": "land_depth", "site_context": "site_context",
+  "terrain_integration": "terrain_context", "road_bearing": "road_bearing",
+  "site_lat": "site_lat", "site_lon": "site_lon", "site_polygon_points": "site_polygon",
+  "buildable_footprint_m2": "buildable_fp", "setback_front_m": "setback_front",
+  "setback_side_m": "setback_side", "setback_back_m": "setback_back",
+  "cos_ratio": "cos_ratio", "cos_used": "cos_used", "max_levels_cap": "max_levels_cap",
+  "parking_preference": "Parking_Préférence", "parking_required": "Parking_required",
+  "satellite_img_url": "satellite_url", "slide_5_image_url": "axo_url",
+  "massing_scn_A_img_url": "massing_A_url", "massing_scn_B_img_url": "massing_B_url",
+  "massing_scn_C_img_url": "massing_C_url"
+};
+
+const EXTRA_DISPLAY_COLS = [
+  "client_email", "project_type", "project_country", "date_submit", "Pipeline_stage",
+  "fp_A_m2", "fp_B_m2", "fp_C_m2", "levels_A", "levels_B", "levels_C",
+  "height_A_m", "height_B_m", "height_C_m", "scenario_A_label", "scenario_B_label", "scenario_C_label",
+  "scenario_A_target_surface_m2", "scenario_B_target_surface_m2", "scenario_C_target_surface_m2",
+  "A_cost_total", "B_cost_total", "C_cost_total", "sdp_A", "sdp_B", "sdp_C",
+  "rendement_A", "rendement_B", "rendement_C", "recommended_scenario_final",
+  "total_units_A", "total_units_B", "total_units_C",
+  "slide_4_image_url", "plot_area_m2", "barlo_status",
+  "Disposition", "input_typologies", "diagnostic_narrative"
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /api/form-leads — Poll Google Form responses (new + existing)
+// ═══════════════════════════════════════════════════════════════════════════════
+app.get("/api/form-leads", async (req, res) => {
+  try {
+    if (!APPS_SCRIPT_URL) return res.status(500).json({ error: "APPS_SCRIPT_URL not configured" });
+    // Read form responses via Apps Script
+    const d = await gasGet("readForm");
+    if (!d.values || d.values.length < 2) return res.json({ ok: true, leads: [] });
+    const headers = d.values[0];
+    // Also read PIPELINE refs to know which form rows are already processed
+    let processedRefs = new Set();
+    const pipe = await gasGet("readPipelineRefs");
+    if (pipe.values) pipe.values.slice(1).forEach(r => { if (r[0]) processedRefs.add(r[0].toString().trim()); });
+    const leads = d.values.slice(1).map((row, idx) => {
+      const nom = (row[2] || "").toString().trim();
+      const prenom = (row[3] || "").toString().trim();
+      const barloCode = (row[55] || row[36] || "").toString().trim(); // BARLO-XXXX code
+      const ref = barloCode || `FORM_${idx + 2}`;
+      return {
+        formRow: idx + 2,
+        ref,
+        client: `${nom} ${prenom}`.trim() || "—",
+        email: (row[1] || "").toString(),
+        date: (row[0] || "").toString(),
+        city: (row[9] || "").toString(),
+        country: (row[8] || "").toString(),
+        processed: processedRefs.has(ref),
+        barloCode
+      };
+    }).filter(l => l.client !== "—" || l.email);
+    res.json({ ok: true, leads, total: leads.length, processed: leads.filter(l => l.processed).length });
+  } catch (err) {
+    console.error(`[FORM-LEADS] Error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /api/process-lead — Execute 8A→8D pipeline for one lead
+// Body: { formRow: N } — the row number in form responses to process
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post("/api/process-lead", async (req, res) => {
+  const t0 = Date.now();
+  const { formRow } = req.body;
+  if (!formRow) return res.status(400).json({ error: "formRow required" });
+  console.log(`\n╔══ PROCESS-LEAD row ${formRow} ══╗`);
+
+  try {
+    if (!APPS_SCRIPT_URL) throw new Error("APPS_SCRIPT_URL not configured");
+
+    // ─── STEP 8A: Read form response & write to PIPELINE ─────────────────────
+    console.log(`[8A] Reading form row ${formRow}...`);
+    const formData = await gasGet("readFormRow", { row: formRow });
+    if (!formData.values || !formData.values[0]) throw new Error(`Form row ${formRow} not found`);
+    const f = formData.values[0]; // f[0]=Horodateur, f[1]=Email, f[2]=Nom, etc.
+
+    // Read PIPELINE headers to know column order
+    const headersData = await gasGet("readPipelineHeaders");
+    if (!headersData.values || !headersData.values[0]) throw new Error("PIPELINE headers not found");
+    const pipeHeaders = headersData.values[0];
+
+    // Standing level conversion (from 8A SetVariables)
+    const standingRaw = (f[30] || "").toString().toLowerCase();
+    let standingLevel = "STANDARD";
+    if (standingRaw.includes("très haut")) standingLevel = "PREMIUM";
+    else if (standingRaw.includes("haut standing")) standingLevel = "HAUT";
+    else if (standingRaw.includes("bon standing")) standingLevel = "STANDARD";
+    else if (standingRaw.includes("économique") || standingRaw.includes("economique")) standingLevel = "ECONOMIQUE";
+
+    // Zoning type from site context (from 8A)
+    const contextRaw = (f[45] || f[15] || "").toString().toLowerCase();
+    let zoningType = "URBAIN";
+    if (contextRaw.includes("isolé") || contextRaw.includes("périph")) zoningType = "PERIURBAIN";
+    else if (contextRaw.includes("intermédiaire") || contextRaw.includes("développement")) zoningType = "PERIURBAIN";
+
+    // Primary driver from objectif (from 8A)
+    const objectifRaw = (f[23] || f[5] || "").toString().toLowerCase();
+    let primaryDriver = "RENTABILITE";
+    if (objectifRaw.includes("sécuriser") || objectifRaw.includes("faisabilité")) primaryDriver = "CAPACITE";
+    else if (objectifRaw.includes("rentabilité")) primaryDriver = "RENTABILITE";
+    else if (objectifRaw.includes("surface") || objectifRaw.includes("capacité")) primaryDriver = "CAPACITE";
+    else if (objectifRaw.includes("équilibre") || objectifRaw.includes("explorer")) primaryDriver = "MIXITE";
+
+    // Financial rigidity from constraints (from 8A)
+    const constraintRaw = (f[31] || "").toString().toLowerCase();
+    let financialRigidity = "0.5";
+    if (constraintRaw.includes("plafond strict")) financialRigidity = "0.9";
+    else if (constraintRaw.includes("emprunt limité")) financialRigidity = "0.7";
+    else if (constraintRaw.includes("aucune")) financialRigidity = "0.2";
+    else if (constraintRaw.includes("flou")) financialRigidity = "0.5";
+
+    // Layout mode from disposition (from 8A module 3)
+    const dispositionRaw = (f[56] || "").toString().toLowerCase();
+    let layoutMode = "SUPERPOSE";
+    if (dispositionRaw.includes("retrait")) layoutMode = "SPLIT_AV_AR";
+
+    // Commerce depth and retrait (from 8A module 3)
+    const commerceDepth = f[57] ? f[57].toString() : "6";
+    const retraitInter = f[59] ? f[59].toString() : "4";
+
+    // Generate lead reference
+    const barloCode = (f[55] || f[36] || "").toString().trim();
+    const leadRef = barloCode || `LEAD_${Date.now().toString(36).toUpperCase()}`;
+
+    // Build PIPELINE row — map to header positions
+    const newRow = new Array(pipeHeaders.length).fill("");
+    function setCol(name, val) {
+      const idx = pipeHeaders.indexOf(name);
+      if (idx >= 0 && val !== undefined && val !== null) newRow[idx] = val.toString();
+    }
+    // Core identity
+    setCol("cf", leadRef);
+    setCol("Pipeline_stage", "1-CLEAN_READY");
+    setCol("processing_lock", "STUDIO");
+    setCol("last_processed_module", "8A");
+    setCol("date_submit", f[0] || new Date().toISOString());
+    setCol("client_name", `${(f[2]||"")} ${(f[3]||"")}`.trim());
+    setCol("client_email", f[1] || "");
+    // Project info
+    setCol("project_type", f[4] || "");
+    setCol("project_country", f[8] || "");
+    setCol("project_city", f[9] || "");
+    setCol("project_district", f[10] || "");
+    setCol("site_area_m2", f[37] || f[20] || "");
+    setCol("site_width_m", f[51] || f[22] || "");
+    setCol("site_depth_m", f[52] || f[23] || "");
+    setCol("site_context", f[45] || f[15] || "");
+    setCol("target_program", f[21] || f[35] || "");
+    setCol("target_surface_m2", f[15] || f[27] || "");
+    setCol("target_units", f[16] || f[28] || "");
+    setCol("max_height_m", "");
+    setCol("max_floors", "");
+    setCol("parking_preference", f[44] || "");
+    setCol("site_saturation_level", "");
+    setCol("financial_rigidity_score", financialRigidity);
+    setCol("land_shape", f[49] || f[21] || "");
+    setCol("fenced_status", f[48] || f[16] || "");
+    setCol("land_identified", f[11] || f[13] || "");
+    setCol("land_width_m", f[51] || f[22] || "");
+    setCol("land_depth_m", f[52] || f[23] || "");
+    setCol("land_min_width_m", f[50] || f[24] || "");
+    setCol("barlo_temp_code", barloCode);
+    setCol("existing_built_area_m2", f[26] || "0");
+    setCol("zoning_type", zoningType);
+    setCol("primary_driver", primaryDriver);
+    setCol("budget_range", f[30] || "");
+    setCol("standing_level", standingLevel);
+    setCol("Disposition", f[56] || "");
+    setCol("input_typologies", f[29] || "");
+    setCol("layout_mode", layoutMode);
+    setCol("commerce_depth_m", commerceDepth);
+    setCol("retrait_inter_volumes_m", retraitInter);
+
+    // Append to PIPELINE
+    const appendResult = await gasPost("appendPipeline", { row: newRow });
+    const pipeRowNum = appendResult.appendedRow;
+    if (!pipeRowNum) throw new Error("Failed to append row to PIPELINE");
+    console.log(`[8A] Lead ${leadRef} written to PIPELINE row ${pipeRowNum} ✓`);
+
+    // ─── STEP 8B: Fetch polygon from Supabase ───────────────────────────────
+    console.log(`[8B] Fetching polygon for ${barloCode}...`);
+    let polygonPoints = "";
+    if (barloCode && SUPABASE_URL && SUPABASE_ANON_KEY) {
+      try {
+        const polyUrl = `${SUPABASE_URL}/rest/v1/polygon_drafts?temp_id=eq.${barloCode}&select=polygon_points`;
+        const polyRes = await fetch(polyUrl, {
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, Accept: "application/json" }
+        });
+        const polyData = await polyRes.json();
+        if (Array.isArray(polyData) && polyData.length > 0 && polyData[0].polygon_points) {
+          polygonPoints = polyData[0].polygon_points;
+        }
+      } catch (e) { console.log(`[8B] Polygon fetch warning: ${e.message}`); }
+    }
+    // Write polygon + stage to PIPELINE
+    const colAN = pipeHeaders.indexOf("site_polygon_points");
+    const colAO = pipeHeaders.indexOf("site_polygon_status");
+    const colB = pipeHeaders.indexOf("Pipeline_stage");
+    const colC = pipeHeaders.indexOf("processing_lock");
+    const colD = pipeHeaders.indexOf("last_processed_module");
+    {
+      const curRow = await gasGet("readPipelineRow", { row: pipeRowNum });
+      const updateRow = curRow.values?.[0] ? [...curRow.values[0]] : new Array(pipeHeaders.length).fill("");
+      while (updateRow.length < pipeHeaders.length) updateRow.push("");
+      if (polygonPoints && colAN >= 0) {
+        updateRow[colAN] = polygonPoints;
+        if (colAO >= 0) updateRow[colAO] = "OK";
+        console.log(`[8B] Polygon written ✓ (${polygonPoints.substring(0, 40)}...)`);
+      } else {
+        console.log(`[8B] No polygon found — continuing without GPS`);
+      }
+      updateRow[colB] = "2-POLYGON_READY";
+      updateRow[colC] = "DONE_8B";
+      updateRow[colD] = "8B";
+      await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: updateRow });
+    }
+
+    // ─── STEP 8C: Compute envelope & read formula-calculated values ─────────
+    console.log(`[8C] Computing feasibility...`);
+    // Wait 2s for Sheet formulas to recalculate after our writes
+    await new Promise(ok => setTimeout(ok, 2000));
+    // Read back the full row (formulas should have computed by now)
+    const refreshed = await gasGet("readPipelineRow", { row: pipeRowNum });
+    if (!refreshed.values || !refreshed.values[0]) throw new Error("Failed to read back PIPELINE row");
+    const rowData = refreshed.values[0];
+    const rowObj = {};
+    pipeHeaders.forEach((h, i) => { if (h) rowObj[h] = (rowData[i] !== undefined ? rowData[i] : ""); });
+
+    // Envelope calculations (from 8C)
+    const plotW = parseFloat(rowObj.plot_w_m || rowObj.land_width_m || rowObj.site_width_m) || 20;
+    const plotD = parseFloat(rowObj.plot_d_m || rowObj.land_depth_m || rowObj.site_depth_m) || 30;
+    const setbackFront = 5, setbackSide = 3, setbackBack = 3;
+    const envW = plotW - (setbackSide * 2);  // width - 6
+    const envD = plotD - setbackFront - setbackBack; // depth - 8
+    const envArea = envW * envD;
+
+    // Write 8C results
+    const row8C = [...rowData];
+    while (row8C.length < pipeHeaders.length) row8C.push("");
+    function set8C(name, val) { const i = pipeHeaders.indexOf(name); if (i >= 0) row8C[i] = val; }
+    set8C("Pipeline_stage", "4-SCENARIOS_READY");
+    set8C("processing_lock", "DONE_8C");
+    set8C("last_processed_module", "8C");
+    set8C("setback_front_m", setbackFront);
+    set8C("setback_side_m", setbackSide);
+    set8C("setback_back_m", setbackBack);
+    set8C("envelope_w_m", envW);
+    set8C("envelope_d_m", envD);
+    set8C("envelope_area_m2", envArea);
+    set8C("site_area_m2", rowObj.site_area_m2 || (plotW * plotD));
+    await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: row8C });
+    console.log(`[8C] Envelope ${envW.toFixed(1)}×${envD.toFixed(1)} = ${envArea.toFixed(0)}m² ✓`);
+
+    // ─── STEP 8D: Call /compute-scenarios ────────────────────────────────────
+    console.log(`[8D] Computing scenarios...`);
+    // Wait again for formulas
+    await new Promise(ok => setTimeout(ok, 2000));
+    // Re-read row with formula-computed values
+    const preScenario = await gasGet("readPipelineRow", { row: pipeRowNum });
+    const row8D = preScenario.values?.[0] || row8C;
+    const obj8D = {};
+    pipeHeaders.forEach((h, i) => { if (h) obj8D[h] = (row8D[i] !== undefined ? row8D[i] : ""); });
+
+    // Build /compute-scenarios body (same as 8D Make body)
+    const scenarioBody = {
+      site_area: obj8D.site_area_m2 || "",
+      envelope_w: obj8D.envelope_w_m || envW,
+      envelope_d: obj8D.envelope_d_m || envD,
+      envelope_area: obj8D.envelope_area_m2 || envArea,
+      zoning_type: obj8D.zoning_type || zoningType,
+      floor_height: 3.2,
+      primary_driver: obj8D.primary_driver || primaryDriver,
+      max_floors: obj8D.max_floors || "",
+      max_height_m: obj8D.max_height_m || "",
+      program_main: obj8D.target_program || "",
+      target_surface_m2: obj8D.target_surface_m2 || "",
+      target_units: obj8D.target_units || "",
+      site_saturation_level: obj8D.site_saturation_level || "",
+      input_typologies: obj8D.input_typologies || "",
+      financial_rigidity_score: obj8D.financial_rigidity_score || financialRigidity,
+      density_band: obj8D.density_band || "",
+      risk_adjusted: obj8D.risk_adjusted || "",
+      feasibility_posture: obj8D.feasibility_posture_calc || "",
+      scenario_A_role: obj8D.scenario_A_role || "",
+      scenario_B_role: obj8D.scenario_B_role || "",
+      scenario_C_role: obj8D.scenario_C_role || "",
+      budget_range: obj8D.budget_range || "",
+      budget_band: obj8D.budget_band || "",
+      budget_tension: obj8D.budget_tension_calc || "",
+      standing_level: obj8D.standing_level || standingLevel,
+      rent_score: obj8D.rent_score || "",
+      capacity_score: obj8D.capacity_score || "",
+      mix_score: obj8D.mix_score || "",
+      phase_score: obj8D.phase_score || "",
+      risk_score: obj8D.risk_score || "",
+      density_pressure_factor: obj8D.density_pressure_factor || "",
+      driver_intensity: obj8D.driver_intensity || "",
+      strategic_position: obj8D.strategic_position_calc || "",
+      layout_mode: obj8D.layout_mode || layoutMode,
+      commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
+      retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
+      disposition: obj8D.Disposition || ""
+    };
+
+    // Call /compute-scenarios on THIS server (internal call)
+    const scenarioRes = await fetch(`http://localhost:${PORT}/compute-scenarios`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(scenarioBody)
+    });
+    const scenarioResult = await scenarioRes.json();
+    if (!scenarioRes.ok) throw new Error(`compute-scenarios failed: ${JSON.stringify(scenarioResult).substring(0, 200)}`);
+    console.log(`[8D] Scenarios computed ✓`);
+
+    // Write scenario results back to PIPELINE
+    const finalRow = await gasGet("readPipelineRow", { row: pipeRowNum });
+    const rowFinal = finalRow.values?.[0] ? [...finalRow.values[0]] : [...row8C];
+    while (rowFinal.length < pipeHeaders.length) rowFinal.push("");
+    function setFinal(name, val) { const i = pipeHeaders.indexOf(name); if (i >= 0 && val !== undefined && val !== null) rowFinal[i] = val.toString(); }
+
+    // Map scenario response to PIPELINE columns
+    const sc = scenarioResult;
+    setFinal("Pipeline_stage", "DONE_8D");
+    setFinal("processing_lock", "DONE_8D");
+    setFinal("last_processed_module", "8D");
+    setFinal("recommended_scenario_final", sc.rec_scenario || "");
+    // Scenario A/B/C params
+    ["A", "B", "C"].forEach(s => {
+      const scn = sc.scenarios?.[s] || {};
+      setFinal(`fp_${s}_m2`, scn.footprint_m2);
+      setFinal(`levels_${s}`, scn.levels);
+      setFinal(`height_${s}_m`, scn.height_m);
+      setFinal(`scenario_${s}_ratio`, scn.ratio);
+      setFinal(`scenario_${s}_role`, scn.role);
+      setFinal(`scenario_${s}_object`, scn.object);
+      setFinal(`scenario_${s}_label`, scn.label);
+      setFinal(`scenario_${s}_target_surface_m2`, scn.target_surface_m2);
+      setFinal(`scenario_${s}_density_index`, scn.density_index);
+      setFinal(`${s}_cost_total`, scn.cost_total);
+      setFinal(`${s}_ventil_global`, JSON.stringify(scn.ventil_global || {}));
+      setFinal(`${s}_budget_fit`, scn.budget_fit);
+      setFinal(`sdp_${s}`, scn.sdp_m2);
+      setFinal(`total_units_${s}`, scn.total_units);
+      setFinal(`circ_ratio_${s}`, scn.circ_ratio);
+      setFinal(`surf_hab_${s}`, scn.surf_hab_m2);
+      setFinal(`m2_par_logt_${s}`, scn.m2_par_logement);
+      setFinal(`revenu_mens_${s}`, scn.revenu_mensuel);
+      setFinal(`rendement_${s}`, scn.rendement);
+      setFinal(`cost_m2_${s}`, scn.cost_m2);
+      setFinal(`cost_bas_${s}`, scn.cost_bas);
+      setFinal(`cost_haut_${s}`, scn.cost_haut);
+      setFinal(`ventil_go_${s}`, scn.ventil_go);
+      setFinal(`ventil_so_${s}`, scn.ventil_so);
+      setFinal(`ventil_lt_${s}`, scn.ventil_lt);
+      setFinal(`ventil_vrd_${s}`, scn.ventil_vrd);
+      setFinal(`unit_mix_${s}`, JSON.stringify(scn.unit_mix || {}));
+    });
+    // Deltas
+    setFinal("delta_BA_sdp", sc.deltas?.BA?.sdp);
+    setFinal("delta_BA_cout", sc.deltas?.BA?.cout);
+    setFinal("delta_CA_sdp", sc.deltas?.CA?.sdp);
+    setFinal("delta_CA_cout", sc.deltas?.CA?.cout);
+
+    await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: rowFinal });
+    console.log(`╚══ PROCESS-LEAD ${leadRef} DONE in ${Date.now() - t0}ms ══╝\n`);
+
+    // Return complete lead data for the cockpit
+    const finalObj = {};
+    pipeHeaders.forEach((h, i) => { if (h) finalObj[h] = rowFinal[i] || ""; });
+    const body8D = { floor_height: 3.2 };
+    for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
+      if (finalObj[pipeCol] !== undefined && finalObj[pipeCol] !== "") body8D[bodyKey] = finalObj[pipeCol];
+    }
+    const display = {};
+    for (const col of EXTRA_DISPLAY_COLS) { if (finalObj[col] !== undefined) display[col] = finalObj[col]; }
+
+    res.json({ ok: true, ref: leadRef, body8D, display, raw_columns: Object.keys(finalObj).length, duration_ms: Date.now() - t0 });
+  } catch (err) {
+    console.error(`[PROCESS-LEAD] Error: ${err.message}\n${err.stack}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /api/lead/:ref — Read processed lead from PIPELINE
+// ═══════════════════════════════════════════════════════════════════════════════
+app.get("/api/lead/:ref", async (req, res) => {
+  const t0 = Date.now();
+  const ref = req.params.ref.trim();
+  console.log(`[LEAD-API] Fetching lead: ${ref}`);
+  try {
+    if (!APPS_SCRIPT_URL) return res.status(500).json({ error: "APPS_SCRIPT_URL not configured on server" });
+    const sheetData = await gasGet("readPipelineAll");
+    if (!sheetData.values || sheetData.values.length < 2) {
+      return res.status(404).json({ error: "PIPELINE tab empty or not found" });
+    }
+    const headers = sheetData.values[0];
+    const cfIndex = headers.indexOf("cf");
+    if (cfIndex === -1) return res.status(500).json({ error: "Column 'cf' not found in PIPELINE" });
+    const dataRow = sheetData.values.find((row, i) => i > 0 && row[cfIndex] && row[cfIndex].toString().trim() === ref);
+    if (!dataRow) return res.status(404).json({ error: `Lead '${ref}' not found in PIPELINE` });
+    const rowObj = {};
+    headers.forEach((h, i) => { if (h) rowObj[h] = dataRow[i] || ""; });
+    const body8D = { floor_height: 3.2 };
+    for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
+      if (rowObj[pipeCol] !== undefined && rowObj[pipeCol] !== "") body8D[bodyKey] = rowObj[pipeCol];
+    }
+    const display = {};
+    for (const col of EXTRA_DISPLAY_COLS) { if (rowObj[col] !== undefined) display[col] = rowObj[col]; }
+    console.log(`[LEAD-API] Lead '${ref}' found — ${Object.keys(body8D).length} body keys, ${Date.now() - t0}ms`);
+    res.json({ ok: true, ref, body8D, display, raw_columns: Object.keys(rowObj).length });
+  } catch (err) {
+    console.error(`[LEAD-API] Error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/leads — List PIPELINE leads
+app.get("/api/leads", async (req, res) => {
+  try {
+    if (!APPS_SCRIPT_URL) return res.status(500).json({ error: "APPS_SCRIPT_URL not configured" });
+    const d = await gasGet("readPipelineAll");
+    if (!d.values || d.values.length < 2) return res.json({ ok: true, leads: [] });
+    const headers = d.values[0];
+    const leads = d.values.slice(1).filter(row => row[0]).map(row => ({
+      ref: row[0],
+      stage: row[1] || "",
+      client: row[headers.indexOf("client_name")] || "",
+      email: row[headers.indexOf("client_email")] || "",
+      date: row[headers.indexOf("date_submit")] || ""
+    }));
+    res.json({ ok: true, leads });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
@@ -8379,7 +8866,7 @@ app.post("/generate-pptx", async (req, res) => {
   }
 });
 app.listen(PORT, () => {
-  console.log(`BARLO v73.3.0-premium-texts-charts on port ${PORT}`);
+  console.log(`BARLO v73.6.0-apps-script on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
