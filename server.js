@@ -177,7 +177,16 @@ async function resizeForPolish(pngBuf, maxDim) {
   console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.2.8-ghost-floor-fix-anti-hallucination" }));
+app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.3.0-premium-texts-charts" }));
+// ─── STUDIO v6.0 — Interface diagnostic premium ─────────────────────────────
+app.get("/studio", (req, res) => {
+  const studioPath = path.join(__dirname, "studio.html");
+  if (fs.existsSync(studioPath)) {
+    res.sendFile(studioPath);
+  } else {
+    res.status(404).send("Studio HTML not found. Deploy studio.html alongside server.js.");
+  }
+});
 // ─── DIAGNOSTIC MASSING : trace complète du calcul de polygone bâti ─────────
 app.post("/diag-massing", async (req, res) => {
   try {
