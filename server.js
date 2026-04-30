@@ -488,14 +488,90 @@ app.post("/api/process-lead", async (req, res) => {
     set8C("envelope_d_m", envD);
     set8C("envelope_area_m2", envArea);
     set8C("site_area_m2", rowObj.site_area_m2 || (plotW * plotD));
+    // ─── STEP 8C-bis: Compute diagnostic scores server-side ───────────────
+    // (Google Sheet formulas don't auto-extend to API-appended rows)
+    const siteArea = parseFloat(rowObj.site_area_m2 || (plotW * plotD)) || 500;
+    const budgetRaw = (rowObj.budget_range || f[30] || "").toString();
+    const budgetNum = parseFloat(budgetRaw.replace(/[^0-9]/g, "")) || 0;
+
+    // Density band based on site area + zoning
+    let densityBand = "MEDIUM";
+    if (siteArea < 300) densityBand = "HIGH";
+    else if (siteArea < 600) densityBand = "MEDIUM";
+    else if (siteArea < 1200) densityBand = "LOW";
+    else densityBand = "VERY_LOW";
+
+    // Budget tension: budget vs site area expectation
+    const budgetPerM2 = budgetNum > 0 ? budgetNum / siteArea : 0;
+    let budgetTension = "MEDIUM";
+    if (budgetPerM2 > 0) {
+      if (budgetPerM2 < 150000) budgetTension = "HIGH";
+      else if (budgetPerM2 < 300000) budgetTension = "MEDIUM";
+      else budgetTension = "LOW";
+    }
+
+    // Budget band
+    let budgetBand = "MEDIUM";
+    if (budgetNum <= 50000000) budgetBand = "SMALL";
+    else if (budgetNum <= 150000000) budgetBand = "MEDIUM";
+    else if (budgetNum <= 500000000) budgetBand = "LARGE";
+    else budgetBand = "XLARGE";
+
+    // Feasibility posture based on driver + constraints
+    let feasibilityPosture = "BALANCED";
+    if (primaryDriver === "CAPACITE") feasibilityPosture = "AGGRESSIVE";
+    else if (primaryDriver === "RENTABILITE") feasibilityPosture = "OPTIMISTIC";
+    else if (primaryDriver === "MIXITE") feasibilityPosture = "BALANCED";
+    if (parseFloat(financialRigidity) >= 0.8) feasibilityPosture = "CONSERVATIVE";
+
+    // Strategic position
+    let strategicPosition = "DEVELOP";
+    if (siteArea > 800 && budgetBand !== "SMALL") strategicPosition = "EXPAND";
+    else if (budgetBand === "SMALL" || parseFloat(financialRigidity) >= 0.7) strategicPosition = "SECURE";
+    else strategicPosition = "DEVELOP";
+
+    // Diagnostic scores (0-1 scale, used by compute-scenarios)
+    const rentScore = standingLevel === "PREMIUM" ? 0.9 : standingLevel === "HAUT" ? 0.7 : standingLevel === "STANDARD" ? 0.5 : 0.3;
+    const capacityScore = densityBand === "HIGH" ? 0.8 : densityBand === "MEDIUM" ? 0.6 : 0.4;
+    const mixScore = primaryDriver === "MIXITE" ? 0.8 : primaryDriver === "CAPACITE" ? 0.5 : 0.4;
+    const phaseScore = siteArea > 600 ? 0.7 : siteArea > 300 ? 0.5 : 0.3;
+    const riskScore = parseFloat(financialRigidity) >= 0.7 ? 0.7 : parseFloat(financialRigidity) >= 0.5 ? 0.5 : 0.3;
+
+    // Driver intensity
+    let driverIntensity = "MEDIUM";
+    if (primaryDriver === "CAPACITE" && densityBand === "HIGH") driverIntensity = "HIGH";
+    else if (primaryDriver === "RENTABILITE" && rentScore >= 0.7) driverIntensity = "HIGH";
+
+    // Density pressure factor
+    const densityPressureFactor = densityBand === "HIGH" ? 1.3 : densityBand === "MEDIUM" ? 1.0 : 0.8;
+
+    // Write all computed scores to PIPELINE
+    set8C("density_band", densityBand);
+    set8C("budget_band", budgetBand);
+    set8C("budget_tension_calc", budgetTension);
+    set8C("feasibility_posture_calc", feasibilityPosture);
+    set8C("strategic_position_calc", strategicPosition);
+    set8C("rent_score", rentScore);
+    set8C("capacity_score", capacityScore);
+    set8C("mix_score", mixScore);
+    set8C("phase_score", phaseScore);
+    set8C("risk_score", riskScore);
+    set8C("driver_intensity", driverIntensity);
+    set8C("density_pressure_factor", densityPressureFactor);
+    // Scenario roles based on posture
+    set8C("scenario_A_role", "INTENSIFICATION");
+    set8C("scenario_B_role", "EQUILIBRE");
+    set8C("scenario_C_role", "PRUDENT");
+    console.log(`[8C] Scores computed: rent=${rentScore} cap=${capacityScore} mix=${mixScore} phase=${phaseScore} risk=${riskScore}`);
+    console.log(`[8C] Posture=${feasibilityPosture} DensityBand=${densityBand} BudgetTension=${budgetTension}`);
+
     await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: row8C });
     console.log(`[8C] Envelope ${envW.toFixed(1)}×${envD.toFixed(1)} = ${envArea.toFixed(0)}m² ✓`);
 
     // ─── STEP 8D: Call /compute-scenarios ────────────────────────────────────
     console.log(`[8D] Computing scenarios...`);
-    // Wait again for formulas
-    await new Promise(ok => setTimeout(ok, 2000));
-    // Re-read row with formula-computed values
+    // Re-read row to get latest state
+    await new Promise(ok => setTimeout(ok, 1000));
     const preScenario = await gasGet("readPipelineRow", { row: pipeRowNum });
     const row8D = preScenario.values?.[0] || row8C;
     const obj8D = {};
@@ -600,6 +676,22 @@ app.post("/api/process-lead", async (req, res) => {
     setFinal("delta_BA_cout", sc.deltas?.BA?.cout);
     setFinal("delta_CA_sdp", sc.deltas?.CA?.sdp);
     setFinal("delta_CA_cout", sc.deltas?.CA?.cout);
+    // Preserve computed scores (in case finalRow read lost them)
+    setFinal("rent_score", obj8D.rent_score || rentScore);
+    setFinal("capacity_score", obj8D.capacity_score || capacityScore);
+    setFinal("mix_score", obj8D.mix_score || mixScore);
+    setFinal("phase_score", obj8D.phase_score || phaseScore);
+    setFinal("risk_score", obj8D.risk_score || riskScore);
+    setFinal("density_band", obj8D.density_band || densityBand);
+    setFinal("budget_band", obj8D.budget_band || budgetBand);
+    setFinal("budget_tension_calc", obj8D.budget_tension_calc || budgetTension);
+    setFinal("feasibility_posture_calc", obj8D.feasibility_posture_calc || feasibilityPosture);
+    setFinal("strategic_position_calc", obj8D.strategic_position_calc || strategicPosition);
+    setFinal("driver_intensity", obj8D.driver_intensity || driverIntensity);
+    setFinal("density_pressure_factor", obj8D.density_pressure_factor || densityPressureFactor);
+    setFinal("scenario_A_role", "INTENSIFICATION");
+    setFinal("scenario_B_role", "EQUILIBRE");
+    setFinal("scenario_C_role", "PRUDENT");
 
     await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: rowFinal });
     console.log(`╚══ PROCESS-LEAD ${leadRef} DONE in ${Date.now() - t0}ms ══╝\n`);
