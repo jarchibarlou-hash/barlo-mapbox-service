@@ -2,7 +2,6 @@
 # BARLO — Dockerfile for Render deployment
 # Node.js + Python + LibreOffice (for PPTX generation & PDF conversion)
 # ═══════════════════════════════════════════════════════════════
-
 FROM node:20-slim
 
 # Install: node-canvas deps + Python 3 + pip + LibreOffice (headless)
@@ -32,11 +31,13 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --production
 
-# Copy server + Python scripts + PPTX template
+# Copy server + Python scripts + PPTX template + Studio
 COPY server.js .
 COPY generate_pptx.py .
 COPY generate_charts.py .
 COPY template_diagnostic.pptx .
+COPY studio.html .
+COPY reference_axo.png .
 
 EXPOSE 3000
 CMD ["node", "server.js"]
