@@ -694,6 +694,156 @@ app.post("/api/process-lead", async (req, res) => {
     setFinal("scenario_C_role", "PRUDENT");
 
     await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: rowFinal });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // v73.8 — 8E + 8F : Génération axo slide 4 + massings A/B/C (Option A)
+    // Pipeline complet dans process-lead. Cache : skip si URL valide existe.
+    // ═══════════════════════════════════════════════════════════════════════
+    const isValidImgUrl = (url) => {
+      if (!url || typeof url !== "string") return false;
+      const u = url.trim();
+      if (!u.startsWith("http")) return false;
+      if (!u.includes("/hektar/") || u.endsWith("massing-images")) return false;
+      return true;
+    };
+
+    const polygonForImg = polygonPoints || (rowFinal[colAN] || "");
+    const clientNameImg = `${(f[2]||"")} ${(f[3]||"")}`.trim();
+    let slide4ImageUrl = "", slide4AxoImageUrl = "";
+    const massingUrls = { A: "", B: "", C: "" };
+
+    if (polygonForImg) {
+      // Body commun pour les 2 appels /generate (top + axo)
+      const _baseGenBody = {
+        lead_id: leadRef, client_name: clientNameImg,
+        polygon_points: polygonForImg,
+        site_area: obj8D.site_area_m2 || (plotW * plotD),
+        land_width: obj8D.land_width_m || plotW, land_depth: obj8D.land_depth_m || plotD,
+        envelope_w: envW, envelope_d: envD, buildable_fp: envArea,
+        setback_front: setbackFront, setback_side: setbackSide, setback_back: setbackBack,
+        terrain_context: obj8D.site_context || "",
+        city: obj8D.project_city || "", district: obj8D.project_district || "",
+        zoning: obj8D.zoning_type || "URBAIN",
+      };
+
+      // ─── 8E.1 : SLIDE 4 = vue satellite TOP (Google Maps Static / Mapbox satellite) ──
+      const cachedSlide4 = obj8D.slide_4_image_url || "";
+      if (isValidImgUrl(cachedSlide4)) {
+        slide4ImageUrl = cachedSlide4;
+        console.log(`[8E-TOP] Cache hit slide 4 satellite top`);
+      } else {
+        console.log(`[8E-TOP] Generating slide 4 satellite top view (Google Static API)...`);
+        try {
+          const genTopRes = await fetch(`http://localhost:${PORT}/generate`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ..._baseGenBody, view: "top", slide_name: "slide_4_top" })
+          });
+          const genTopResult = await genTopRes.json();
+          if (genTopResult && genTopResult.ok) {
+            // En mode top : pas de polish IA, public_url = enhanced_url
+            slide4ImageUrl = genTopResult.enhanced_url || genTopResult.public_url || "";
+            console.log(`[8E-TOP] ✓ Slide 4 satellite top generated`);
+          } else {
+            console.warn(`[8E-TOP] /generate(top) failed: ${JSON.stringify(genTopResult).substring(0, 200)}`);
+          }
+        } catch (e) { console.warn(`[8E-TOP] Error: ${e.message}`); }
+      }
+
+      // ─── 8E.2 : SLIDE 5 = axonométrie 3D + polish IA ─────────────────────
+      const cachedSlide5 = obj8D.slide_5_image_url || "";
+      if (isValidImgUrl(cachedSlide5)) {
+        slide4AxoImageUrl = cachedSlide5;
+        console.log(`[8E-AXO] Cache hit slide 5 axo`);
+      } else {
+        console.log(`[8E-AXO] Generating slide 5 axonometry + AI polish...`);
+        try {
+          const genAxoRes = await fetch(`http://localhost:${PORT}/generate`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ..._baseGenBody, view: "axo", slide_name: "slide_4_axo" })
+          });
+          const genAxoResult = await genAxoRes.json();
+          if (genAxoResult && genAxoResult.ok) {
+            slide4AxoImageUrl = genAxoResult.enhanced_url || genAxoResult.public_url || "";
+            console.log(`[8E-AXO] ✓ Slide 5 axo enhanced generated`);
+          } else {
+            console.warn(`[8E-AXO] /generate(axo) failed: ${JSON.stringify(genAxoResult).substring(0, 200)}`);
+          }
+        } catch (e) { console.warn(`[8E-AXO] Error: ${e.message}`); }
+      }
+
+      for (const label of ["A", "B", "C"]) {
+        const cachedKey = `massing_scn_${label}_img_url`;
+        const cached = obj8D[cachedKey] || "";
+        if (isValidImgUrl(cached)) {
+          massingUrls[label] = cached;
+          console.log(`[8F-${label}] Cache hit`);
+          continue;
+        }
+        console.log(`[8F-${label}] Generating massing...`);
+        try {
+          const massingBody = {
+            lead_id: leadRef, client_name: clientNameImg,
+            polygon_points: polygonForImg,
+            site_area: obj8D.site_area_m2 || (plotW * plotD),
+            setback_front: setbackFront, setback_side: setbackSide, setback_back: setbackBack,
+            envelope_w: envW, envelope_d: envD,
+            massing_label: label, slide_name: `scenario_${label}_massing`,
+            compute_scenario: true,
+            zoning_type: obj8D.zoning_type || zoningType,
+            primary_driver: obj8D.primary_driver || primaryDriver,
+            max_floors: obj8D.max_floors || "", max_height_m: obj8D.max_height_m || "",
+            program_main: obj8D.target_program || "",
+            target_surface_m2: obj8D.target_surface_m2 || "",
+            target_units: obj8D.target_units || "",
+            input_typologies: obj8D.input_typologies || "",
+            financial_rigidity_score: obj8D.financial_rigidity_score || financialRigidity,
+            density_band: obj8D.density_band || densityBand,
+            feasibility_posture: obj8D.feasibility_posture_calc || feasibilityPosture,
+            budget_range: obj8D.budget_range || "",
+            budget_band: obj8D.budget_band || budgetBand,
+            standing_level: obj8D.standing_level || standingLevel,
+            rent_score: obj8D.rent_score || rentScore,
+            capacity_score: obj8D.capacity_score || capacityScore,
+            mix_score: obj8D.mix_score || mixScore,
+            phase_score: obj8D.phase_score || phaseScore,
+            risk_score: obj8D.risk_score || riskScore,
+            density_pressure_factor: obj8D.density_pressure_factor || densityPressureFactor,
+            driver_intensity: obj8D.driver_intensity || driverIntensity,
+            layout_mode: obj8D.layout_mode || layoutMode,
+            commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
+            retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
+          };
+          const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(massingBody)
+          });
+          const mResult = await mRes.json();
+          if (mResult && mResult.ok) {
+            massingUrls[label] = mResult.enhanced_url || mResult.public_url || "";
+            console.log(`[8F-${label}] ✓ massing generated`);
+          } else {
+            console.warn(`[8F-${label}] /generate-massing failed: ${JSON.stringify(mResult).substring(0, 200)}`);
+          }
+        } catch (e) { console.warn(`[8F-${label}] Error: ${e.message}`); }
+      }
+
+      try {
+        const rowImg = await gasGet("readPipelineRow", { row: pipeRowNum });
+        const row8E = rowImg.values?.[0] ? [...rowImg.values[0]] : [...rowFinal];
+        while (row8E.length < pipeHeaders.length) row8E.push("");
+        const setImg = (name, val) => { const i = pipeHeaders.indexOf(name); if (i >= 0 && val) row8E[i] = val; };
+        if (slide4ImageUrl) setImg("slide_4_image_url", slide4ImageUrl);
+        if (slide4AxoImageUrl) setImg("slide_5_image_url", slide4AxoImageUrl);
+        if (massingUrls.A) setImg("massing_scn_A_img_url", massingUrls.A);
+        if (massingUrls.B) setImg("massing_scn_B_img_url", massingUrls.B);
+        if (massingUrls.C) setImg("massing_scn_C_img_url", massingUrls.C);
+        await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: row8E });
+        console.log(`[8E/8F] Image URLs written to PIPELINE ✓`);
+      } catch (e) { console.warn(`[8E/8F] PIPELINE write error: ${e.message}`); }
+    } else {
+      console.log(`[8E/8F] No polygon_points — skipping image generation`);
+    }
+
     console.log(`╚══ PROCESS-LEAD ${leadRef} DONE in ${Date.now() - t0}ms ══╝\n`);
 
     // Return complete lead data for the cockpit
@@ -703,6 +853,15 @@ app.post("/api/process-lead", async (req, res) => {
     for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
       if (finalObj[pipeCol] !== undefined && finalObj[pipeCol] !== "") body8D[bodyKey] = finalObj[pipeCol];
     }
+    // v73.8 — Embarquer images sous body8D.images avec les clés Python attendues
+    const imagesDict = {};
+    if (slide4ImageUrl)    imagesDict.slide_4_image      = slide4ImageUrl;
+    if (slide4AxoImageUrl) imagesDict.slide_4_axo_image  = slide4AxoImageUrl;
+    if (massingUrls.A)     imagesDict.scenario_A_massing = massingUrls.A;
+    if (massingUrls.B)     imagesDict.scenario_B_massing = massingUrls.B;
+    if (massingUrls.C)     imagesDict.scenario_C_massing = massingUrls.C;
+    body8D.images = imagesDict;
+
     const display = {};
     for (const col of EXTRA_DISPLAY_COLS) { if (finalObj[col] !== undefined) display[col] = finalObj[col]; }
 
@@ -737,6 +896,15 @@ app.get("/api/lead/:ref", async (req, res) => {
     for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
       if (rowObj[pipeCol] !== undefined && rowObj[pipeCol] !== "") body8D[bodyKey] = rowObj[pipeCol];
     }
+    // v73.8 — Embarquer images depuis les colonnes PIPELINE avec clés Python attendues
+    const _isValidLeadImg = (u) => u && typeof u === "string" && u.startsWith("http") && u.includes("/hektar/") && !u.endsWith("massing-images");
+    const _imagesDict = {};
+    if (_isValidLeadImg(rowObj.slide_4_image_url))     _imagesDict.slide_4_image      = rowObj.slide_4_image_url;
+    if (_isValidLeadImg(rowObj.slide_5_image_url))     _imagesDict.slide_4_axo_image  = rowObj.slide_5_image_url;
+    if (_isValidLeadImg(rowObj.massing_scn_A_img_url)) _imagesDict.scenario_A_massing = rowObj.massing_scn_A_img_url;
+    if (_isValidLeadImg(rowObj.massing_scn_B_img_url)) _imagesDict.scenario_B_massing = rowObj.massing_scn_B_img_url;
+    if (_isValidLeadImg(rowObj.massing_scn_C_img_url)) _imagesDict.scenario_C_massing = rowObj.massing_scn_C_img_url;
+    body8D.images = _imagesDict;
     const display = {};
     for (const col of EXTRA_DISPLAY_COLS) { if (rowObj[col] !== undefined) display[col] = rowObj[col]; }
     console.log(`[LEAD-API] Lead '${ref}' found — ${Object.keys(body8D).length} body keys, ${Date.now() - t0}ms`);
