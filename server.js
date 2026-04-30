@@ -301,12 +301,28 @@ app.get("/api/form-leads", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 app.post("/api/process-lead", async (req, res) => {
   const t0 = Date.now();
-  const { formRow } = req.body;
-  if (!formRow) return res.status(400).json({ error: "formRow required" });
-  console.log(`\n╔══ PROCESS-LEAD row ${formRow} ══╗`);
+  // v73.9 — accepter formRow (nouveau lead) OU ref (retraitement lead existant)
+  let { formRow, ref } = req.body;
+  if (!formRow && !ref) return res.status(400).json({ error: "formRow ou ref requis" });
+  console.log(`\n╔══ PROCESS-LEAD ${formRow ? `row ${formRow}` : `ref ${ref}`} ══╗`);
 
   try {
     if (!APPS_SCRIPT_URL) throw new Error("APPS_SCRIPT_URL not configured");
+
+    // v73.9 — Si ref fourni mais pas formRow, retrouver le formRow via readForm
+    if (!formRow && ref) {
+      console.log(`[8A] Resolving formRow from ref="${ref}"...`);
+      const allForm = await gasGet("readForm");
+      if (allForm.values && allForm.values.length > 1) {
+        for (let i = 1; i < allForm.values.length; i++) {
+          const row = allForm.values[i] || [];
+          const code = (row[55] || row[36] || "").toString().trim();
+          if (code === ref) { formRow = i + 1; break; }
+        }
+      }
+      if (!formRow) throw new Error(`Lead "${ref}" introuvable dans le formulaire`);
+      console.log(`[8A] Resolved ref="${ref}" → formRow=${formRow}`);
+    }
 
     // ─── STEP 8A: Read form response & write to PIPELINE ─────────────────────
     console.log(`[8A] Reading form row ${formRow}...`);
@@ -411,11 +427,40 @@ app.post("/api/process-lead", async (req, res) => {
     setCol("commerce_depth_m", commerceDepth);
     setCol("retrait_inter_volumes_m", retraitInter);
 
-    // Append to PIPELINE
-    const appendResult = await gasPost("appendPipeline", { row: newRow });
-    const pipeRowNum = appendResult.appendedRow;
-    if (!pipeRowNum) throw new Error("Failed to append row to PIPELINE");
-    console.log(`[8A] Lead ${leadRef} written to PIPELINE row ${pipeRowNum} ✓`);
+    // v73.9 — Détection lead existant : UPDATE au lieu d'APPEND (mode retraitement)
+    let pipeRowNum = null;
+    let isReprocessing = false;
+    try {
+      const existingRefs = await gasGet("readPipelineRefs");
+      if (existingRefs.values && existingRefs.values.length > 1) {
+        for (let i = 1; i < existingRefs.values.length; i++) {
+          const cf = ((existingRefs.values[i] || [])[0] || "").toString().trim();
+          if (cf === leadRef) { pipeRowNum = i + 1; isReprocessing = true; break; }
+        }
+      }
+    } catch (e) { console.warn(`[8A] readPipelineRefs error: ${e.message}`); }
+
+    if (isReprocessing) {
+      console.log(`[8A] Lead ${leadRef} EXISTS at row ${pipeRowNum} → RETRAITEMENT (UPDATE mode)`);
+      // Préserver les URLs images valides depuis l'existant (le cache 8E/8F décidera de regen ou pas)
+      try {
+        const existingRow = await gasGet("readPipelineRow", { row: pipeRowNum });
+        const existing = existingRow.values?.[0] || [];
+        const preserveCols = ["slide_4_image_url", "slide_5_image_url",
+                              "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url"];
+        for (const col of preserveCols) {
+          const idx = pipeHeaders.indexOf(col);
+          if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
+        }
+      } catch (e) { console.warn(`[8A] Preserve images error: ${e.message}`); }
+      await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: newRow });
+      console.log(`[8A] Lead ${leadRef} UPDATED at row ${pipeRowNum} ✓`);
+    } else {
+      const appendResult = await gasPost("appendPipeline", { row: newRow });
+      pipeRowNum = appendResult.appendedRow;
+      if (!pipeRowNum) throw new Error("Failed to append row to PIPELINE");
+      console.log(`[8A] Lead ${leadRef} APPENDED at row ${pipeRowNum} ✓`);
+    }
 
     // ─── STEP 8B: Fetch polygon from Supabase ───────────────────────────────
     console.log(`[8B] Fetching polygon for ${barloCode}...`);
@@ -696,8 +741,7 @@ app.post("/api/process-lead", async (req, res) => {
     await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: rowFinal });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // v73.8 — 8E + 8F : Génération axo slide 4 + massings A/B/C (Option A)
-    // Pipeline complet dans process-lead. Cache : skip si URL valide existe.
+    // v73.8 — 8E + 8F : génération slide 4 (top) + slide 5 (axo IA) + massings A/B/C
     // ═══════════════════════════════════════════════════════════════════════
     const isValidImgUrl = (url) => {
       if (!url || typeof url !== "string") return false;
@@ -713,7 +757,6 @@ app.post("/api/process-lead", async (req, res) => {
     const massingUrls = { A: "", B: "", C: "" };
 
     if (polygonForImg) {
-      // Body commun pour les 2 appels /generate (top + axo)
       const _baseGenBody = {
         lead_id: leadRef, client_name: clientNameImg,
         polygon_points: polygonForImg,
@@ -726,13 +769,12 @@ app.post("/api/process-lead", async (req, res) => {
         zoning: obj8D.zoning_type || "URBAIN",
       };
 
-      // ─── 8E.1 : SLIDE 4 = vue satellite TOP (Google Maps Static / Mapbox satellite) ──
       const cachedSlide4 = obj8D.slide_4_image_url || "";
       if (isValidImgUrl(cachedSlide4)) {
         slide4ImageUrl = cachedSlide4;
         console.log(`[8E-TOP] Cache hit slide 4 satellite top`);
       } else {
-        console.log(`[8E-TOP] Generating slide 4 satellite top view (Google Static API)...`);
+        console.log(`[8E-TOP] Generating slide 4 satellite top view...`);
         try {
           const genTopRes = await fetch(`http://localhost:${PORT}/generate`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -740,7 +782,6 @@ app.post("/api/process-lead", async (req, res) => {
           });
           const genTopResult = await genTopRes.json();
           if (genTopResult && genTopResult.ok) {
-            // En mode top : pas de polish IA, public_url = enhanced_url
             slide4ImageUrl = genTopResult.enhanced_url || genTopResult.public_url || "";
             console.log(`[8E-TOP] ✓ Slide 4 satellite top generated`);
           } else {
@@ -749,7 +790,6 @@ app.post("/api/process-lead", async (req, res) => {
         } catch (e) { console.warn(`[8E-TOP] Error: ${e.message}`); }
       }
 
-      // ─── 8E.2 : SLIDE 5 = axonométrie 3D + polish IA ─────────────────────
       const cachedSlide5 = obj8D.slide_5_image_url || "";
       if (isValidImgUrl(cachedSlide5)) {
         slide4AxoImageUrl = cachedSlide5;
@@ -853,7 +893,6 @@ app.post("/api/process-lead", async (req, res) => {
     for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
       if (finalObj[pipeCol] !== undefined && finalObj[pipeCol] !== "") body8D[bodyKey] = finalObj[pipeCol];
     }
-    // v73.8 — Embarquer images sous body8D.images avec les clés Python attendues
     const imagesDict = {};
     if (slide4ImageUrl)    imagesDict.slide_4_image      = slide4ImageUrl;
     if (slide4AxoImageUrl) imagesDict.slide_4_axo_image  = slide4AxoImageUrl;
@@ -865,7 +904,7 @@ app.post("/api/process-lead", async (req, res) => {
     const display = {};
     for (const col of EXTRA_DISPLAY_COLS) { if (finalObj[col] !== undefined) display[col] = finalObj[col]; }
 
-    res.json({ ok: true, ref: leadRef, body8D, display, raw_columns: Object.keys(finalObj).length, duration_ms: Date.now() - t0 });
+    res.json({ ok: true, ref: leadRef, reprocessed: isReprocessing, body8D, display, raw_columns: Object.keys(finalObj).length, duration_ms: Date.now() - t0 });
   } catch (err) {
     console.error(`[PROCESS-LEAD] Error: ${err.message}\n${err.stack}`);
     res.status(500).json({ error: err.message });
@@ -896,7 +935,6 @@ app.get("/api/lead/:ref", async (req, res) => {
     for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
       if (rowObj[pipeCol] !== undefined && rowObj[pipeCol] !== "") body8D[bodyKey] = rowObj[pipeCol];
     }
-    // v73.8 — Embarquer images depuis les colonnes PIPELINE avec clés Python attendues
     const _isValidLeadImg = (u) => u && typeof u === "string" && u.startsWith("http") && u.includes("/hektar/") && !u.endsWith("massing-images");
     const _imagesDict = {};
     if (_isValidLeadImg(rowObj.slide_4_image_url))     _imagesDict.slide_4_image      = rowObj.slide_4_image_url;
