@@ -392,22 +392,6 @@ app.post("/api/process-lead", async (req, res) => {
     setCol("date_submit", f[0] || new Date().toISOString());
     setCol("client_name", `${(f[2]||"")} ${(f[3]||"")}`.trim());
     setCol("client_email", f[1] || "");
-    // v74.1 — Scanner intelligent : détecte les champs par regex au lieu d'index fixe
-    // Robuste aux futurs changements d'ordre du formulaire Google.
-    const findFormValueByPattern = (formRow, pattern, fallbackIndex = -1) => {
-      for (let i = 0; i < formRow.length; i++) {
-        if (formRow[i] && pattern.test(String(formRow[i]))) return formRow[i];
-      }
-      return fallbackIndex >= 0 ? (formRow[fallbackIndex] || "") : "";
-    };
-    const findAllFormValuesByPattern = (formRow, pattern) => {
-      const out = [];
-      for (let i = 0; i < formRow.length; i++) {
-        if (formRow[i] && pattern.test(String(formRow[i]))) out.push({ index: i, value: formRow[i] });
-      }
-      return out;
-    };
-
     // Project info
     setCol("project_type", f[4] || "");
     setCol("project_country", f[8] || "");
@@ -435,24 +419,13 @@ app.post("/api/process-lead", async (req, res) => {
     setCol("existing_built_area_m2", f[26] || "0");
     setCol("zoning_type", zoningType);
     setCol("primary_driver", primaryDriver);
-    // v74.1 — Détection robuste par contenu (regex)
-    // budget : contient FCFA, €, EUR, ou un range numérique
-    const budgetVal = findFormValueByPattern(f, /FCFA|\beur\b|euro|million|\d{2,}\s*000/i, 30);
-    setCol("budget_range", budgetVal);
-
+    // v74.2 — Indices avec fallback robuste (form a été réordonné)
+    // Behalal : "33 M FCFA" en f[18], "T3=2" en f[39], "Commerce devant" en f[56]
+    setCol("budget_range", f[18] || f[30] || "");
     setCol("standing_level", standingLevel);
-
-    // Disposition : superposé, split, monolithique, compact, etc.
-    const dispoVal = findFormValueByPattern(f, /superpos|split|compact|monolith|av(ant)?\s*ar(rière)?/i, 56);
-    setCol("Disposition", dispoVal);
-
-    // input_typologies : contient T1/T2/T3/T4/T5 avec un = ou : ou nombre, OU "studio"/"commerce" + chiffre
-    const typoVal = findFormValueByPattern(f, /(T[1-5]|studio|commerce)\s*[=:]|\b(\d+)\s*[\u00d7x*]?\s*(T[1-5]|studio|commerce)/i, 29);
-    setCol("input_typologies", typoVal);
-
-    // v74.1 — Trace de debug : log les valeurs détectées vs anciens indices
-    console.log("[v74.1 SCAN] budget=" + JSON.stringify(budgetVal) + " dispo=" + JSON.stringify(dispoVal) + " typo=" + JSON.stringify(typoVal));
-    if (!typoVal && f[29]) console.log("[v74.1 SCAN] WARN typo: f[29]=" + JSON.stringify(f[29]) + " mais regex no match");
+    setCol("Disposition", f[56] || "");
+    setCol("input_typologies", f[39] || f[29] || "");
+    console.log("[v74.2 INDICES] budget=" + JSON.stringify(f[18] || f[30]) + " dispo=" + JSON.stringify(f[56]) + " typo=" + JSON.stringify(f[39] || f[29]));
     setCol("layout_mode", layoutMode);
     setCol("commerce_depth_m", commerceDepth);
     setCol("retrait_inter_volumes_m", retraitInter);
