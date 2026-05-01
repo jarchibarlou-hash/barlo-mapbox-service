@@ -419,13 +419,14 @@ app.post("/api/process-lead", async (req, res) => {
     setCol("existing_built_area_m2", f[26] || "0");
     setCol("zoning_type", zoningType);
     setCol("primary_driver", primaryDriver);
-    // v74.2 — Indices avec fallback robuste (form a été réordonné)
-    // Behalal : "33 M FCFA" en f[18], "T3=2" en f[39], "Commerce devant" en f[56]
-    setCol("budget_range", f[18] || f[30] || "");
+    // v74.3 — OFF-BY-ONE FIX (confirmé par logs Render)
+    // Vrais indices : budget=f[17] (33M FCFA), typo=f[38] (T3=2), dispo=f[56] (Commerce devant)
+    // Fallbacks aux anciens index pour ne pas casser les autres leads
+    setCol("budget_range", f[17] || f[18] || f[30] || "");
     setCol("standing_level", standingLevel);
     setCol("Disposition", f[56] || "");
-    setCol("input_typologies", f[39] || f[29] || "");
-    console.log("[v74.2 INDICES] budget=" + JSON.stringify(f[18] || f[30]) + " dispo=" + JSON.stringify(f[56]) + " typo=" + JSON.stringify(f[39] || f[29]));
+    setCol("input_typologies", f[38] || f[39] || f[29] || "");
+    console.log("[v74.3 INDICES] budget=" + JSON.stringify(f[17] || f[18] || f[30]) + " dispo=" + JSON.stringify(f[56]) + " typo=" + JSON.stringify(f[38] || f[39] || f[29]));
     setCol("layout_mode", layoutMode);
     setCol("commerce_depth_m", commerceDepth);
     setCol("retrait_inter_volumes_m", retraitInter);
