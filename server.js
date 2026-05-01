@@ -242,7 +242,11 @@ const PIPELINE_TO_BODY = {
   "parking_preference": "Parking_Préférence", "parking_required": "Parking_required",
   "satellite_img_url": "satellite_url", "slide_5_image_url": "axo_url",
   "massing_scn_A_img_url": "massing_A_url", "massing_scn_B_img_url": "massing_B_url",
-  "massing_scn_C_img_url": "massing_C_url"
+  "massing_scn_C_img_url": "massing_C_url",
+  // v74.4 — CRITICAL FIX : input_typologies + Disposition manquaient du mapping
+  // Conséquence : body8D ne contenait pas T3=2 → /generate-pptx tombait sur defaultMixFn
+  "input_typologies": "input_typologies",
+  "Disposition": "Disposition"
 };
 
 const EXTRA_DISPLAY_COLS = [
