@@ -2370,18 +2370,45 @@ function classifyProgramTypeV73(programMain) {
 }
 // ── PARSEUR DE TYPOLOGIES ───────────────────────────────────────────────────────
 function parseTypologiesV73(typoString) {
+  // v74 — Parser robuste : accepte multiple formats
+  //   "T3=2"
+  //   "T2 : 2 unités, T3 : 3 unités"
+  //   "Studio : 1 unité, T2 : 2 unités"
+  //   "1 commerce + 2 T3"
   if (!typoString || typeof typoString !== "string") return [];
-  return typoString
-    .split(/[;,\s]+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 0)
-    .map(s => {
-      const m = s.match(/^(T[1-5])\s*=\s*(\d+)$/i);
-      if (!m) return null;
-      return { type: m[1].toUpperCase(), count: parseInt(m[2], 10) };
-    })
-    .filter(Boolean)
-    .filter(t => t.count > 0);
+  const s = typoString.trim();
+  if (!s) return [];
+  const result = {};
+  const normalized = s.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const patterns = [
+    /(STUDIO|COMMERCE|T[1-5])\s*[=:]\s*(\d+)/g,
+    /(\d+)\s*[\u00d7x*]?\s*(STUDIO|COMMERCE|T[1-5])/g,
+  ];
+  for (const pattern of patterns) {
+    let m;
+    pattern.lastIndex = 0;
+    while ((m = pattern.exec(normalized)) !== null) {
+      let type, count;
+      if (/^\d/.test(m[1])) {
+        count = parseInt(m[1], 10);
+        type = m[2];
+      } else {
+        type = m[1];
+        count = parseInt(m[2], 10);
+      }
+      if (type === "STUDIO") type = "T1";
+      if (count > 0) result[type] = (result[type] || 0) + count;
+    }
+  }
+  // Convert to legacy list format (commerce séparé par computeProgramDrivenScenarioV73)
+  const out = [];
+  for (const t of ["T1", "T2", "T3", "T4", "T5"]) {
+    if (result[t] && result[t] > 0) out.push({ type: t, count: result[t] });
+  }
+  // COMMERCE handled séparément via _hasCommerceInput flag attaché au résultat
+  Object.defineProperty(out, "_hasCommerceInput", { value: !!result.COMMERCE, enumerable: false });
+  Object.defineProperty(out, "_commerceCountInput", { value: result.COMMERCE || 0, enumerable: false });
+  return out;
 }
 // ── HELPERS DE CONSTRUCTION DU MIX A/B/C ───────────────────────────────────────
 function downgradeTypeV73(t) {
@@ -2489,6 +2516,98 @@ function buildUnitMixObjectV73(logementsTypos, commerceCount) {
   return obj;
 }
 // ═══════════════════════════════════════════════════════════════════════════════
+// v74 — defaultMixFn(n, programType) : génère le mix par défaut si pas d'input_typologies
+// Doctrine officielle :
+//   MAISON_INDIVIDUELLE : 1 unité = T4, plusieurs = tous T3
+//   PETIT_COLLECTIF : majorité T3, +T2 (~20%) si ≥5, +1 T4 si ≥5
+//   IMMEUBLE_RAPPORT : toujours 1 T4, ~25% T2, reste T3, +1 T5 si ≥15
+//   USAGE_MIXTE : 15% commerces + même logique résidentielle (1 T4, 25% T2, reste T3)
+//   MIXTE_OPPORTUNISTE : 20% commerces + 30% T2 + reste T3
+//   RESIDENCE_MEUBLEE : 40% T1 + 40% T2 + 20% T3 (si ≤4 → tout T1)
+//   HOTEL_URBAIN : 70% T1 + 30% T3
+//   CLINIQUE : 50% T2 + 15% T3 + 35% T1
+//   CENTRE_COMMERCIAL : 70% commerces + 30% T4 (ancres)
+//   SCOLAIRE : 65% T3 + 15% T2 + 20% T1
+//   COMMERCIAL : tout commerces
+// ═══════════════════════════════════════════════════════════════════════════════
+function defaultMixFnV74(n, programType) {
+  if (n <= 0) return { logements: [], commerceCount: 0 };
+  const cleanLog = (mix) => {
+    const out = [];
+    for (const t of ["T1", "T2", "T3", "T4", "T5"]) {
+      if (mix[t] && mix[t] > 0) out.push({ type: t, count: mix[t] });
+    }
+    return out;
+  };
+  const PT = programType;
+
+  if (PT === "MAISON" || PT === "MAISON_INDIVIDUELLE") {
+    if (n === 1) return { logements: [{ type: "T4", count: 1 }], commerceCount: 0 };
+    return { logements: [{ type: "T3", count: n }], commerceCount: 0 };
+  }
+  if (PT === "PETIT_COLLECTIF") {
+    if (n < 5) return { logements: [{ type: "T3", count: n }], commerceCount: 0 };
+    const nT4 = 1, nT2 = Math.max(1, Math.round(n * 0.20));
+    const nT3 = n - nT4 - nT2;
+    return { logements: cleanLog({ T2: nT2, T3: nT3, T4: nT4 }), commerceCount: 0 };
+  }
+  if (PT === "IMMEUBLE_DENSE" || PT === "IMMEUBLE_RAPPORT") {
+    const nT4 = 1, nT5 = (n >= 15) ? 1 : 0;
+    const nT2 = Math.max(1, Math.round(n * 0.25));
+    const nT3 = Math.max(0, n - nT4 - nT5 - nT2);
+    return { logements: cleanLog({ T2: nT2, T3: nT3, T4: nT4, T5: nT5 }), commerceCount: 0 };
+  }
+  if (PT === "MIXTE" || PT === "USAGE_MIXTE") {
+    const nCom = Math.max(1, Math.round(n * 0.15));
+    const nResid = n - nCom;
+    if (nResid <= 0) return { logements: [], commerceCount: n };
+    if (nResid <= 2) return { logements: [{ type: "T3", count: nResid }], commerceCount: nCom };
+    const nT4 = 1, nT2 = Math.max(1, Math.round(nResid * 0.25));
+    const nT3 = Math.max(0, nResid - nT4 - nT2);
+    return { logements: cleanLog({ T2: nT2, T3: nT3, T4: nT4 }), commerceCount: nCom };
+  }
+  if (PT === "MIXTE_OPPORTUNISTE") {
+    const nCom = Math.max(1, Math.round(n * 0.20));
+    const nResid = n - nCom;
+    if (nResid <= 0) return { logements: [], commerceCount: n };
+    const nT2 = Math.max(1, Math.round(nResid * 0.30));
+    const nT3 = Math.max(0, nResid - nT2);
+    return { logements: cleanLog({ T2: nT2, T3: nT3 }), commerceCount: nCom };
+  }
+  if (PT === "RESIDENCE_MEUBLEE") {
+    if (n <= 4) return { logements: [{ type: "T1", count: n }], commerceCount: 0 };
+    const nT1 = Math.round(n * 0.40), nT2 = Math.round(n * 0.40);
+    const nT3 = Math.max(0, n - nT1 - nT2);
+    return { logements: cleanLog({ T1: nT1, T2: nT2, T3: nT3 }), commerceCount: 0 };
+  }
+  if (PT === "HOTEL_URBAIN") {
+    const nT1 = Math.round(n * 0.70);
+    const nT3 = Math.max(0, n - nT1);
+    return { logements: cleanLog({ T1: nT1, T3: nT3 }), commerceCount: 0 };
+  }
+  if (PT === "CLINIQUE") {
+    const nT2 = Math.round(n * 0.50), nT3 = Math.round(n * 0.15);
+    const nT1 = Math.max(0, n - nT2 - nT3);
+    return { logements: cleanLog({ T1: nT1, T2: nT2, T3: nT3 }), commerceCount: 0 };
+  }
+  if (PT === "CENTRE_COMMERCIAL") {
+    const nCom = Math.round(n * 0.70);
+    const nT4 = Math.max(0, n - nCom);
+    return { logements: cleanLog({ T4: nT4 }), commerceCount: nCom };
+  }
+  if (PT === "SCOLAIRE") {
+    const nT3 = Math.round(n * 0.65), nT2 = Math.round(n * 0.15);
+    const nT1 = Math.max(0, n - nT3 - nT2);
+    return { logements: cleanLog({ T1: nT1, T2: nT2, T3: nT3 }), commerceCount: 0 };
+  }
+  if (PT === "COMMERCIAL") {
+    return { logements: [], commerceCount: n };
+  }
+  // Fallback : tout T3
+  return { logements: [{ type: "T3", count: n }], commerceCount: 0 };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // FONCTION PRINCIPALE — calcule fp/levels/sdp/unitMix pour un scénario (A, B ou C)
 // ═══════════════════════════════════════════════════════════════════════════════
 function computeProgramDrivenScenarioV73(params) {
@@ -2519,33 +2638,56 @@ function computeProgramDrivenScenarioV73(params) {
     };
     return { isUnsupported: true, unsupportedReason: reasons[programType], programType };
   }
-  // 2. PARSER TYPOLOGIES + FALLBACKS
+  // 2. PARSER TYPOLOGIES + FALLBACKS (v74 doctrine officielle)
   let typologiesA_logements = parseTypologiesV73(input_typologies);
-  if (typologiesA_logements.length === 0 && target_units > 0) {
-    typologiesA_logements = [{ type: "T3", count: target_units }];
-  }
+  let commerceCountA = 0, commerceCountB = 0, commerceCountC = 0;
   let usingSurfaceFallback = false;
-  if (typologiesA_logements.length === 0 && target_surface_m2 > 0) {
+
+  if (typologiesA_logements.length > 0 || typologiesA_logements._hasCommerceInput) {
+    // INPUT FOURNI = source de vérité pour les logements
+    // Commerce : 1 si MIXTE et pas de commerce dans input (auto), sinon = input._commerceCountInput
+    const isMixte = (programType === "MIXTE" || programType === "USAGE_MIXTE" || programType === "MIXTE_OPPORTUNISTE");
+    if (typologiesA_logements._hasCommerceInput) {
+      commerceCountA = typologiesA_logements._commerceCountInput;
+    } else if (isMixte) {
+      commerceCountA = 1; // auto-commerce signature MIXTE
+    }
+    commerceCountB = commerceCountA;
+    commerceCountC = commerceCountA;
+  } else if (target_units > 0) {
+    // PAS D'INPUT → defaultMixFn par programme
+    const dm = defaultMixFnV74(target_units, programType);
+    typologiesA_logements = dm.logements;
+    commerceCountA = dm.commerceCount;
+    commerceCountB = dm.commerceCount;
+    commerceCountC = dm.commerceCount;
+  } else if (target_surface_m2 > 0) {
+    // FALLBACK SURFACE : déduire un nombre d'unités T3
     usingSurfaceFallback = true;
     const std = String(standing_level).toUpperCase();
     const sizeT3 = (UNIT_SIZES_V73.T3[std] || UNIT_SIZES_V73.T3.ECONOMIQUE);
     const nUnits = Math.max(1, Math.round(target_surface_m2 / (sizeT3 * CIRCULATION_COEFF_V73)));
-    typologiesA_logements = [{ type: "T3", count: nUnits }];
+    const dm = defaultMixFnV74(nUnits, programType);
+    typologiesA_logements = dm.logements;
+    commerceCountA = dm.commerceCount;
+    commerceCountB = dm.commerceCount;
+    commerceCountC = dm.commerceCount;
   }
-  if (typologiesA_logements.length === 0) {
+
+  if (typologiesA_logements.length === 0 && commerceCountA === 0) {
     return {
       isUnsupported: true,
       unsupportedReason: "Aucune donnée programme exploitable — fournir input_typologies, target_units ou target_surface_m2",
       programType,
     };
   }
-  // 3. COMMERCES PAR TYPE
-  let commerceCountA = 0, commerceCountB = 0, commerceCountC = 0;
-  if (programType === "MIXTE") {
-    commerceCountA = 1; commerceCountB = 1; commerceCountC = 1;
-  } else if (programType === "COMMERCIAL") {
-    commerceCountA = typologiesA_logements.reduce((s, t) => s + t.count, 0);
-    commerceCountB = commerceCountA;
+  // 3. COMMERCIAL pur — tout en commerces (déjà géré par defaultMixFn pour ce cas)
+  if (programType === "COMMERCIAL" && typologiesA_logements.length > 0) {
+    // Si l'utilisateur a saisi des logements mais le programme est COMMERCIAL,
+    // on convertit tout en commerces
+    const totalUnits = typologiesA_logements.reduce((s, t) => s + t.count, 0) + commerceCountA;
+    commerceCountA = totalUnits;
+    commerceCountB = totalUnits;
     commerceCountC = 1;
     typologiesA_logements = [];
   }
