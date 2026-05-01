@@ -454,8 +454,10 @@ app.post("/api/process-lead", async (req, res) => {
       try {
         const existingRow = await gasGet("readPipelineRow", { row: pipeRowNum });
         const existing = existingRow.values?.[0] || [];
+        // v74.6 — CRITICAL FIX : préserver aussi le polygon (sinon retraitement = perte du polygon dessiné)
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
-                              "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url"];
+                              "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
+                              "site_polygon_points", "site_polygon_status"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
