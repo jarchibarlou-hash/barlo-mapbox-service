@@ -436,20 +436,31 @@ app.post("/api/process-lead", async (req, res) => {
     setCol("retrait_inter_volumes_m", retraitInter);
 
     // v73.9 — Détection lead existant : UPDATE au lieu d'APPEND (mode retraitement)
+    // v74.7 — FIX : matche aussi sur barlo_temp_code (sinon un lead avec cf=timestamp
+    //               et barlo_temp_code=BARLO-XXXX crée un doublon quand re-traité par BARLO-XXXX)
     let pipeRowNum = null;
     let isReprocessing = false;
+    let matchedBy = "";
     try {
-      const existingRefs = await gasGet("readPipelineRefs");
-      if (existingRefs.values && existingRefs.values.length > 1) {
-        for (let i = 1; i < existingRefs.values.length; i++) {
-          const cf = ((existingRefs.values[i] || [])[0] || "").toString().trim();
-          if (cf === leadRef) { pipeRowNum = i + 1; isReprocessing = true; break; }
+      const allRows = await gasGet("readPipelineAll");
+      const btcIdx = pipeHeaders.indexOf("barlo_temp_code");
+      if (allRows.values && allRows.values.length > 1) {
+        for (let i = 1; i < allRows.values.length; i++) {
+          const row = allRows.values[i] || [];
+          const cf = (row[0] || "").toString().trim();
+          const btc = btcIdx >= 0 ? (row[btcIdx] || "").toString().trim() : "";
+          if (cf && cf === leadRef) {
+            pipeRowNum = i + 1; isReprocessing = true; matchedBy = "cf"; break;
+          }
+          if (btc && btc === leadRef) {
+            pipeRowNum = i + 1; isReprocessing = true; matchedBy = "barlo_temp_code"; break;
+          }
         }
       }
-    } catch (e) { console.warn(`[8A] readPipelineRefs error: ${e.message}`); }
+    } catch (e) { console.warn(`[8A] readPipelineAll lookup error: ${e.message}`); }
 
     if (isReprocessing) {
-      console.log(`[8A] Lead ${leadRef} EXISTS at row ${pipeRowNum} → RETRAITEMENT (UPDATE mode)`);
+      console.log(`[8A] Lead ${leadRef} EXISTS at row ${pipeRowNum} (matched by ${matchedBy}) → RETRAITEMENT (UPDATE mode)`);
       // Préserver les URLs images valides depuis l'existant (le cache 8E/8F décidera de regen ou pas)
       try {
         const existingRow = await gasGet("readPipelineRow", { row: pipeRowNum });
