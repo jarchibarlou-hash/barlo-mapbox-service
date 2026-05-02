@@ -6754,9 +6754,9 @@ app.post("/generate", async (req, res) => {
     //           → strict drift scoring (25%) → redraw overlays on top
     //           → fallback to deterministic if all variations fail
     // ═══════════════════════════════════════════════════════════════════════════
-    const SLIDE4_VARIATIONS = 2; // v72.93: reduced from 3 → 2 (saves 30-60s)
-    const SLIDE4_AI_POLISH_ENABLED = true; // v72.127: balanced photorealism with strict geometric preservation
-    const SLIDE4_DRIFT_THRESHOLD = 0.75; // v72.128: raised — photorealistic texture polish naturally causes 60-70% block drift; raised to 75% to let it pass while catching true geometric hallucinations (typically >85%)
+    const SLIDE4_VARIATIONS = Number(process.env.SLIDE4_VARIATIONS) || 3; // v74.8: 3 variations (more chances to pass strict drift)
+    const SLIDE4_AI_POLISH_ENABLED = process.env.SLIDE4_SKIP_POLISH !== "true"; // v74.8: env var toggle for rollback
+    const SLIDE4_DRIFT_THRESHOLD = Number(process.env.SLIDE4_DRIFT_THRESHOLD) || 0.50; // v74.8: tightened 0.75 → 0.50 (reject polishes that hallucinate urban context like green-grass-villas instead of dense Logpom)
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
@@ -6812,6 +6812,23 @@ app.post("/generate", async (req, res) => {
           "- NO warm sepia tint, NO golden hour, NO amber atmosphere, NO sun bloom",
           "- Cool-to-neutral color temperature throughout",
           "",
+          "URBAN CONTEXT — PRESERVE THE EXISTING TISSUE (CRITICAL, v74.8):",
+          "- The input shows the REAL urban tissue surrounding the parcel — keep it EXACTLY as is",
+          "- This is a DENSE African neighborhood (Cameroon/Douala): buildings are CLOSE TO EACH OTHER, sometimes touching, with narrow gaps and irregular orientations",
+          "- Do NOT replace the dense urban tissue with sparse, well-spaced suburban villas",
+          "- Do NOT add lawns, gardens, or large green areas between buildings where the input has continuous built fabric",
+          "- Do NOT regularize building positions onto a grid — preserve the natural irregularity of the input",
+          "- Building COUNT must match input EXACTLY — do not delete, merge, or split buildings",
+          "- Building POSITIONS must match input EXACTLY — buildings must remain at the same x,y coordinates",
+          "- Building HEIGHTS must match input EXACTLY — preserve the relative height hierarchy",
+          "- Surrounding ROAD NETWORK must match input EXACTLY — same street layout, same widths, same orientations",
+          "",
+          "GLOBAL TONE — STRICT (v74.8):",
+          "- Apply ONLY the building/ground material change (Mapbox grey blocks → off-white maquette buildings)",
+          "- Do NOT shift the global color temperature toward warm/beige/sepia — keep it cool-neutral",
+          "- The output should feel like a desaturated cool architectural render, not a warm sunset rendering",
+          "- If unsure, err on the side of being TOO close to the input — visual fidelity > stylistic flair",
+          "",
           "FORBIDDEN (zero tolerance):",
           "- Do NOT change the position, shape, height, or count of ANY building",
           "- Do NOT add NEW buildings, walls, structures, volumes, or pads",
@@ -6824,8 +6841,10 @@ app.post("/generate", async (req, res) => {
           "- Do NOT add ground elevation/socle under the parcel — flat at street level",
           "- Do NOT use painterly, sketchy, watercolor, or comic-book styles",
           "- Do NOT make it look like a real photograph — keep the clean architectural render aesthetic",
+          "- Do NOT invent suburban villas, garden lawns, or sparse housing where the input shows dense urban fabric",
+          "- Do NOT apply a global beige/sepia/warm tone — keep cool-neutral throughout",
           "",
-          "REFERENCE STYLE: clean architectural axonometric urban planning render — like a high-quality 3D model rendering from a professional architecture office, with sober materials, neutral lighting, and absolute geometric clarity.",
+          "REFERENCE STYLE: clean architectural axonometric urban planning render — like a high-quality 3D model rendering from a professional architecture office, with sober materials, neutral lighting, and absolute geometric clarity. The reference image shows the AESTHETIC to apply, NOT the urban tissue to replicate — your urban tissue must come from IMAGE 1.",
         ].join(" ");
         // v72.34: Use robust polish engine with retry + timeout
         // v73.2.7 : polish slide 5 axo avec image reference enhanced (multimodal)
