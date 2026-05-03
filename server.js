@@ -4991,14 +4991,19 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     }
     console.log(`│ Front edge: road_bearing=${rb.toFixed(0)}° → best match [${frontIdx}→${(frontIdx+1)%envM.length}] angleDiff=${bestAngleDiff.toFixed(1)}° len=${maxEdgeLen.toFixed(1)}m`);
   } else {
-    // ── FALLBACK : bord le plus long = front de rue ──
-    for (let i = 0; i < envelopeCoords.length; i++) {
-      const j = (i + 1) % envelopeCoords.length;
-      const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
-      const edgeLen = Math.sqrt(dx * dx + dy * dy);
-      if (edgeLen > maxEdgeLen) { maxEdgeLen = edgeLen; frontIdx = i; }
-    }
-    console.log(`│ Front edge: no road_bearing → longest edge [${frontIdx}→${(frontIdx+1)%envM.length}] len=${maxEdgeLen.toFixed(1)}m`);
+    // ── FALLBACK v74.9 : convention v73.1 — arête 0 = front (cohérent avec setbacks) ──
+    // Anciennement : bord le plus long. Bug pour parcelles quasi-carrées (orientait
+    // perpendiculaire à la rue, ex: BARLO-QU6C 14×15m → frontEdge = arête latérale
+    // au lieu de l'arête sur rue). Le user trace toujours le polygone en commençant
+    // par l'arête côté rue → arête 0 est fiable et déjà utilisée par les setbacks
+    // (5m sur arête 0, 3m sur les autres). On l'utilise aussi pour l'orientation
+    // du bâtiment, ce qui garantit commerce ALONG arête 0 (côté rue) en SPLIT.
+    frontIdx = 0;
+    const fj0 = 1 % envelopeCoords.length;
+    const dx0 = envM[fj0].x - envM[frontIdx].x;
+    const dy0 = envM[fj0].y - envM[frontIdx].y;
+    maxEdgeLen = Math.sqrt(dx0 * dx0 + dy0 * dy0);
+    console.log(`│ Front edge: no road_bearing → convention v73.1 (arête 0) [${frontIdx}→${fj0}] len=${maxEdgeLen.toFixed(1)}m`);
   }
   const fi = frontIdx, fj = (fi + 1) % envM.length;
   const sDx = envM[fj].x - envM[fi].x, sDy = envM[fj].y - envM[fi].y;
@@ -6756,7 +6761,7 @@ app.post("/generate", async (req, res) => {
     // ═══════════════════════════════════════════════════════════════════════════
     const SLIDE4_VARIATIONS = Number(process.env.SLIDE4_VARIATIONS) || 3; // v74.8: 3 variations (more chances to pass strict drift)
     const SLIDE4_AI_POLISH_ENABLED = process.env.SLIDE4_SKIP_POLISH !== "true"; // v74.8: env var toggle for rollback
-    const SLIDE4_DRIFT_THRESHOLD = Number(process.env.SLIDE4_DRIFT_THRESHOLD) || 0.50; // v74.8: tightened 0.75 → 0.50 (reject polishes that hallucinate urban context like green-grass-villas instead of dense Logpom)
+    const SLIDE4_DRIFT_THRESHOLD = Number(process.env.SLIDE4_DRIFT_THRESHOLD) || 0.30; // v74.9: tightened 0.50 → 0.30 (v74.8 still let through polishes that fully invented urban tissue; 30% forces near-perfect geometric fidelity, falls back to deterministic Hektar render otherwise)
     // v72.100: TIME BUDGET SUPPRIMÉ pour slide4 — polish toujours tenté
     // (si ça déborde Make.com, on aura au moins la version déterministe en fallback)
     const slide4Elapsed = Date.now() - t0;
