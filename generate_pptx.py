@@ -95,20 +95,28 @@ def clear_shape_text(shape):
 def get_font_size_for_slide(slide_num):
     """
     Return target font size matching premium document density.
-    v4.0 -- Calibrated from manual red-comment corrections.
+    v74.13 -- Calibration : textes refondus plus courts (lot P4) → on peut
+    remonter les tailles. Cible architecte conseil moderne, lisible.
+    Slides 8/11/14/16 spécifiquement remontées (feedback user "trop petits").
     """
     if slide_num == 3:
-        return Pt(11)    # Intro -- 4 paragraphs, moderate density
-    elif slide_num in [5, 6, 9, 12]:
-        return Pt(9)     # Dense analysis: context, scenario summaries
-    elif slide_num in [4, 7, 10, 11, 13, 14, 16, 19]:
-        return Pt(10)    # Standard dense: site, financial, risk, arbitrage, next steps
+        return Pt(12)    # Intro -- moderate density, slightly bumped
+    elif slide_num in [6, 9, 12]:
+        return Pt(11)    # Scenario summaries -- bumped from 9 (textes raccourcis)
+    elif slide_num == 5:
+        return Pt(11)    # Context -- bumped from 9
+    elif slide_num in [8, 11, 14]:
+        return Pt(12)    # Risk slides -- BUMPED from 10 (feedback "trop petits")
+    elif slide_num in [4, 7, 10, 13, 19]:
+        return Pt(11)    # Site, financial, next steps -- bumped from 10
+    elif slide_num == 16:
+        return Pt(12)    # Strategic arbitrage -- BUMPED from 10 (feedback "trop petit")
     elif slide_num in [17, 18]:
-        return Pt(9)     # 3-column layout -- very dense
+        return Pt(10)    # 3-column layout -- bumped from 9 (still dense but legible)
     elif slide_num == 20:
-        return Pt(11)    # Conclusion -- moderate density
+        return Pt(12)    # Conclusion -- bumped from 11
     else:
-        return None       # Keep template font (15-16pt) for slides 1, 2, 8_chart, 15
+        return None       # Keep template font (15-16pt) for slides 1, 2, 15
 
 def set_font_size_for_shape(shape, font_size_pt):
     """
@@ -268,7 +276,11 @@ def replace_shape_with_image(slide, shape, image_path, override_bounds=None, mai
             print(f"WARNING: Could not load image for aspect ratio: {e}", file=sys.stderr)
     slide.shapes.add_picture(image_path, left, top, width, height)
 
-def replace_shape_with_multiple_images(slide, shape, image_paths):
+def replace_shape_with_multiple_images(slide, shape, image_paths, maintain_aspect_ratio=True):
+    """v74.13 — par défaut maintain_aspect_ratio=True pour eviter la distorsion
+    des charts (radar, barres, jauge) inseres cote-a-cote. Calcule pour chaque
+    image la taille qui rentre dans la cellule (img_width × height) en preservant
+    le ratio source, puis centre verticalement dans la cellule disponible."""
     valid_paths = [p for p in image_paths if p and os.path.exists(p)]
     if not valid_paths:
         print("WARNING: No valid images for multi-image replacement", file=sys.stderr)
@@ -284,7 +296,29 @@ def replace_shape_with_multiple_images(slide, shape, image_paths):
     sp_element.getparent().remove(sp_element)
     for i, img_path in enumerate(valid_paths):
         img_left = left + i * (img_width + gap)
-        slide.shapes.add_picture(img_path, img_left, top, img_width, height)
+        cell_w = img_width
+        cell_h = height
+        cell_top = top
+        if maintain_aspect_ratio:
+            try:
+                from PIL import Image
+                pil = Image.open(img_path)
+                src_w, src_h = pil.size
+                if src_h > 0 and src_w > 0:
+                    ratio = src_w / src_h
+                    target_w = cell_w
+                    target_h = int(target_w / ratio)
+                    if target_h > cell_h:
+                        target_h = cell_h
+                        target_w = int(target_h * ratio)
+                    # Centrer verticalement dans la cellule disponible
+                    cell_top = top + (cell_h - target_h) // 2
+                    img_left = img_left + (cell_w - target_w) // 2
+                    cell_w = target_w
+                    cell_h = target_h
+            except Exception as e:
+                print(f"WARNING: Could not preserve aspect ratio for {img_path}: {e}", file=sys.stderr)
+        slide.shapes.add_picture(img_path, img_left, cell_top, cell_w, cell_h)
 
 # -------------------------------------------------------------
 # SLIDE 15 -- COMPARATIVE TABLE (FULL SLIDE)
@@ -356,9 +390,10 @@ def _insert_risk_charts_fallback(slide, slide_num, chart_paths):
         return False
     print(f"Found target shape for risk charts on slide {slide_num}: {target_shape.name}", file=sys.stderr)
     if len(chart_image_paths) == 1:
-        replace_shape_with_image(slide, target_shape, chart_image_paths[0])
+        # v74.13 : preserve aspect ratio sur charts (homothecie OK)
+        replace_shape_with_image(slide, target_shape, chart_image_paths[0], maintain_aspect_ratio=True)
     else:
-        replace_shape_with_multiple_images(slide, target_shape, chart_image_paths)
+        replace_shape_with_multiple_images(slide, target_shape, chart_image_paths, maintain_aspect_ratio=True)
     return True
 
 # -------------------------------------------------------------
@@ -458,10 +493,11 @@ def assemble_pptx(data, template_path, output_path):
                     chart_image_paths = [chart_paths.get(k) for k in chart_keys]
                     chart_image_paths = [p for p in chart_image_paths if p]
                     if len(chart_image_paths) == 1:
-                        replace_shape_with_image(slide, shape, chart_image_paths[0])
+                        # v74.13 : preserve aspect ratio sur charts
+                        replace_shape_with_image(slide, shape, chart_image_paths[0], maintain_aspect_ratio=True)
                         chart_inserted = True
                     elif len(chart_image_paths) > 1:
-                        replace_shape_with_multiple_images(slide, shape, chart_image_paths)
+                        replace_shape_with_multiple_images(slide, shape, chart_image_paths, maintain_aspect_ratio=True)
                         chart_inserted = True
                     break
             if not chart_inserted:
@@ -536,9 +572,10 @@ def assemble_pptx(data, template_path, output_path):
                     chart_image_paths = [chart_paths.get(k) for k in chart_keys]
                     chart_image_paths = [p for p in chart_image_paths if p]
                     if len(chart_image_paths) == 1:
-                        replace_shape_with_image(slide, shape, chart_image_paths[0])
+                        # v74.13 : preserve aspect ratio sur charts
+                        replace_shape_with_image(slide, shape, chart_image_paths[0], maintain_aspect_ratio=True)
                     elif len(chart_image_paths) > 1:
-                        replace_shape_with_multiple_images(slide, shape, chart_image_paths)
+                        replace_shape_with_multiple_images(slide, shape, chart_image_paths, maintain_aspect_ratio=True)
                     else:
                         clear_shape_text(shape)
                     continue
