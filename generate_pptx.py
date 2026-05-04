@@ -417,17 +417,24 @@ def _clean_phasage_text(text):
 # -------------------------------------------------------------
 
 def _apply_text_to_shape(shape, placeholder, text, slide_num):
-    """Replace placeholder text, set font size, enable auto-shrink."""
+    """v74.14 — calibration auto-shrink :
+    - Slides 8/11/14/16 (textes refondus courts) : 95% min, presque pas de shrink → on garde les 12pt
+    - Slides 5/6/9/12 : 85% min (un peu plus serre)
+    - Slides 17/18 (3-col tres dense) : 80% min
+    - Autres : 90% min standard
+    """
     replace_text_in_shape(shape, placeholder, text)
     font_size = get_font_size_for_slide(slide_num)
     if font_size is not None:
         set_font_size_for_shape(shape, font_size)
-    # More aggressive shrink for very dense slides (9pt text)
-    # v72.87: 75% min instead of 70% to avoid over-truncation on slide 17/18 col 3
-    if slide_num in [5, 6, 9, 12, 17, 18]:
-        enable_auto_shrink(shape, fontScale=75000)  # 75% min = ~6.75pt from 9pt
+    if slide_num in [8, 11, 14, 16]:
+        enable_auto_shrink(shape, fontScale=95000)  # 95% min — quasi pas de shrink, garantit la 12pt
+    elif slide_num in [17, 18]:
+        enable_auto_shrink(shape, fontScale=80000)  # 80% — 3-col dense
+    elif slide_num in [5, 6, 9, 12]:
+        enable_auto_shrink(shape, fontScale=85000)  # 85% — scenario sommaires
     else:
-        enable_auto_shrink(shape, fontScale=80000)  # 80% standard
+        enable_auto_shrink(shape, fontScale=90000)  # 90% standard (vs 80% avant)
 
 # -------------------------------------------------------------
 # MAIN ASSEMBLY
