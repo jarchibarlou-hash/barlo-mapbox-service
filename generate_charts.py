@@ -740,6 +740,156 @@ def generate_risk_panel(risk_scores: dict, recommendation_score: float,
 # ═══════════════════════════════════════════════════════════════
 # MAIN — Génération complète depuis le JSON d'entrée
 # ═══════════════════════════════════════════════════════════════
+def _format_money(amount):
+    """v74.15 — formatte un montant FCFA en M (millions) ou k (milliers)."""
+    a = float(amount or 0)
+    if a >= 1_000_000:
+        return f"{a / 1_000_000:.0f} M"
+    if a >= 1_000:
+        return f"{a / 1_000:.0f} k"
+    return f"{a:.0f}"
+
+
+def generate_cost_calc_visual(scenario: dict, label: str, output_path: str):
+    """v74.15 — Visualisation graphique du calcul SDP × coût/m² = total.
+    3 blocs numerotés côte à côte avec gros chiffres et icônes opérateurs.
+    Remplace la prose 'Le calcul s'articule comme suit ...'.
+    """
+    sdp = scenario.get('sdp_m2', 0)
+    cost_m2 = scenario.get('cost_m2_fcfa', 0)
+    cost_total = scenario.get('cost_total_fcfa', 0)
+    accent = COLORS.get(label, COLORS['dark'])
+
+    fig, axes = plt.subplots(1, 5, figsize=(11, 3),
+                             gridspec_kw={'width_ratios': [3, 0.4, 3, 0.4, 3.2]})
+    fig.patch.set_facecolor('white')
+
+    # Bloc 1 : SDP
+    ax = axes[0]
+    ax.set_facecolor(COLORS['light'])
+    ax.text(0.5, 0.65, f"{sdp:,.0f}".replace(',', ' '), ha='center', va='center',
+            fontsize=32, fontweight='bold', color=COLORS['dark'])
+    ax.text(0.5, 0.30, 'm² SDP', ha='center', va='center',
+            fontsize=11, color=COLORS['muted'])
+    ax.text(0.5, 0.08, 'Surface de Plancher', ha='center', va='center',
+            fontsize=8, color=COLORS['muted'], style='italic')
+    ax.set_xticks([]); ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_color(COLORS['grid'])
+        spine.set_linewidth(0.8)
+
+    # Opérateur ×
+    axes[1].text(0.5, 0.5, '×', ha='center', va='center',
+                 fontsize=36, color=accent, fontweight='bold')
+    axes[1].axis('off')
+
+    # Bloc 2 : Coût/m²
+    ax = axes[2]
+    ax.set_facecolor(COLORS['light'])
+    ax.text(0.5, 0.65, _format_money(cost_m2), ha='center', va='center',
+            fontsize=32, fontweight='bold', color=COLORS['dark'])
+    ax.text(0.5, 0.30, 'FCFA / m²', ha='center', va='center',
+            fontsize=11, color=COLORS['muted'])
+    ax.text(0.5, 0.08, 'Coût marché local', ha='center', va='center',
+            fontsize=8, color=COLORS['muted'], style='italic')
+    ax.set_xticks([]); ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_color(COLORS['grid'])
+        spine.set_linewidth(0.8)
+
+    # Opérateur =
+    axes[3].text(0.5, 0.5, '=', ha='center', va='center',
+                 fontsize=36, color=accent, fontweight='bold')
+    axes[3].axis('off')
+
+    # Bloc 3 : Total (mis en avant)
+    ax = axes[4]
+    ax.set_facecolor(accent)
+    ax.text(0.5, 0.65, _format_money(cost_total), ha='center', va='center',
+            fontsize=34, fontweight='bold', color='white')
+    ax.text(0.5, 0.30, 'FCFA', ha='center', va='center',
+            fontsize=11, color='white')
+    ax.text(0.5, 0.08, 'Coût total estimé', ha='center', va='center',
+            fontsize=8, color='white', style='italic')
+    ax.set_xticks([]); ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    fig.suptitle(f"Calcul du coût total — Scénario {label}",
+                 fontsize=12, fontweight='bold', color=COLORS['dark'], y=0.98)
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.85, bottom=0.05, wspace=0.05)
+
+    _save(fig, output_path)
+
+
+def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value: float, output_path: str):
+    """v74.15 — Jauge horizontale : où se positionne le coût scénario par rapport au budget client.
+    Coloration : vert (dans budget), orange (limite), rouge (dépassement).
+    """
+    cost_total = float(scenario.get('cost_total_fcfa', 0) or 0)
+    budget = float(budget_fcfa_value or 0)
+    if budget <= 0:
+        budget = max(cost_total * 1.1, 1)
+
+    # Calcul de la position
+    ratio = cost_total / budget if budget > 0 else 0
+    # Échelle : 0 à 150% du budget
+    scale_max = max(1.5 * budget, cost_total * 1.05)
+
+    # Couleur selon position
+    if ratio <= 0.95:
+        bar_color = COLORS['green']
+        label_pos = 'Dans le budget'
+    elif ratio <= 1.05:
+        bar_color = COLORS['orange']
+        label_pos = 'En limite de budget'
+    else:
+        bar_color = COLORS['red']
+        label_pos = 'Hors budget'
+
+    fig, ax = plt.subplots(figsize=(11, 2.6))
+    fig.patch.set_facecolor('white')
+
+    # Track de fond
+    bar_y = 0.5
+    ax.barh([bar_y], [scale_max], height=0.42, color=COLORS['grid'], edgecolor='none')
+    # Coût scénario
+    ax.barh([bar_y], [cost_total], height=0.42, color=bar_color, edgecolor='none')
+
+    # Marker budget client (ligne verticale)
+    ax.axvline(x=budget, color=COLORS['dark'], linewidth=2.5, linestyle='--', zorder=5)
+    ax.text(budget, 1.02, f"Budget client\n{_format_money(budget)} FCFA",
+            ha='center', va='bottom', fontsize=9.5, fontweight='bold',
+            color=COLORS['dark'])
+
+    # Marker coût scénario (texte au-dessus de la barre)
+    ax.text(cost_total / 2, bar_y, f"{_format_money(cost_total)} FCFA",
+            ha='center', va='center', fontsize=14, fontweight='bold',
+            color='white' if ratio > 0.4 else COLORS['dark'])
+
+    # Label position en bas à droite
+    ax.text(scale_max * 0.99, 0.0, label_pos,
+            ha='right', va='top', fontsize=10.5, fontweight='bold',
+            color=bar_color)
+
+    # Pourcentage du budget
+    pct = ratio * 100
+    ax.text(scale_max * 0.99, 0.18, f"{pct:.0f} % du budget",
+            ha='right', va='top', fontsize=9, color=COLORS['muted'])
+
+    ax.set_xlim(0, scale_max)
+    ax.set_ylim(-0.1, 1.4)
+    ax.set_yticks([])
+    ax.set_xticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_title(f"Position du coût vs budget — Scénario {label}",
+                 pad=12, **FONT_TITLE)
+
+    _save(fig, output_path)
+
+
 def generate_all_charts(data: dict, output_dir: str) -> dict:
     """
     data : payload JSON complet de /generate-pptx
@@ -789,6 +939,45 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
         chart_paths['cost_breakdown'] = pie_path
         print(f"[CHARTS v2.0] Ventilation coûts scénario {rec_label}: "
               f"coût={rec_sc.get('cost_total_fcfa', 0)}", file=sys.stderr)
+
+    # v74.15 — Charts financiers PAR SCENARIO (slides 7/10/13)
+    # 3 charts pour chacun A, B, C : calcul, donut ventilation, jauge vs budget
+    budget_value = 0
+    try:
+        # parser budget_fcfa string ex "33M FCFA" → 33_000_000
+        budget_str = str(data.get('budget_fcfa', '') or '').upper()
+        import re
+        m = re.search(r'(\d+(?:[.,]\d+)?)\s*M', budget_str)
+        if m:
+            budget_value = float(m.group(1).replace(',', '.')) * 1_000_000
+    except Exception:
+        pass
+
+    for label in ['A', 'B', 'C']:
+        sc = scenarios.get(label, {})
+        if not sc or not sc.get('cost_total_fcfa'):
+            continue
+        # 1. Calcul visuel SDP × cost/m² = total
+        calc_path = os.path.join(output_dir, f'scenario_{label}_cost_calc.png')
+        try:
+            generate_cost_calc_visual(sc, label, calc_path)
+            chart_paths[f'scenario_{label}_cost_calc'] = calc_path
+        except Exception as e:
+            print(f"[CHARTS v2.0] Erreur cost_calc {label}: {e}", file=sys.stderr)
+        # 2. Donut ventilation pour ce scenario
+        donut_path = os.path.join(output_dir, f'scenario_{label}_cost_donut.png')
+        try:
+            generate_cost_breakdown(sc, donut_path)
+            chart_paths[f'scenario_{label}_cost_donut'] = donut_path
+        except Exception as e:
+            print(f"[CHARTS v2.0] Erreur cost_donut {label}: {e}", file=sys.stderr)
+        # 3. Jauge vs budget client
+        gauge_path = os.path.join(output_dir, f'scenario_{label}_budget_gauge.png')
+        try:
+            generate_budget_position_gauge(sc, label, budget_value, gauge_path)
+            chart_paths[f'scenario_{label}_budget_gauge'] = gauge_path
+        except Exception as e:
+            print(f"[CHARTS v2.0] Erreur budget_gauge {label}: {e}", file=sys.stderr)
 
     # Timeline (slide 19)
     if rec_sc:

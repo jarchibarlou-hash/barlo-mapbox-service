@@ -629,6 +629,42 @@ def assemble_pptx(data, template_path, output_path):
             Emu(5760720), Emu(3017520), Emu(2926080), Emu(1920240))
         print("Inserted cost breakdown chart on slide 17 (bottom-right)", file=sys.stderr)
 
+    # ─── v74.15 SLIDES 7/10/13 — CHARTS FINANCIERS PAR SCENARIO ───────────────
+    # 3 charts par slide pour aerer la prose et illustrer le calcul + budget :
+    #   1. Calcul visuel (SDP × cost/m² = total) — bande horizontale en bas
+    #   2. Jauge budget — bande horizontale au-dessus
+    #   3. Donut ventilation — petit dans la marge droite
+    # Slide dimensions : 10" × 5.62" (9144000 × 5143500 EMU)
+    # Layout ciblé :
+    #   - Texte en haut : 0-3" (top de slide)
+    #   - Donut a droite : 6.5"-9.8" largeur, 0.6"-3" top
+    #   - Jauge budget en bas : 0.3"-9.7" largeur, 3.4"-4.3" top
+    #   - Calcul visuel encore plus bas : 0.3"-9.7" largeur, 4.4"-5.4" top
+    FINANCIAL_SLIDE_MAP = {7: 'A', 10: 'B', 13: 'C'}
+    for slide_num_fin, label_fin in FINANCIAL_SLIDE_MAP.items():
+        if len(slides_list) < slide_num_fin:
+            continue
+        slide_fin = slides_list[slide_num_fin - 1]
+        donut = chart_paths.get(f'scenario_{label_fin}_cost_donut')
+        gauge = chart_paths.get(f'scenario_{label_fin}_budget_gauge')
+        calc = chart_paths.get(f'scenario_{label_fin}_cost_calc')
+        # Donut a droite (haut)
+        if donut and os.path.exists(donut):
+            slide_fin.shapes.add_picture(donut,
+                Emu(5943600), Emu(548640),  # left=6.5", top=0.6"
+                Emu(2880000), Emu(2240000)) # ~3.15" × 2.45"
+        # Jauge budget en bas
+        if gauge and os.path.exists(gauge):
+            slide_fin.shapes.add_picture(gauge,
+                Emu(274320), Emu(3109200),  # left=0.3", top=3.4"
+                Emu(8595360), Emu(823000))  # ~9.4" × 0.9"
+        # Calcul visuel tout en bas
+        if calc and os.path.exists(calc):
+            slide_fin.shapes.add_picture(calc,
+                Emu(274320), Emu(4023360),  # left=0.3", top=4.4"
+                Emu(8595360), Emu(960000))  # ~9.4" × 1.05"
+        print(f"v74.15: Inserted financial charts on slide {slide_num_fin} ({label_fin})", file=sys.stderr)
+
     # Slide 17 -- Budget comparison table (bottom-left, next to pie chart)
     # v72.92: Repositioned to bottom-left to coexist with pie chart on right
     # Table: Scenario | SDP | Cout/m2 marche | Cout/m2 ajuste | Cout total | Label
