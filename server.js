@@ -5255,13 +5255,12 @@ function buildCommercePolygon(envelopeCoords, splitLayout, roadBearing) {
       if (score < bestScore) { bestScore = score; frontIdx = i; }
     }
   } else {
-    let maxLen = 0;
-    for (let i = 0; i < envM.length; i++) {
-      const j = (i + 1) % envM.length;
-      const dx = envM[j].x - envM[i].x, dy = envM[j].y - envM[i].y;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len > maxLen) { maxLen = len; frontIdx = i; }
-    }
+    // v74.10 — FIX : convention v73.1 (arête 0 = côté rue), cohérent avec
+    // computeMassingPolygon et les setbacks. Sans ce fix, le commerce restait
+    // placé sur l'arête la plus longue → perpendiculaire à la rue pour les
+    // parcelles quasi-carrées. Désormais le commerce est COLLÉ à arête 0
+    // (côté rue) sur tous les scénarios SPLIT.
+    frontIdx = 0;
   }
   const fi = frontIdx, fj = (fi + 1) % envM.length;
   const sDx = envM[fj].x - envM[fi].x, sDy = envM[fj].y - envM[fi].y;
