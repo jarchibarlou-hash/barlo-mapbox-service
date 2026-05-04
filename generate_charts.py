@@ -768,7 +768,8 @@ def generate_cost_calc_visual(scenario: dict, label: str, output_path: str):
         cost_m2 = cost_total / sdp
     accent = COLORS.get(label, COLORS['dark'])
 
-    fig, axes = plt.subplots(1, 5, figsize=(11, 3),
+    # v74.17 — figsize ratio 9:1.3 ≈ 6.9 (match insertion pour zero distorsion)
+    fig, axes = plt.subplots(1, 5, figsize=(13.8, 2),
                              gridspec_kw={'width_ratios': [3, 0.4, 3, 0.4, 3.2]})
     fig.patch.set_facecolor('white')
 
@@ -855,7 +856,8 @@ def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value
         bar_color = COLORS['red']
         label_pos = 'Hors budget'
 
-    fig, ax = plt.subplots(figsize=(11, 2.6))
+    # v74.17 — figsize ratio 9:1.0 = 9 (match insertion pour zero distorsion)
+    fig, ax = plt.subplots(figsize=(13.5, 1.5))
     fig.patch.set_facecolor('white')
 
     # Track de fond

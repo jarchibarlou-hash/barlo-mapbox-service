@@ -7782,19 +7782,67 @@ function buildTemplateTexts(flat, scenarios) {
     const fp = f(`${sc}_fp`);
     const levels = f(`${sc}_levels`);
     const sdp = f(`${sc}_sdp`);
-    const pilotisDesc = f(`${sc}_pilotis_desc`) || "sans pilotis";
-    const typoDesc = f(`${sc}_typology_desc`) || "bloc compact";
-    const configJustif = f(`${sc}_config_justif`) || `Configuration optimisée pour le terrain`;
+    const hasPilotis = String(f(`${sc}_has_pilotis`)).toLowerCase() === "true";
+    const layoutMode = f(`${sc}_layout`) || f("layout_mode") || "SUPERPOSE";
     const unitSummary = f(`${sc}_unit_summary`);
-    const m2Logt = f(`${sc}_m2_par_logt`);
     const units = f(`${sc}_units`);
-    const cosPct = f(`${sc}_cos_pct`);
-    const sdpMax = f("site_sdp_max");
-    const standing = f("standing_level").toLowerCase();
     const habTotal = f(`${sc}_hab_m2_total`);
-    const circRatio = f(`${sc}_circulation_ratio`) || "15 à 20";
-    // v74.12 — refonte ton "architecte conseil moderne" : phrases courtes, bold sur chiffres clés, démonstration plutôt que description
-    return `Le **Scénario ${sc} (${role})** ${philosophie[sc]}.\n\n**${units} unités** en usage mixte, **R+${levels}** sur **${fp} m² d'emprise** = **${sdp} m² SDP**.\n\n${typoDesc}, ${pilotisDesc}. ${configJustif}\n\nProgramme détaillé :\n- ${unitSummary}\n- Surface utile par logement : **${m2Logt} m²** (${qualifSurface(m2Logt)} pour un standing ${standing})\n- Surface habitable totale : **${habTotal} m²** (SDP nette des circulations, estimées ${circRatio} %)\n\nImplantation et impact :\n- Stationnement : ${parkingText(sc)}\n- Gabarit ${qualifGabarit(levels)}\n- COS utilisé : **${cosPct} %** du COS autorisé (${sdp} m² sur ${sdpMax} théoriques)`;
+    const siteArea = parseInt(f("site_area")) || 0;
+    const fpNum = parseInt(fp) || 0;
+    const mitoyennete = parseInt(f("retrait_mitoyennete")) || 0;
+    const fpPct = siteArea > 0 ? Math.round(fpNum / siteArea * 100) : 0;
+    // ── Narrative architecturale (parti, pilotis, mitoyenneté) — vocabulaire client ──
+    let narrativeArchi = "";
+    if (layoutMode === "SPLIT_AV_AR" && hasPilotis) {
+      narrativeArchi = `Le bâti se découpe en **deux volumes distincts** : un **commerce en bandeau** plaqué contre la rue pour la visibilité, et un **bâtiment de logements en retrait sur pilotis**. Le rez-de-chaussée libéré sous les logements accueille le stationnement et les circulations — la cour reste dégagée et la lumière naturelle pénètre au sol.`;
+    } else if (layoutMode === "SPLIT_AV_AR") {
+      narrativeArchi = `Le bâti se découpe en **deux volumes distincts** : un **commerce côté rue** et un **bâtiment de logements en retrait**. Cette dissociation maximise la visibilité commerciale et préserve l'intimité des logements.`;
+    } else if (hasPilotis) {
+      narrativeArchi = `Le bâtiment est posé **sur pilotis** : le rez-de-chaussée est libéré pour le stationnement, la circulation et la lumière, les logements occupent les étages.`;
+    } else {
+      narrativeArchi = `Le bâtiment est un **volume unique compact** organisé par superposition : commerce au rez-de-chaussée et logement aux étages. Cette typologie offre le **meilleur coût au m²**, idéal pour un budget contraint.`;
+    }
+    // ── Contrainte mitoyenneté & climat ──
+    let contrainteText;
+    if (mitoyennete >= 2) {
+      contrainteText = `\n\nLa **mitoyenneté sur ${mitoyennete} côtés** impose des murs latéraux aveugles, compensés par des **ouvertures généreuses** sur les façades libres (avant et arrière) — indispensable pour la **ventilation traversante** en climat tropical.`;
+    } else if (mitoyennete === 1) {
+      contrainteText = `\n\nLa mitoyenneté sur **1 côté** laisse trois façades dégagées : conditions favorables pour la lumière et la ventilation traversante.`;
+    } else {
+      contrainteText = `\n\nLes **quatre façades sont dégagées** : conditions optimales pour la lumière naturelle et la ventilation traversante en climat tropical.`;
+    }
+    // ── Programme en bullets : parser "1×COMMERCE(50m²) + 2×T3(65m²)" ──
+    const TYPE_LABEL = { COMMERCE: "Commerce", T1: "studio T1", T2: "logement T2", T3: "logement T3", T4: "logement T4", T5: "logement T5" };
+    const unitBullets = (unitSummary || "")
+      .split(/\s*\+\s*/)
+      .map(part => {
+        const m = part.match(/(\d+)\s*[×x*]\s*([A-Z0-9]+)\s*\(\s*(\d+)\s*m/i);
+        if (!m) return part ? `- ${part}` : "";
+        const count = parseInt(m[1]);
+        const type = m[2].toUpperCase();
+        const m2 = m[3];
+        const label = TYPE_LABEL[type] || type;
+        const isCommerce = type === "COMMERCE";
+        const plural = count > 1 ? "s" : "";
+        const each = count > 1 ? " chacun" : "";
+        const placement = isCommerce ? "au rez-de-chaussée, ouvert sur la rue" : "aux étages";
+        return `- **${count} ${label}${plural}** de **${m2} m²**${each} ${placement}`;
+      })
+      .filter(Boolean)
+      .join("\n");
+    // ── Empreinte au sol — pilotis libère le sol ──
+    let empriseText;
+    if (hasPilotis && layoutMode === "SPLIT_AV_AR") {
+      const commerceArea = parseInt(f(`${sc}_commerce_size_m2`)) || 50;
+      const commercePct = siteArea > 0 ? Math.round(commerceArea / siteArea * 100) : 0;
+      empriseText = `**Empreinte au sol** : **${commercePct} %** du terrain (uniquement le volume commerce ; le bâtiment de logements est sur pilotis, donc le sol reste libre dessous)`;
+    } else if (hasPilotis) {
+      empriseText = `**Empreinte au sol** : **0 %** du terrain (bâtiment intégralement sur pilotis — le sol reste libre pour parking, circulation, jardin)`;
+    } else {
+      empriseText = `**Empreinte au sol** : **${fpPct} %** du terrain (${fpNum} m² bâti sur ${siteArea} m² disponibles)`;
+    }
+    // v74.16 — refonte narrative architecte conseil + bullets par unité + emprise au sol % (no COS, no jargon)
+    return `Le **Scénario ${sc} (${role})** ${philosophie[sc]}.\n\n**${units} unités** sur **${sdp} m² SDP** — bâtiment **R+${levels}**, surface habitable totale **${habTotal} m²**.\n\n${narrativeArchi}${contrainteText}\n\n**Programme détaillé :**\n${unitBullets}\n\n**Implantation :**\n- ${empriseText}\n- Gabarit ${qualifGabarit(levels)}\n- Stationnement : ${parkingText(sc)}`;
   }
   // ── Scenario financial builder (slides 7/10/13) ──
   // Directive BARLO : "EXPLIQUER DE FAÇON ACCESSIBLE LE RAISONNEMENT DES CALCULS",

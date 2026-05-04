@@ -629,37 +629,60 @@ def assemble_pptx(data, template_path, output_path):
             Emu(5760720), Emu(3017520), Emu(2926080), Emu(1920240))
         print("Inserted cost breakdown chart on slide 17 (bottom-right)", file=sys.stderr)
 
-    # ─── v74.16 SLIDES 7/10/13 — CHARTS FINANCIERS (layout corrige) ───────────
-    # Push 2 v24 a montre :
-    #   - Donut a droite ECRASE le texte (cut off "marche economique a D...")
-    #   - Cost calc affichait 0 FCFA/m² (bug data : champ manquant)
-    #   - Gauge titre serre contre la bordure
-    #   - Fond charts blanc visible (rendu non integre)
-    # Decision v74.16 : DROP le donut sur slides 7/10/13 (la ventilation
-    # est deja listee dans le texte avec %) — libere la marge droite.
-    # Garde uniquement : calc visuel + gauge budget, full-width en bas.
-    # Layout ciblé :
-    #   - Texte : 0-3" (top, auto-shrink)
-    #   - Calc visuel : 3.0"-4.0" full width
-    #   - Gauge budget : 4.1"-5.2" full width
+    # ─── v74.17 SLIDES 7/10/13 — DISCIPLINE LAYOUT ────────────────────────────
+    # v25 a montre que le shape TEXTE prend toute la slide (~5.5" haut),
+    # donc le texte affiche son contenu jusqu'a ~4.2" et SE CHEVAUCHE
+    # avec mes charts a 3.0" et 4.1". Fix : RESIZE le shape texte
+    # programmatiquement a 2.5" haut → 0.5"-3.0" → libere 3.0"-5.5" net.
+    #
+    # Plus : calc figsize=(11,3) ratio 3.67 inserer dans 9x1 ratio 9 → 2.4x
+    # de stretch horizontal. v74.17 : ajuste figsize ET insertion pour
+    # matcher 1:1 (zero distorsion).
+    #
+    # Layout cible final (zero overlap, zero distorsion) :
+    #   - Title (template) : 0-0.5"
+    #   - Texte (resize) : 0.5"-3.0" (h=2.5")
+    #   - Calc visuel : 3.1"-4.4" (h=1.3", figsize 11×1.6 ratio 6.9 → insert 9.0×1.3 ratio 6.9 ✓)
+    #   - Gauge budget : 4.5"-5.5" (h=1.0", figsize 11×1.4 ratio 7.9 → insert 9.0×1.0 ratio 9.0 close)
     FINANCIAL_SLIDE_MAP = {7: 'A', 10: 'B', 13: 'C'}
     for slide_num_fin, label_fin in FINANCIAL_SLIDE_MAP.items():
         if len(slides_list) < slide_num_fin:
             continue
         slide_fin = slides_list[slide_num_fin - 1]
+        # ─── ETAPE 1 : Resize le shape texte principal (le plus grand non-titre) ──
+        text_shapes = []
+        for shp in slide_fin.shapes:
+            try:
+                if not shp.has_text_frame:
+                    continue
+                if shp.top is None or shp.top < Emu(700000):  # skip title (top<0.77")
+                    continue
+                text_shapes.append((shp.height, shp))
+            except Exception:
+                continue
+        if text_shapes:
+            text_shapes.sort(key=lambda t: t[0], reverse=True)
+            main_text = text_shapes[0][1]
+            try:
+                main_text.height = Emu(2286000)  # 2.5"
+                main_text.top = Emu(457200)      # 0.5"
+                print(f"v74.17 slide {slide_num_fin}: text shape resized to top=0.5\" h=2.5\"", file=sys.stderr)
+            except Exception as e:
+                print(f"v74.17 slide {slide_num_fin}: failed to resize text shape: {e}", file=sys.stderr)
+        # ─── ETAPE 2 : Inserer les 2 charts dans la zone bottom libere ──
         gauge = chart_paths.get(f'scenario_{label_fin}_budget_gauge')
         calc = chart_paths.get(f'scenario_{label_fin}_cost_calc')
-        # Calcul visuel : milieu/bas, full-width
+        # Calc visuel : top=3.1", left=0.5", w=9.0", h=1.3"
         if calc and os.path.exists(calc):
             slide_fin.shapes.add_picture(calc,
-                Emu(457200), Emu(2743200),  # left=0.5", top=3.0"
-                Emu(8229600), Emu(914400))  # 9.0" × 1.0"
-        # Jauge budget : sous le calc, full-width
+                Emu(457200), Emu(2834640),  # left=0.5", top=3.1"
+                Emu(8229600), Emu(1188720)) # 9.0" × 1.3"
+        # Gauge budget : top=4.5", left=0.5", w=9.0", h=1.0"
         if gauge and os.path.exists(gauge):
             slide_fin.shapes.add_picture(gauge,
-                Emu(457200), Emu(3743200),  # left=0.5", top=4.1"
-                Emu(8229600), Emu(1005840)) # 9.0" × 1.1"
-        print(f"v74.16: Inserted financial charts (calc+gauge) on slide {slide_num_fin} ({label_fin})", file=sys.stderr)
+                Emu(457200), Emu(4114800),  # left=0.5", top=4.5"
+                Emu(8229600), Emu(914400))  # 9.0" × 1.0"
+        print(f"v74.17: Inserted financial charts on slide {slide_num_fin} ({label_fin})", file=sys.stderr)
 
     # Slide 17 -- Budget comparison table (bottom-left, next to pie chart)
     # v72.92: Repositioned to bottom-left to coexist with pie chart on right
