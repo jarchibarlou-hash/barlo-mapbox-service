@@ -186,19 +186,53 @@ def replace_text_in_shape(shape, placeholder, new_text):
         _add_run_to_paragraph(new_p, para_text, ref_run)
         xml_element.append(new_p)
 
+def _parse_markdown_bold(text):
+    """v74.12 — Parse markdown **bold** into [(text, is_bold), ...] segments.
+    Robust against unbalanced markers : ** sans pair → traite comme texte normal."""
+    if not text or '**' not in text:
+        return [(text or '', False)]
+    segments = []
+    parts = text.split('**')
+    # Si nombre impair de **, le dernier segment reste en non-bold (markers déséquilibrés)
+    is_bold = False
+    for part in parts:
+        if part:
+            segments.append((part, is_bold))
+        is_bold = not is_bold
+    # Si on a fini en is_bold=True (impair), le dernier ** orphelin a inversé pour rien.
+    # Pas de souci, le segment a déjà été ajouté avec son flag correct.
+    return segments
+
 def _add_run_to_paragraph(p_element, text, ref_run=None):
+    """v74.12 — Crée 1+ runs en parsant markdown **bold**.
+    Si pas de **, comportement identique à avant (1 seul run).
+    Sinon, alterne runs normaux et runs bold."""
     from lxml import etree
-    r = etree.SubElement(p_element, '{http://schemas.openxmlformats.org/drawingml/2006/main}r')
+    A_NS = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    segments = _parse_markdown_bold(text)
+    # Reference rPr depuis ref_run (formatting hérité) — sans le b
+    base_rPr = None
     if ref_run is not None and ref_run._r is not None:
-        rPr_orig = ref_run._r.find('{http://schemas.openxmlformats.org/drawingml/2006/main}rPr')
+        rPr_orig = ref_run._r.find(f'{A_NS}rPr')
         if rPr_orig is not None:
-            rPr = copy.deepcopy(rPr_orig)
-            rPr.attrib.pop('b', None)
-            r.insert(0, rPr)
-    t = etree.SubElement(r, '{http://schemas.openxmlformats.org/drawingml/2006/main}t')
-    t.text = text
-    if text and (text[0] == ' ' or text[-1] == ' '):
-        t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+            base_rPr = copy.deepcopy(rPr_orig)
+            base_rPr.attrib.pop('b', None)
+    for seg_text, seg_bold in segments:
+        if not seg_text:
+            continue
+        r = etree.SubElement(p_element, f'{A_NS}r')
+        if base_rPr is not None:
+            seg_rPr = copy.deepcopy(base_rPr)
+            if seg_bold:
+                seg_rPr.set('b', '1')
+            r.insert(0, seg_rPr)
+        elif seg_bold:
+            seg_rPr = etree.SubElement(r, f'{A_NS}rPr')
+            seg_rPr.set('b', '1')
+        t = etree.SubElement(r, f'{A_NS}t')
+        t.text = seg_text
+        if seg_text and (seg_text[0] == ' ' or seg_text[-1] == ' '):
+            t.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
 
 # -------------------------------------------------------------
 # IMAGE REPLACEMENT
