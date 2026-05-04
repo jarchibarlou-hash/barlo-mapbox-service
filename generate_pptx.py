@@ -619,15 +619,39 @@ def assemble_pptx(data, template_path, output_path):
 
     slides_list = list(prs.slides)
 
-    # Slide 17 -- Cost breakdown pie chart
-    # v72.92: Repositioned to bottom-right to avoid overlapping text columns
+    # ─── v74.19 SLIDE 17 — repositionner donut + resize colonnes texte ─────────
+    # v25 a montre : donut a 3.3" superpose la 3e colonne texte qui descend
+    # jusqu'au bas. Push 3 : RESIZE les 3 colonnes a top=0.8" h=2.7"
+    # → libere 3.5"-5.5" pour le donut full-width centre.
     cost_chart = chart_paths.get('cost_breakdown')
-    if cost_chart and os.path.exists(cost_chart) and len(slides_list) >= 17:
+    if len(slides_list) >= 17:
         slide17 = slides_list[16]
-        # Right side, below text columns: left=6.3", top=3.3", width=3.2", height=2.1"
-        slide17.shapes.add_picture(cost_chart,
-            Emu(5760720), Emu(3017520), Emu(2926080), Emu(1920240))
-        print("Inserted cost breakdown chart on slide 17 (bottom-right)", file=sys.stderr)
+        # Etape 1 : trouver les 3 shapes texte des colonnes (top > 0.8" et grandes)
+        col_shapes = []
+        for shp in slide17.shapes:
+            try:
+                if not shp.has_text_frame:
+                    continue
+                if shp.top is None or shp.top < Emu(700000):
+                    continue
+                if shp.height < Emu(1500000):  # skip petits inserts (intro)
+                    continue
+                col_shapes.append((shp.top, shp))
+            except Exception:
+                continue
+        # Resize chacune a h=2.5" pour liberer le bas
+        for top_emu, shp in col_shapes:
+            try:
+                shp.top = Emu(914400)        # 1.0"
+                shp.height = Emu(2286000)    # 2.5"
+            except Exception:
+                pass
+        # Etape 2 : inserer le donut bottom-center, w=5.0" h=2.0"
+        if cost_chart and os.path.exists(cost_chart):
+            slide17.shapes.add_picture(cost_chart,
+                Emu(2286000), Emu(3382200),  # left=2.5", top=3.7"
+                Emu(4572000), Emu(1828800))  # 5.0" × 2.0"
+            print(f"v74.19: Donut on slide 17 repositioned bottom-center", file=sys.stderr)
 
     # ─── v74.17 SLIDES 7/10/13 — DISCIPLINE LAYOUT ────────────────────────────
     # v25 a montre que le shape TEXTE prend toute la slide (~5.5" haut),
