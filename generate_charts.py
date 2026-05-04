@@ -71,13 +71,16 @@ DPI = 300  # Haute résolution pour PPTX
 
 
 def _save(fig, path):
-    """v74.16 — Sauvegarde avec fond TRANSPARENT pour s'integrer au fond du slide.
-    Les axes en facecolor='white' ou autre couleur sont preserves explicitement.
-    Haute resolution (DPI=300), marges serrees."""
-    # Forcer le facecolor transparent du figure (pas blanc)
-    fig.patch.set_alpha(0)
+    """v74.18 — Sauvegarde fond figure transparent MAIS axes facecolors PRESERVES.
+    Avec transparent=True (v74.16) matplotlib forcait tous les patches en transparent,
+    cassant le bloc de couleur 'TOTAL' (42M en blanc-sur-rien invisible).
+    Solution : facecolor='none' sur la figure mais transparent=False dans savefig
+    → la figure n'a pas de fond, mais ax.set_facecolor() est respecte."""
+    fig.patch.set_facecolor('none')
+    fig.patch.set_edgecolor('none')
     fig.savefig(path, dpi=DPI, bbox_inches='tight',
-                transparent=True, pad_inches=0.15)
+                transparent=False, pad_inches=0.15,
+                facecolor='none', edgecolor='none')
     plt.close(fig)
 
 

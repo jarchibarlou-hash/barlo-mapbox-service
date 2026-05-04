@@ -669,20 +669,20 @@ def assemble_pptx(data, template_path, output_path):
                 print(f"v74.17 slide {slide_num_fin}: text shape resized to top=0.5\" h=2.5\"", file=sys.stderr)
             except Exception as e:
                 print(f"v74.17 slide {slide_num_fin}: failed to resize text shape: {e}", file=sys.stderr)
-        # ─── ETAPE 2 : Inserer les 2 charts dans la zone bottom libere ──
+        # ─── ETAPE 2 : Inserer les 2 charts avec espace entre eux ──
         gauge = chart_paths.get(f'scenario_{label_fin}_budget_gauge')
         calc = chart_paths.get(f'scenario_{label_fin}_cost_calc')
-        # Calc visuel : top=3.1", left=0.5", w=9.0", h=1.3"
+        # Calc visuel : top=3.0", left=0.5", w=9.0", h=1.1"
         if calc and os.path.exists(calc):
             slide_fin.shapes.add_picture(calc,
-                Emu(457200), Emu(2834640),  # left=0.5", top=3.1"
-                Emu(8229600), Emu(1188720)) # 9.0" × 1.3"
-        # Gauge budget : top=4.5", left=0.5", w=9.0", h=1.0"
+                Emu(457200), Emu(2743200),  # left=0.5", top=3.0"
+                Emu(8229600), Emu(1005840)) # 9.0" × 1.1"
+        # Gauge budget : top=4.4", left=0.5", w=9.0", h=1.0" (gap 0.3" entre les deux)
         if gauge and os.path.exists(gauge):
             slide_fin.shapes.add_picture(gauge,
-                Emu(457200), Emu(4114800),  # left=0.5", top=4.5"
+                Emu(457200), Emu(4023360),  # left=0.5", top=4.4"
                 Emu(8229600), Emu(914400))  # 9.0" × 1.0"
-        print(f"v74.17: Inserted financial charts on slide {slide_num_fin} ({label_fin})", file=sys.stderr)
+        print(f"v74.18: Inserted financial charts on slide {slide_num_fin} ({label_fin})", file=sys.stderr)
 
     # Slide 17 -- Budget comparison table (bottom-left, next to pie chart)
     # v72.92: Repositioned to bottom-left to coexist with pie chart on right
