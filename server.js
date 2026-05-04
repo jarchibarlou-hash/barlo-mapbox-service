@@ -7981,8 +7981,13 @@ function buildTemplateTexts(flat, scenarios) {
   texts.next_step_outcome_text = `**Livrables attendus** : APS validé, budget affiné à ±10 %, rapport géotechnique, dossier de permis prêt pour dépôt.`;
   // ── SLIDE 20: Conclusion premium ──
   // v74.19 — verdict premium, dynamique, appel à l'action clair
-  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**).\n\nIl répond à vos trois exigences clés :\n- **Programme livré** : ${f("A_units")} unités en R+${f("rec_levels")}\n- **Budget maîtrisé** : ${f("rec_cost_total")} vs **${f("budget_fcfa")}** visés\n- **Mise en œuvre** : techniques classiques, maîtrisées par les entreprises locales\n\nLes deux autres scénarios restent disponibles si vos priorités évoluent — mais ${rec} offre le **meilleur ratio retour-risque** au regard des données analysées.`;
-  texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** Coût maîtrisé (**${f("rec_cost_total")}**), conformité urbanistique solide, et un gabarit **R+${f("rec_levels")}** réaliste pour les entreprises locales. Le programme **${f("A_units")} unités** est tenu, sans surcoût technique inutile.`;
+  // v74.20 FIX : utiliser rec_units (le programme reel livre par le scenario recommande)
+  // au lieu de A_units (l'ambition initiale du client) pour eviter le mismatch
+  // (ex: client veut 3 unites, scenario C en livre 2 → conclusion doit dire 2)
+  const recUnits = f(`${rec}_units`) || f("rec_units") || f("A_units");
+  const recSdp = f(`${rec}_sdp`) || f("rec_sdp");
+  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**).\n\nIl répond à vos exigences clés :\n- **Programme livré** : **${recUnits} unités** sur **${recSdp} m² SDP** (R+${f("rec_levels")})\n- **Budget maîtrisé** : **${f("rec_cost_total")}** vs **${f("budget_fcfa")}** visés\n- **Mise en œuvre** : techniques classiques, maîtrisées par les entreprises locales\n\nLes deux autres scénarios restent disponibles si vos priorités évoluent — mais ${rec} offre le **meilleur ratio retour-risque** au regard des données analysées.`;
+  texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** Coût maîtrisé (**${f("rec_cost_total")}**), conformité urbanistique solide, et un gabarit **R+${f("rec_levels")}** réaliste pour les entreprises locales. Le programme **${recUnits} unités sur ${recSdp} m² SDP** est tenu, sans surcoût technique inutile.`;
   texts.conclusion_projection_text = `**Horizon de livraison** : **12 à 14 mois** après le lancement des études (sous réserve d'obtention du permis dans les délais).\n\n**Calendrier optimal** :\n- Démarrage **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**\n\n**Durée chantier estimée** : ${f("rec_duree_chantier")}.`;
   console.log(`│ ✅ TEMPLATE ENGINE v2.0 PREMIUM: ${Object.keys(texts).length} textes générés (accents, conditionnel, cross-ref charts)`);
   return texts;
