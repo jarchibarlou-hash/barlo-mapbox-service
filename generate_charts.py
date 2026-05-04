@@ -760,8 +760,12 @@ def generate_cost_calc_visual(scenario: dict, label: str, output_path: str):
     Remplace la prose 'Le calcul s'articule comme suit ...'.
     """
     sdp = scenario.get('sdp_m2', 0)
-    cost_m2 = scenario.get('cost_m2_fcfa', 0)
+    # v74.16 — utilise cost_per_m2_sdp (champ reel de mapScenarioForPython)
+    # avec fallback derive (cost_total / sdp) si manquant
+    cost_m2 = scenario.get('cost_per_m2_sdp', 0)
     cost_total = scenario.get('cost_total_fcfa', 0)
+    if not cost_m2 and sdp > 0 and cost_total > 0:
+        cost_m2 = cost_total / sdp
     accent = COLORS.get(label, COLORS['dark'])
 
     fig, axes = plt.subplots(1, 5, figsize=(11, 3),
@@ -819,9 +823,9 @@ def generate_cost_calc_visual(scenario: dict, label: str, output_path: str):
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    fig.suptitle(f"Calcul du coût total — Scénario {label}",
-                 fontsize=12, fontweight='bold', color=COLORS['dark'], y=0.98)
-    fig.subplots_adjust(left=0.02, right=0.98, top=0.85, bottom=0.05, wspace=0.05)
+    # v74.16 — pas de suptitle (le titre est porte par le texte de la slide).
+    # Plus d'espace pour les chiffres, fond integre au slide.
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.96, bottom=0.04, wspace=0.05)
 
     _save(fig, output_path)
 
@@ -882,14 +886,14 @@ def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value
             ha='right', va='top', fontsize=9, color=COLORS['muted'])
 
     ax.set_xlim(0, scale_max)
-    ax.set_ylim(-0.1, 1.4)
+    ax.set_ylim(-0.1, 1.55)  # v74.16 — plus d'espace en haut pour le label budget
     ax.set_yticks([])
     ax.set_xticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.set_title(f"Position du coût vs budget — Scénario {label}",
-                 pad=12, **FONT_TITLE)
+    # v74.16 — pas de suptitle (le slide a deja un titre). Espace sup. pour le marker budget.
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.92, bottom=0.05)
 
     _save(fig, output_path)
 

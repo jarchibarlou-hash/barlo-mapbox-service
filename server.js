@@ -7822,9 +7822,9 @@ function buildTemplateTexts(flat, scenarios) {
     const budgetFit = tradBudgetFit(f(`${sc}_budget_fit`));
     const costUnit = f(`${sc}_cost_unit`);
     const units = f(`${sc}_units`);
-    // v74.15 — texte allégé : les 3 charts (calcul, donut, jauge) portent l'info quanti
-    // Le texte reste pour le COMMENT et le POURQUOI, pas pour répéter les chiffres
-    return `**${costM2}/m² de SDP** — positionnement cohérent avec le marché ${standing} à ${city}.\n\nLa ventilation des coûts (cf. donut ci-contre) suit la répartition standard pour ce type de programme :\n- **Gros œuvre & structure** (${ventGoPct}) : fondations, structure béton armé, dalles et voiles\n- **Second œuvre & finitions** (${ventSoPct}) : menuiseries, revêtements, étanchéité\n- **Lots techniques** (${ventLtPct}) : électricité, plomberie, CVC\n- **VRD** (${ventVrdPct}) : raccordements réseaux, voirie\n\nLes deux barres en bas montrent **comment se construit le coût total** (SDP × prix au m²) et **comment ce coût se positionne face à l'enveloppe client de ${budgetFcfa}**.\n\n**Coût par unité** : ${costUnit}/unité (${costTotal} ÷ ${units} unités).\n**Honoraires maîtrise d'œuvre** : ${honoBas}M à ${honoHaut}M FCFA (${honoTauxBas} à ${honoTauxHaut} des travaux), à ajouter au coût travaux.\n\nCes chiffres sont à affiner en phase APS/APD.`;
+    // v74.16 — texte allégé : les 2 charts (calc + gauge) portent l'info chiffrée
+    // Le texte reste pour la ventilation par lot, le coût/unité, les honoraires
+    return `**${costM2}/m² de SDP** — positionnement cohérent avec le marché ${standing} à ${city}.\n\nLa ventilation des coûts suit la répartition standard pour ce type de programme :\n- **Gros œuvre & structure** (${ventGoPct}) : fondations, structure béton armé, dalles et voiles\n- **Second œuvre & finitions** (${ventSoPct}) : menuiseries, revêtements, étanchéité\n- **Lots techniques** (${ventLtPct}) : électricité, plomberie, CVC\n- **VRD** (${ventVrdPct}) : raccordements réseaux, voirie\n\n**Coût par unité** : ${costUnit}/unité (${costTotal} ÷ ${units} unités).\n**Honoraires maîtrise d'œuvre** : ${honoBas}M à ${honoHaut}M FCFA (${honoTauxBas} à ${honoTauxHaut} des travaux), à ajouter au coût travaux.\n\nLes graphiques ci-dessous illustrent comment se construit ce coût total et comment il se positionne face à l'enveloppe client de **${budgetFcfa}**. Ces chiffres sont à affiner en phase APS/APD.`;
   }
   // ── Scenario risk builder (slides 8/11/14) ──
   // Directive BARLO : "ÊTRE SPÉCIFIQUE SUR LES RISQUES, pas de phrase générique"
@@ -9276,6 +9276,8 @@ app.post("/generate-pptx", async (req, res) => {
         levels: sc.levels || 0,
         total_units: sc.total_units || 0,
         cost_total_fcfa: costTotal,
+        // v74.16 FIX : cout au m² SDP (utilise par generate_cost_calc_visual sur slides 7/10/13)
+        cost_per_m2_sdp: sc.cost_per_m2_sdp || (sc.sdp_m2 > 0 ? Math.round(costTotal / sc.sdp_m2) : 0),
         duree_chantier_mois: sc.duree_chantier_mois || 0,
         fp_m2: sc.fp_m2 || 0,
         height_m: sc.height_m || 0,
