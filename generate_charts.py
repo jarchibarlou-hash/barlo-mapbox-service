@@ -71,9 +71,13 @@ DPI = 300  # Haute résolution pour PPTX
 
 
 def _save(fig, path):
-    """Sauvegarde avec fond blanc, haute résolution, marges serrées."""
-    fig.savefig(path, dpi=DPI, bbox_inches='tight', facecolor='white',
-                transparent=False, pad_inches=0.15)
+    """v74.16 — Sauvegarde avec fond TRANSPARENT pour s'integrer au fond du slide.
+    Les axes en facecolor='white' ou autre couleur sont preserves explicitement.
+    Haute resolution (DPI=300), marges serrees."""
+    # Forcer le facecolor transparent du figure (pas blanc)
+    fig.patch.set_alpha(0)
+    fig.savefig(path, dpi=DPI, bbox_inches='tight',
+                transparent=True, pad_inches=0.15)
     plt.close(fig)
 
 
