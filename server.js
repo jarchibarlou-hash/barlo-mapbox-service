@@ -8229,19 +8229,23 @@ function validateConformity(flat, scenarios, texts) {
     }
   }
   // ── 8. CHECK: Recommended scenario exists and has valid score ──
+  // v74.11 FIX : le moteur stocke le score dans `recommendation_score` (0-1 float),
+  // pas dans `.score`. Avant ce fix, le check passait toujours en "score invalide".
   const recSc = flat.rec_scenario;
   if (!recSc || !["A", "B", "C"].includes(recSc)) {
     errors.push(`rec_scenario invalide: "${recSc}"`);
   } else {
     const recData = scenarios[recSc] || {};
-    if (!recData.score || recData.score < 1) {
-      errors.push(`Scénario recommandé ${recSc}: score invalide (${recData.score})`);
+    const recScore = recData.recommendation_score;
+    if (recScore === undefined || recScore === null || recScore <= 0) {
+      errors.push(`Scénario recommandé ${recSc}: recommendation_score invalide (${recScore})`);
     }
   }
-  // ── 9. CHECK: A/B/C scores are distinct ──
-  if (sA.score && sB.score && sC.score) {
-    if (sA.score === sB.score && sB.score === sC.score) {
-      errors.push(`Scores identiques A=B=C=${sA.score} — moteur de différenciation défaillant`);
+  // ── 9. CHECK: A/B/C recommendation_scores are distinct ──
+  // v74.11 FIX : utiliser recommendation_score (champ réel du moteur)
+  if (sA.recommendation_score && sB.recommendation_score && sC.recommendation_score) {
+    if (sA.recommendation_score === sB.recommendation_score && sB.recommendation_score === sC.recommendation_score) {
+      errors.push(`recommendation_score identiques A=B=C=${sA.recommendation_score} — moteur de différenciation défaillant`);
     }
   }
   // ── v72.88 CONFORMITY TRACE — trace critical data through all layers ──
