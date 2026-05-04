@@ -440,6 +440,127 @@ def _apply_text_to_shape(shape, placeholder, text, slide_num):
 # MAIN ASSEMBLY
 # -------------------------------------------------------------
 
+def _apply_premium_styling(prs, data, client_name):
+    """v74.21 PUSH 5 — Propage l'identite BARLA IMMO sur les slides du corps.
+    Sans toucher au template, ajoute une couche overlay :
+    - Footer (client + page X/N) en bas-droite
+    - Edge bar verticale gauche (couleur selon section)
+    - Le tout en cohrence avec slides 1-2 (vert sapin + rose corail)
+    """
+    from pptx.util import Pt as _Pt, Emu as _Emu
+    from pptx.dml.color import RGBColor as _Rgb
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import PP_ALIGN as _Align
+
+    # Palette BARLA IMMO (vert sapin + rose corail) + accents par scenario
+    BARLA_VERT = _Rgb(0x1A, 0x5D, 0x4A)   # vert sapin (titres, intro)
+    BARLA_ROSE = _Rgb(0xE7, 0x6E, 0x7E)   # rose corail (conclusion, action)
+    SCEN_A = _Rgb(0xC0, 0x39, 0x2B)        # brique (Scenario A INTENSIFICATION)
+    SCEN_B = _Rgb(0xD4, 0x85, 0x0E)        # ambre (Scenario B EQUILIBRE)
+    SCEN_C = _Rgb(0x1E, 0x84, 0x49)        # foret (Scenario C PRUDENT)
+    GRAY_FOOTER = _Rgb(0x9E, 0xA5, 0xB3)   # texte footer discret
+
+    def section_color(slide_num):
+        # 1-2 : couvertures (on touche pas)
+        # 3-5 : intro → vert sapin
+        # 6-8 : Scenario A → brique
+        # 9-11: Scenario B → ambre
+        # 12-14: Scenario C → foret
+        # 15  : comparatif → vert sapin
+        # 16  : arbitrage → rose corail (decision)
+        # 17-19: success / next → vert sapin
+        # 20  : conclusion → rose corail
+        if slide_num in (3, 4, 5, 15):       return BARLA_VERT
+        if slide_num in (6, 7, 8):           return SCEN_A
+        if slide_num in (9, 10, 11):         return SCEN_B
+        if slide_num in (12, 13, 14):        return SCEN_C
+        if slide_num in (16, 20):            return BARLA_ROSE
+        if slide_num in (17, 18, 19):        return BARLA_VERT
+        return BARLA_VERT
+
+    # Dimensions slide standard 10" x 5.62" = 9144000 x 5143500 EMU
+    SLIDE_W = _Emu(9144000)
+    SLIDE_H = _Emu(5143500)
+
+    rec_label = data.get('recommended', data.get('rec_scenario', 'C'))
+    site_area = data.get('site_area', '')
+    total_slides = len(prs.slides)
+
+    for idx, slide in enumerate(prs.slides):
+        slide_num = idx + 1
+        # Skip couverture (1) + manifeste (2) — deja stylees a la main par user
+        if slide_num <= 2:
+            continue
+        try:
+            color = section_color(slide_num)
+            # ── 1. EDGE BAR verticale gauche (signature visuelle, 4pt = 50800 EMU) ──
+            edge = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                _Emu(0), _Emu(0),         # left=0, top=0
+                _Emu(50800), SLIDE_H       # 4pt × full height
+            )
+            edge.fill.solid()
+            edge.fill.fore_color.rgb = color
+            edge.line.fill.background()  # pas de bord
+            edge.shadow.inherit = False
+            # ── 2. FOOTER en bas (client + page X/N + section accent) ──
+            # Petit carre couleur a gauche du texte footer
+            dot_size = _Emu(91440)  # 0.1"
+            dot_top = _Emu(4900200) # 5.36"
+            dot_left = _Emu(457200) # 0.5"
+            dot = slide.shapes.add_shape(
+                MSO_SHAPE.OVAL,
+                dot_left, dot_top, dot_size, dot_size
+            )
+            dot.fill.solid()
+            dot.fill.fore_color.rgb = color
+            dot.line.fill.background()
+            # Texte footer
+            footer_left = _Emu(640000)   # apres le dot
+            footer_top = _Emu(4892000)   # ~5.35"
+            footer_w = _Emu(8000000)
+            footer_h = _Emu(220000)
+            footer = slide.shapes.add_textbox(footer_left, footer_top, footer_w, footer_h)
+            tf = footer.text_frame
+            tf.margin_left = _Emu(0)
+            tf.margin_right = _Emu(0)
+            tf.margin_top = _Emu(0)
+            tf.margin_bottom = _Emu(0)
+            tf.word_wrap = False
+            p = tf.paragraphs[0]
+            p.alignment = _Align.LEFT
+            # Run 1 : "BARLO Diagnostic"
+            r1 = p.add_run()
+            r1.text = "BARLO Diagnostic"
+            r1.font.size = _Pt(8)
+            r1.font.bold = True
+            r1.font.color.rgb = BARLA_VERT
+            # Run 2 : separator + client
+            r2 = p.add_run()
+            r2.text = f"   |   {client_name or 'Client'}"
+            r2.font.size = _Pt(8)
+            r2.font.color.rgb = GRAY_FOOTER
+            # Page number a droite (texte separe pour alignement droite)
+            page_left = _Emu(8000000)
+            page = slide.shapes.add_textbox(page_left, footer_top, _Emu(900000), footer_h)
+            ptf = page.text_frame
+            ptf.margin_left = _Emu(0)
+            ptf.margin_right = _Emu(0)
+            ptf.margin_top = _Emu(0)
+            ptf.margin_bottom = _Emu(0)
+            pp = ptf.paragraphs[0]
+            pp.alignment = _Align.RIGHT
+            pr = pp.add_run()
+            pr.text = f"{slide_num} / {total_slides}"
+            pr.font.size = _Pt(8)
+            pr.font.bold = True
+            pr.font.color.rgb = color
+        except Exception as e:
+            print(f"v74.21 styling slide {slide_num}: {e}", file=sys.stderr)
+            continue
+    print(f"v74.21 PUSH 5: premium styling applique aux slides 3-{total_slides}", file=sys.stderr)
+
+
 def assemble_pptx(data, template_path, output_path):
     chart_dir = tempfile.mkdtemp(prefix='barlo_charts_')
     print(f"Generating charts in {chart_dir}...", file=sys.stderr)
@@ -913,6 +1034,18 @@ def assemble_pptx(data, template_path, output_path):
                     enable_auto_shrink(shape, fontScale=80000)
                     shrink_count += 1
     print(f"Auto-shrink applied to {shrink_count} text shapes (fontScale=80000)", file=sys.stderr)
+
+    # ─── v74.21 PUSH 5 — DIRECTION ARTISTIQUE PREMIUM ─────────────────────────
+    # Propage l'identite BARLA IMMO (vert sapin + rose corail) sur toutes les
+    # slides du corps (3-20), pour rompre avec le 'PowerPoint blanc rigide'.
+    # Ajoute :
+    #   - Footer discret (client + page X/20) en bas-droite
+    #   - Edge bar verticale gauche (signature visuelle, ~6pt large)
+    #   - Code couleur par section : A/B/C/intro/conclusion
+    try:
+        _apply_premium_styling(prs, data, client_name)
+    except Exception as e:
+        print(f"v74.21 premium styling error (non-fatal): {e}", file=sys.stderr)
 
     prs.save(output_path)
     print(f"PPTX saved to {output_path}", file=sys.stderr)
