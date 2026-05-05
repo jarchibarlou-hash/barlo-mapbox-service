@@ -907,6 +907,16 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
+            // v74.27 — propager les overrides utilisateur vers /generate-massing
+            override_levels_A: obj8D.override_levels_A || "",
+            override_levels_B: obj8D.override_levels_B || "",
+            override_levels_C: obj8D.override_levels_C || "",
+            override_typology_A: obj8D.override_typology_A || "",
+            override_typology_B: obj8D.override_typology_B || "",
+            override_typology_C: obj8D.override_typology_C || "",
+            override_units_A: obj8D.override_units_A || "",
+            override_units_B: obj8D.override_units_B || "",
+            override_units_C: obj8D.override_units_C || "",
           };
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -7235,6 +7245,8 @@ app.post("/generate-massing", async (req, res) => {
       input_typologies: input_typologies || "",
       commerce_size_m2: Number(commerce_size_m2) || 0,
     });
+    // v74.27 — appliquer overrides utilisateur (lus depuis req.body)
+    applyScenarioOverrides(scenarios, req.body);
     const sc = scenarios[label] || scenarios.A;
     // v72.28: LOG les 3 scénarios pour vérifier la différenciation
     console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
