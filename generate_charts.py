@@ -23,30 +23,30 @@ import matplotlib.patheffects as pe
 import numpy as np
 import os, json, sys
 
-# ─── PALETTE PREMIUM ────────────────────────────────────────────────
-# Tons sourds, professionnels — jamais criards
+# ─── PALETTE PREMIUM v74.24 — DARK THEME (rose corail + vert foret) ──
+# Charte BARLA IMMO sur fond sombre. Inspirée du modèle reference user.
 COLORS = {
-    # Scénarios
-    'A': '#C0392B',   # Brique profond — ambitieux
-    'B': '#D4850E',   # Ambre chaud — équilibré
-    'C': '#1E8449',   # Forêt — prudent
-    # Structure
-    'dark':   '#1B2A4A',  # Marine profond
-    'light':  '#F7F9FC',  # Gris perle
-    'accent': '#2C3E50',  # Ardoise
-    'grid':   '#E2E8F0',  # Grille subtile
-    'text':   '#1B2A4A',  # Texte principal
-    'muted':  '#7F8C9B',  # Texte secondaire
-    # Sévérité
-    'green':  '#1E8449',
-    'orange': '#D4850E',
-    'red':    '#C0392B',
-    'bg':     '#FFFFFF',
-    # Ventilation coûts
-    'pie_go':  '#1B2A4A',   # Gros œuvre — marine
-    'pie_so':  '#2E7D6F',   # Second œuvre — teal
-    'pie_lt':  '#D4850E',   # Lots techniques — ambre
-    'pie_vrd': '#C0392B',   # VRD — brique
+    # Scénarios (sur fond sombre, accents lumineux)
+    'A': '#E76E7E',   # Rose corail — Scenario A (decision/intensification)
+    'B': '#F0C85F',   # Or doux — Scenario B (equilibre)
+    'C': '#4CAF7F',   # Vert clair — Scenario C (prudent)
+    # Structure dark theme
+    'dark':   '#0E2520',  # Vert foret tres sombre (background)
+    'light':  '#1A3530',  # Vert foret moyen (cartes/blocs)
+    'accent': '#E76E7E',  # Rose corail (accent principal)
+    'grid':   '#2A4A40',  # Grille subtile sur dark
+    'text':   '#F5F5F5',  # Texte principal blanc casse
+    'muted':  '#B0B7C0',  # Texte secondaire gris clair
+    # Sévérité (sur fond sombre)
+    'green':  '#4CAF7F',  # Vert clair
+    'orange': '#F0C85F',  # Or doux
+    'red':    '#E76E7E',  # Rose corail (alerte douce)
+    'bg':     '#0E2520',  # Background sombre
+    # Ventilation coûts (palette dark adaptive)
+    'pie_go':  '#1A5D4A',   # Gros œuvre — vert sapin
+    'pie_so':  '#4CAF7F',   # Second œuvre — vert clair
+    'pie_lt':  '#F0C85F',   # Lots techniques — or doux
+    'pie_vrd': '#E76E7E',   # VRD — rose corail
 }
 
 # Libellés français des clés de risque (doivent correspondre à /compute-scenarios)
@@ -60,9 +60,9 @@ RISK_LABELS_FR = {
     'cout_m2':                 'Coût\nau m²',
 }
 
-# Typographie
-FONT_TITLE    = {'fontsize': 13, 'fontweight': 'bold', 'color': COLORS['dark']}
-FONT_SUBTITLE = {'fontsize': 11, 'fontweight': 'bold', 'color': COLORS['dark']}
+# Typographie — v74.24 dark theme : titres en blanc, accent rose corail
+FONT_TITLE    = {'fontsize': 13, 'fontweight': 'bold', 'color': COLORS['text']}
+FONT_SUBTITLE = {'fontsize': 11, 'fontweight': 'bold', 'color': COLORS['accent']}
 FONT_LABEL    = {'fontsize': 9,  'fontweight': 'bold', 'color': COLORS['text']}
 FONT_VALUE    = {'fontsize': 10, 'fontweight': 'bold', 'color': COLORS['text']}
 FONT_MUTED    = {'fontsize': 8,  'color': COLORS['muted']}

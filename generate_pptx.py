@@ -441,41 +441,44 @@ def _apply_text_to_shape(shape, placeholder, text, slide_num):
 # -------------------------------------------------------------
 
 def _apply_premium_styling(prs, data, client_name):
-    """v74.21 PUSH 5 — Propage l'identite BARLA IMMO sur les slides du corps.
-    Sans toucher au template, ajoute une couche overlay :
-    - Footer (client + page X/N) en bas-droite
-    - Edge bar verticale gauche (couleur selon section)
-    - Le tout en cohrence avec slides 1-2 (vert sapin + rose corail)
+    """v74.24 PUSH 6 — DARK THEME PREMIUM CONSULTING
+    Inspire du modele reference user : fond sombre + accents rose corail / vert foret.
+    Garde la charte BARLA IMMO (vert + rose), pas de jaune dore.
+
+    Ajoute :
+    - Background sombre full-slide (vert foret tres sombre #0E2520) sur slides 3-20
+    - Recoloration de TOUS les textes en blanc/light gris (lisible sur fond sombre)
+    - Bold runs forces en rose corail (accents) ou vert clair (data)
+    - Footer minimaliste : 'BARLO DIAGNOSTIC · Client' + page X/N
     """
     from pptx.util import Pt as _Pt, Emu as _Emu
     from pptx.dml.color import RGBColor as _Rgb
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.enum.text import PP_ALIGN as _Align
+    from copy import deepcopy as _deepcopy
+    from lxml import etree as _etree
 
-    # Palette BARLA IMMO (vert sapin + rose corail) + accents par scenario
-    BARLA_VERT = _Rgb(0x1A, 0x5D, 0x4A)   # vert sapin (titres, intro)
-    BARLA_ROSE = _Rgb(0xE7, 0x6E, 0x7E)   # rose corail (conclusion, action)
-    SCEN_A = _Rgb(0xC0, 0x39, 0x2B)        # brique (Scenario A INTENSIFICATION)
-    SCEN_B = _Rgb(0xD4, 0x85, 0x0E)        # ambre (Scenario B EQUILIBRE)
-    SCEN_C = _Rgb(0x1E, 0x84, 0x49)        # foret (Scenario C PRUDENT)
-    GRAY_FOOTER = _Rgb(0x9E, 0xA5, 0xB3)   # texte footer discret
+    # ── Palette dark theme BARLA IMMO ──
+    DARK_BG = _Rgb(0x0E, 0x25, 0x20)         # vert foret tres sombre, presque noir
+    BARLA_ROSE = _Rgb(0xE7, 0x6E, 0x7E)      # rose corail (accent / decision)
+    BARLA_VERT_LIGHT = _Rgb(0x4C, 0xAF, 0x7F)  # vert clair (data positive, lumiere)
+    TEXT_WHITE = _Rgb(0xF5, 0xF5, 0xF5)      # off-white (corps texte)
+    TEXT_LIGHT_GRAY = _Rgb(0xB0, 0xB7, 0xC0) # gris clair (texte secondaire)
+    TEXT_MUTED = _Rgb(0x7E, 0x88, 0x95)      # gris muted (footer, captions)
+
+    # ── Code couleur d'accent par section (utilise pour le numero de page) ──
+    BARLA_VERT = _Rgb(0x4C, 0xAF, 0x7F)   # vert clair (sur fond sombre)
+    SCEN_A = BARLA_ROSE                    # rose corail pour A (decision/action)
+    SCEN_B = _Rgb(0xF0, 0xC8, 0x5F)        # or doux (B = equilibre)
+    SCEN_C = BARLA_VERT_LIGHT              # vert clair (C = prudent)
+    GRAY_FOOTER = TEXT_MUTED
 
     def section_color(slide_num):
-        # 1-2 : couvertures (on touche pas)
-        # 3-5 : intro → vert sapin
-        # 6-8 : Scenario A → brique
-        # 9-11: Scenario B → ambre
-        # 12-14: Scenario C → foret
-        # 15  : comparatif → vert sapin
-        # 16  : arbitrage → rose corail (decision)
-        # 17-19: success / next → vert sapin
-        # 20  : conclusion → rose corail
-        if slide_num in (3, 4, 5, 15):       return BARLA_VERT
-        if slide_num in (6, 7, 8):           return SCEN_A
-        if slide_num in (9, 10, 11):         return SCEN_B
-        if slide_num in (12, 13, 14):        return SCEN_C
-        if slide_num in (16, 20):            return BARLA_ROSE
-        if slide_num in (17, 18, 19):        return BARLA_VERT
+        if slide_num in (3, 4, 5, 15, 17, 18, 19):  return BARLA_VERT
+        if slide_num in (6, 7, 8):                  return SCEN_A
+        if slide_num in (9, 10, 11):                return SCEN_B
+        if slide_num in (12, 13, 14):               return SCEN_C
+        if slide_num in (16, 20):                   return BARLA_ROSE
         return BARLA_VERT
 
     # Dimensions slide standard 10" x 5.62" = 9144000 x 5143500 EMU
@@ -497,20 +500,79 @@ def _apply_premium_styling(prs, data, client_name):
         19: "PROCHAINES ETAPES", 20: "CONCLUSION",
     }
 
-    # v74.23 : version MINIMALISTE — ANNULE bandes laterales et bandes basses
-    # User feedback : 'pas beau, pas premium' avec edge bars + bandes
-    # Garde UNIQUEMENT : footer texte sobre + page numbers en couleur de section
-    # En attente du PDF reference user pour applique direction artistique cible
+    # ─── v74.24 DARK THEME : background sombre + recoloration textes ──────────
+    # User a demande Option B : refonte complete inspiree du modele reference,
+    # tout en conservant la charte BARLA (vert foret + rose corail).
+    # Etapes par slide (3-20) :
+    #   1. Insere un rectangle DARK_BG plein qui couvre tout, place EN ARRIERE
+    #      (premier child du spTree) → toutes les shapes existantes sur top
+    #   2. Recolore TOUS les runs de texte :
+    #      - Bold (chiffres, labels accent) : ROSE CORAIL
+    #      - Regular : OFF-WHITE
+    #   3. Ajoute footer minimaliste + page number
+    A_NS = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    P_NS = '{http://schemas.openxmlformats.org/presentationml/2006/main}'
+
+    def _move_shape_to_back(shape):
+        sp_elem = shape._element
+        parent = sp_elem.getparent()
+        # Deplacer en premier enfant grpSpPr/cSld_spTree
+        # Apres le grpSpPr (qui est toujours premier), on insere a l'index 1
+        parent.remove(sp_elem)
+        # Trouver l'index apres le grpSpPr (qui est attendu en premier)
+        insert_idx = 1
+        try:
+            # find nvGrpSpPr + grpSpPr (premiers elements)
+            for i, child in enumerate(parent):
+                tag = child.tag.split('}')[-1]
+                if tag in ('nvGrpSpPr', 'grpSpPr'):
+                    insert_idx = max(insert_idx, i + 1)
+                else:
+                    break
+        except Exception:
+            pass
+        parent.insert(insert_idx, sp_elem)
+
+    def _recolor_text_runs(shape, regular_color, bold_color):
+        if not shape.has_text_frame:
+            return
+        for para in shape.text_frame.paragraphs:
+            for run in para.runs:
+                try:
+                    is_bold = bool(run.font.bold)
+                    target = bold_color if is_bold else regular_color
+                    run.font.color.rgb = target
+                except Exception:
+                    pass
+
     for idx, slide in enumerate(prs.slides):
         slide_num = idx + 1
         if slide_num <= 2:
             continue
         try:
             color = section_color(slide_num)
-            # FOOTER textuel sobre, sans bande coloree
-            footer_top = _Emu(4900000)  # ~5.36"
+
+            # ── 1. RECOLORER TOUS LES TEXTES EXISTANTS (avant ajout bg) ──
+            # Permet d'eviter texte sombre invisible sur fond sombre
+            for shp in list(slide.shapes):
+                if shp.has_text_frame:
+                    _recolor_text_runs(shp, TEXT_WHITE, BARLA_ROSE)
+
+            # ── 2. INSERER BACKGROUND DARK plein, EN ARRIERE ──
+            bg = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                _Emu(0), _Emu(0), SLIDE_W, SLIDE_H
+            )
+            bg.fill.solid()
+            bg.fill.fore_color.rgb = DARK_BG
+            bg.line.fill.background()
+            bg.shadow.inherit = False
+            _move_shape_to_back(bg)
+
+            # ── 3. FOOTER textuel sobre, sur fond sombre ──
+            footer_top = _Emu(4900000)
             footer_h = _Emu(220000)
-            footer_left = _Emu(457200)  # 0.5"
+            footer_left = _Emu(457200)
             footer_w = _Emu(6500000)
             footer = slide.shapes.add_textbox(footer_left, footer_top, footer_w, footer_h)
             tf = footer.text_frame
@@ -523,12 +585,12 @@ def _apply_premium_styling(prs, data, client_name):
             r1.text = "BARLO DIAGNOSTIC"
             r1.font.size = _Pt(8)
             r1.font.bold = True
-            r1.font.color.rgb = BARLA_VERT
+            r1.font.color.rgb = BARLA_ROSE
             r2 = p.add_run()
             r2.text = f"  ·  {client_name or 'Client'}"
             r2.font.size = _Pt(8)
-            r2.font.color.rgb = GRAY_FOOTER
-            # Page number droite, discret
+            r2.font.color.rgb = TEXT_LIGHT_GRAY
+            # Page number droite
             page_left = _Emu(7800000)
             page = slide.shapes.add_textbox(page_left, footer_top, _Emu(900000), footer_h)
             ptf = page.text_frame
@@ -544,11 +606,11 @@ def _apply_premium_styling(prs, data, client_name):
             pr2 = pp.add_run()
             pr2.text = f" / {total_slides}"
             pr2.font.size = _Pt(8)
-            pr2.font.color.rgb = GRAY_FOOTER
+            pr2.font.color.rgb = TEXT_LIGHT_GRAY
         except Exception as e:
-            print(f"v74.23 styling slide {slide_num}: {e}", file=sys.stderr)
+            print(f"v74.24 dark theme slide {slide_num}: {e}", file=sys.stderr)
             continue
-    print(f"v74.23 : footer minimaliste applique sur slides 3-{total_slides} (edge bars retirees)", file=sys.stderr)
+    print(f"v74.24 DARK THEME applique sur slides 3-{total_slides} (fond #0E2520 + recoloration)", file=sys.stderr)
 
 
 def assemble_pptx(data, template_path, output_path):
