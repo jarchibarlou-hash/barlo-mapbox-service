@@ -701,7 +701,17 @@ app.post("/api/process-lead", async (req, res) => {
       layout_mode: obj8D.layout_mode || layoutMode,
       commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
       retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-      disposition: obj8D.Disposition || ""
+      disposition: obj8D.Disposition || "",
+      // v74.26 — overrides utilisateur (vide = engine libre, rempli = engine respecte)
+      override_levels_A: obj8D.override_levels_A || "",
+      override_levels_B: obj8D.override_levels_B || "",
+      override_levels_C: obj8D.override_levels_C || "",
+      override_typology_A: obj8D.override_typology_A || "",
+      override_typology_B: obj8D.override_typology_B || "",
+      override_typology_C: obj8D.override_typology_C || "",
+      override_units_A: obj8D.override_units_A || "",
+      override_units_B: obj8D.override_units_B || "",
+      override_units_C: obj8D.override_units_C || ""
     };
 
     // Call /compute-scenarios on THIS server (internal call)
@@ -4504,6 +4514,59 @@ function computeSmartScenarios({
   console.log(`└── end SCENARIO ENGINE v57.20 ──`);
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// v74.26 PUSH 7 — SYSTEME D'OVERRIDE PAR LEAD
+// L'utilisateur peut renseigner dans PIPELINE des colonnes override_* qui
+// FORCENT certains parametres scenario apres calcul moteur. Le moteur reste
+// intact ; on post-process les scenarios pour respecter les choix manuels.
+// Champs supportes (par scenario A/B/C) :
+//   override_levels_A/B/C    : force le R+X (entier)
+//   override_typology_A/B/C  : force la forme (BLOC, BARRE, EN_L, EN_U, ...)
+//   override_units_A/B/C     : force le nombre d'unites (entier)
+// Fields globaux (a venir Phase 2) :
+//   lateral_hug_side, lateral_gap_m
+// ═══════════════════════════════════════════════════════════════════════════
+function applyScenarioOverrides(scenarios, params) {
+  if (!scenarios || typeof scenarios !== "object" || !params) return scenarios;
+  const TYPOLOGIES_VALID = new Set(["BLOC", "BARRE", "EN_L", "EN_U", "EXTENSION"]);
+  for (const label of ["A", "B", "C"]) {
+    const sc = scenarios[label];
+    if (!sc || typeof sc !== "object") continue;
+    // ── Override levels (R+X) ──
+    const ovLvl = parseInt(params[`override_levels_${label}`]);
+    if (ovLvl > 0 && ovLvl <= 20 && ovLvl !== sc.levels) {
+      console.log(`[OVERRIDE-${label}] levels ${sc.levels} → ${ovLvl}`);
+      const oldLevels = sc.levels || 1;
+      sc.levels = ovLvl;
+      // Recompute height
+      const floorH = sc.floor_height || 3.2;
+      sc.height_m = Math.round(ovLvl * floorH * 10) / 10;
+      // Recompute SDP from new levels (preserve fp)
+      const fp = sc.footprint_m2 || sc.fp_m2 || 0;
+      if (fp > 0) {
+        sc.sdp_m2 = Math.round(fp * ovLvl);
+        // Recalculate cost if cost_total depends on SDP
+        if (sc.cost_per_m2_sdp && sc.cost_total_fcfa) {
+          sc.cost_total_fcfa = Math.round(sc.sdp_m2 * sc.cost_per_m2_sdp);
+        }
+      }
+    }
+    // ── Override typology ──
+    const ovTypo = String(params[`override_typology_${label}`] || "").trim().toUpperCase();
+    if (ovTypo && TYPOLOGIES_VALID.has(ovTypo) && ovTypo !== sc.typology) {
+      console.log(`[OVERRIDE-${label}] typology ${sc.typology} → ${ovTypo}`);
+      sc.typology = ovTypo;
+      sc.typology_desc = `${ovTypo.toLowerCase().replace("_", "-")} (forcé manuellement)`;
+    }
+    // ── Override total units ──
+    const ovUnits = parseInt(params[`override_units_${label}`]);
+    if (ovUnits > 0 && ovUnits <= 100 && ovUnits !== sc.total_units) {
+      console.log(`[OVERRIDE-${label}] units ${sc.total_units} → ${ovUnits}`);
+      sc.total_units = ovUnits;
+    }
+  }
+  return scenarios;
+}
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
@@ -4743,6 +4806,8 @@ app.post("/compute-scenarios", (req, res) => {
     site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
     site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
   };
+  // v74.26 — apply overrides (post-process moteur, n'altere pas la logique)
+  applyScenarioOverrides(scenarios, p);
   return res.json({ ok: true, scenarios, computed_budget_band: scenarios.computed_budget_band, ...flat });
 });
 // ─── TYPOLOGIES ARCHITECTURALES (v54) ────────────────────────────────────────
@@ -8884,6 +8949,8 @@ app.post("/generate-texts", async (req, res) => {
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
   });
+  // v74.26 — appliquer overrides utilisateur
+  applyScenarioOverrides(scenarios, p);
   // Step 2: Flatten scenario data (reuse existing flatten logic)
   const diag = scenarios.diagnostic || {};
   const comp = diag.comparatif || {};
@@ -9194,6 +9261,8 @@ app.post("/generate-pptx", async (req, res) => {
       input_typologies: p.input_typologies || "",
       commerce_size_m2: Number(p.commerce_size_m2) || 0,
     });
+    // v74.26 — appliquer overrides utilisateur (champs override_*_A/B/C dans p)
+    applyScenarioOverrides(scenarios, p);
     // Step 2: Flatten + generate texts (same as /generate-texts)
     const diag = scenarios.diagnostic || {};
     const comp = diag.comparatif || {};
