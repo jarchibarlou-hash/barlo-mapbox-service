@@ -497,76 +497,21 @@ def _apply_premium_styling(prs, data, client_name):
         19: "PROCHAINES ETAPES", 20: "CONCLUSION",
     }
 
+    # v74.23 : version MINIMALISTE — ANNULE bandes laterales et bandes basses
+    # User feedback : 'pas beau, pas premium' avec edge bars + bandes
+    # Garde UNIQUEMENT : footer texte sobre + page numbers en couleur de section
+    # En attente du PDF reference user pour applique direction artistique cible
     for idx, slide in enumerate(prs.slides):
         slide_num = idx + 1
         if slide_num <= 2:
             continue
         try:
             color = section_color(slide_num)
-            # ── 1. EDGE BAR verticale gauche, EPAISSE (16pt × full height) ──
-            # v74.22 : passee de 4pt a 16pt (~0.16") pour vraie presence visuelle
-            edge_w = _Emu(203200)  # 16pt = ~0.16"
-            edge = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE,
-                _Emu(0), _Emu(0),
-                edge_w, SLIDE_H
-            )
-            edge.fill.solid()
-            edge.fill.fore_color.rgb = color
-            edge.line.fill.background()
-            edge.shadow.inherit = False
-
-            # ── 2. BANDEAU SUPERIEUR (tag de section en haut a gauche) ──
-            # Format : '03 · INTRODUCTION' en lettres bold majuscules, couleur section
-            # Position : top=0.15", left=0.4" (apres edge bar), width=auto, height=0.3"
-            tag_w = _Emu(7800000)
-            tag_h = _Emu(280000)
-            tag_top = _Emu(140000)
-            tag_left = _Emu(370000)
-            tag = slide.shapes.add_textbox(tag_left, tag_top, tag_w, tag_h)
-            ttf = tag.text_frame
-            ttf.margin_left = _Emu(0); ttf.margin_right = _Emu(0)
-            ttf.margin_top = _Emu(0); ttf.margin_bottom = _Emu(0)
-            tp = ttf.paragraphs[0]
-            tp.alignment = _Align.LEFT
-            # Run 1 : numero de slide en bold (ex "03")
-            tr1 = tp.add_run()
-            tr1.text = f"{slide_num:02d}"
-            tr1.font.size = _Pt(11)
-            tr1.font.bold = True
-            tr1.font.color.rgb = color
-            # Run 2 : separateur " · "
-            tr2 = tp.add_run()
-            tr2.text = "  ·  "
-            tr2.font.size = _Pt(11)
-            tr2.font.color.rgb = GRAY_FOOTER
-            # Run 3 : label section
-            tr3 = tp.add_run()
-            tr3.text = SECTION_LABEL.get(slide_num, "")
-            tr3.font.size = _Pt(10)
-            tr3.font.bold = True
-            tr3.font.color.rgb = GRAY_FOOTER
-
-            # ── 3. BANDE HORIZONTALE BAS DE SLIDE (10pt = 127000 EMU) ──
-            # Comme la signature des slides 1-2 (vert + rose) mais
-            # uniformisee a la couleur de la section
-            bottom_band_h = _Emu(127000)  # 10pt
-            band = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE,
-                _Emu(0), _Emu(int(SLIDE_H) - int(bottom_band_h)),
-                SLIDE_W, bottom_band_h
-            )
-            band.fill.solid()
-            band.fill.fore_color.rgb = color
-            band.line.fill.background()
-            band.shadow.inherit = False
-
-            # ── 4. FOOTER textuel (juste au dessus de la bande, en blanc/dark) ──
-            footer_top = _Emu(4860000)  # ~5.31"
-            footer_h = _Emu(280000)
-            # Footer gauche : "BARLO DIAGNOSTIC | <client>"
-            footer_left = _Emu(370000)
-            footer_w = _Emu(5500000)
+            # FOOTER textuel sobre, sans bande coloree
+            footer_top = _Emu(4900000)  # ~5.36"
+            footer_h = _Emu(220000)
+            footer_left = _Emu(457200)  # 0.5"
+            footer_w = _Emu(6500000)
             footer = slide.shapes.add_textbox(footer_left, footer_top, footer_w, footer_h)
             tf = footer.text_frame
             tf.margin_left = _Emu(0); tf.margin_right = _Emu(0)
@@ -576,22 +521,16 @@ def _apply_premium_styling(prs, data, client_name):
             p.alignment = _Align.LEFT
             r1 = p.add_run()
             r1.text = "BARLO DIAGNOSTIC"
-            r1.font.size = _Pt(9)
+            r1.font.size = _Pt(8)
             r1.font.bold = True
             r1.font.color.rgb = BARLA_VERT
             r2 = p.add_run()
-            r2.text = f"   |   {client_name or 'Client'}"
-            r2.font.size = _Pt(9)
+            r2.text = f"  ·  {client_name or 'Client'}"
+            r2.font.size = _Pt(8)
             r2.font.color.rgb = GRAY_FOOTER
-            r3 = p.add_run()
-            r3.text = f"   ·   {site_area} m² Douala"
-            r3.font.size = _Pt(8)
-            r3.font.color.rgb = GRAY_FOOTER
-            r3.font.italic = True
-
-            # Page number droite (avec '/ N' bien visible)
+            # Page number droite, discret
             page_left = _Emu(7800000)
-            page = slide.shapes.add_textbox(page_left, footer_top, _Emu(1100000), footer_h)
+            page = slide.shapes.add_textbox(page_left, footer_top, _Emu(900000), footer_h)
             ptf = page.text_frame
             ptf.margin_left = _Emu(0); ptf.margin_right = _Emu(0)
             ptf.margin_top = _Emu(0); ptf.margin_bottom = _Emu(0)
@@ -599,17 +538,17 @@ def _apply_premium_styling(prs, data, client_name):
             pp.alignment = _Align.RIGHT
             pr1 = pp.add_run()
             pr1.text = f"{slide_num:02d}"
-            pr1.font.size = _Pt(14)
+            pr1.font.size = _Pt(11)
             pr1.font.bold = True
             pr1.font.color.rgb = color
             pr2 = pp.add_run()
             pr2.text = f" / {total_slides}"
-            pr2.font.size = _Pt(9)
+            pr2.font.size = _Pt(8)
             pr2.font.color.rgb = GRAY_FOOTER
         except Exception as e:
-            print(f"v74.22 styling slide {slide_num}: {e}", file=sys.stderr)
+            print(f"v74.23 styling slide {slide_num}: {e}", file=sys.stderr)
             continue
-    print(f"v74.22 PUSH 5+ : direction artistique RENFORCEE appliquee sur slides 3-{total_slides}", file=sys.stderr)
+    print(f"v74.23 : footer minimaliste applique sur slides 3-{total_slides} (edge bars retirees)", file=sys.stderr)
 
 
 def assemble_pptx(data, template_path, output_path):
