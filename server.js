@@ -485,18 +485,38 @@ app.post("/api/process-lead", async (req, res) => {
 
     // ─── STEP 8B: Fetch polygon from Supabase ───────────────────────────────
     console.log(`[8B] Fetching polygon for ${barloCode}...`);
+    // v74.25 DIAG : verbose logging pour debug pourquoi certains polygones ne sont pas trouves
+    console.log(`[8B-DIAG] env: SUPABASE_URL=${SUPABASE_URL ? "SET("+SUPABASE_URL.length+"c)" : "MISSING"} | ANON_KEY=${SUPABASE_ANON_KEY ? "SET("+SUPABASE_ANON_KEY.length+"c)" : "MISSING"} | barloCode="${barloCode}" len=${barloCode ? barloCode.length : 0}`);
     let polygonPoints = "";
     if (barloCode && SUPABASE_URL && SUPABASE_ANON_KEY) {
       try {
-        const polyUrl = `${SUPABASE_URL}/rest/v1/polygon_drafts?temp_id=eq.${barloCode}&select=polygon_points`;
+        const polyUrl = `${SUPABASE_URL}/rest/v1/polygon_drafts?temp_id=eq.${encodeURIComponent(barloCode)}&select=polygon_points`;
+        console.log(`[8B-DIAG] URL=${polyUrl}`);
+        const t0_8b = Date.now();
         const polyRes = await fetch(polyUrl, {
           headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, Accept: "application/json" }
         });
-        const polyData = await polyRes.json();
+        const elapsedFetch = Date.now() - t0_8b;
+        console.log(`[8B-DIAG] HTTP ${polyRes.status} in ${elapsedFetch}ms`);
+        const polyText = await polyRes.text();
+        console.log(`[8B-DIAG] body (first 300c): ${polyText.substring(0, 300)}`);
+        let polyData;
+        try { polyData = JSON.parse(polyText); }
+        catch (parseErr) {
+          console.log(`[8B-DIAG] JSON parse failed: ${parseErr.message}`);
+          polyData = null;
+        }
+        console.log(`[8B-DIAG] parsed: isArray=${Array.isArray(polyData)} length=${Array.isArray(polyData) ? polyData.length : "N/A"} firstHasPoints=${Array.isArray(polyData) && polyData.length > 0 ? !!polyData[0].polygon_points : "N/A"}`);
         if (Array.isArray(polyData) && polyData.length > 0 && polyData[0].polygon_points) {
           polygonPoints = polyData[0].polygon_points;
+          console.log(`[8B-DIAG] ✓ polygon found, ${polygonPoints.length} chars`);
         }
-      } catch (e) { console.log(`[8B] Polygon fetch warning: ${e.message}`); }
+      } catch (e) {
+        console.log(`[8B] Polygon fetch warning: ${e.message}`);
+        console.log(`[8B-DIAG] Error stack: ${e.stack ? e.stack.substring(0, 300) : "no stack"}`);
+      }
+    } else {
+      console.log(`[8B-DIAG] Pre-condition failed — skip fetch`);
     }
     // Write polygon + stage to PIPELINE
     const colAN = pipeHeaders.indexOf("site_polygon_points");
