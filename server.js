@@ -10130,6 +10130,77 @@ app.post("/generate-pptx", async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+// ─── ENDPOINT GET /pptx-premium/:leadId (raccourci navigateur) ──────────────
+// Push 22.1.b : raccourci pour tester /generate-pptx-premium sans formulaire.
+// Lit la PIPELINE pour le lead, construit le body necessaire, appelle la
+// generation premium en interne, et streame le pptx en download.
+app.get("/pptx-premium/:leadId", async (req, res) => {
+  const leadId = String(req.params.leadId || "").trim();
+  if (!leadId) return res.status(400).send("lead_id manquant");
+  try {
+    // Read PIPELINE row pour ce lead
+    const headersData = await gasGet("readPipelineHeaders");
+    const pipeHeaders = headersData.values && headersData.values[0];
+    if (!pipeHeaders) return res.status(500).send("PIPELINE headers introuvables");
+    const allData = await gasGet("readPipelineAll");
+    const allRows = allData.values || [];
+    const btcIdx = pipeHeaders.indexOf("barlo_temp_code");
+    const cfIdx = pipeHeaders.indexOf("cf");
+    let matchedRow = null;
+    for (let i = 1; i < allRows.length; i++) {
+      const r = allRows[i];
+      if (!r) continue;
+      if (
+        (btcIdx >= 0 && r[btcIdx] && String(r[btcIdx]).trim() === leadId) ||
+        (cfIdx >= 0 && r[cfIdx] && String(r[cfIdx]).trim() === leadId)
+      ) {
+        matchedRow = r;
+        break;
+      }
+    }
+    if (!matchedRow) return res.status(404).send(`Lead "${leadId}" introuvable dans PIPELINE`);
+    // Build obj depuis pipeHeaders
+    const obj = {};
+    pipeHeaders.forEach((h, i) => { if (h) obj[h] = matchedRow[i] !== undefined ? matchedRow[i] : ""; });
+    // Map PIPELINE → body /generate-pptx-premium
+    const p = {};
+    for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
+      if (obj[pipeCol] !== undefined && obj[pipeCol] !== "") p[bodyKey] = obj[pipeCol];
+    }
+    // Plus tous les overrides
+    const overrideFields = [
+      "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
+      "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
+      "override_units_A", "override_units_B", "override_units_C",
+      "override_fp_A", "override_fp_B", "override_fp_C",
+      "override_levels_A", "override_levels_B", "override_levels_C",
+      "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
+    ];
+    for (const f of overrideFields) {
+      if (obj[f] !== undefined && obj[f] !== "") p[f] = obj[f];
+    }
+    p.lead_id = leadId;
+    p.client_name = obj.client_name || "";
+    p.city = obj.project_city || "Douala";
+    // Forward to /generate-pptx-premium internally via fetch
+    const pptxRes = await fetch(`http://localhost:${PORT}/generate-pptx-premium`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    });
+    if (!pptxRes.ok) {
+      const txt = await pptxRes.text();
+      return res.status(500).send(`Generation echouee: ${txt.substring(0, 500)}`);
+    }
+    const buf = Buffer.from(await pptxRes.arrayBuffer());
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    res.setHeader("Content-Disposition", `attachment; filename="diagnostic_premium_${leadId}.pptx"`);
+    res.send(buf);
+  } catch (e) {
+    console.error(`[pptx-premium GET] ${e.message}\n${e.stack}`);
+    res.status(500).send(`Erreur: ${e.message}`);
+  }
+});
 // ─── ENDPOINT /generate-pptx-premium (Push 22.1) ─────────────────────────────
 // Variante de /generate-pptx qui utilise le template Canva premium au lieu
 // du template Python classique. Phase 22.1 : substitution textes uniquement.
