@@ -469,10 +469,12 @@ app.post("/api/process-lead", async (req, res) => {
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
                               "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
                               "site_polygon_points", "site_polygon_status",
-                              // v74.33 PUSH 11+12+15 — Lead Constraints framework (par lead)
+                              // v74.34 PUSH 11+12+15+16 — Lead Constraints framework (par lead)
                               "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
                               "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
-                              "override_units_A", "override_units_B", "override_units_C"];
+                              "override_units_A", "override_units_B", "override_units_C",
+                              "override_fp_A", "override_fp_B", "override_fp_C",
+                              "override_levels_A", "override_levels_B", "override_levels_C"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -709,7 +711,7 @@ app.post("/api/process-lead", async (req, res) => {
       commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
       retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
       disposition: obj8D.Disposition || "",
-      // v74.33 PUSH 11+12+15 — Lead Constraints framework (par lead)
+      // v74.34 PUSH 16 — Lead Constraints framework (par lead)
       override_lateral_hug: obj8D.override_lateral_hug || "",
       override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
       override_ignore_cos: obj8D.override_ignore_cos || "",
@@ -719,6 +721,12 @@ app.post("/api/process-lead", async (req, res) => {
       override_units_A: obj8D.override_units_A || "",
       override_units_B: obj8D.override_units_B || "",
       override_units_C: obj8D.override_units_C || "",
+      override_fp_A: obj8D.override_fp_A || "",
+      override_fp_B: obj8D.override_fp_B || "",
+      override_fp_C: obj8D.override_fp_C || "",
+      override_levels_A: obj8D.override_levels_A || "",
+      override_levels_B: obj8D.override_levels_B || "",
+      override_levels_C: obj8D.override_levels_C || "",
     };
 
     // Call /compute-scenarios on THIS server (internal call)
@@ -933,7 +941,7 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-            // v74.33 PUSH 13+15 — propager les contraintes lead lues FRAICHEMENT (obj8F)
+            // v74.34 PUSH 16 — propager les contraintes lead lues FRAICHEMENT (obj8F)
             override_lateral_hug: obj8F.override_lateral_hug || "",
             override_lateral_gap_m: obj8F.override_lateral_gap_m || "",
             override_ignore_cos: obj8F.override_ignore_cos || "",
@@ -943,6 +951,12 @@ app.post("/api/process-lead", async (req, res) => {
             override_units_A: obj8F.override_units_A || "",
             override_units_B: obj8F.override_units_B || "",
             override_units_C: obj8F.override_units_C || "",
+            override_fp_A: obj8F.override_fp_A || "",
+            override_fp_B: obj8F.override_fp_B || "",
+            override_fp_C: obj8F.override_fp_C || "",
+            override_levels_A: obj8F.override_levels_A || "",
+            override_levels_B: obj8F.override_levels_B || "",
+            override_levels_C: obj8F.override_levels_C || "",
           };
           console.log(`[8F-${label}-DIAG] body constraints sent : hug="${massingBody.override_lateral_hug}" gap="${massingBody.override_lateral_gap_m}" cos="${massingBody.override_ignore_cos}" max_fp="${massingBody.override_max_fp_m2}" ignore_setbacks="${massingBody.override_ignore_setbacks}"`);
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
@@ -4633,22 +4647,31 @@ function parseLeadConstraints(body) {
     c.isEmpty = false;
     c.activeList.push("retraits reglementaires non appliques (derogation totale assumee)");
   }
-  // ── PROGRAMMATIQUE : nombre d'unites force par scenario (Push 15) ──
-  const unitsA = parseInt(get("override_units_A"));
-  const unitsB = parseInt(get("override_units_B"));
-  const unitsC = parseInt(get("override_units_C"));
-  if (unitsA > 0 || unitsB > 0 || unitsC > 0) {
-    c.programmatic.target_units = {
-      A: unitsA > 0 ? unitsA : null,
-      B: unitsB > 0 ? unitsB : null,
-      C: unitsC > 0 ? unitsC : null,
-    };
+  // ── PROGRAMMATIQUE : overrides complets par scenario (Push 15+16) ──
+  // Chaque scenario peut avoir fp, levels, units forces. Si rempli, ces valeurs
+  // ecrasent celles du moteur, et la cascade SDP/m²-logt/cost suit.
+  const scOverrides = {};
+  let hasScOverride = false;
+  for (const lbl of ["A", "B", "C"]) {
+    const fp = parseFloat(get(`override_fp_${lbl}`));
+    const lev = parseInt(get(`override_levels_${lbl}`));
+    const u = parseInt(get(`override_units_${lbl}`));
+    if (fp > 0 || lev > 0 || u > 0) {
+      scOverrides[lbl] = {};
+      if (fp > 0) scOverrides[lbl].fp = fp;
+      if (lev > 0) scOverrides[lbl].levels = lev;
+      if (u > 0) scOverrides[lbl].units = u;
+      hasScOverride = true;
+    }
+  }
+  if (hasScOverride) {
+    c.programmatic.scenarios = scOverrides;
     c.isEmpty = false;
-    const parts = [];
-    if (unitsA > 0) parts.push(`A=${unitsA}`);
-    if (unitsB > 0) parts.push(`B=${unitsB}`);
-    if (unitsC > 0) parts.push(`C=${unitsC}`);
-    c.activeList.push(`nombre d'unites force par scenario (${parts.join(", ")})`);
+    const summary = ["A", "B", "C"]
+      .filter(l => scOverrides[l])
+      .map(l => `${l}=[${[scOverrides[l].fp ? `fp${scOverrides[l].fp}` : "", scOverrides[l].levels ? `R+${scOverrides[l].levels - 1}` : "", scOverrides[l].units ? `${scOverrides[l].units}u` : ""].filter(Boolean).join(",")}]`)
+      .join(" ");
+    c.activeList.push(`scenarios forces : ${summary}`);
   }
   // ── DOCUMENTATION ──
   const rat = String(get("constraints_rationale") || "").trim();
@@ -4760,42 +4783,67 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       console.log(`│ [CONSTRAINTS] Cap fp_m2=${cap}m² mais max actuel=${maxFpDefault}m² ≤ cap → no-op`);
     }
   }
-  // ── PROGRAMMATIQUE : forcer total_units par scenario (Push 15) ──
-  // Recalcule m²/logement = SDP × usable_ratio / target_units, et redimensionne
-  // le mix unitaire proportionnellement. Permet par exemple "A=8 grands apparts,
-  // B=8 apparts plus petits, C=6 apparts" pour un meme cap fp.
-  const targetUnits = constraints.programmatic && constraints.programmatic.target_units;
-  if (targetUnits) {
-    const USABLE_RATIO = 0.75; // hypothese 25% circulations
+  // ── PROGRAMMATIQUE : overrides complets par scenario (Push 16) ──
+  // Si fp/levels/units sont fournis pour un scenario, on ECRASE les valeurs du
+  // moteur et on recalcule la cascade :
+  //   SDP   = fp × levels
+  //   m²/logt = SDP / units (brut, sans soustraire circulations)
+  //   cost  = ajuste proportionnellement
+  //   mix   = simplifie en N × type(m²) base sur la taille moyenne
+  const scOv = constraints.programmatic && constraints.programmatic.scenarios;
+  if (scOv) {
     for (const lbl of ["A", "B", "C"]) {
       const sc = scenarios[lbl];
-      const tgt = targetUnits[lbl];
-      if (!sc || !tgt || tgt <= 0) continue;
+      const ov = scOv[lbl];
+      if (!sc || !ov) continue;
+      const oldFp = sc.fp_m2 || 0;
+      const oldLevels = sc.levels || 1;
+      const oldSdp = sc.sdp_m2 || (oldFp * oldLevels);
       const oldUnits = sc.total_units || 1;
-      sc.total_units = tgt;
-      // m²/logement (utile) recalcule a partir du SDP × ratio
-      const sdp = sc.sdp_m2 || (sc.fp_m2 || 0) * (sc.levels || 1);
-      const usableTotal = Math.round(sdp * USABLE_RATIO);
-      const m2PerUnit = Math.max(8, Math.round(usableTotal / tgt));
-      sc.m2_habitable_par_logement = m2PerUnit;
-      sc.surface_habitable_m2 = m2PerUnit * tgt;
-      sc.total_useful_m2 = usableTotal;
-      sc.hab_m2_total = usableTotal;
-      // Cost per unit
-      if (typeof sc.cost_total_fcfa === "number" && tgt > 0) {
-        sc.cost_per_unit = Math.round(sc.cost_total_fcfa / tgt);
+      const oldCost = sc.cost_total_fcfa || 0;
+      // Apply overrides
+      if (ov.fp > 0) sc.fp_m2 = ov.fp;
+      if (ov.levels > 0) {
+        sc.levels = ov.levels;
+        sc.height_m = Math.round(ov.levels * 3.2 * 10) / 10;
       }
-      // Mix unitaire : rescale proportionnel a oldUnits → tgt
-      if (sc.unit_mix && typeof sc.unit_mix === "object") {
-        const unitScale = tgt / Math.max(1, oldUnits);
-        for (const k of Object.keys(sc.unit_mix)) {
-          sc.unit_mix[k] = Math.max(0, Math.round(sc.unit_mix[k] * unitScale));
-        }
+      if (ov.units > 0) sc.total_units = ov.units;
+      // Cascade SDP
+      sc.sdp_m2 = Math.round(sc.fp_m2 * sc.levels);
+      const sdpScale = oldSdp > 0 ? sc.sdp_m2 / oldSdp : 1;
+      // m²/logt = SDP / units (BRUT, sans ratio circulations)
+      if (sc.total_units > 0) {
+        sc.m2_habitable_par_logement = Math.round(sc.sdp_m2 / sc.total_units);
+        sc.surface_habitable_m2 = sc.sdp_m2;
+        sc.total_useful_m2 = sc.sdp_m2;
+        sc.hab_m2_total = sc.sdp_m2;
       }
-      if (sc.unit_mix_detail) {
-        sc.unit_mix_detail = rescaleMixDetail(sc.unit_mix_detail, tgt / Math.max(1, oldUnits));
+      // Cost cascade (proportionnel SDP)
+      if (typeof sc.cost_total_fcfa === "number") {
+        sc.cost_total_fcfa = Math.round(oldCost * sdpScale);
       }
-      console.log(`│ [CONSTRAINTS] ${lbl}: total_units force ${oldUnits}→${tgt} | m²/logt=${m2PerUnit} | surface_hab=${m2PerUnit * tgt}m²`);
+      if (typeof sc.cost_per_unit === "number" && sc.total_units > 0) {
+        sc.cost_per_unit = Math.round(sc.cost_total_fcfa / sc.total_units);
+      }
+      if (sc.cout_fourchette) {
+        if (typeof sc.cout_fourchette.bas === "number") sc.cout_fourchette.bas = Math.round(sc.cout_fourchette.bas * sdpScale);
+        if (typeof sc.cout_fourchette.haut === "number") sc.cout_fourchette.haut = Math.round(sc.cout_fourchette.haut * sdpScale);
+        if (typeof sc.cout_fourchette.median === "number") sc.cout_fourchette.median = Math.round(sc.cout_fourchette.median * sdpScale);
+      }
+      // Reconstruct mix : 1 type homogene base sur m²/logt
+      const m2pu = sc.m2_habitable_par_logement;
+      const type = m2pu < 28 ? "T1" : m2pu < 45 ? "T2" : m2pu < 65 ? "T3" : m2pu < 85 ? "T4" : "T5";
+      sc.unit_mix_detail = `${sc.total_units}×${type}(${m2pu}m²)`;
+      sc.unit_mix = { [type]: sc.total_units };
+      // COS recalcule proportionnel
+      if (typeof sc.cos_ratio_pct === "number" && oldSdp > 0) {
+        sc.cos_ratio_pct = Math.round(sc.cos_ratio_pct * sdpScale);
+        sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
+          : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
+          : "AMBITIEUX_HORS_COS";
+      }
+      sc.programmatic_override = true;
+      console.log(`│ [CONSTRAINTS] ${lbl} OVERRIDE : fp=${sc.fp_m2}m² × levels=${sc.levels} = SDP=${sc.sdp_m2}m² | ${sc.total_units} unites de ${m2pu}m² (${type}) | cout=${Math.round((sc.cost_total_fcfa || 0) / 1e6)}M FCFA`);
     }
   }
   return scenarios;
@@ -7454,7 +7502,7 @@ app.post("/generate-massing", async (req, res) => {
     // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
     input_typologies = "",
     commerce_size_m2 = 0,
-    // v74.33 PUSH 11+12+15 — Lead Constraints framework (par lead)
+    // v74.34 PUSH 16 — Lead Constraints framework (par lead)
     override_lateral_hug = "",
     override_lateral_gap_m = "",
     override_ignore_cos = "",
@@ -7464,6 +7512,12 @@ app.post("/generate-massing", async (req, res) => {
     override_units_A = "",
     override_units_B = "",
     override_units_C = "",
+    override_fp_A = "",
+    override_fp_B = "",
+    override_fp_C = "",
+    override_levels_A = "",
+    override_levels_B = "",
+    override_levels_C = "",
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
