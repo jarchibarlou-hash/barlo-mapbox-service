@@ -469,12 +469,13 @@ app.post("/api/process-lead", async (req, res) => {
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
                               "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
                               "site_polygon_points", "site_polygon_status",
-                              // v74.34 PUSH 11+12+15+16 — Lead Constraints framework (par lead)
+                              // v74.34 PUSH 11+12+15+16+18 — Lead Constraints framework (par lead)
                               "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
                               "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
                               "override_units_A", "override_units_B", "override_units_C",
                               "override_fp_A", "override_fp_B", "override_fp_C",
-                              "override_levels_A", "override_levels_B", "override_levels_C"];
+                              "override_levels_A", "override_levels_B", "override_levels_C",
+                              "override_gap_m_A", "override_gap_m_B", "override_gap_m_C"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -727,6 +728,9 @@ app.post("/api/process-lead", async (req, res) => {
       override_levels_A: obj8D.override_levels_A || "",
       override_levels_B: obj8D.override_levels_B || "",
       override_levels_C: obj8D.override_levels_C || "",
+      override_gap_m_A: obj8D.override_gap_m_A || "",
+      override_gap_m_B: obj8D.override_gap_m_B || "",
+      override_gap_m_C: obj8D.override_gap_m_C || "",
     };
 
     // Call /compute-scenarios on THIS server (internal call)
@@ -957,6 +961,9 @@ app.post("/api/process-lead", async (req, res) => {
             override_levels_A: obj8F.override_levels_A || "",
             override_levels_B: obj8F.override_levels_B || "",
             override_levels_C: obj8F.override_levels_C || "",
+            override_gap_m_A: obj8F.override_gap_m_A || "",
+            override_gap_m_B: obj8F.override_gap_m_B || "",
+            override_gap_m_C: obj8F.override_gap_m_C || "",
           };
           console.log(`[8F-${label}-DIAG] body constraints sent : hug="${massingBody.override_lateral_hug}" gap="${massingBody.override_lateral_gap_m}" cos="${massingBody.override_ignore_cos}" max_fp="${massingBody.override_max_fp_m2}" ignore_setbacks="${massingBody.override_ignore_setbacks}"`);
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
@@ -4671,11 +4678,13 @@ function parseLeadConstraints(body) {
     const fp = parseFloat(get(`override_fp_${lbl}`));
     const lev = parseLevelsSmart(get(`override_levels_${lbl}`));
     const u = parseInt(get(`override_units_${lbl}`));
-    if (fp > 0 || lev > 0 || u > 0) {
+    const gap = parseFloat(get(`override_gap_m_${lbl}`));
+    if (fp > 0 || lev > 0 || u > 0 || gap > 0) {
       scOverrides[lbl] = {};
       if (fp > 0) scOverrides[lbl].fp = fp;
       if (lev > 0) scOverrides[lbl].levels = lev;
       if (u > 0) scOverrides[lbl].units = u;
+      if (gap > 0) scOverrides[lbl].gap_m = gap;
       hasScOverride = true;
     }
   }
@@ -4684,7 +4693,12 @@ function parseLeadConstraints(body) {
     c.isEmpty = false;
     const summary = ["A", "B", "C"]
       .filter(l => scOverrides[l])
-      .map(l => `${l}=[${[scOverrides[l].fp ? `fp${scOverrides[l].fp}` : "", scOverrides[l].levels ? `R+${scOverrides[l].levels - 1}` : "", scOverrides[l].units ? `${scOverrides[l].units}u` : ""].filter(Boolean).join(",")}]`)
+      .map(l => `${l}=[${[
+        scOverrides[l].fp ? `fp${scOverrides[l].fp}` : "",
+        scOverrides[l].levels ? `R+${scOverrides[l].levels - 1}` : "",
+        scOverrides[l].units ? `${scOverrides[l].units}u` : "",
+        scOverrides[l].gap_m ? `gap${scOverrides[l].gap_m}m` : "",
+      ].filter(Boolean).join(",")}]`)
       .join(" ");
     c.activeList.push(`scenarios forces : ${summary}`);
   }
@@ -4866,14 +4880,22 @@ function applyConstraintsToScenarios(scenarios, constraints) {
 // ─── 2. ETAGE MASSING : geometrie 3D (positionnement, dimensions) ─────────
 // Renvoie un objet { hugSign, gapM, ignoreSetbacks } que computeMassingPolygon
 // utilisera. Si pas de contraintes geometriques, hugSign=0.
-function applyConstraintsToMassing(constraints, sUx, sUy, nUx, nUy) {
+// Push 18 : accepte scenarioLabel ("A"/"B"/"C") pour selectionner un gap_m
+// par-scenario s'il existe (constraints.programmatic.scenarios[lbl].gap_m).
+function applyConstraintsToMassing(constraints, sUx, sUy, nUx, nUy, scenarioLabel) {
   const out = { hugSign: 0, gapM: 0, ignoreSetbacks: false, fillEdge: false };
   if (!constraints || constraints.isEmpty) return out;
   const geo = constraints.geometry || {};
   const reg = constraints.regulatory || {};
-  // ── lateral hug + gap ──
+  // ── lateral hug + gap (gap eventuellement override par-scenario) ──
   const hug = geo.lateral_hug;
-  const gapM = geo.lateral_gap_m || 0;
+  let gapM = geo.lateral_gap_m || 0;
+  // Push 18 : per-scenario gap override
+  const scOv = constraints.programmatic && constraints.programmatic.scenarios;
+  if (scenarioLabel && scOv && scOv[scenarioLabel] && scOv[scenarioLabel].gap_m > 0) {
+    gapM = scOv[scenarioLabel].gap_m;
+    console.log(`│ [CONSTRAINTS-MASSING] Per-scenario gap_m for ${scenarioLabel}: ${gapM}m (overrides global)`);
+  }
   if (hug && gapM > 0) {
     const cardVec = { EAST: [1, 0], WEST: [-1, 0], NORTH: [0, 1], SOUTH: [0, -1] }[hug];
     if (cardVec) {
@@ -5397,9 +5419,10 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     site_saturation, project_type, existing_fp_m2,
     road_bearing: roadBearingInput, scenario_role, split_context,
     lead_constraints: leadConstraintsCtx,
+    scenario_label: scenarioLabelCtx,
     // legacy (Push 8/9) — fallback si lead_constraints n'est pas fourni
     lateral_hug: lateralHugRaw, lateral_gap_m: lateralGapRaw } = context;
-  console.log(`┌── computeMassingPolygon v74.30 (LEAD CONSTRAINTS) ──`);
+  console.log(`┌── computeMassingPolygon v74.34 (LEAD CONSTRAINTS) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
   // ── 1. Centroïde et conversion mètres ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -5518,7 +5541,7 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
       override_lateral_gap_m: lateralGapRaw,
     });
   }
-  const massingC = applyConstraintsToMassing(_leadConstraints, sUx, sUy, nUx, nUy);
+  const massingC = applyConstraintsToMassing(_leadConstraints, sUx, sUy, nUx, nUy, scenarioLabelCtx);
   let hugSign = massingC.hugSign;
   const gapM = massingC.gapM;
   const ignoreSetbacks = massingC.ignoreSetbacks;
@@ -7533,6 +7556,9 @@ app.post("/generate-massing", async (req, res) => {
     override_levels_A = "",
     override_levels_B = "",
     override_levels_C = "",
+    override_gap_m_A = "",
+    override_gap_m_B = "",
+    override_gap_m_C = "",
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -7907,9 +7933,11 @@ app.post("/generate-massing", async (req, res) => {
     existing_fp_m2: Number(existing_footprint_m2) || 0,
     road_bearing: Number(road_bearing) || null,        // v56.7: azimut rue depuis la Sheet
     scenario_role: label === "A" ? "INTENSIFICATION" : label === "B" ? "EQUILIBRE" : "PRUDENT",
+    scenario_label: label,                               // Push 18 : per-scenario gap override
     split_context: splitContext,                         // v72.27: positionner logement derrière commerce
-    // v74.30 PUSH 11 — passer les contraintes structurelles du lead au framework.
-    // computeMassingPolygon utilise applyConstraintsToMassing() pour les consommer.
+    // v74.30 PUSH 11+18 — passer les contraintes structurelles du lead au framework.
+    // computeMassingPolygon utilise applyConstraintsToMassing() pour les consommer
+    // et selectionne un gap_m par scenario si fourni.
     lead_constraints: parseLeadConstraints(req.body),
   });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
