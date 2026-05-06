@@ -7092,8 +7092,12 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
   } else {
     // ══ MODE SUPERPOSÉ : annotations classiques ══
     const realTotalH = rdcH_m + (levels - 1) * etageH_m;
-    // v72.87: utiliser le SDP RÉEL du scénario (pas fp_m2 × levels qui est une approximation)
-    const sdpTotale = sdp_m2_actual || (fp_m2 * levels);
+    // v74.37 PUSH 21 : si actual_fp_m2 fourni (rendu reel apres saturation),
+    // le total SDP doit refleter ce qui est dessine = somme des plateaux annotes.
+    // Sinon fallback sur sdp_m2_actual (engine) ou fp_m2 × levels.
+    const sdpTotale = (actual_fp_m2 && actual_fp_m2 > 0)
+      ? Math.round(actual_fp_m2 * levels)
+      : (sdp_m2_actual || (fp_m2 * levels));
     const annX = W * 0.62;
     const annBaseY = H * 0.58;
     const annStepY = -32 * s;
