@@ -469,10 +469,8 @@ app.post("/api/process-lead", async (req, res) => {
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
                               "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
                               "site_polygon_points", "site_polygon_status",
-                              // v74.27 — preserve user overrides across retreatments
-                              "override_levels_A", "override_levels_B", "override_levels_C",
-                              "override_typology_A", "override_typology_B", "override_typology_C",
-                              "override_units_A", "override_units_B", "override_units_C"];
+                              // v74.28 — overrides STRUCTURELS par lead (Push 8)
+                              "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -706,16 +704,10 @@ app.post("/api/process-lead", async (req, res) => {
       commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
       retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
       disposition: obj8D.Disposition || "",
-      // v74.26 — overrides utilisateur (vide = engine libre, rempli = engine respecte)
-      override_levels_A: obj8D.override_levels_A || "",
-      override_levels_B: obj8D.override_levels_B || "",
-      override_levels_C: obj8D.override_levels_C || "",
-      override_typology_A: obj8D.override_typology_A || "",
-      override_typology_B: obj8D.override_typology_B || "",
-      override_typology_C: obj8D.override_typology_C || "",
-      override_units_A: obj8D.override_units_A || "",
-      override_units_B: obj8D.override_units_B || "",
-      override_units_C: obj8D.override_units_C || ""
+      // v74.28 — overrides STRUCTURELS par lead (Push 8)
+      override_lateral_hug: obj8D.override_lateral_hug || "",
+      override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
+      override_ignore_cos: obj8D.override_ignore_cos || ""
     };
 
     // Call /compute-scenarios on THIS server (internal call)
@@ -907,16 +899,10 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-            // v74.27 — propager les overrides utilisateur vers /generate-massing
-            override_levels_A: obj8D.override_levels_A || "",
-            override_levels_B: obj8D.override_levels_B || "",
-            override_levels_C: obj8D.override_levels_C || "",
-            override_typology_A: obj8D.override_typology_A || "",
-            override_typology_B: obj8D.override_typology_B || "",
-            override_typology_C: obj8D.override_typology_C || "",
-            override_units_A: obj8D.override_units_A || "",
-            override_units_B: obj8D.override_units_B || "",
-            override_units_C: obj8D.override_units_C || "",
+            // v74.28 — propager les overrides STRUCTURELS vers /generate-massing (Push 8)
+            override_lateral_hug: obj8D.override_lateral_hug || "",
+            override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
+            override_ignore_cos: obj8D.override_ignore_cos || "",
           };
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -4529,56 +4515,28 @@ function computeSmartScenarios({
   return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
 }
 // ═══════════════════════════════════════════════════════════════════════════
-// v74.26 PUSH 7 — SYSTEME D'OVERRIDE PAR LEAD
-// L'utilisateur peut renseigner dans PIPELINE des colonnes override_* qui
-// FORCENT certains parametres scenario apres calcul moteur. Le moteur reste
-// intact ; on post-process les scenarios pour respecter les choix manuels.
-// Champs supportes (par scenario A/B/C) :
-//   override_levels_A/B/C    : force le R+X (entier)
-//   override_typology_A/B/C  : force la forme (BLOC, BARRE, EN_L, EN_U, ...)
-//   override_units_A/B/C     : force le nombre d'unites (entier)
-// Fields globaux (a venir Phase 2) :
-//   lateral_hug_side, lateral_gap_m
+// v74.28 PUSH 8 — OVERRIDE STRUCTUREL PAR LEAD
+// Remplace le system override_levels/typology/units (Push 7, retire — trop
+// naïf, cassait la coherence). Nouvelle approche : overrides STRUCTURELS qui
+// expriment des CONTRAINTES architecturales que le moteur respecte.
+//
+// Champs globaux (par lead, pas par scenario) :
+//   override_lateral_hug    (EAST/WEST/NORTH/SOUTH)
+//      → bati plaque contre cette mitoyennete au lieu d'etre centre
+//   override_lateral_gap_m  (entier 1-8)
+//      → distance min cote oppose au hug
+//   override_ignore_cos     (Y/vide)
+//      → adouci le ton du rapport quand on depasse le COS (deroge assumee)
+//
+// Le helper ne touche pas aux scenarios eux-memes : c'est computeMassingPolygon
+// (positionnement) et les textes (ton du COS) qui lisent ces overrides.
 // ═══════════════════════════════════════════════════════════════════════════
 function applyScenarioOverrides(scenarios, params) {
-  if (!scenarios || typeof scenarios !== "object" || !params) return scenarios;
-  const TYPOLOGIES_VALID = new Set(["BLOC", "BARRE", "EN_L", "EN_U", "EXTENSION"]);
-  for (const label of ["A", "B", "C"]) {
-    const sc = scenarios[label];
-    if (!sc || typeof sc !== "object") continue;
-    // ── Override levels (R+X) ──
-    const ovLvl = parseInt(params[`override_levels_${label}`]);
-    if (ovLvl > 0 && ovLvl <= 20 && ovLvl !== sc.levels) {
-      console.log(`[OVERRIDE-${label}] levels ${sc.levels} → ${ovLvl}`);
-      const oldLevels = sc.levels || 1;
-      sc.levels = ovLvl;
-      // Recompute height
-      const floorH = sc.floor_height || 3.2;
-      sc.height_m = Math.round(ovLvl * floorH * 10) / 10;
-      // Recompute SDP from new levels (preserve fp)
-      const fp = sc.footprint_m2 || sc.fp_m2 || 0;
-      if (fp > 0) {
-        sc.sdp_m2 = Math.round(fp * ovLvl);
-        // Recalculate cost if cost_total depends on SDP
-        if (sc.cost_per_m2_sdp && sc.cost_total_fcfa) {
-          sc.cost_total_fcfa = Math.round(sc.sdp_m2 * sc.cost_per_m2_sdp);
-        }
-      }
-    }
-    // ── Override typology ──
-    const ovTypo = String(params[`override_typology_${label}`] || "").trim().toUpperCase();
-    if (ovTypo && TYPOLOGIES_VALID.has(ovTypo) && ovTypo !== sc.typology) {
-      console.log(`[OVERRIDE-${label}] typology ${sc.typology} → ${ovTypo}`);
-      sc.typology = ovTypo;
-      sc.typology_desc = `${ovTypo.toLowerCase().replace("_", "-")} (forcé manuellement)`;
-    }
-    // ── Override total units ──
-    const ovUnits = parseInt(params[`override_units_${label}`]);
-    if (ovUnits > 0 && ovUnits <= 100 && ovUnits !== sc.total_units) {
-      console.log(`[OVERRIDE-${label}] units ${sc.total_units} → ${ovUnits}`);
-      sc.total_units = ovUnits;
-    }
-  }
+  // v74.28 — fonction conservee (signature inchangee) mais rendue NOOP.
+  // Les anciens override_levels/typology/units etaient cassants (creaient
+  // des incoherences SDP/units/COS). Les nouveaux overrides structurels
+  // sont appliques DIRECTEMENT dans computeMassingPolygon et dans les textes,
+  // pas via post-processing des scenarios.
   return scenarios;
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
@@ -4812,6 +4770,10 @@ app.post("/compute-scenarios", (req, res) => {
     profil_standing: profil.standing || "",
     profil_programme: profil.programme || "",
     profil_cible_unites: String(profil.cible_unites || 0),
+    // v74.28 — overrides STRUCTURELS (Push 8) echo
+    override_ignore_cos: String(p.override_ignore_cos || "").toUpperCase() === "Y" ? "Y" : "",
+    override_lateral_hug: String(p.override_lateral_hug || "").toUpperCase(),
+    override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
     // ── SITE DIAG ──
     site_ces_regl: `${siteDiag.ces_reglementaire_pct || 0}%`,
     site_cos_regl: String(siteDiag.cos_reglementaire || 0),
@@ -5056,8 +5018,9 @@ function envelopeDepthAtU(uTarget, envLocal) {
 function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}) {
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2,
-    road_bearing: roadBearingInput, scenario_role, split_context } = context;
-  console.log(`┌── computeMassingPolygon v72.27 (ROAD_BEARING + RÔLE + SOLAR + SPLIT) ──`);
+    road_bearing: roadBearingInput, scenario_role, split_context,
+    lateral_hug: lateralHugRaw, lateral_gap_m: lateralGapRaw } = context;
+  console.log(`┌── computeMassingPolygon v74.28 (ROAD_BEARING + RÔLE + SOLAR + SPLIT + HUG) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
   // ── 1. Centroïde et conversion mètres ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -5271,8 +5234,47 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const shapeArea = polyArea(bPts);
   console.log(`│ Shape: ${typology} bW=${bW.toFixed(1)}m × bD=${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m²`);
   // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
-  // Centre U = milieu du bbox, Centre V = retrait en profondeur
-  const cU = (minU + maxU) / 2;
+  // Centre U = milieu du bbox (par défaut, peut être décalé par lateral_hug)
+  // Centre V = retrait en profondeur
+  let cU = (minU + maxU) / 2;
+  // v74.28 — OVERRIDE LATERAL HUG (Push 8) ──────────────────────────────────
+  // Si lateral_hug = EAST/WEST/NORTH/SOUTH, on plaque le bâtiment contre cette
+  // mitoyenneté en laissant lateral_gap_m sur le côté opposé (au lieu d'être
+  // centré). Utilisé pour les leads qui assument une dérogation sur un côté
+  // (cf. Vanelle BARLO-BVTW : hug=EAST, gap=4m, ignore_cos=Y).
+  const hug = String(lateralHugRaw || "").trim().toUpperCase();
+  const gapM = Math.max(0, parseFloat(lateralGapRaw) || 0);
+  if (hug && gapM > 0) {
+    const cardVec = { EAST: [1, 0], WEST: [-1, 0], NORTH: [0, 1], SOUTH: [0, -1] }[hug];
+    if (cardVec) {
+      // Projection du cardinal sur l'axe local U (axe rue)
+      // Convention toM : x = est (lon+), y = nord (lat+)
+      const dotU = cardVec[0] * sUx + cardVec[1] * sUy;
+      const dotV = cardVec[0] * nUx + cardVec[1] * nUy;
+      console.log(`│ v74.28 LATERAL HUG: ${hug} gap=${gapM}m | dotU=${dotU.toFixed(2)} dotV=${dotV.toFixed(2)}`);
+      if (Math.abs(dotU) >= Math.abs(dotV)) {
+        // L'axe lateral (U) contient bien la direction cardinale demandée
+        const sign = dotU >= 0 ? 1 : -1;
+        let targetCU;
+        if (sign > 0) {
+          // Hug côté maxU : opposé = minU → gap sur minU
+          targetCU = minU + gapM + bW / 2;
+          // Clamp pour rester dans l'enveloppe côté maxU (marge constructive)
+          if (targetCU + bW / 2 > maxU - margin) targetCU = maxU - margin - bW / 2;
+        } else {
+          // Hug côté minU : opposé = maxU → gap sur maxU
+          targetCU = maxU - gapM - bW / 2;
+          if (targetCU - bW / 2 < minU + margin) targetCU = minU + margin + bW / 2;
+        }
+        console.log(`│ v74.28 cU ${cU.toFixed(1)} → ${targetCU.toFixed(1)} (sign=${sign}, bW=${bW.toFixed(1)})`);
+        cU = targetCU;
+      } else {
+        console.log(`│ v74.28 LATERAL HUG ignoré : cardinal ${hug} sur axe profondeur (V), pas latéral (U)`);
+      }
+    } else {
+      console.log(`│ v74.28 LATERAL HUG inconnu: "${hug}" — ignoré`);
+    }
+  }
   let cV;
   if (splitForcePosition && split_context) {
     // v72.27 SPLIT: positionner le logement PRÉCISÉMENT derrière le commerce + gap
@@ -7111,6 +7113,10 @@ app.post("/generate-massing", async (req, res) => {
     // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
     input_typologies = "",
     commerce_size_m2 = 0,
+    // v74.28 — overrides STRUCTURELS par lead (Push 8)
+    override_lateral_hug = "",
+    override_lateral_gap_m = "",
+    override_ignore_cos = "",
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -7477,6 +7483,9 @@ app.post("/generate-massing", async (req, res) => {
     road_bearing: Number(road_bearing) || null,        // v56.7: azimut rue depuis la Sheet
     scenario_role: label === "A" ? "INTENSIFICATION" : label === "B" ? "EQUILIBRE" : "PRUDENT",
     split_context: splitContext,                         // v72.27: positionner logement derrière commerce
+    // v74.28 — overrides STRUCTURELS (Push 8)
+    lateral_hug: override_lateral_hug,
+    lateral_gap_m: override_lateral_gap_m,
   });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -8003,6 +8012,20 @@ function buildTemplateTexts(flat, scenarios) {
     const sdpMax = f("site_sdp_max");
     const costTotal = f(`${sc}_cost_total`);
     const budgetFcfa = f("budget_fcfa");
+    // v74.28 — Push 8 : adoucir le ton COS si dérogation assumée par le client
+    const ignoreCos = String(f("override_ignore_cos")).toUpperCase() === "Y";
+    const cosCompliance = String(f(`${sc}_cos_compliance`) || "").toUpperCase();
+    const cosPctNum = parseInt(cosPct) || 0;
+    let urbanismeBullet;
+    if (ignoreCos && cosPctNum > 100) {
+      urbanismeBullet = `COS à **${cosPct} %** du maximum autorisé — **dérogation assumée** par le client (déjà discutée avec la maîtrise d'ouvrage). À instruire en phase permis.`;
+    } else if (cosCompliance === "AMBITIEUX_HORS_COS") {
+      urbanismeBullet = `COS à **${cosPct} %** — dépassement significatif du plafond réglementaire, dérogation à instruire au cas par cas.`;
+    } else if (cosCompliance === "DEROGATION_POSSIBLE") {
+      urbanismeBullet = `COS à **${cosPct} %** — légèrement au-dessus du plafond, dérogation envisageable.`;
+    } else {
+      urbanismeBullet = `COS à **${cosPct} %** du maximum autorisé. Hauteurs et retraits conformes.`;
+    }
     // Détails budgétaires spécifiques
     let budgetAnalysis = "";
     if (budgetFit === "hors budget") {
@@ -8022,7 +8045,7 @@ function buildTemplateTexts(flat, scenarios) {
       compaciteAnalysis = `Les ${m2Logt} m² par logement offrent un niveau de confort conforme au standing ${standing} visé. Le risque de refus lié à la compacité est faible.`;
     }
     // v74.14 — buildRisk raccourci : 5 sections compactes, taille 12pt sans auto-shrink
-    return `**Score global ${score}/100** — profil ${profil}.\n\n**1. Urbanisme** — COS à **${cosPct} %** du maximum autorisé. Hauteurs et retraits conformes.\n\n**2. Surface habitable** — ${compaciteAnalysis}\n\n**3. Budget** — ${budgetAnalysis}\n\n**4. Stationnement** — ${parking}.\n\n**5. Constructibilité** — R+${levels} en standing ${standing}, complexité ${risqueCompacite === "élevé" ? "significative" : risqueCompacite === "modéré" ? "modérée" : "standard"}. Système poteau-poutre béton armé maîtrisé localement.`;
+    return `**Score global ${score}/100** — profil ${profil}.\n\n**1. Urbanisme** — ${urbanismeBullet}\n\n**2. Surface habitable** — ${compaciteAnalysis}\n\n**3. Budget** — ${budgetAnalysis}\n\n**4. Stationnement** — ${parking}.\n\n**5. Constructibilité** — R+${levels} en standing ${standing}, complexité ${risqueCompacite === "élevé" ? "significative" : risqueCompacite === "modéré" ? "modérée" : "standard"}. Système poteau-poutre béton armé maîtrisé localement.`;
   }
   // ── Recommended scenario shortcuts ──
   const rec = f("rec_scenario") || "C";
@@ -9011,6 +9034,10 @@ app.post("/generate-texts", async (req, res) => {
     profil_posture: profil.posture || p.feasibility_posture || "BALANCED",
     profil_standing: profil.standing || p.standing_level || "STANDARD",
     profil_programme: profil.programme || "",
+    // v74.28 — overrides STRUCTURELS (Push 8) propages dans les textes
+    override_ignore_cos: String(p.override_ignore_cos || "").toUpperCase() === "Y" ? "Y" : "",
+    override_lateral_hug: String(p.override_lateral_hug || "").toUpperCase(),
+    override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
     A_role: sA.role || "", A_fp: String(sA.fp_m2 || 0), A_levels: String(sA.levels || 0),
     A_height: String(sA.height_m || 0), A_sdp: String(sA.sdp_m2 || 0),
     A_units: String(sA.total_units || 0), A_unit_summary: sA.unit_mix_detail || "",
@@ -9310,6 +9337,10 @@ app.post("/generate-pptx", async (req, res) => {
       delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
       delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
       profil_posture: (diag.profil_client || {}).posture || "BALANCED",
+      // v74.28 — overrides STRUCTURELS (Push 8) propages dans les textes
+      override_ignore_cos: String(p.override_ignore_cos || "").toUpperCase() === "Y" ? "Y" : "",
+      override_lateral_hug: String(p.override_lateral_hug || "").toUpperCase(),
+      override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
     };
     // Add per-scenario flat fields
     for (const [key, s] of [["A", sA], ["B", sB], ["C", sC]]) {
