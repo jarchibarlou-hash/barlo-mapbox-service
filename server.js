@@ -4647,14 +4647,29 @@ function parseLeadConstraints(body) {
     c.isEmpty = false;
     c.activeList.push("retraits reglementaires non appliques (derogation totale assumee)");
   }
-  // ── PROGRAMMATIQUE : overrides complets par scenario (Push 15+16) ──
+  // ── PROGRAMMATIQUE : overrides complets par scenario (Push 15+16+17) ──
   // Chaque scenario peut avoir fp, levels, units forces. Si rempli, ces valeurs
   // ecrasent celles du moteur, et la cascade SDP/m²-logt/cost suit.
+  // Push 17 : parser souple pour levels — accepte "R+3 (4 niv)", "R+3", "4 niv", "4".
+  const parseLevelsSmart = (raw) => {
+    if (!raw) return 0;
+    const s = String(raw).trim();
+    // Priorite 1 : "X niv" (le user a deja ecrit le total)
+    const nivMatch = s.match(/(\d+)\s*niv/i);
+    if (nivMatch) return parseInt(nivMatch[1]);
+    // Priorite 2 : "R+X" → X+1 (RDC + X etages)
+    const rMatch = s.match(/R\s*\+\s*(\d+)/i);
+    if (rMatch) return parseInt(rMatch[1]) + 1;
+    // Fallback : premier entier rencontre
+    const intMatch = s.match(/(\d+)/);
+    if (intMatch) return parseInt(intMatch[1]);
+    return 0;
+  };
   const scOverrides = {};
   let hasScOverride = false;
   for (const lbl of ["A", "B", "C"]) {
     const fp = parseFloat(get(`override_fp_${lbl}`));
-    const lev = parseInt(get(`override_levels_${lbl}`));
+    const lev = parseLevelsSmart(get(`override_levels_${lbl}`));
     const u = parseInt(get(`override_units_${lbl}`));
     if (fp > 0 || lev > 0 || u > 0) {
       scOverrides[lbl] = {};
