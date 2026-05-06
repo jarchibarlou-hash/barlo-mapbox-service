@@ -469,9 +469,9 @@ app.post("/api/process-lead", async (req, res) => {
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
                               "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
                               "site_polygon_points", "site_polygon_status",
-                              // v74.30 PUSH 11 — Lead Constraints framework (par lead)
+                              // v74.30 PUSH 11+12 — Lead Constraints framework (par lead)
                               "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
-                              "override_max_fp_m2", "constraints_rationale"];
+                              "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -705,11 +705,12 @@ app.post("/api/process-lead", async (req, res) => {
       commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
       retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
       disposition: obj8D.Disposition || "",
-      // v74.30 PUSH 11 — Lead Constraints framework (par lead)
+      // v74.30 PUSH 11+12 — Lead Constraints framework (par lead)
       override_lateral_hug: obj8D.override_lateral_hug || "",
       override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
       override_ignore_cos: obj8D.override_ignore_cos || "",
       override_max_fp_m2: obj8D.override_max_fp_m2 || "",
+      override_ignore_setbacks: obj8D.override_ignore_setbacks || "",
       constraints_rationale: obj8D.constraints_rationale || "",
     };
 
@@ -861,13 +862,13 @@ app.post("/api/process-lead", async (req, res) => {
         } catch (e) { console.warn(`[8E-AXO] Error: ${e.message}`); }
       }
 
-      // v74.30 PUSH 11 — Cache bypass : toute lead constraint desactive le cache 8F
-      // (sinon les contraintes lateral_hug/max_fp/etc. ne s'appliqueraient jamais
-      // sur les leads existants ayant deja des massings caches).
+      // v74.30 PUSH 11+12 — Cache bypass : toute lead constraint desactive le cache 8F
+      // (sinon les contraintes lateral_hug/max_fp/setbacks/etc. ne s'appliqueraient
+      // jamais sur les leads existants ayant deja des massings caches).
       const hasStructuralOverride = !!(
         obj8D.override_lateral_hug || obj8D.override_lateral_gap_m ||
         obj8D.override_ignore_cos || obj8D.override_max_fp_m2 ||
-        obj8D.constraints_rationale
+        obj8D.override_ignore_setbacks || obj8D.constraints_rationale
       );
       if (hasStructuralOverride) {
         console.log(`[8F] Cache BYPASS : lead constraints detectees (hug=${obj8D.override_lateral_hug || "-"} gap=${obj8D.override_lateral_gap_m || "-"} ignore_cos=${obj8D.override_ignore_cos || "-"} max_fp=${obj8D.override_max_fp_m2 || "-"}) → regen massing A/B/C forcee`);
@@ -913,11 +914,12 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-            // v74.30 PUSH 11 — propager les contraintes lead vers /generate-massing
+            // v74.30 PUSH 11+12 — propager les contraintes lead vers /generate-massing
             override_lateral_hug: obj8D.override_lateral_hug || "",
             override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
             override_ignore_cos: obj8D.override_ignore_cos || "",
             override_max_fp_m2: obj8D.override_max_fp_m2 || "",
+            override_ignore_setbacks: obj8D.override_ignore_setbacks || "",
             constraints_rationale: obj8D.constraints_rationale || "",
           };
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
@@ -4602,6 +4604,12 @@ function parseLeadConstraints(body) {
     c.isEmpty = false;
     c.activeList.push("derogation COS assumee");
   }
+  const ignoreSetbacks = String(get("override_ignore_setbacks") || "").trim().toUpperCase() === "Y";
+  if (ignoreSetbacks) {
+    c.regulatory.ignore_setbacks = true;
+    c.isEmpty = false;
+    c.activeList.push("retraits reglementaires non appliques (derogation totale assumee)");
+  }
   // ── DOCUMENTATION ──
   const rat = String(get("constraints_rationale") || "").trim();
   if (rat) {
@@ -4700,12 +4708,13 @@ function applyConstraintsToScenarios(scenarios, constraints) {
   return scenarios;
 }
 // ─── 2. ETAGE MASSING : geometrie 3D (positionnement, dimensions) ─────────
-// Renvoie un objet { hugSign, gapM, maxW_override } que computeMassingPolygon
-// utilisera. Si pas de contraintes geometriques, hugSign=0 et maxW_override=null.
+// Renvoie un objet { hugSign, gapM, ignoreSetbacks } que computeMassingPolygon
+// utilisera. Si pas de contraintes geometriques, hugSign=0.
 function applyConstraintsToMassing(constraints, sUx, sUy, nUx, nUy) {
-  const out = { hugSign: 0, gapM: 0, maxW_override: null };
+  const out = { hugSign: 0, gapM: 0, ignoreSetbacks: false, fillEdge: false };
   if (!constraints || constraints.isEmpty) return out;
   const geo = constraints.geometry || {};
+  const reg = constraints.regulatory || {};
   // ── lateral hug + gap ──
   const hug = geo.lateral_hug;
   const gapM = geo.lateral_gap_m || 0;
@@ -4720,6 +4729,12 @@ function applyConstraintsToMassing(constraints, sUx, sUy, nUx, nUy) {
         out.gapM = gapM;
       }
     }
+  }
+  // ── ignore_setbacks : derogation totale (front, lateral, back) ──
+  if (reg.ignore_setbacks) {
+    out.ignoreSetbacks = true;
+    out.fillEdge = true; // batiment couvre toute l'arete (depth max)
+    console.log(`│ [CONSTRAINTS-MASSING] IGNORE_SETBACKS=Y → bati s'etend sur toute la parcelle (limites assumees)`);
   }
   return out;
 }
@@ -5350,12 +5365,26 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const massingC = applyConstraintsToMassing(_leadConstraints, sUx, sUy, nUx, nUy);
   let hugSign = massingC.hugSign;
   const gapM = massingC.gapM;
+  const ignoreSetbacks = massingC.ignoreSetbacks;
+  const fillEdge = massingC.fillEdge;
+  // v74.31 PUSH 12 — si ignore_setbacks=Y, on ignore les retraits reglementaires :
+  // on recalcule availW/availD a partir des coords de la PARCELLE (envM = parcelM
+  // dans ce cas), pas de l'enveloppe reduite. La parcelle est dans envelopeCoords
+  // ici (le caller passe deja parcelCoords quand ignore_setbacks).
   if (hugSign !== 0 && gapM > 0) {
     const oldMaxW = maxW;
-    maxW = Math.max(4, availW - gapM - 2 * margin);
-    console.log(`│ [CONSTRAINTS-MASSING] HUG actif → maxW ${oldMaxW.toFixed(1)} → ${maxW.toFixed(1)} (availW=${availW.toFixed(1)} - gap=${gapM} - 2*margin=${(2*margin).toFixed(1)})`);
+    // v74.31 : vrai plaquage = 0 marge cote hug, gap cote oppose, marge constructive seulement cote oppose si pas de gap
+    // bW max = availW - gapM (le gap absorbe tout le cote oppose, pas de double marge)
+    maxW = Math.max(4, availW - gapM);
+    console.log(`│ [CONSTRAINTS-MASSING] HUG actif (vrai plaquage) → maxW ${oldMaxW.toFixed(1)} → ${maxW.toFixed(1)} (availW=${availW.toFixed(1)} - gap=${gapM})`);
   }
-  console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
+  // v74.31 — fillEdge : le batiment doit s'etendre sur toute la longueur de l'arete (V max)
+  if (fillEdge) {
+    const oldMaxD = maxD;
+    maxD = Math.max(8, availD); // plus de 2*margin retire — toute la profondeur disponible
+    console.log(`│ [CONSTRAINTS-MASSING] FILL_EDGE → maxD ${oldMaxD.toFixed(1)} → ${maxD.toFixed(1)} (toute l'arete)`);
+  }
+  console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m, hug=${hugSign}, fillEdge=${fillEdge})`);
   // Position en profondeur (retrait de la rue) — v72.27 : SPLIT-aware
   // En mode SPLIT_AV_AR, le logement doit être DERRIÈRE le commerce + gap.
   // Le centre du logement = marge + commDepth + interGap + bD/2 (calculé après forme)
@@ -5457,6 +5486,23 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
       { u: bW / 2, v: bD / 2 }, { u: -bW / 2, v: bD / 2 },
     ];
   }
+  // v74.31 PUSH 12 — OVERRIDE SHAPE quand hug actif : on force un BARRE qui
+  // utilise toute la largeur disponible apres gap, et la profondeur soit pleine
+  // (fillEdge), soit calculee pour atteindre fp_m2 cible.
+  if (hugSign !== 0) {
+    const oldBw = bW, oldBd = bD;
+    bW = maxW; // pleine largeur apres gap
+    if (fillEdge) {
+      bD = maxD; // toute la longueur de l'arete
+    } else {
+      bD = Math.min(maxD, Math.max(6, fp_m2 / Math.max(1, bW)));
+    }
+    bPts = [
+      { u: -bW / 2, v: -bD / 2 }, { u: bW / 2, v: -bD / 2 },
+      { u: bW / 2, v: bD / 2 }, { u: -bW / 2, v: bD / 2 },
+    ];
+    console.log(`│ [CONSTRAINTS-MASSING] SHAPE override: ${oldBw.toFixed(1)}×${oldBd.toFixed(1)} → ${bW.toFixed(1)}×${bD.toFixed(1)} (fillEdge=${fillEdge}, fp cible=${fp_m2}m²)`);
+  }
   const shapeArea = polyArea(bPts);
   console.log(`│ Shape: ${typology} bW=${bW.toFixed(1)}m × bD=${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m²`);
   // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
@@ -5464,12 +5510,11 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // Centre V = retrait en profondeur (gere plus bas)
   let cU;
   if (hugSign !== 0) {
-    // v74.30 — PLAQUAGE LATERAL via Lead Constraints framework
-    // Le bati colle la mitoyennete demandee, marge constructive minimale.
-    // bW a deja ete contraint plus haut → gap cote oppose respecte automatiquement.
-    cU = (hugSign > 0) ? (maxU - margin - bW / 2) : (minU + margin + bW / 2);
+    // v74.31 — VRAI PLAQUAGE : 0 marge cote hug (mur contre cloture).
+    // Le bati colle exactement la mitoyennete demandee.
+    cU = (hugSign > 0) ? (maxU - bW / 2) : (minU + bW / 2);
     const oppositeGap = (hugSign > 0) ? (cU - bW / 2) - minU : maxU - (cU + bW / 2);
-    console.log(`│ [CONSTRAINTS-MASSING] cU=${cU.toFixed(1)} (plaque cote ${hugSign > 0 ? "maxU" : "minU"}, bW=${bW.toFixed(1)}m) | gap cote oppose=${oppositeGap.toFixed(1)}m (cible ${gapM}m)`);
+    console.log(`│ [CONSTRAINTS-MASSING] cU=${cU.toFixed(1)} (PLAQUE cote ${hugSign > 0 ? "maxU" : "minU"}, bW=${bW.toFixed(1)}m, marge=0) | gap cote oppose=${oppositeGap.toFixed(1)}m (cible ${gapM}m)`);
   } else {
     cU = (minU + maxU) / 2;
   }
@@ -5490,6 +5535,10 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     }
     console.log(`│ v72.27 SPLIT POSITION: logement front=${logementFrontEdge.toFixed(1)}m center=${cV.toFixed(1)}m back=${(cV+bD/2).toFixed(1)}m`);
     console.log(`│ v72.27 Commerce zone: [${(minV+margin).toFixed(1)}, ${(minV+margin+commD).toFixed(1)}m] | Gap: ${gapD}m | Logement: [${logementFrontEdge.toFixed(1)}, ${(cV+bD/2).toFixed(1)}m]`);
+  } else if (fillEdge) {
+    // v74.31 PUSH 12 — bati centre dans la profondeur (couvre toute l'arete latérale)
+    cV = (minV + maxV) / 2;
+    console.log(`│ [CONSTRAINTS-MASSING] FILL_EDGE cV=${cV.toFixed(1)} (centre, bD=${bD.toFixed(1)}m couvre [${(cV-bD/2).toFixed(1)}, ${(cV+bD/2).toFixed(1)}])`);
   } else {
     cV = minV + availD * depthPct;
   }
@@ -7311,11 +7360,12 @@ app.post("/generate-massing", async (req, res) => {
     // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
     input_typologies = "",
     commerce_size_m2 = 0,
-    // v74.30 PUSH 11 — Lead Constraints framework (par lead)
+    // v74.30 PUSH 11+12 — Lead Constraints framework (par lead)
     override_lateral_hug = "",
     override_lateral_gap_m = "",
     override_ignore_cos = "",
     override_max_fp_m2 = "",
+    override_ignore_setbacks = "",
     constraints_rationale = "",
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
@@ -7642,7 +7692,13 @@ app.post("/generate-massing", async (req, res) => {
   const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
     ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
     : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
-  const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
+  // v74.31 PUSH 12 — si lead constraint ignore_setbacks=Y, on bypass computeEnvelope
+  // et on utilise la PARCELLE comme enveloppe (retraits = 0). Le bati pourra alors
+  // s'etendre sur toute la parcelle dans la limite des autres contraintes (hug, gap, max_fp).
+  const _ignoreSetbacks = String(req.body.override_ignore_setbacks || "").trim().toUpperCase() === "Y";
+  const envelopeCoords = _ignoreSetbacks
+    ? (console.log(`│ [CONSTRAINTS] override_ignore_setbacks=Y → ENVELOPE = PARCELLE (retraits ignores)`), [...coords])
+    : computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
   // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
   const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const envMinX = Math.min(...envPtsDbg.map(p => p.x)), envMaxX = Math.max(...envPtsDbg.map(p => p.x));
