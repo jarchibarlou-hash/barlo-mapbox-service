@@ -4662,27 +4662,43 @@ function applyConstraintsToScenarios(scenarios, constraints) {
     return scenarios;
   }
   scenarios._constraints_applied = true;
-  // ── max_fp_m2 : cap proportionnel pour preserver hierarchie A > B > C ──
+  // ── max_fp_m2 : cap fp avec strategie selon contraintes geometriques ──
+  // Sans hug : scale proportionnel (preserve la hierarchie naturelle moteur)
+  // Avec hug : ratios FIXES A=1.0, B=0.65, C=0.40 (garantit differenciation
+  // visuelle, evite que A et B saturent au meme bD physique). v74.33 PUSH 14.
   const cap = constraints.geometry && constraints.geometry.max_fp_m2;
+  const hugActive = !!(constraints.geometry && constraints.geometry.lateral_hug);
   if (cap && cap > 0) {
     const labels = ["A", "B", "C"].filter(l => scenarios[l]);
     const maxFpDefault = Math.max(...labels.map(l => scenarios[l].fp_m2 || 0));
-    if (maxFpDefault > cap) {
-      const scale = cap / maxFpDefault;
+    // Determine target fp per scenario
+    const targetFp = {};
+    if (hugActive) {
+      // Ratios fixes — garantit differenciation visuelle entre A/B/C
+      const RATIOS = { A: 1.00, B: 0.65, C: 0.40 };
+      for (const lbl of labels) targetFp[lbl] = Math.max(10, Math.round(cap * (RATIOS[lbl] || 0.5)));
+      console.log(`│ [CONSTRAINTS] Cap fp_m2=${cap}m² + hug actif → ratios fixes : A=${targetFp.A}m² B=${targetFp.B}m² C=${targetFp.C}m²`);
+    } else {
+      // Pas de hug : scale proportionnel (preserve hierarchie moteur)
+      const scale = maxFpDefault > 0 ? Math.min(1, cap / maxFpDefault) : 1;
+      for (const lbl of labels) targetFp[lbl] = Math.max(10, Math.round((scenarios[lbl].fp_m2 || 0) * scale));
       console.log(`│ [CONSTRAINTS] Cap fp_m2=${cap}m² (max actuel=${maxFpDefault}m²) → scale=${scale.toFixed(3)}`);
+    }
+    if (maxFpDefault > cap || hugActive) {
       for (const lbl of labels) {
         const sc = scenarios[lbl];
         const oldFp = sc.fp_m2 || 0;
         const oldSdp = sc.sdp_m2 || (oldFp * (sc.levels || 1));
         if (oldFp <= 0) continue;
-        // Cap fp proportionnellement
-        sc.fp_m2 = Math.max(10, Math.round(oldFp * scale));
+        // Appliquer le target (calcule au-dessus selon strategie)
+        sc.fp_m2 = targetFp[lbl] || oldFp;
         // Cascade : SDP, units, useful, cost, COS
+        const fpScale = oldFp > 0 ? sc.fp_m2 / oldFp : 1;
         const newSdp = Math.round(sc.fp_m2 * (sc.levels || 1));
         const sdpScale = oldSdp > 0 ? newSdp / oldSdp : 1;
         sc.sdp_m2 = newSdp;
-        if (sc.fp_rdc_m2) sc.fp_rdc_m2 = Math.round(sc.fp_rdc_m2 * scale);
-        if (sc.fp_etages_m2) sc.fp_etages_m2 = Math.round(sc.fp_etages_m2 * scale);
+        if (sc.fp_rdc_m2) sc.fp_rdc_m2 = Math.round(sc.fp_rdc_m2 * fpScale);
+        if (sc.fp_etages_m2) sc.fp_etages_m2 = Math.round(sc.fp_etages_m2 * fpScale);
         if (typeof sc.total_units === "number") {
           sc.total_units = Math.max(1, Math.round(sc.total_units * sdpScale));
         }
@@ -5502,22 +5518,23 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
       { u: bW / 2, v: bD / 2 }, { u: -bW / 2, v: bD / 2 },
     ];
   }
-  // v74.31 PUSH 12 — OVERRIDE SHAPE quand hug actif : on force un BARRE qui
-  // utilise toute la largeur disponible apres gap, et la profondeur soit pleine
-  // (fillEdge), soit calculee pour atteindre fp_m2 cible.
+  // v74.33 PUSH 14 — OVERRIDE SHAPE quand hug actif : BARRE qui utilise pleine
+  // largeur apres gap, et profondeur PROPORTIONNELLE a fp_m2 cible (capee par maxD).
+  // Cela garantit une differenciation visuelle entre A/B/C : chaque scenario a sa
+  // propre profondeur reflectant son fp_m2. fillEdge agit comme borne max
+  // (le bati PEUT atteindre toute l'arete) mais ne FORCE plus bD = maxD.
   if (hugSign !== 0) {
     const oldBw = bW, oldBd = bD;
     bW = maxW; // pleine largeur apres gap
-    if (fillEdge) {
-      bD = maxD; // toute la longueur de l'arete
-    } else {
-      bD = Math.min(maxD, Math.max(6, fp_m2 / Math.max(1, bW)));
-    }
+    // bD = profondeur necessaire pour atteindre fp_m2 cible, plafonnee par maxD
+    const targetBd = fp_m2 / Math.max(1, bW);
+    bD = Math.min(maxD, Math.max(4, targetBd));
+    const fpReal = bW * bD;
     bPts = [
       { u: -bW / 2, v: -bD / 2 }, { u: bW / 2, v: -bD / 2 },
       { u: bW / 2, v: bD / 2 }, { u: -bW / 2, v: bD / 2 },
     ];
-    console.log(`│ [CONSTRAINTS-MASSING] SHAPE override: ${oldBw.toFixed(1)}×${oldBd.toFixed(1)} → ${bW.toFixed(1)}×${bD.toFixed(1)} (fillEdge=${fillEdge}, fp cible=${fp_m2}m²)`);
+    console.log(`│ [CONSTRAINTS-MASSING] SHAPE override: ${oldBw.toFixed(1)}×${oldBd.toFixed(1)} → ${bW.toFixed(1)}×${bD.toFixed(1)} (fp cible=${fp_m2}m², fp reel=${fpReal.toFixed(0)}m², ${bD >= maxD - 0.1 ? "SATURE maxD" : "bD libre"})`);
   }
   const shapeArea = polyArea(bPts);
   console.log(`│ Shape: ${typology} bW=${bW.toFixed(1)}m × bD=${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m²`);
