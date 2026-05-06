@@ -858,10 +858,16 @@ app.post("/api/process-lead", async (req, res) => {
         } catch (e) { console.warn(`[8E-AXO] Error: ${e.message}`); }
       }
 
+      // v74.30 — Cache bypass : tout override structurel desactive le cache 8F
+      // (sinon Push 9 lateral_hug ne s'applique jamais sur les leads existants).
+      const hasStructuralOverride = !!(obj8D.override_lateral_hug || obj8D.override_lateral_gap_m || obj8D.override_ignore_cos);
+      if (hasStructuralOverride) {
+        console.log(`[8F] Cache BYPASS : override structurel detecte (hug=${obj8D.override_lateral_hug || "-"} gap=${obj8D.override_lateral_gap_m || "-"} ignore_cos=${obj8D.override_ignore_cos || "-"}) → regen massing A/B/C forcee`);
+      }
       for (const label of ["A", "B", "C"]) {
         const cachedKey = `massing_scn_${label}_img_url`;
         const cached = obj8D[cachedKey] || "";
-        if (isValidImgUrl(cached)) {
+        if (!hasStructuralOverride && isValidImgUrl(cached)) {
           massingUrls[label] = cached;
           console.log(`[8F-${label}] Cache hit`);
           continue;
