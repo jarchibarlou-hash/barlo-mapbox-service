@@ -162,6 +162,7 @@
             </div>
             <div class="download-area" id="downloadArea">
                 <button class="btn-download" id="downloadBtn">⬇ Télécharger le diagnostic</button>
+                <button class="btn-download" id="downloadBtnPremium" style="margin-top:8px;background:#1d3a2a;color:#f5f0e6;border:1px solid #c9a878">✨ Télécharger version premium (Canva)</button>
             </div>
         </div>
     </div>
@@ -284,6 +285,17 @@ async function generatePPTX() {
         steps.forEach(s=>stepState(s,"done"));
         const blob=await r.blob(); const url=URL.createObjectURL(blob);
         $("downloadBtn").onclick=()=>{const a=document.createElement("a");a.href=url;a.download=`diagnostic_${selectedLead?.client||selectedLead?.ref||"barlo"}.pptx`;a.click();};
+        // v22.1.c : bouton premium — fetch /generate-pptx-premium et telecharge
+        $("downloadBtnPremium").onclick=async()=>{
+            const btnP=$("downloadBtnPremium");const orig=btnP.textContent;btnP.disabled=true;btnP.textContent="⏳ Génération premium...";
+            try{
+                const rp=await fetch(`${API}/generate-pptx-premium`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(currentBody8D)});
+                if(!rp.ok){const ep=await rp.json().catch(()=>({}));throw new Error(ep.error||`HTTP ${rp.status}`);}
+                const blobP=await rp.blob();const urlP=URL.createObjectURL(blobP);
+                const ap=document.createElement("a");ap.href=urlP;ap.download=`diagnostic_premium_${selectedLead?.client||selectedLead?.ref||"barlo"}.pptx`;ap.click();
+            }catch(e){alert(`Erreur premium : ${e.message}`);}
+            btnP.disabled=false;btnP.textContent=orig;
+        };
         $("downloadArea").classList.add("active");
     } catch(e) {
         document.querySelectorAll(".gen-step.active").forEach(s=>{s.classList.remove("active");s.classList.add("error");s.querySelector(".icon").textContent="✕";});
