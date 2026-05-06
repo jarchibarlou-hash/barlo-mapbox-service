@@ -5747,6 +5747,9 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   // v72.25: Exporter les infos de repère local pour le SPLIT (découpe commerce/logement)
   result._frontDir = { sUx, sUy, nUx, nUy }; // direction rue (s) et profondeur site (n)
   result._centerLatLon = { lat: eLat, lon: eLon };
+  // v74.36 PUSH 20 : exposer la surface REELLE rendue (apres saturation maxD/maxW)
+  // pour que les annotations sur l'image reflectent ce qui est dessine, pas la cible.
+  result._actualFp = Math.round(actualFp);
   return result;
 }
 // ─── SPLIT COMMERCE/LOGEMENT : polygon commerce construit depuis l'enveloppe ──
@@ -6983,7 +6986,12 @@ function drawSolarArc(ctx, W, H, p) {
   ctx.restore();
 }
 // ─── OVERLAYS CANVAS — MASSING ────────────────────────────────────────────────
-function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, fp_rdc_m2, fp_etages_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual }) {
+function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, commerce_levels, habitation_levels, total_height, floor_height, fp_m2, fp_rdc_m2, fp_etages_m2, accent_color, scenario_role, typology, split_layout, sdp_m2_actual, actual_fp_m2 }) {
+  // v74.36 PUSH 20 : si actual_fp_m2 fourni (surface reelle rendue apres saturation),
+  // on l'utilise pour les annotations a la place de fp_m2 (qui est la cible engine).
+  const displayFp = actual_fp_m2 && actual_fp_m2 > 0 ? actual_fp_m2 : fp_m2;
+  const displayFpRdc = actual_fp_m2 && actual_fp_m2 > 0 ? actual_fp_m2 : (fp_rdc_m2 || fp_m2);
+  const displayFpEtages = actual_fp_m2 && actual_fp_m2 > 0 ? actual_fp_m2 : (fp_etages_m2 || fp_m2);
   const s = W / 1280;
   // ── BOUSSOLE N en bas à droite ──
   ctx.save();
@@ -7013,16 +7021,18 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const logtBaseY = H * 0.52;
     for (let f = 0; f < vl.levels; f++) {
       const y = logtBaseY + f * stepY;
-      // v72.28: En SPLIT avec pilotis, le logement commence à R+1
-      const floorLabel = `R+${f + 1}`;
+      // v74.36 PUSH 20 : nomenclature "Niv X" (1-indexée, RDC inclus). En SPLIT
+      // avec pilotis, le logement commence au niveau 2 (pilotis = Niv 1).
+      const floorLabel = `Niv ${f + 2}`;
+      const lvlFp = (actual_fp_m2 && actual_fp_m2 > 0) ? actual_fp_m2 : vl.fp_m2;
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
       ctx.strokeStyle = "#3a7ac0"; ctx.lineWidth = 2*s; ctx.stroke();
       ctx.font = `bold ${12*s}px Arial`; ctx.textAlign = "left";
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-      ctx.strokeText(`${floorLabel} : ${vl.fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.strokeText(`${floorLabel} : ${lvlFp} m²`, annX + lineLen + 6*s, y + 4*s);
       ctx.fillStyle = "#3a7ac0";
-      ctx.fillText(`${floorLabel} : ${vl.fp_m2} m²`, annX + lineLen + 6*s, y + 4*s);
+      ctx.fillText(`${floorLabel} : ${lvlFp} m²`, annX + lineLen + 6*s, y + 4*s);
     }
     // Pilotis annotation
     const pilotisY = logtBaseY + 24*s;
@@ -7031,9 +7041,9 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     ctx.strokeStyle = "#b0aea8"; ctx.lineWidth = 2*s; ctx.stroke();
     ctx.font = `${11*s}px Arial`; ctx.textAlign = "left";
     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3*s;
-    ctx.strokeText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    ctx.strokeText(`Pilotis (Niv 1)`, annX + lineLen + 6*s, pilotisY + 4*s);
     ctx.fillStyle = "#888";
-    ctx.fillText(`Pilotis (RDC)`, annX + lineLen + 6*s, pilotisY + 4*s);
+    ctx.fillText(`Pilotis (Niv 1)`, annX + lineLen + 6*s, pilotisY + 4*s);
     // v72.88: Recalculate sub-labels proportionally from actual SDP total
     //   Raw vl.sdp_m2 + vc.sdp_m2 may not match sdp_m2_actual (the real moteur value).
     //   Apply ratio so sub-labels sum exactly to the total shown.
@@ -7052,7 +7062,8 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const commBaseY = logtLabelY + 28*s;
     for (let f = 0; f < vc.levels; f++) {
       const y = commBaseY + f * 24*s;
-      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
+      // v74.36 PUSH 20 : commerce occupe les Niv 1 à Niv N (au sol)
+      const floorLabel = `Niv ${f + 1}`;
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
       ctx.strokeStyle = "#e07830"; ctx.lineWidth = 2*s; ctx.stroke();
@@ -7088,8 +7099,10 @@ function drawMassingOverlays(ctx, W, H, { site_area, bearing, label, levels, com
     const annStepY = -32 * s;
     for (let f = 0; f < levels; f++) {
       const y = annBaseY + f * annStepY;
-      const floorLabel = f === 0 ? "RDC" : `R+${f}`;
-      const floorFp = f === 0 ? (fp_rdc_m2 || fp_m2) : (fp_etages_m2 || fp_m2);
+      // v74.36 PUSH 20 : nomenclature "Niv X" (1-indexée, Niv 1 = RDC)
+      const floorLabel = `Niv ${f + 1}`;
+      // v74.36 : utiliser la surface REELLE rendue (apres saturation), pas la cible
+      const floorFp = f === 0 ? displayFpRdc : displayFpEtages;
       ctx.beginPath();
       ctx.moveTo(annX, y); ctx.lineTo(annX + lineLen, y);
       ctx.strokeStyle = "#000000"; ctx.lineWidth = 2*s; ctx.stroke();
@@ -8042,6 +8055,8 @@ app.post("/generate-massing", async (req, res) => {
       typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
       fp_rdc_m2: Math.round(Number(fp_m2_raw_used_rdc) || fp),
       fp_etages_m2: Math.round((compute_scenario && scFpEtages) ? scFpEtages : fp),
+      // v74.36 PUSH 20 : surface REELLE du plateau rendu (apres saturation maxD/maxW)
+      actual_fp_m2: massingCoords._actualFp || 0,
     });
     const png = canvas.toBuffer("image/png");
     await sb.storage.from("massing-images").upload(basePath, png, { contentType: "image/png", upsert: true });
@@ -8246,6 +8261,8 @@ ABSOLUTELY NO WARM SHIFT. ABSOLUTELY NO SEPIA. KEEP EVERYTHING COOL OFF-WHITE ex
             levels, commerce_levels: commerceLevels, habitation_levels: habitationLevels,
             total_height: realTotalH, floor_height: etageH, fp_m2: Math.round(fp), accent_color: accentColor, scenario_role: scenarioRole,
             typology: massingCoords._typology, split_layout: splitLayout, sdp_m2_actual: scenarioSdp,
+            // v74.36 PUSH 20 : surface REELLE du plateau rendu
+            actual_fp_m2: massingCoords._actualFp || 0,
           });
           const finalPng = finalCtx.canvas.toBuffer("image/png");
           const enhancedPath = `${folder}/${slideName}_enhanced_${UPLOAD_TS}.png`;
@@ -8412,9 +8429,12 @@ function buildTemplateTexts(flat, scenarios) {
     } else {
       expositionText = `Plusieurs façades libres permettent une **bonne distribution lumineuse**. En climat tropical, prévoir des **protections solaires** (auvents, claustras) sur les façades ouest et sud-ouest pour éviter la surchauffe en fin d'après-midi. La **ventilation traversante** est toujours à privilégier pour le confort thermique.`;
     }
-    const repereHauteur = `Le tissu environnant est dominé par du bâti **R+1 à R+2**. Le scénario ${sc} en **R+${levels}** s'inscrit dans cette gamme, sans s'imposer visuellement.`;
+    // v74.36 PUSH 20 : nomenclature "Niv X" (Niv 1 = RDC). levels = nb total de
+    // niveaux. R+X equivaut a Niv (X+1). Tissu R+1 a R+2 → Niv 2 a Niv 3.
+    const totalNiv = parseInt(levels) + 1; // levels = R+X dans le moteur, +1 pour RDC
+    const repereHauteur = `Le tissu environnant est dominé par du bâti **2 à 3 niveaux**. Le scénario ${sc} en **${totalNiv} niveaux** s'inscrit dans cette gamme, sans s'imposer visuellement.`;
     // v74.18 — refonte : Programme bullets + Exposition/orientation + Empreinte (no Implantation jargon)
-    return `Le **Scénario ${sc} (${role})** ${philosophie[sc]}.\n\n**${units} unités** sur **${sdp} m² SDP** — bâtiment **R+${levels}**, surface habitable totale **${habTotal} m²**.\n\n${narrativeArchi}${contrainteText}\n\n**Programme détaillé :**\n${unitBullets}\n\n**Exposition et orientation :**\n${expositionText}\n\n${repereHauteur}\n\n${empriseText}`;
+    return `Le **Scénario ${sc} (${role})** ${philosophie[sc]}.\n\n**${units} unités** sur **${sdp} m² SDP** — bâtiment **${totalNiv} niveaux** (RDC + ${levels} étages), surface habitable totale **${habTotal} m²**.\n\n${narrativeArchi}${contrainteText}\n\n**Programme détaillé :**\n${unitBullets}\n\n**Exposition et orientation :**\n${expositionText}\n\n${repereHauteur}\n\n${empriseText}`;
   }
   // ── Scenario financial builder (slides 7/10/13) ──
   // Directive BARLO : "EXPLIQUER DE FAÇON ACCESSIBLE LE RAISONNEMENT DES CALCULS",
@@ -8498,7 +8518,9 @@ function buildTemplateTexts(flat, scenarios) {
       compaciteAnalysis = `Les ${m2Logt} m² par logement offrent un niveau de confort conforme au standing ${standing} visé. Le risque de refus lié à la compacité est faible.`;
     }
     // v74.14 — buildRisk raccourci : 5 sections compactes, taille 12pt sans auto-shrink
-    return `**Score global ${score}/100** — profil ${profil}.\n\n**1. Urbanisme** — ${urbanismeBullet}\n\n**2. Surface habitable** — ${compaciteAnalysis}\n\n**3. Budget** — ${budgetAnalysis}\n\n**4. Stationnement** — ${parking}.\n\n**5. Constructibilité** — R+${levels} en standing ${standing}, complexité ${risqueCompacite === "élevé" ? "significative" : risqueCompacite === "modéré" ? "modérée" : "standard"}. Système poteau-poutre béton armé maîtrisé localement.`;
+    // v74.36 PUSH 20 : nomenclature "X niveaux" (Niv 1 = RDC, levels stocke = R+X)
+    const totalNivRisk = parseInt(levels) + 1;
+    return `**Score global ${score}/100** — profil ${profil}.\n\n**1. Urbanisme** — ${urbanismeBullet}\n\n**2. Surface habitable** — ${compaciteAnalysis}\n\n**3. Budget** — ${budgetAnalysis}\n\n**4. Stationnement** — ${parking}.\n\n**5. Constructibilité** — ${totalNivRisk} niveaux en standing ${standing}, complexité ${risqueCompacite === "élevé" ? "significative" : risqueCompacite === "modéré" ? "modérée" : "standard"}. Système poteau-poutre béton armé maîtrisé localement.`;
   }
   // ── Recommended scenario shortcuts ──
   const rec = f("rec_scenario") || "C";
@@ -8516,7 +8538,7 @@ function buildTemplateTexts(flat, scenarios) {
   texts.slide_4_text = `Géométrie régulière **${f("envelope_w")} × ${f("envelope_d")} m** sur **${f("envelope_area")} m²** brut.\n\n**Comment se construit la surface utilisable**\n\nLes retraits réglementaires délimitent la "zone constructible" — l'espace réellement disponible pour bâtir, une fois les distances obligatoires aux limites du terrain respectées :\n\n- Recul **avant** (côté rue) : **${f("retrait_avant")}**\n- Recul **latéral** (chaque côté) : **${f("retrait_lateral")}**\n- Recul **arrière** : **${f("retrait_arriere")}**\n- Mitoyenneté : **${f("retrait_mitoyennete")}** côtés\n\nCes retraits **amputent l'emprise de ${f("retrait_reduction_pct")}** : sur les ${f("envelope_area")} m² du terrain, seuls **${f("retrait_emprise_constructible")}** sont effectivement constructibles au sol.\n\nC'est cette emprise réduite qui dimensionne le projet : elle conditionne directement la taille de l'empreinte au sol, le nombre d'étages possibles et donc le programme final.`;
   // ── SLIDE 5: Contexte quartier (base déterministe — GPT reformule uniquement) ──
   // v74.14 — slide 5 : contexte + bioclimat, SANS COS/CES (déjà slide 3)
-  texts.slide_5_text = `**Quartier dense** de ${f("city")}, environnement bâti mixte associant logements et activités commerciales. Tissu urbain hérité, parcelles serrées, voirie irrégulière.\n\n**Mitoyenneté sur ${f("retrait_mitoyennete")} côtés** : les façades latérales sont aveugles ou faiblement ouvertes. L'éclairage naturel et la ventilation traversante doivent passer par les façades libres (avant et arrière). C'est une **contrainte structurante** pour la conception des logements.\n\n**Climat ${(f("orient_zone") || "tropical").toLowerCase()}** :\n- Soleil intense, pluies abondantes en saison humide\n- La **ventilation naturelle traversante** est essentielle pour le confort thermique sans sur-coût énergétique\n- Les protections solaires (auvents, claustras) prolongent la durabilité des façades\n\n**Repère volumétrique** : la densité environnante et les retraits orientent vers un gabarit **R+${f("rec_levels")} maximum**, cohérent avec le tissu existant et le programme de **${f("target_units")} unités**.`;
+  texts.slide_5_text = `**Quartier dense** de ${f("city")}, environnement bâti mixte associant logements et activités commerciales. Tissu urbain hérité, parcelles serrées, voirie irrégulière.\n\n**Mitoyenneté sur ${f("retrait_mitoyennete")} côtés** : les façades latérales sont aveugles ou faiblement ouvertes. L'éclairage naturel et la ventilation traversante doivent passer par les façades libres (avant et arrière). C'est une **contrainte structurante** pour la conception des logements.\n\n**Climat ${(f("orient_zone") || "tropical").toLowerCase()}** :\n- Soleil intense, pluies abondantes en saison humide\n- La **ventilation naturelle traversante** est essentielle pour le confort thermique sans sur-coût énergétique\n- Les protections solaires (auvents, claustras) prolongent la durabilité des façades\n\n**Repère volumétrique** : la densité environnante et les retraits orientent vers un gabarit **${(parseInt(f("rec_levels")) || 0) + 1} niveaux maximum**, cohérent avec le tissu existant et le programme de **${f("target_units")} unités**.`;
   // ── SLIDES 6/9/12: Scenario summaries ──
   texts.scenario_A_summary_text = buildSummary("A");
   // B vs A comparison
@@ -8544,13 +8566,13 @@ function buildTemplateTexts(flat, scenarios) {
   // ── SLIDE 17: Conditions de réussite (donut chart à droite) ──
   // v74.19 — textes courts, bullets, bold sur chiffres et concepts clés
   texts.invisible_intro_text = `**Conditions de réussite** — maîtriser le coût, le phasage et les délais.`;
-  texts.invisible_technical_text = `**Ventilation pour le Scénario ${rec}** (cf. donut ci-contre, total **${f("rec_cost_total")}**) :\n- **Gros œuvre** ${f("rec_ventil_go_pct")} : structure béton armé R+${f("rec_levels")}, poste majeur\n- **Second œuvre** ${f("rec_ventil_so_pct")} : finitions ${f("standing_level").toLowerCase()} adaptées au climat\n- **Lots techniques** ${f("rec_ventil_lt_pct")} : électricité, plomberie, ventilation naturelle\n- **VRD** ${f("rec_ventil_vrd_pct")} : raccordements, assainissement\n\n**Phasage recommandé** (durée totale **${f("rec_duree_chantier")}**) :\n- **M1-M2** : études + permis (délai incompressible)\n- **M3** : terrassement + fondations (saison sèche obligatoire)\n- **M4-M5** : gros œuvre\n- **M6-M7** : second œuvre + lots techniques\n- **M8** : finitions + réception`;
+  texts.invisible_technical_text = `**Ventilation pour le Scénario ${rec}** (cf. donut ci-contre, total **${f("rec_cost_total")}**) :\n- **Gros œuvre** ${f("rec_ventil_go_pct")} : structure béton armé ${(parseInt(f("rec_levels")) || 0) + 1} niveaux, poste majeur\n- **Second œuvre** ${f("rec_ventil_so_pct")} : finitions ${f("standing_level").toLowerCase()} adaptées au climat\n- **Lots techniques** ${f("rec_ventil_lt_pct")} : électricité, plomberie, ventilation naturelle\n- **VRD** ${f("rec_ventil_vrd_pct")} : raccordements, assainissement\n\n**Phasage recommandé** (durée totale **${f("rec_duree_chantier")}**) :\n- **M1-M2** : études + permis (délai incompressible)\n- **M3** : terrassement + fondations (saison sèche obligatoire)\n- **M4-M5** : gros œuvre\n- **M6-M7** : second œuvre + lots techniques\n- **M8** : finitions + réception`;
   texts.invisible_financial_text = `**Coût travaux** : ${f("rec_cost_total")} pour un budget initial de **${f("budget_fcfa")}**.\n\n**Frais annexes** (à provisionner en plus) :\n- **Honoraires architecte** : ${f("rec_hono_bas")}M-${f("rec_hono_haut")}M FCFA (${f("rec_hono_taux_bas")}-${f("rec_hono_taux_haut")} des travaux)\n- **Permis & taxes** : ~1-2 % des travaux\n- **Études géotechniques** : 300k-500k FCFA\n- **Notaire & admin** : variable\n- **Assurance dommage-ouvrage** : ~2 % des travaux\n\n**Provision recommandée** : prévoir une **enveloppe annexe ~${f("rec_hono_bas")}M-${f("rec_hono_haut")}M FCFA** au-dessus du coût travaux, plus une **marge imprévus de 5-8 %**.`;
   texts.invisible_strategic_text = `**Calendrier vs climat tropical** de ${f("city")} (saison des pluies juin-octobre) :\n- **Démarrage idéal** : novembre-janvier (saison sèche)\n- **Fondations** : impérativement hors pluies\n- **Gros œuvre** : tolérant aux pluies (avec précautions)\n- **Finitions** : avant la prochaine saison des pluies\n\n**Échéancier des décaissements** :\n- **M1-M2** : 15 % (études, permis, installation)\n- **M3-M5** : 50 % (fondations + gros œuvre)\n- **M6-M7** : 25 % (second œuvre)\n- **M8** : 10 % (finitions, réception, solde)`;
   // ── SLIDE 18: Ce qu'on ne voit pas encore — points techniques + checklist + jalons ──
   // v74.19 — différenciée de slide 17 : col financier = checklist actions, col stratégique = jalons décisionnels
   texts.success_intro_text = `*Le **Scénario ${rec}** s'impose par son **coût optimisé** (${f("rec_cost_total")}), sa **conformité urbanistique**, et sa **gestion rigoureuse du budget**.*`;
-  texts.success_technical_text = `**Points techniques à anticiper :**\n\n- **Structure R+${f("rec_levels")}** béton armé : système poteau-poutre classique, maîtrisé localement\n- **Fondations** : étude géotechnique **indispensable** (mitoyenneté ${f("retrait_mitoyennete")} côtés)\n- **Empreinte ${f("rec_fp")} m²** : circulations verticales à optimiser\n- **Ventilation naturelle** : ouvertures traversantes sur façades libres\n- **Étanchéité toiture terrasse** : critique en climat tropical humide`;
+  texts.success_technical_text = `**Points techniques à anticiper :**\n\n- **Structure ${(parseInt(f("rec_levels")) || 0) + 1} niveaux** béton armé : système poteau-poutre classique, maîtrisé localement\n- **Fondations** : étude géotechnique **indispensable** (mitoyenneté ${f("retrait_mitoyennete")} côtés)\n- **Empreinte ${f("rec_fp")} m²** : circulations verticales à optimiser\n- **Ventilation naturelle** : ouvertures traversantes sur façades libres\n- **Étanchéité toiture terrasse** : critique en climat tropical humide`;
   texts.success_financial_text = `**Checklist actions financières — avant lancement :**\n\n- ☐ **Validation budget total** (travaux + annexes) avec votre conseil financier\n- ☐ **Mise en place de la trésorerie** par tranches selon échéancier de décaissement\n- ☐ **Devis comparatifs** auprès de **3 entreprises minimum** pour chaque lot majeur\n- ☐ **Provision imprévus** : 5 à 8 % du budget travaux à isoler dès le départ\n- ☐ **Mode de financement** : autofinancement, prêt bancaire ou mixte ?\n- ☐ **Modalités de paiement** : avances, situations mensuelles, retenue de garantie\n- ☐ **Suivi budgétaire mensuel** par lot pour détecter les dérives à temps`;
   texts.success_strategic_text = `**Jalons décisionnels — décisions à prendre dans l'ordre :**\n\n- **Go/no-go terrain** : valider la maîtrise foncière et les actes\n- **Choix architecte** : appel d'offres restreint ou consultation directe\n- **Lancement APS/APD** : 3-4 + 4-6 semaines, base du chiffrage définitif\n- **Étude géotechnique** : 2-3 semaines, indispensable avant permis\n- **Dépôt permis de construire** : instruction **2-4 mois** selon commune\n- **Consultation entreprises** : 3-4 semaines pour devis\n- **Sélection entreprise** + signature des marchés\n- **Démarrage chantier** : viser saison sèche pour les fondations`;
   // ── SLIDE 19: Next steps — études et démarches APS/APD ──
@@ -8565,8 +8587,8 @@ function buildTemplateTexts(flat, scenarios) {
   // (ex: client veut 3 unites, scenario C en livre 2 → conclusion doit dire 2)
   const recUnits = f(`${rec}_units`) || f("rec_units") || f("A_units");
   const recSdp = f(`${rec}_sdp`) || f("rec_sdp");
-  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**).\n\nIl répond à vos exigences clés :\n- **Programme livré** : **${recUnits} unités** sur **${recSdp} m² SDP** (R+${f("rec_levels")})\n- **Budget maîtrisé** : **${f("rec_cost_total")}** vs **${f("budget_fcfa")}** visés\n- **Mise en œuvre** : techniques classiques, maîtrisées par les entreprises locales\n\nLes deux autres scénarios restent disponibles si vos priorités évoluent — mais ${rec} offre le **meilleur ratio retour-risque** au regard des données analysées.`;
-  texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** Coût maîtrisé (**${f("rec_cost_total")}**), conformité urbanistique solide, et un gabarit **R+${f("rec_levels")}** réaliste pour les entreprises locales. Le programme **${recUnits} unités sur ${recSdp} m² SDP** est tenu, sans surcoût technique inutile.`;
+  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**).\n\nIl répond à vos exigences clés :\n- **Programme livré** : **${recUnits} unités** sur **${recSdp} m² SDP** (${(parseInt(f("rec_levels")) || 0) + 1} niveaux)\n- **Budget maîtrisé** : **${f("rec_cost_total")}** vs **${f("budget_fcfa")}** visés\n- **Mise en œuvre** : techniques classiques, maîtrisées par les entreprises locales\n\nLes deux autres scénarios restent disponibles si vos priorités évoluent — mais ${rec} offre le **meilleur ratio retour-risque** au regard des données analysées.`;
+  texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** Coût maîtrisé (**${f("rec_cost_total")}**), conformité urbanistique solide, et un gabarit **${(parseInt(f("rec_levels")) || 0) + 1} niveaux** réaliste pour les entreprises locales. Le programme **${recUnits} unités sur ${recSdp} m² SDP** est tenu, sans surcoût technique inutile.`;
   texts.conclusion_projection_text = `**Horizon de livraison** : **12 à 14 mois** après le lancement des études (sous réserve d'obtention du permis dans les délais).\n\n**Calendrier optimal** :\n- Démarrage **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**\n\n**Durée chantier estimée** : ${f("rec_duree_chantier")}.`;
   console.log(`│ ✅ TEMPLATE ENGINE v2.0 PREMIUM: ${Object.keys(texts).length} textes générés (accents, conditionnel, cross-ref charts)`);
   return texts;
@@ -9724,10 +9746,11 @@ app.post("/generate-texts", async (req, res) => {
   // ── PREMIUM GATE: sanitize (mostly a no-op now, but catches edge cases) ──
   generatedTexts = sanitizePremiumTexts(generatedTexts, flat);
   // Step 4: Build comparatif data from scenarios
+  // v74.36 PUSH 20 : nomenclature "X niveaux" (sA.levels = nb total de niveaux)
   const comparatif = {
-    comparatif_A_label: `Scenario ${sA.role || "A"} — R+${sA.levels || 0}`,
-    comparatif_B_label: `Scenario ${sB.role || "B"} — R+${sB.levels || 0}`,
-    comparatif_C_label: `Scenario ${sC.role || "C"} — R+${sC.levels || 0}`,
+    comparatif_A_label: `Scenario ${sA.role || "A"} — ${sA.levels || 0} niveaux`,
+    comparatif_B_label: `Scenario ${sB.role || "B"} — ${sB.levels || 0} niveaux`,
+    comparatif_C_label: `Scenario ${sC.role || "C"} — ${sC.levels || 0} niveaux`,
     comparatif_A_sdp: `${sA.sdp_m2 || 0} m²`,
     comparatif_B_sdp: `${sB.sdp_m2 || 0} m²`,
     comparatif_C_sdp: `${sC.sdp_m2 || 0} m²`,
