@@ -469,9 +469,10 @@ app.post("/api/process-lead", async (req, res) => {
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
                               "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
                               "site_polygon_points", "site_polygon_status",
-                              // v74.30 PUSH 11+12 — Lead Constraints framework (par lead)
+                              // v74.33 PUSH 11+12+15 — Lead Constraints framework (par lead)
                               "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
-                              "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale"];
+                              "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
+                              "override_units_A", "override_units_B", "override_units_C"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -665,9 +666,9 @@ app.post("/api/process-lead", async (req, res) => {
     const row8D = preScenario.values?.[0] || row8C;
     const obj8D = {};
     pipeHeaders.forEach((h, i) => { if (h) obj8D[h] = (row8D[i] !== undefined ? row8D[i] : ""); });
-    // v74.32 PUSH 13 — diag : confirmer ce que obj8D a comme contraintes
-    console.log(`[8D-DIAG] obj8D constraints : hug="${obj8D.override_lateral_hug || ""}" gap="${obj8D.override_lateral_gap_m || ""}" cos="${obj8D.override_ignore_cos || ""}" max_fp="${obj8D.override_max_fp_m2 || ""}" ignore_setbacks="${obj8D.override_ignore_setbacks || ""}" rationale="${(obj8D.constraints_rationale || "").substring(0, 50)}"`);
-    console.log(`[8D-DIAG] pipeHeaders has columns: hug=${pipeHeaders.indexOf("override_lateral_hug")} gap=${pipeHeaders.indexOf("override_lateral_gap_m")} cos=${pipeHeaders.indexOf("override_ignore_cos")} max_fp=${pipeHeaders.indexOf("override_max_fp_m2")} ignore_setbacks=${pipeHeaders.indexOf("override_ignore_setbacks")} rationale=${pipeHeaders.indexOf("constraints_rationale")}`);
+    // v74.33 PUSH 13+15 — diag : confirmer ce que obj8D a comme contraintes
+    console.log(`[8D-DIAG] obj8D constraints : hug="${obj8D.override_lateral_hug || ""}" gap="${obj8D.override_lateral_gap_m || ""}" cos="${obj8D.override_ignore_cos || ""}" max_fp="${obj8D.override_max_fp_m2 || ""}" ignore_setbacks="${obj8D.override_ignore_setbacks || ""}" units_A="${obj8D.override_units_A || ""}" units_B="${obj8D.override_units_B || ""}" units_C="${obj8D.override_units_C || ""}" rationale="${(obj8D.constraints_rationale || "").substring(0, 50)}"`);
+    console.log(`[8D-DIAG] pipeHeaders has columns: hug=${pipeHeaders.indexOf("override_lateral_hug")} gap=${pipeHeaders.indexOf("override_lateral_gap_m")} cos=${pipeHeaders.indexOf("override_ignore_cos")} max_fp=${pipeHeaders.indexOf("override_max_fp_m2")} ignore_setbacks=${pipeHeaders.indexOf("override_ignore_setbacks")} units_A=${pipeHeaders.indexOf("override_units_A")} units_B=${pipeHeaders.indexOf("override_units_B")} units_C=${pipeHeaders.indexOf("override_units_C")} rationale=${pipeHeaders.indexOf("constraints_rationale")}`);
 
     // Build /compute-scenarios body (same as 8D Make body)
     const scenarioBody = {
@@ -708,13 +709,16 @@ app.post("/api/process-lead", async (req, res) => {
       commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
       retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
       disposition: obj8D.Disposition || "",
-      // v74.30 PUSH 11+12 — Lead Constraints framework (par lead)
+      // v74.33 PUSH 11+12+15 — Lead Constraints framework (par lead)
       override_lateral_hug: obj8D.override_lateral_hug || "",
       override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
       override_ignore_cos: obj8D.override_ignore_cos || "",
       override_max_fp_m2: obj8D.override_max_fp_m2 || "",
       override_ignore_setbacks: obj8D.override_ignore_setbacks || "",
       constraints_rationale: obj8D.constraints_rationale || "",
+      override_units_A: obj8D.override_units_A || "",
+      override_units_B: obj8D.override_units_B || "",
+      override_units_C: obj8D.override_units_C || "",
     };
 
     // Call /compute-scenarios on THIS server (internal call)
@@ -929,13 +933,16 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-            // v74.32 PUSH 13 — propager les contraintes lead lues FRAICHEMENT (obj8F)
+            // v74.33 PUSH 13+15 — propager les contraintes lead lues FRAICHEMENT (obj8F)
             override_lateral_hug: obj8F.override_lateral_hug || "",
             override_lateral_gap_m: obj8F.override_lateral_gap_m || "",
             override_ignore_cos: obj8F.override_ignore_cos || "",
             override_max_fp_m2: obj8F.override_max_fp_m2 || "",
             override_ignore_setbacks: obj8F.override_ignore_setbacks || "",
             constraints_rationale: obj8F.constraints_rationale || "",
+            override_units_A: obj8F.override_units_A || "",
+            override_units_B: obj8F.override_units_B || "",
+            override_units_C: obj8F.override_units_C || "",
           };
           console.log(`[8F-${label}-DIAG] body constraints sent : hug="${massingBody.override_lateral_hug}" gap="${massingBody.override_lateral_gap_m}" cos="${massingBody.override_ignore_cos}" max_fp="${massingBody.override_max_fp_m2}" ignore_setbacks="${massingBody.override_ignore_setbacks}"`);
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
@@ -4626,6 +4633,23 @@ function parseLeadConstraints(body) {
     c.isEmpty = false;
     c.activeList.push("retraits reglementaires non appliques (derogation totale assumee)");
   }
+  // ── PROGRAMMATIQUE : nombre d'unites force par scenario (Push 15) ──
+  const unitsA = parseInt(get("override_units_A"));
+  const unitsB = parseInt(get("override_units_B"));
+  const unitsC = parseInt(get("override_units_C"));
+  if (unitsA > 0 || unitsB > 0 || unitsC > 0) {
+    c.programmatic.target_units = {
+      A: unitsA > 0 ? unitsA : null,
+      B: unitsB > 0 ? unitsB : null,
+      C: unitsC > 0 ? unitsC : null,
+    };
+    c.isEmpty = false;
+    const parts = [];
+    if (unitsA > 0) parts.push(`A=${unitsA}`);
+    if (unitsB > 0) parts.push(`B=${unitsB}`);
+    if (unitsC > 0) parts.push(`C=${unitsC}`);
+    c.activeList.push(`nombre d'unites force par scenario (${parts.join(", ")})`);
+  }
   // ── DOCUMENTATION ──
   const rat = String(get("constraints_rationale") || "").trim();
   if (rat) {
@@ -4736,7 +4760,44 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       console.log(`│ [CONSTRAINTS] Cap fp_m2=${cap}m² mais max actuel=${maxFpDefault}m² ≤ cap → no-op`);
     }
   }
-  // (futurs handlers programmatiques ici : force_typology, max_levels, etc.)
+  // ── PROGRAMMATIQUE : forcer total_units par scenario (Push 15) ──
+  // Recalcule m²/logement = SDP × usable_ratio / target_units, et redimensionne
+  // le mix unitaire proportionnellement. Permet par exemple "A=8 grands apparts,
+  // B=8 apparts plus petits, C=6 apparts" pour un meme cap fp.
+  const targetUnits = constraints.programmatic && constraints.programmatic.target_units;
+  if (targetUnits) {
+    const USABLE_RATIO = 0.75; // hypothese 25% circulations
+    for (const lbl of ["A", "B", "C"]) {
+      const sc = scenarios[lbl];
+      const tgt = targetUnits[lbl];
+      if (!sc || !tgt || tgt <= 0) continue;
+      const oldUnits = sc.total_units || 1;
+      sc.total_units = tgt;
+      // m²/logement (utile) recalcule a partir du SDP × ratio
+      const sdp = sc.sdp_m2 || (sc.fp_m2 || 0) * (sc.levels || 1);
+      const usableTotal = Math.round(sdp * USABLE_RATIO);
+      const m2PerUnit = Math.max(8, Math.round(usableTotal / tgt));
+      sc.m2_habitable_par_logement = m2PerUnit;
+      sc.surface_habitable_m2 = m2PerUnit * tgt;
+      sc.total_useful_m2 = usableTotal;
+      sc.hab_m2_total = usableTotal;
+      // Cost per unit
+      if (typeof sc.cost_total_fcfa === "number" && tgt > 0) {
+        sc.cost_per_unit = Math.round(sc.cost_total_fcfa / tgt);
+      }
+      // Mix unitaire : rescale proportionnel a oldUnits → tgt
+      if (sc.unit_mix && typeof sc.unit_mix === "object") {
+        const unitScale = tgt / Math.max(1, oldUnits);
+        for (const k of Object.keys(sc.unit_mix)) {
+          sc.unit_mix[k] = Math.max(0, Math.round(sc.unit_mix[k] * unitScale));
+        }
+      }
+      if (sc.unit_mix_detail) {
+        sc.unit_mix_detail = rescaleMixDetail(sc.unit_mix_detail, tgt / Math.max(1, oldUnits));
+      }
+      console.log(`│ [CONSTRAINTS] ${lbl}: total_units force ${oldUnits}→${tgt} | m²/logt=${m2PerUnit} | surface_hab=${m2PerUnit * tgt}m²`);
+    }
+  }
   return scenarios;
 }
 // ─── 2. ETAGE MASSING : geometrie 3D (positionnement, dimensions) ─────────
@@ -7393,13 +7454,16 @@ app.post("/generate-massing", async (req, res) => {
     // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
     input_typologies = "",
     commerce_size_m2 = 0,
-    // v74.30 PUSH 11+12 — Lead Constraints framework (par lead)
+    // v74.33 PUSH 11+12+15 — Lead Constraints framework (par lead)
     override_lateral_hug = "",
     override_lateral_gap_m = "",
     override_ignore_cos = "",
     override_max_fp_m2 = "",
     override_ignore_setbacks = "",
     constraints_rationale = "",
+    override_units_A = "",
+    override_units_B = "",
+    override_units_C = "",
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
