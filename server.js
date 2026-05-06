@@ -5129,6 +5129,31 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     maxD = Math.max(6, availD - reservedFront - margin); // profondeur restante pour logement
     console.log(`│ v72.27 SPLIT maxD: availD=${availD.toFixed(1)} - reserved=${reservedFront.toFixed(1)} - margin=${margin} → maxD=${maxD.toFixed(1)}m`);
   }
+  // v74.29 — Override LATERAL HUG : detection AVANT calcul forme.
+  // Si hug actif, on contraint maxW pour preserver gap + marge cote oppose.
+  // Le batiment va aussi etre plaque contre la mitoyennete cote hug (cf. positionnement plus bas).
+  const hug = String(lateralHugRaw || "").trim().toUpperCase();
+  const gapM = Math.max(0, parseFloat(lateralGapRaw) || 0);
+  let hugSign = 0; // 0 = pas de hug, +1 = vers maxU, -1 = vers minU
+  if (hug && gapM > 0) {
+    const cardVec = { EAST: [1, 0], WEST: [-1, 0], NORTH: [0, 1], SOUTH: [0, -1] }[hug];
+    if (cardVec) {
+      const dotU_card = cardVec[0] * sUx + cardVec[1] * sUy;
+      const dotV_card = cardVec[0] * nUx + cardVec[1] * nUy;
+      console.log(`│ v74.29 HUG: ${hug} gap=${gapM}m | dotU=${dotU_card.toFixed(2)} dotV=${dotV_card.toFixed(2)}`);
+      if (Math.abs(dotU_card) >= Math.abs(dotV_card)) {
+        hugSign = dotU_card >= 0 ? 1 : -1;
+        // Reduire maxW pour que le bati respecte gapM cote oppose + margin cote hug
+        const oldMaxW = maxW;
+        maxW = Math.max(4, availW - gapM - 2 * margin);
+        console.log(`│ v74.29 HUG actif → maxW ${oldMaxW.toFixed(1)} → ${maxW.toFixed(1)} (availW=${availW.toFixed(1)} - gap=${gapM} - 2*margin=${(2*margin).toFixed(1)})`);
+      } else {
+        console.log(`│ v74.29 HUG ignore : cardinal sur axe profondeur (V), pas lateral (U)`);
+      }
+    } else {
+      console.log(`│ v74.29 HUG inconnu: "${hug}" — ignore`);
+    }
+  }
   console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
   // Position en profondeur (retrait de la rue) — v72.27 : SPLIT-aware
   // En mode SPLIT_AV_AR, le logement doit être DERRIÈRE le commerce + gap.
@@ -5234,46 +5259,26 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const shapeArea = polyArea(bPts);
   console.log(`│ Shape: ${typology} bW=${bW.toFixed(1)}m × bD=${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m²`);
   // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
-  // Centre U = milieu du bbox (par défaut, peut être décalé par lateral_hug)
-  // Centre V = retrait en profondeur
-  let cU = (minU + maxU) / 2;
-  // v74.28 — OVERRIDE LATERAL HUG (Push 8) ──────────────────────────────────
-  // Si lateral_hug = EAST/WEST/NORTH/SOUTH, on plaque le bâtiment contre cette
-  // mitoyenneté en laissant lateral_gap_m sur le côté opposé (au lieu d'être
-  // centré). Utilisé pour les leads qui assument une dérogation sur un côté
-  // (cf. Vanelle BARLO-BVTW : hug=EAST, gap=4m, ignore_cos=Y).
-  const hug = String(lateralHugRaw || "").trim().toUpperCase();
-  const gapM = Math.max(0, parseFloat(lateralGapRaw) || 0);
-  if (hug && gapM > 0) {
-    const cardVec = { EAST: [1, 0], WEST: [-1, 0], NORTH: [0, 1], SOUTH: [0, -1] }[hug];
-    if (cardVec) {
-      // Projection du cardinal sur l'axe local U (axe rue)
-      // Convention toM : x = est (lon+), y = nord (lat+)
-      const dotU = cardVec[0] * sUx + cardVec[1] * sUy;
-      const dotV = cardVec[0] * nUx + cardVec[1] * nUy;
-      console.log(`│ v74.28 LATERAL HUG: ${hug} gap=${gapM}m | dotU=${dotU.toFixed(2)} dotV=${dotV.toFixed(2)}`);
-      if (Math.abs(dotU) >= Math.abs(dotV)) {
-        // L'axe lateral (U) contient bien la direction cardinale demandée
-        const sign = dotU >= 0 ? 1 : -1;
-        let targetCU;
-        if (sign > 0) {
-          // Hug côté maxU : opposé = minU → gap sur minU
-          targetCU = minU + gapM + bW / 2;
-          // Clamp pour rester dans l'enveloppe côté maxU (marge constructive)
-          if (targetCU + bW / 2 > maxU - margin) targetCU = maxU - margin - bW / 2;
-        } else {
-          // Hug côté minU : opposé = maxU → gap sur maxU
-          targetCU = maxU - gapM - bW / 2;
-          if (targetCU - bW / 2 < minU + margin) targetCU = minU + margin + bW / 2;
-        }
-        console.log(`│ v74.28 cU ${cU.toFixed(1)} → ${targetCU.toFixed(1)} (sign=${sign}, bW=${bW.toFixed(1)})`);
-        cU = targetCU;
-      } else {
-        console.log(`│ v74.28 LATERAL HUG ignoré : cardinal ${hug} sur axe profondeur (V), pas latéral (U)`);
-      }
+  // Centre U = milieu du bbox par defaut, ou plaque contre cote hug si override actif
+  // Centre V = retrait en profondeur (gere plus bas)
+  let cU;
+  if (hugSign !== 0) {
+    // v74.29 — PLAQUAGE LATERAL : centre du bati colle contre la mitoyennete demandee
+    // (avec une marge constructive minimale). bW a deja ete contraint plus haut pour
+    // que le gap cote oppose soit respecte automatiquement.
+    if (hugSign > 0) {
+      // dotU > 0 : la direction cardinal pointe vers maxU → plaquer cote maxU
+      cU = maxU - margin - bW / 2;
     } else {
-      console.log(`│ v74.28 LATERAL HUG inconnu: "${hug}" — ignoré`);
+      // dotU < 0 : la direction cardinal pointe vers minU → plaquer cote minU
+      cU = minU + margin + bW / 2;
     }
+    const oppositeGap = (hugSign > 0)
+      ? (cU - bW / 2) - minU      // gap cote minU
+      : maxU - (cU + bW / 2);      // gap cote maxU
+    console.log(`│ v74.29 HUG cU=${cU.toFixed(1)} (plaque cote ${hugSign > 0 ? "maxU" : "minU"}, bW=${bW.toFixed(1)}m) | gap cote oppose=${oppositeGap.toFixed(1)}m (cible ${gapM}m)`);
+  } else {
+    cU = (minU + maxU) / 2;
   }
   let cV;
   if (splitForcePosition && split_context) {
