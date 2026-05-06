@@ -469,8 +469,9 @@ app.post("/api/process-lead", async (req, res) => {
         const preserveCols = ["slide_4_image_url", "slide_5_image_url",
                               "massing_scn_A_img_url", "massing_scn_B_img_url", "massing_scn_C_img_url",
                               "site_polygon_points", "site_polygon_status",
-                              // v74.28 — overrides STRUCTURELS par lead (Push 8)
-                              "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos"];
+                              // v74.30 PUSH 11 — Lead Constraints framework (par lead)
+                              "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
+                              "override_max_fp_m2", "constraints_rationale"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -704,10 +705,12 @@ app.post("/api/process-lead", async (req, res) => {
       commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
       retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
       disposition: obj8D.Disposition || "",
-      // v74.28 — overrides STRUCTURELS par lead (Push 8)
+      // v74.30 PUSH 11 — Lead Constraints framework (par lead)
       override_lateral_hug: obj8D.override_lateral_hug || "",
       override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
-      override_ignore_cos: obj8D.override_ignore_cos || ""
+      override_ignore_cos: obj8D.override_ignore_cos || "",
+      override_max_fp_m2: obj8D.override_max_fp_m2 || "",
+      constraints_rationale: obj8D.constraints_rationale || "",
     };
 
     // Call /compute-scenarios on THIS server (internal call)
@@ -858,11 +861,16 @@ app.post("/api/process-lead", async (req, res) => {
         } catch (e) { console.warn(`[8E-AXO] Error: ${e.message}`); }
       }
 
-      // v74.30 — Cache bypass : tout override structurel desactive le cache 8F
-      // (sinon Push 9 lateral_hug ne s'applique jamais sur les leads existants).
-      const hasStructuralOverride = !!(obj8D.override_lateral_hug || obj8D.override_lateral_gap_m || obj8D.override_ignore_cos);
+      // v74.30 PUSH 11 — Cache bypass : toute lead constraint desactive le cache 8F
+      // (sinon les contraintes lateral_hug/max_fp/etc. ne s'appliqueraient jamais
+      // sur les leads existants ayant deja des massings caches).
+      const hasStructuralOverride = !!(
+        obj8D.override_lateral_hug || obj8D.override_lateral_gap_m ||
+        obj8D.override_ignore_cos || obj8D.override_max_fp_m2 ||
+        obj8D.constraints_rationale
+      );
       if (hasStructuralOverride) {
-        console.log(`[8F] Cache BYPASS : override structurel detecte (hug=${obj8D.override_lateral_hug || "-"} gap=${obj8D.override_lateral_gap_m || "-"} ignore_cos=${obj8D.override_ignore_cos || "-"}) → regen massing A/B/C forcee`);
+        console.log(`[8F] Cache BYPASS : lead constraints detectees (hug=${obj8D.override_lateral_hug || "-"} gap=${obj8D.override_lateral_gap_m || "-"} ignore_cos=${obj8D.override_ignore_cos || "-"} max_fp=${obj8D.override_max_fp_m2 || "-"}) → regen massing A/B/C forcee`);
       }
       for (const label of ["A", "B", "C"]) {
         const cachedKey = `massing_scn_${label}_img_url`;
@@ -905,10 +913,12 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-            // v74.28 — propager les overrides STRUCTURELS vers /generate-massing (Push 8)
+            // v74.30 PUSH 11 — propager les contraintes lead vers /generate-massing
             override_lateral_hug: obj8D.override_lateral_hug || "",
             override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
             override_ignore_cos: obj8D.override_ignore_cos || "",
+            override_max_fp_m2: obj8D.override_max_fp_m2 || "",
+            constraints_rationale: obj8D.constraints_rationale || "",
           };
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -4518,32 +4528,218 @@ function computeSmartScenarios({
   console.log(`│ C(${r.C.role}): fp=${r.C.fp_m2}m² × ${r.C.levels}niv = ${r.C.sdp_m2}m² SDP (${r.C.cos_ratio_pct}%COS) ${r.C.cos_compliance} | ${r.C.unit_mix_detail}`);
   console.log(`│ ★ RECOMMANDÉ : ${recommended} — ${recommendation_reason}`);
   console.log(`└── end SCENARIO ENGINE v57.20 ──`);
-  return { A: r.A, B: r.B, C: r.C, meta, diagnostic, computed_budget_band: budget_band };
+  // v74.30 PUSH 11 — appliquer les contraintes structurelles du lead.
+  // Si _leadConstraints est present (injecte par /compute-scenarios depuis le body),
+  // on cap fp/sdp/units/mix en cascade. Sinon, no-op (isEmpty=true).
+  const _scenarios = { A: r.A, B: r.B, C: r.C };
+  if (arguments[0] && arguments[0]._leadConstraints) {
+    applyConstraintsToScenarios(_scenarios, arguments[0]._leadConstraints);
+    if (!arguments[0]._leadConstraints.isEmpty) {
+      console.log(`│ [PUSH11] Apres contraintes: A=${_scenarios.A.fp_m2}m²×${_scenarios.A.levels}niv=${_scenarios.A.sdp_m2}m² | B=${_scenarios.B.fp_m2}m²×${_scenarios.B.levels}niv=${_scenarios.B.sdp_m2}m² | C=${_scenarios.C.fp_m2}m²×${_scenarios.C.levels}niv=${_scenarios.C.sdp_m2}m²`);
+    }
+  }
+  return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band };
 }
 // ═══════════════════════════════════════════════════════════════════════════
-// v74.28 PUSH 8 — OVERRIDE STRUCTUREL PAR LEAD
-// Remplace le system override_levels/typology/units (Push 7, retire — trop
-// naïf, cassait la coherence). Nouvelle approche : overrides STRUCTURELS qui
-// expriment des CONTRAINTES architecturales que le moteur respecte.
-//
-// Champs globaux (par lead, pas par scenario) :
-//   override_lateral_hug    (EAST/WEST/NORTH/SOUTH)
-//      → bati plaque contre cette mitoyennete au lieu d'etre centre
-//   override_lateral_gap_m  (entier 1-8)
-//      → distance min cote oppose au hug
-//   override_ignore_cos     (Y/vide)
-//      → adouci le ton du rapport quand on depasse le COS (deroge assumee)
-//
-// Le helper ne touche pas aux scenarios eux-memes : c'est computeMassingPolygon
-// (positionnement) et les textes (ton du COS) qui lisent ces overrides.
+// v74.30 PUSH 11 — LEAD CONSTRAINTS FRAMEWORK
 // ═══════════════════════════════════════════════════════════════════════════
-function applyScenarioOverrides(scenarios, params) {
-  // v74.28 — fonction conservee (signature inchangee) mais rendue NOOP.
-  // Les anciens override_levels/typology/units etaient cassants (creaient
-  // des incoherences SDP/units/COS). Les nouveaux overrides structurels
-  // sont appliques DIRECTEMENT dans computeMassingPolygon et dans les textes,
-  // pas via post-processing des scenarios.
+// Au lieu de coller des "overrides" isoles, on declare un objet structure
+// par lead qui regroupe TOUTES ses particularites architecturales /
+// reglementaires / programmatiques. Trois fonctions consument cet objet
+// a 3 etages distincts du pipeline :
+//   1. applyConstraintsToScenarios : cap fp/sdp/units/mix dans le moteur
+//   2. applyConstraintsToMassing   : positionnement 3D (plaquage hug, etc.)
+//   3. applyConstraintsToTexts     : adoucit COS, insere alerte dans pptx
+//
+// Garantie zero-impact : si toutes les colonnes override_* du lead sont
+// vides, parseLeadConstraints retourne un objet avec isEmpty=true, et les
+// trois fonctions returnent immediatement sans rien modifier. Les leads
+// "normaux" traversent ce code de facon strictement transparente.
+//
+// Pour ajouter une nouvelle contrainte : ajouter le champ dans
+// parseLeadConstraints + un handler dans la fonction concernee. Pas besoin
+// de toucher computeSmartScenarios, computeMassingPolygon, ni les textes
+// directement — c'est tout l'interet de la structure.
+// ═══════════════════════════════════════════════════════════════════════════
+function parseLeadConstraints(body) {
+  const c = {
+    geometry: {},
+    regulatory: {},
+    programmatic: {},
+    rationale: "",
+    isEmpty: true,
+    activeList: [], // libelles humains (utilises par applyConstraintsToTexts)
+  };
+  if (!body || typeof body !== "object") return c;
+  const get = (k) => body[k];
+  // ── GEOMETRIE ──
+  const hugRaw = String(get("override_lateral_hug") || "").trim().toUpperCase();
+  if (["EAST", "WEST", "NORTH", "SOUTH"].includes(hugRaw)) {
+    c.geometry.lateral_hug = hugRaw;
+    c.isEmpty = false;
+    const sideFr = { EAST: "est", WEST: "ouest", NORTH: "nord", SOUTH: "sud" }[hugRaw];
+    c.activeList.push(`mitoyennete cote ${sideFr} assumee`);
+  }
+  const gapM = parseFloat(get("override_lateral_gap_m"));
+  if (!isNaN(gapM) && gapM > 0) {
+    c.geometry.lateral_gap_m = gapM;
+    c.isEmpty = false;
+    if (c.geometry.lateral_hug) {
+      const oppFr = { EAST: "ouest", WEST: "est", NORTH: "sud", SOUTH: "nord" }[c.geometry.lateral_hug];
+      c.activeList.push(`ecart de ${gapM} m cote ${oppFr}`);
+    }
+  }
+  const maxFp = parseFloat(get("override_max_fp_m2"));
+  if (!isNaN(maxFp) && maxFp > 0) {
+    c.geometry.max_fp_m2 = maxFp;
+    c.isEmpty = false;
+    c.activeList.push(`emprise au sol bornee a ${maxFp} m²`);
+  }
+  // ── REGLEMENTAIRE ──
+  const ignoreCos = String(get("override_ignore_cos") || "").trim().toUpperCase() === "Y";
+  if (ignoreCos) {
+    c.regulatory.ignore_cos = true;
+    c.isEmpty = false;
+    c.activeList.push("derogation COS assumee");
+  }
+  // ── DOCUMENTATION ──
+  const rat = String(get("constraints_rationale") || "").trim();
+  if (rat) {
+    c.rationale = rat;
+    c.isEmpty = false;
+  }
+  if (!c.isEmpty) {
+    console.log(`│ [CONSTRAINTS] Lead a des contraintes specifiques : ${c.activeList.join(", ")}${c.rationale ? ` — rationale: "${c.rationale}"` : ""}`);
+  }
+  return c;
+}
+// ─── helper : rescaling du mix detail "8×T2(45m²)" → "5×T2(45m²)" ─────────
+function rescaleMixDetail(detail, scale) {
+  if (!detail || scale >= 1) return detail;
+  return String(detail).split(/\s*\+\s*/)
+    .map(part => {
+      const m = part.match(/(\d+)\s*[×x*]\s*([A-Z0-9]+)\s*\(\s*(\d+)\s*m/i);
+      if (!m) return part;
+      const oldCount = parseInt(m[1]);
+      const newCount = Math.max(0, Math.round(oldCount * scale));
+      if (newCount === 0) return null;
+      return `${newCount}×${m[2]}(${m[3]}m²)`;
+    })
+    .filter(Boolean)
+    .join(" + ");
+}
+// ─── 1. ETAGE SCENARIO : cap fp/sdp/units/mix dans les 3 scenarios ────────
+function applyConstraintsToScenarios(scenarios, constraints) {
+  if (!constraints || constraints.isEmpty) return scenarios;
+  if (!scenarios || typeof scenarios !== "object") return scenarios;
+  // v74.30 — idempotence : si deja applique, ne pas recapper
+  if (scenarios._constraints_applied) {
+    console.log(`│ [CONSTRAINTS] deja applique sur ces scenarios → skip`);
+    return scenarios;
+  }
+  scenarios._constraints_applied = true;
+  // ── max_fp_m2 : cap proportionnel pour preserver hierarchie A > B > C ──
+  const cap = constraints.geometry && constraints.geometry.max_fp_m2;
+  if (cap && cap > 0) {
+    const labels = ["A", "B", "C"].filter(l => scenarios[l]);
+    const maxFpDefault = Math.max(...labels.map(l => scenarios[l].fp_m2 || 0));
+    if (maxFpDefault > cap) {
+      const scale = cap / maxFpDefault;
+      console.log(`│ [CONSTRAINTS] Cap fp_m2=${cap}m² (max actuel=${maxFpDefault}m²) → scale=${scale.toFixed(3)}`);
+      for (const lbl of labels) {
+        const sc = scenarios[lbl];
+        const oldFp = sc.fp_m2 || 0;
+        const oldSdp = sc.sdp_m2 || (oldFp * (sc.levels || 1));
+        if (oldFp <= 0) continue;
+        // Cap fp proportionnellement
+        sc.fp_m2 = Math.max(10, Math.round(oldFp * scale));
+        // Cascade : SDP, units, useful, cost, COS
+        const newSdp = Math.round(sc.fp_m2 * (sc.levels || 1));
+        const sdpScale = oldSdp > 0 ? newSdp / oldSdp : 1;
+        sc.sdp_m2 = newSdp;
+        if (sc.fp_rdc_m2) sc.fp_rdc_m2 = Math.round(sc.fp_rdc_m2 * scale);
+        if (sc.fp_etages_m2) sc.fp_etages_m2 = Math.round(sc.fp_etages_m2 * scale);
+        if (typeof sc.total_units === "number") {
+          sc.total_units = Math.max(1, Math.round(sc.total_units * sdpScale));
+        }
+        if (typeof sc.total_useful_m2 === "number") sc.total_useful_m2 = Math.round(sc.total_useful_m2 * sdpScale);
+        if (typeof sc.surface_habitable_m2 === "number") sc.surface_habitable_m2 = Math.round(sc.surface_habitable_m2 * sdpScale);
+        if (typeof sc.hab_m2_total === "number") sc.hab_m2_total = Math.round(sc.hab_m2_total * sdpScale);
+        if (typeof sc.cost_total_fcfa === "number") sc.cost_total_fcfa = Math.round(sc.cost_total_fcfa * sdpScale);
+        if (sc.cout_fourchette) {
+          if (typeof sc.cout_fourchette.bas === "number") sc.cout_fourchette.bas = Math.round(sc.cout_fourchette.bas * sdpScale);
+          if (typeof sc.cout_fourchette.haut === "number") sc.cout_fourchette.haut = Math.round(sc.cout_fourchette.haut * sdpScale);
+          if (typeof sc.cout_fourchette.median === "number") sc.cout_fourchette.median = Math.round(sc.cout_fourchette.median * sdpScale);
+        }
+        if (typeof sc.cost_per_unit === "number" && sc.total_units > 0) {
+          sc.cost_per_unit = Math.round(sc.cost_total_fcfa / sc.total_units);
+        }
+        // Mix unitaire : reduire chaque count proportionnellement
+        if (sc.unit_mix && typeof sc.unit_mix === "object") {
+          for (const k of Object.keys(sc.unit_mix)) {
+            sc.unit_mix[k] = Math.max(0, Math.round(sc.unit_mix[k] * sdpScale));
+          }
+        }
+        if (sc.unit_mix_detail) sc.unit_mix_detail = rescaleMixDetail(sc.unit_mix_detail, sdpScale);
+        // COS ratio recalcule
+        if (typeof sc.cos_ratio_pct === "number") {
+          sc.cos_ratio_pct = Math.round(sc.cos_ratio_pct * sdpScale);
+          sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
+            : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
+            : "AMBITIEUX_HORS_COS";
+        }
+        sc.fp_capped_by_constraint = true;
+        sc.fp_original_m2 = oldFp;
+        console.log(`│ [CONSTRAINTS] ${lbl}: fp ${oldFp}→${sc.fp_m2}m² | sdp ${oldSdp}→${sc.sdp_m2}m² | units ${Math.round(sc.total_units / sdpScale)}→${sc.total_units}`);
+      }
+    } else {
+      console.log(`│ [CONSTRAINTS] Cap fp_m2=${cap}m² mais max actuel=${maxFpDefault}m² ≤ cap → no-op`);
+    }
+  }
+  // (futurs handlers programmatiques ici : force_typology, max_levels, etc.)
   return scenarios;
+}
+// ─── 2. ETAGE MASSING : geometrie 3D (positionnement, dimensions) ─────────
+// Renvoie un objet { hugSign, gapM, maxW_override } que computeMassingPolygon
+// utilisera. Si pas de contraintes geometriques, hugSign=0 et maxW_override=null.
+function applyConstraintsToMassing(constraints, sUx, sUy, nUx, nUy) {
+  const out = { hugSign: 0, gapM: 0, maxW_override: null };
+  if (!constraints || constraints.isEmpty) return out;
+  const geo = constraints.geometry || {};
+  // ── lateral hug + gap ──
+  const hug = geo.lateral_hug;
+  const gapM = geo.lateral_gap_m || 0;
+  if (hug && gapM > 0) {
+    const cardVec = { EAST: [1, 0], WEST: [-1, 0], NORTH: [0, 1], SOUTH: [0, -1] }[hug];
+    if (cardVec) {
+      const dotU = cardVec[0] * sUx + cardVec[1] * sUy;
+      const dotV = cardVec[0] * nUx + cardVec[1] * nUy;
+      console.log(`│ [CONSTRAINTS-MASSING] HUG ${hug} gap=${gapM}m | dotU=${dotU.toFixed(2)} dotV=${dotV.toFixed(2)}`);
+      if (Math.abs(dotU) >= Math.abs(dotV)) {
+        out.hugSign = dotU >= 0 ? 1 : -1;
+        out.gapM = gapM;
+      }
+    }
+  }
+  return out;
+}
+// ─── 3. ETAGE TEXTES : alerte slide 3 + adoucissement COS ─────────────────
+function applyConstraintsToTexts(flat, constraints) {
+  if (!flat || !constraints || constraints.isEmpty) return flat;
+  const list = constraints.activeList || [];
+  if (list.length === 0 && !constraints.rationale) return flat;
+  // Construire un bloc d'alerte humanise
+  const items = list.map(l => `- ${l.charAt(0).toUpperCase() + l.slice(1)}`).join("\n");
+  const ratLine = constraints.rationale ? `\n\n*${constraints.rationale}*` : "";
+  flat._constraints_alert_text = `**⚠ Contraintes specifiques discutees avec le client :**\n${items}\n\nLe programme a ete dimensionne en consequence : les chiffres ci-dessous tiennent compte de ces choix.${ratLine}`;
+  // Compat : flag exploitable par buildTemplateTexts
+  flat._has_constraints = "Y";
+  return flat;
+}
+// Compat : ancienne signature applyScenarioOverrides → delegue au framework
+function applyScenarioOverrides(scenarios, params) {
+  const constraints = parseLeadConstraints(params || {});
+  return applyConstraintsToScenarios(scenarios, constraints);
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
 app.post("/compute-scenarios", (req, res) => {
@@ -4601,6 +4797,8 @@ app.post("/compute-scenarios", (req, res) => {
     input_typologies: p.input_typologies || "",
     commerce_size_m2: Number(p.commerce_size_m2) || 0,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
+    // v74.30 PUSH 11 : injecter contraintes specifiques du lead (parsees ici)
+    _leadConstraints: parseLeadConstraints(p),
   });
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
@@ -4776,10 +4974,12 @@ app.post("/compute-scenarios", (req, res) => {
     profil_standing: profil.standing || "",
     profil_programme: profil.programme || "",
     profil_cible_unites: String(profil.cible_unites || 0),
-    // v74.28 — overrides STRUCTURELS (Push 8) echo
+    // v74.30 PUSH 11 — Lead Constraints echo (utilise par buildTemplateTexts)
     override_ignore_cos: String(p.override_ignore_cos || "").toUpperCase() === "Y" ? "Y" : "",
     override_lateral_hug: String(p.override_lateral_hug || "").toUpperCase(),
     override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
+    override_max_fp_m2: String(p.override_max_fp_m2 || ""),
+    constraints_rationale: String(p.constraints_rationale || ""),
     // ── SITE DIAG ──
     site_ces_regl: `${siteDiag.ces_reglementaire_pct || 0}%`,
     site_cos_regl: String(siteDiag.cos_reglementaire || 0),
@@ -5025,8 +5225,10 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const { massing_mode, primary_driver, levels, standing_level, program_main,
     site_saturation, project_type, existing_fp_m2,
     road_bearing: roadBearingInput, scenario_role, split_context,
+    lead_constraints: leadConstraintsCtx,
+    // legacy (Push 8/9) — fallback si lead_constraints n'est pas fourni
     lateral_hug: lateralHugRaw, lateral_gap_m: lateralGapRaw } = context;
-  console.log(`┌── computeMassingPolygon v74.28 (ROAD_BEARING + RÔLE + SOLAR + SPLIT + HUG) ──`);
+  console.log(`┌── computeMassingPolygon v74.30 (LEAD CONSTRAINTS) ──`);
   console.log(`│ fp_m2=${fp_m2}  envelopeArea=${envelopeArea.toFixed(1)}m²  mode=${massing_mode}  role=${scenario_role}`);
   // ── 1. Centroïde et conversion mètres ──
   const eLat = envelopeCoords.reduce((s, p) => s + p.lat, 0) / envelopeCoords.length;
@@ -5135,30 +5337,23 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
     maxD = Math.max(6, availD - reservedFront - margin); // profondeur restante pour logement
     console.log(`│ v72.27 SPLIT maxD: availD=${availD.toFixed(1)} - reserved=${reservedFront.toFixed(1)} - margin=${margin} → maxD=${maxD.toFixed(1)}m`);
   }
-  // v74.29 — Override LATERAL HUG : detection AVANT calcul forme.
-  // Si hug actif, on contraint maxW pour preserver gap + marge cote oppose.
-  // Le batiment va aussi etre plaque contre la mitoyennete cote hug (cf. positionnement plus bas).
-  const hug = String(lateralHugRaw || "").trim().toUpperCase();
-  const gapM = Math.max(0, parseFloat(lateralGapRaw) || 0);
-  let hugSign = 0; // 0 = pas de hug, +1 = vers maxU, -1 = vers minU
-  if (hug && gapM > 0) {
-    const cardVec = { EAST: [1, 0], WEST: [-1, 0], NORTH: [0, 1], SOUTH: [0, -1] }[hug];
-    if (cardVec) {
-      const dotU_card = cardVec[0] * sUx + cardVec[1] * sUy;
-      const dotV_card = cardVec[0] * nUx + cardVec[1] * nUy;
-      console.log(`│ v74.29 HUG: ${hug} gap=${gapM}m | dotU=${dotU_card.toFixed(2)} dotV=${dotV_card.toFixed(2)}`);
-      if (Math.abs(dotU_card) >= Math.abs(dotV_card)) {
-        hugSign = dotU_card >= 0 ? 1 : -1;
-        // Reduire maxW pour que le bati respecte gapM cote oppose + margin cote hug
-        const oldMaxW = maxW;
-        maxW = Math.max(4, availW - gapM - 2 * margin);
-        console.log(`│ v74.29 HUG actif → maxW ${oldMaxW.toFixed(1)} → ${maxW.toFixed(1)} (availW=${availW.toFixed(1)} - gap=${gapM} - 2*margin=${(2*margin).toFixed(1)})`);
-      } else {
-        console.log(`│ v74.29 HUG ignore : cardinal sur axe profondeur (V), pas lateral (U)`);
-      }
-    } else {
-      console.log(`│ v74.29 HUG inconnu: "${hug}" — ignore`);
-    }
+  // v74.30 — Lead constraints : si fournies via context, on les passe au framework.
+  // Sinon, on construit un objet minimal a partir des champs legacy (lateral_hug/gap)
+  // pour rester compatible avec les anciens callers.
+  let _leadConstraints = leadConstraintsCtx;
+  if (!_leadConstraints) {
+    _leadConstraints = parseLeadConstraints({
+      override_lateral_hug: lateralHugRaw,
+      override_lateral_gap_m: lateralGapRaw,
+    });
+  }
+  const massingC = applyConstraintsToMassing(_leadConstraints, sUx, sUy, nUx, nUy);
+  let hugSign = massingC.hugSign;
+  const gapM = massingC.gapM;
+  if (hugSign !== 0 && gapM > 0) {
+    const oldMaxW = maxW;
+    maxW = Math.max(4, availW - gapM - 2 * margin);
+    console.log(`│ [CONSTRAINTS-MASSING] HUG actif → maxW ${oldMaxW.toFixed(1)} → ${maxW.toFixed(1)} (availW=${availW.toFixed(1)} - gap=${gapM} - 2*margin=${(2*margin).toFixed(1)})`);
   }
   console.log(`│ v56.5 DIRECT: availW=${availW.toFixed(1)} availD=${availD.toFixed(1)} → maxW=${maxW.toFixed(1)} maxD=${maxD.toFixed(1)} (margin=${margin}m)`);
   // Position en profondeur (retrait de la rue) — v72.27 : SPLIT-aware
@@ -5265,24 +5460,16 @@ function computeMassingPolygon(envelopeCoords, fp_m2, envelopeArea, context = {}
   const shapeArea = polyArea(bPts);
   console.log(`│ Shape: ${typology} bW=${bW.toFixed(1)}m × bD=${bD.toFixed(1)}m area=${shapeArea.toFixed(0)}m² target=${fp_m2}m²`);
   // ── 7. POSITIONNEMENT DIRECT dans le bbox ──
-  // Centre U = milieu du bbox par defaut, ou plaque contre cote hug si override actif
+  // Centre U = milieu du bbox par defaut, ou plaque contre cote hug si lead constraint actif
   // Centre V = retrait en profondeur (gere plus bas)
   let cU;
   if (hugSign !== 0) {
-    // v74.29 — PLAQUAGE LATERAL : centre du bati colle contre la mitoyennete demandee
-    // (avec une marge constructive minimale). bW a deja ete contraint plus haut pour
-    // que le gap cote oppose soit respecte automatiquement.
-    if (hugSign > 0) {
-      // dotU > 0 : la direction cardinal pointe vers maxU → plaquer cote maxU
-      cU = maxU - margin - bW / 2;
-    } else {
-      // dotU < 0 : la direction cardinal pointe vers minU → plaquer cote minU
-      cU = minU + margin + bW / 2;
-    }
-    const oppositeGap = (hugSign > 0)
-      ? (cU - bW / 2) - minU      // gap cote minU
-      : maxU - (cU + bW / 2);      // gap cote maxU
-    console.log(`│ v74.29 HUG cU=${cU.toFixed(1)} (plaque cote ${hugSign > 0 ? "maxU" : "minU"}, bW=${bW.toFixed(1)}m) | gap cote oppose=${oppositeGap.toFixed(1)}m (cible ${gapM}m)`);
+    // v74.30 — PLAQUAGE LATERAL via Lead Constraints framework
+    // Le bati colle la mitoyennete demandee, marge constructive minimale.
+    // bW a deja ete contraint plus haut → gap cote oppose respecte automatiquement.
+    cU = (hugSign > 0) ? (maxU - margin - bW / 2) : (minU + margin + bW / 2);
+    const oppositeGap = (hugSign > 0) ? (cU - bW / 2) - minU : maxU - (cU + bW / 2);
+    console.log(`│ [CONSTRAINTS-MASSING] cU=${cU.toFixed(1)} (plaque cote ${hugSign > 0 ? "maxU" : "minU"}, bW=${bW.toFixed(1)}m) | gap cote oppose=${oppositeGap.toFixed(1)}m (cible ${gapM}m)`);
   } else {
     cU = (minU + maxU) / 2;
   }
@@ -7124,10 +7311,12 @@ app.post("/generate-massing", async (req, res) => {
     // v73.1.3: typology-driven fields (CRITIQUE — sinon fallback sur target_units → mauvais mix)
     input_typologies = "",
     commerce_size_m2 = 0,
-    // v74.28 — overrides STRUCTURELS par lead (Push 8)
+    // v74.30 PUSH 11 — Lead Constraints framework (par lead)
     override_lateral_hug = "",
     override_lateral_gap_m = "",
     override_ignore_cos = "",
+    override_max_fp_m2 = "",
+    constraints_rationale = "",
   } = req.body;
   if (!lead_id || !polygon_points) return res.status(400).json({ error: "lead_id et polygon_points obligatoires" });
   if (!envelope_w || !envelope_d) return res.status(400).json({ error: "envelope_w, envelope_d obligatoires" });
@@ -7261,8 +7450,11 @@ app.post("/generate-massing", async (req, res) => {
       // v73.1.3: typology-driven fields (sinon fallback target_units → mauvais mix)
       input_typologies: input_typologies || "",
       commerce_size_m2: Number(commerce_size_m2) || 0,
+      // v74.30 PUSH 11 : injecter contraintes specifiques du lead
+      _leadConstraints: parseLeadConstraints(req.body),
     });
-    // v74.27 — appliquer overrides utilisateur (lus depuis req.body)
+    // v74.30: applyScenarioOverrides est maintenant un alias du framework Lead Constraints,
+    // mais le moteur les a deja appliquees via _leadConstraints — appel devenu no-op ici.
     applyScenarioOverrides(scenarios, req.body);
     const sc = scenarios[label] || scenarios.A;
     // v72.28: LOG les 3 scénarios pour vérifier la différenciation
@@ -7494,9 +7686,9 @@ app.post("/generate-massing", async (req, res) => {
     road_bearing: Number(road_bearing) || null,        // v56.7: azimut rue depuis la Sheet
     scenario_role: label === "A" ? "INTENSIFICATION" : label === "B" ? "EQUILIBRE" : "PRUDENT",
     split_context: splitContext,                         // v72.27: positionner logement derrière commerce
-    // v74.28 — overrides STRUCTURELS (Push 8)
-    lateral_hug: override_lateral_hug,
-    lateral_gap_m: override_lateral_gap_m,
+    // v74.30 PUSH 11 — passer les contraintes structurelles du lead au framework.
+    // computeMassingPolygon utilise applyConstraintsToMassing() pour les consommer.
+    lead_constraints: parseLeadConstraints(req.body),
   });
   const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -8065,7 +8257,9 @@ function buildTemplateTexts(flat, scenarios) {
   // ── SLIDE 3: Introduction ──
   // Directive BARLO : "COMMENCE TOUJOURS PAR « Ce projet consiste à »"
   // v74.18 — slide 3 : roles purs sans SDP (chiffres reveles dans les slides scenario detaillees)
-  texts.slide_3_intro_text = `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${f("A_units")} unités** en standing ${f("standing_level").toLowerCase()}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (Coefficient d'Occupation des Sols) de **${f("site_cos_regl")}**, un **CES** (Coefficient d'Emprise au Sol) de **${f("site_ces_regl")} %**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — l'ambition** : maximise la densité et exploite pleinement le potentiel foncier. C'est la configuration qui se rapproche le plus de votre demande initiale.\n- **Scénario B — l'équilibre** : ajuste densité et coût pour gagner en faisabilité financière, tout en préservant un programme cohérent.\n- **Scénario C — la prudence** : version la plus économique, qui sécurise le budget et minimise le risque de dépassement.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Emprise constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Enveloppe : **${f("envelope_w")} × ${f("envelope_d")} m**\n- **SDP** (Surface De Plancher) max théorique : **${f("site_sdp_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${f("retrait_mitoyennete")}** côtés`;
+  // v74.30 PUSH 11 — prefixer l'intro slide 3 par le bloc alerte si contraintes lead
+  const constraintsAlertPrefix = flat._constraints_alert_text ? `${flat._constraints_alert_text}\n\n` : "";
+  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${f("A_units")} unités** en standing ${f("standing_level").toLowerCase()}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (Coefficient d'Occupation des Sols) de **${f("site_cos_regl")}**, un **CES** (Coefficient d'Emprise au Sol) de **${f("site_ces_regl")} %**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — l'ambition** : maximise la densité et exploite pleinement le potentiel foncier. C'est la configuration qui se rapproche le plus de votre demande initiale.\n- **Scénario B — l'équilibre** : ajuste densité et coût pour gagner en faisabilité financière, tout en préservant un programme cohérent.\n- **Scénario C — la prudence** : version la plus économique, qui sécurise le budget et minimise le risque de dépassement.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Emprise constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Enveloppe : **${f("envelope_w")} × ${f("envelope_d")} m**\n- **SDP** (Surface De Plancher) max théorique : **${f("site_sdp_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${f("retrait_mitoyennete")}** côtés`;
   texts.slide_3_programme_text = "";
   // ── SLIDE 4: Terrain ──
   // v74.14 — slide 4 : focus EMPRISE (déduit slide 3), sans COS/CES (déjà mentionnés)
@@ -8998,8 +9192,10 @@ app.post("/generate-texts", async (req, res) => {
     layout_mode: p.layout_mode || "SUPERPOSE",
     commerce_depth_m: Number(p.commerce_depth_m) || 6,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
+    // v74.30 PUSH 11 : injecter contraintes specifiques du lead
+    _leadConstraints: parseLeadConstraints(p),
   });
-  // v74.26 — appliquer overrides utilisateur
+  // v74.30: applyScenarioOverrides est devenu un alias du framework, idempotent.
   applyScenarioOverrides(scenarios, p);
   // Step 2: Flatten scenario data (reuse existing flatten logic)
   const diag = scenarios.diagnostic || {};
@@ -9045,10 +9241,12 @@ app.post("/generate-texts", async (req, res) => {
     profil_posture: profil.posture || p.feasibility_posture || "BALANCED",
     profil_standing: profil.standing || p.standing_level || "STANDARD",
     profil_programme: profil.programme || "",
-    // v74.28 — overrides STRUCTURELS (Push 8) propages dans les textes
+    // v74.30 PUSH 11 — Lead Constraints echo
     override_ignore_cos: String(p.override_ignore_cos || "").toUpperCase() === "Y" ? "Y" : "",
     override_lateral_hug: String(p.override_lateral_hug || "").toUpperCase(),
     override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
+    override_max_fp_m2: String(p.override_max_fp_m2 || ""),
+    constraints_rationale: String(p.constraints_rationale || ""),
     A_role: sA.role || "", A_fp: String(sA.fp_m2 || 0), A_levels: String(sA.levels || 0),
     A_height: String(sA.height_m || 0), A_sdp: String(sA.sdp_m2 || 0),
     A_units: String(sA.total_units || 0), A_unit_summary: sA.unit_mix_detail || "",
@@ -9171,6 +9369,8 @@ app.post("/generate-texts", async (req, res) => {
   };
   // ═══ v72.91 ENRICH flat with ALL keys needed by template engine ═══
   enrichFlatForTemplates(flat, p, scenarios);
+  // ═══ v74.30 PUSH 11 — injecter alerte contraintes (si lead a des contraintes) ═══
+  applyConstraintsToTexts(flat, parseLeadConstraints(p));
   // ═══ v72.90 TEMPLATE ENGINE — deterministic texts (zero GPT) ═══
   const templateTexts = buildTemplateTexts(flat, scenarios);
   console.log(`[GENERATE-TEXTS] Template engine: ${Object.keys(templateTexts).length} deterministic texts`);
@@ -9314,8 +9514,10 @@ app.post("/generate-pptx", async (req, res) => {
       // v73.1.11: typology-driven fields (sinon fallback target_units → mauvais mix dans les textes)
       input_typologies: p.input_typologies || "",
       commerce_size_m2: Number(p.commerce_size_m2) || 0,
+      // v74.30 PUSH 11 : injecter contraintes specifiques du lead
+      _leadConstraints: parseLeadConstraints(p),
     });
-    // v74.26 — appliquer overrides utilisateur (champs override_*_A/B/C dans p)
+    // v74.30: alias du framework, idempotent (safe).
     applyScenarioOverrides(scenarios, p);
     // Step 2: Flatten + generate texts (same as /generate-texts)
     const diag = scenarios.diagnostic || {};
@@ -9348,10 +9550,12 @@ app.post("/generate-pptx", async (req, res) => {
       delta_CA_sdp: `${dCA.delta_sdp_m2 || 0} m² (${dCA.delta_sdp_pct || 0}%)`,
       delta_CA_cout: `${dCA.delta_cout_fcfa ? Math.round(dCA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dCA.delta_cout_pct || 0}%)`,
       profil_posture: (diag.profil_client || {}).posture || "BALANCED",
-      // v74.28 — overrides STRUCTURELS (Push 8) propages dans les textes
+      // v74.30 PUSH 11 — Lead Constraints echo
       override_ignore_cos: String(p.override_ignore_cos || "").toUpperCase() === "Y" ? "Y" : "",
       override_lateral_hug: String(p.override_lateral_hug || "").toUpperCase(),
       override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
+      override_max_fp_m2: String(p.override_max_fp_m2 || ""),
+      constraints_rationale: String(p.constraints_rationale || ""),
     };
     // Add per-scenario flat fields
     for (const [key, s] of [["A", sA], ["B", sB], ["C", sC]]) {
@@ -9402,6 +9606,8 @@ app.post("/generate-pptx", async (req, res) => {
     }
     // ═══ v72.91 ENRICH flat with ALL keys needed by template engine ═══
     enrichFlatForTemplates(flat, p, scenarios);
+    // ═══ v74.30 PUSH 11 — injecter alerte contraintes (si lead a des contraintes) ═══
+    applyConstraintsToTexts(flat, parseLeadConstraints(p));
     // ═══ v72.90 TEMPLATE ENGINE — deterministic texts ═══
     const templateTexts = buildTemplateTexts(flat, scenarios);
     // ═══ v72.90 GPT — ONLY slide_5_text ═══
