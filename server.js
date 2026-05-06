@@ -665,6 +665,9 @@ app.post("/api/process-lead", async (req, res) => {
     const row8D = preScenario.values?.[0] || row8C;
     const obj8D = {};
     pipeHeaders.forEach((h, i) => { if (h) obj8D[h] = (row8D[i] !== undefined ? row8D[i] : ""); });
+    // v74.32 PUSH 13 — diag : confirmer ce que obj8D a comme contraintes
+    console.log(`[8D-DIAG] obj8D constraints : hug="${obj8D.override_lateral_hug || ""}" gap="${obj8D.override_lateral_gap_m || ""}" cos="${obj8D.override_ignore_cos || ""}" max_fp="${obj8D.override_max_fp_m2 || ""}" ignore_setbacks="${obj8D.override_ignore_setbacks || ""}" rationale="${(obj8D.constraints_rationale || "").substring(0, 50)}"`);
+    console.log(`[8D-DIAG] pipeHeaders has columns: hug=${pipeHeaders.indexOf("override_lateral_hug")} gap=${pipeHeaders.indexOf("override_lateral_gap_m")} cos=${pipeHeaders.indexOf("override_ignore_cos")} max_fp=${pipeHeaders.indexOf("override_max_fp_m2")} ignore_setbacks=${pipeHeaders.indexOf("override_ignore_setbacks")} rationale=${pipeHeaders.indexOf("constraints_rationale")}`);
 
     // Build /compute-scenarios body (same as 8D Make body)
     const scenarioBody = {
@@ -862,20 +865,32 @@ app.post("/api/process-lead", async (req, res) => {
         } catch (e) { console.warn(`[8E-AXO] Error: ${e.message}`); }
       }
 
+      // v74.32 PUSH 13 — re-read PIPELINE row JUSTE AVANT 8F pour avoir les valeurs FRAICHES.
+      // Resout le cas ou le user modifie la PIPELINE pendant un retraitement long.
+      let obj8F = obj8D; // fallback
+      try {
+        const fresh8F = await gasGet("readPipelineRow", { row: pipeRowNum });
+        const row8F = fresh8F.values?.[0];
+        if (row8F && row8F.length > 0) {
+          obj8F = {};
+          pipeHeaders.forEach((h, i) => { if (h) obj8F[h] = (row8F[i] !== undefined ? row8F[i] : ""); });
+          console.log(`[8F-DIAG] obj8F constraints (fresh re-read) : hug="${obj8F.override_lateral_hug || ""}" gap="${obj8F.override_lateral_gap_m || ""}" cos="${obj8F.override_ignore_cos || ""}" max_fp="${obj8F.override_max_fp_m2 || ""}" ignore_setbacks="${obj8F.override_ignore_setbacks || ""}" rationale="${(obj8F.constraints_rationale || "").substring(0, 50)}"`);
+        }
+      } catch (e) { console.log(`[8F-DIAG] re-read warning: ${e.message}`); }
       // v74.30 PUSH 11+12 — Cache bypass : toute lead constraint desactive le cache 8F
       // (sinon les contraintes lateral_hug/max_fp/setbacks/etc. ne s'appliqueraient
       // jamais sur les leads existants ayant deja des massings caches).
       const hasStructuralOverride = !!(
-        obj8D.override_lateral_hug || obj8D.override_lateral_gap_m ||
-        obj8D.override_ignore_cos || obj8D.override_max_fp_m2 ||
-        obj8D.override_ignore_setbacks || obj8D.constraints_rationale
+        obj8F.override_lateral_hug || obj8F.override_lateral_gap_m ||
+        obj8F.override_ignore_cos || obj8F.override_max_fp_m2 ||
+        obj8F.override_ignore_setbacks || obj8F.constraints_rationale
       );
       if (hasStructuralOverride) {
-        console.log(`[8F] Cache BYPASS : lead constraints detectees (hug=${obj8D.override_lateral_hug || "-"} gap=${obj8D.override_lateral_gap_m || "-"} ignore_cos=${obj8D.override_ignore_cos || "-"} max_fp=${obj8D.override_max_fp_m2 || "-"}) → regen massing A/B/C forcee`);
+        console.log(`[8F] Cache BYPASS : lead constraints detectees (hug=${obj8F.override_lateral_hug || "-"} gap=${obj8F.override_lateral_gap_m || "-"} ignore_cos=${obj8F.override_ignore_cos || "-"} max_fp=${obj8F.override_max_fp_m2 || "-"} ignore_setbacks=${obj8F.override_ignore_setbacks || "-"}) → regen massing A/B/C forcee`);
       }
       for (const label of ["A", "B", "C"]) {
         const cachedKey = `massing_scn_${label}_img_url`;
-        const cached = obj8D[cachedKey] || "";
+        const cached = obj8F[cachedKey] || "";
         if (!hasStructuralOverride && isValidImgUrl(cached)) {
           massingUrls[label] = cached;
           console.log(`[8F-${label}] Cache hit`);
@@ -914,14 +929,15 @@ app.post("/api/process-lead", async (req, res) => {
             layout_mode: obj8D.layout_mode || layoutMode,
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
-            // v74.30 PUSH 11+12 — propager les contraintes lead vers /generate-massing
-            override_lateral_hug: obj8D.override_lateral_hug || "",
-            override_lateral_gap_m: obj8D.override_lateral_gap_m || "",
-            override_ignore_cos: obj8D.override_ignore_cos || "",
-            override_max_fp_m2: obj8D.override_max_fp_m2 || "",
-            override_ignore_setbacks: obj8D.override_ignore_setbacks || "",
-            constraints_rationale: obj8D.constraints_rationale || "",
+            // v74.32 PUSH 13 — propager les contraintes lead lues FRAICHEMENT (obj8F)
+            override_lateral_hug: obj8F.override_lateral_hug || "",
+            override_lateral_gap_m: obj8F.override_lateral_gap_m || "",
+            override_ignore_cos: obj8F.override_ignore_cos || "",
+            override_max_fp_m2: obj8F.override_max_fp_m2 || "",
+            override_ignore_setbacks: obj8F.override_ignore_setbacks || "",
+            constraints_rationale: obj8F.constraints_rationale || "",
           };
+          console.log(`[8F-${label}-DIAG] body constraints sent : hug="${massingBody.override_lateral_hug}" gap="${massingBody.override_lateral_gap_m}" cos="${massingBody.override_ignore_cos}" max_fp="${massingBody.override_max_fp_m2}" ignore_setbacks="${massingBody.override_ignore_setbacks}"`);
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(massingBody)
