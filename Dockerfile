@@ -31,11 +31,13 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --production
 
-# Copy server + Python scripts + PPTX template + Studio
+# Copy server + Python scripts + PPTX templates + Studio
 COPY server.js .
 COPY generate_pptx.py .
+COPY generate_pptx_premium.py .
 COPY generate_charts.py .
 COPY template_diagnostic.pptx .
+COPY template_diagnostic_premium.pptx .
 COPY studio.html .
 COPY reference_axo.png .
 
