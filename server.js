@@ -9397,6 +9397,68 @@ async function generateDiagnosticTexts(dataContext, rules) {
     return { error: err.message, elapsed_ms: Date.now() - t0 };
   }
 }
+// v74.35 PUSH 19 — helper : re-fetch les overrides depuis PIPELINE pour un lead
+// Resout le probleme ou Make.com appelle /generate-texts ou /generate-pptx sans
+// inclure tous les override_* dans le body. Sans ce helper, parseLeadConstraints
+// ne voit que ce que Make.com envoie → texts desync vs image (dont massingBody
+// est plombe explicitement par process-lead).
+async function mergeLeadOverridesFromPipeline(p) {
+  const leadId = String(p.lead_id || p.barlo_temp_code || p.cf || "").trim();
+  if (!leadId) return p;
+  try {
+    const headersData = await gasGet("readPipelineHeaders");
+    const pipeHeaders = headersData.values && headersData.values[0];
+    if (!pipeHeaders) return p;
+    const allData = await gasGet("readPipelineAll");
+    const allRows = allData.values || [];
+    const btcIdx = pipeHeaders.indexOf("barlo_temp_code");
+    const cfIdx = pipeHeaders.indexOf("cf");
+    const idIdx = pipeHeaders.indexOf("lead_id");
+    let matchedRow = null;
+    for (let i = 1; i < allRows.length; i++) {
+      const r = allRows[i];
+      if (!r) continue;
+      if (
+        (btcIdx >= 0 && r[btcIdx] && String(r[btcIdx]).trim() === leadId) ||
+        (cfIdx >= 0 && r[cfIdx] && String(r[cfIdx]).trim() === leadId) ||
+        (idIdx >= 0 && r[idIdx] && String(r[idIdx]).trim() === leadId)
+      ) {
+        matchedRow = r;
+        break;
+      }
+    }
+    if (!matchedRow) {
+      console.log(`[MERGE-OVERRIDES] Lead "${leadId}" introuvable dans PIPELINE → skip`);
+      return p;
+    }
+    const overrideFields = [
+      "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
+      "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
+      "override_units_A", "override_units_B", "override_units_C",
+      "override_fp_A", "override_fp_B", "override_fp_C",
+      "override_levels_A", "override_levels_B", "override_levels_C",
+      "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
+    ];
+    let mergedCount = 0;
+    const merged = [];
+    for (const f of overrideFields) {
+      const idx = pipeHeaders.indexOf(f);
+      if (idx < 0) continue;
+      const val = matchedRow[idx];
+      if (val !== undefined && val !== null && String(val).trim() !== "" && !p[f]) {
+        p[f] = val;
+        mergedCount++;
+        merged.push(`${f}=${String(val).substring(0, 20)}`);
+      }
+    }
+    if (mergedCount > 0) {
+      console.log(`[MERGE-OVERRIDES] Lead "${leadId}" : ${mergedCount} overrides re-merges depuis PIPELINE → ${merged.join(", ")}`);
+    }
+  } catch (e) {
+    console.warn(`[MERGE-OVERRIDES] error: ${e.message}`);
+  }
+  return p;
+}
 app.post("/generate-texts", async (req, res) => {
   const t0 = Date.now();
   console.log(`\n═══ /generate-texts v3.0-PREMIUM ═══`);
@@ -9404,6 +9466,8 @@ app.post("/generate-texts", async (req, res) => {
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
+  // v74.35 PUSH 19 : re-merge lead-specific overrides depuis PIPELINE
+  await mergeLeadOverridesFromPipeline(p);
   // Step 1: Compute scenarios (reuse existing engine)
   const scenarios = computeSmartScenarios({
     site_area: Number(p.site_area),
@@ -9722,6 +9786,8 @@ app.post("/generate-pptx", async (req, res) => {
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
   }
+  // v74.35 PUSH 19 : re-merge lead-specific overrides depuis PIPELINE
+  await mergeLeadOverridesFromPipeline(p);
   try {
     // Step 1: Compute scenarios
     const scenarios = computeSmartScenarios({
