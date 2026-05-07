@@ -240,7 +240,7 @@ def build_slide_replacements(flat, scenarios=None):
             "Le scénario d'intensification présente des risques significatifs liés à la complexité technique. La construction sur 4 niveaux avec 280 m² habitables nécessite une structure béton armé exigeante. Les fondations en mitoyenneté sur 2 côtés requièrent une étude géotechnique approfondie et des techniques de reprise en sous-œuvre coûteuses.":
                 f"Le scénario d'intensification présente des risques techniques notables. La construction sur {a_levels_total} niveaux avec {a_sdp} m² habitables nécessite une structure béton armé exigeante. Les fondations en mitoyenneté ({retrait_mitoyennete} côté(s)) requièrent une étude géotechnique approfondie.",
             "Les dérogations réglementaires constituent un risque majeur. Le dépassement du COS standard et les retraits réduits nécessitent des autorisations spéciales dont l'obtention n'est pas garantie. Le surcoût estimé à 59 M FCFA dépasse le budget cible, avec un score global de 64/100 classé \"Acceptable\" — le plus faible des trois scénarios étudiés.":
-                f"Le coût de {a_cost_total} pour {a_units} unités positionne ce scénario {(\"au-dessus\" if a_cost_total > budget_fcfa else \"dans la cible\")} de l'enveloppe {budget_fcfa}. Score global de {a_score}/100. Vigilance sur la conformité urbanistique et la complexité technique du projet.",
+                f"Le coût de {a_cost_total} pour {a_units} unités est à comparer à l'enveloppe {budget_fcfa}. Score global de {a_score}/100. Vigilance sur la conformité urbanistique et la complexité technique du projet — dérogations à instruire en phase permis.",
             "Scénario A — Analyse des Risques": f"Scénario A — Analyse des Risques",
         },
 
