@@ -178,6 +178,62 @@ async function resizeForPolish(pngBuf, maxDim) {
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
 app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.6.0-apps-script" }));
+// ─── PWA MANIFEST + ICONS (Push 23) ──────────────────────────────────────────
+// Permet au navigateur Chrome/Edge/Brave d'installer le studio comme une
+// application desktop avec icone et fenetre dediee.
+app.get("/manifest.json", (req, res) => {
+  res.json({
+    name: "BARLO Studio",
+    short_name: "BARLO",
+    description: "Cockpit de diagnostic d'opportunite immobiliere — BARLO",
+    start_url: "/studio",
+    scope: "/",
+    display: "standalone",
+    orientation: "landscape",
+    background_color: "#0e1a14",
+    theme_color: "#1d3a2a",
+    icons: [
+      { src: "/barlo-icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
+      { src: "/barlo-icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }
+    ]
+  });
+});
+app.get("/barlo-icon-:size.png", (req, res) => {
+  try {
+    const size = Math.max(32, Math.min(1024, parseInt(req.params.size) || 512));
+    const canvas = createCanvas(size, size);
+    const ctx = canvas.getContext("2d");
+    // Fond vert sapin BARLO avec leger gradient
+    const grad = ctx.createLinearGradient(0, 0, size, size);
+    grad.addColorStop(0, "#1d3a2a");
+    grad.addColorStop(1, "#142a1d");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    // Filet dore
+    ctx.strokeStyle = "#c9a878";
+    ctx.lineWidth = Math.max(1, size * 0.012);
+    const m = size * 0.10;
+    ctx.strokeRect(m, m, size - 2*m, size - 2*m);
+    // Lettre "B" en serif elegante (creme ivoire)
+    ctx.fillStyle = "#f5f0e6";
+    ctx.font = `bold ${Math.round(size * 0.55)}px Georgia, "Playfair Display", serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("B", size / 2, size / 2 + size * 0.02);
+    // Petit point rose corail (signature BARLO) en bas a droite
+    ctx.fillStyle = "#e8826b";
+    ctx.beginPath();
+    ctx.arc(size * 0.78, size * 0.78, size * 0.04, 0, 2 * Math.PI);
+    ctx.fill();
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=86400"); // 1 jour
+    res.send(canvas.toBuffer("image/png"));
+  } catch (e) {
+    res.status(500).send(`icon error: ${e.message}`);
+  }
+});
+// Favicon — meme generation, juste taille fixe 64
+app.get("/favicon.ico", (req, res) => res.redirect(302, "/barlo-icon-64.png"));
 // ─── STUDIO v6.0 — Interface diagnostic premium ─────────────────────────────
 app.get("/studio", (req, res) => {
   const studioPath = path.join(__dirname, "studio.html");
