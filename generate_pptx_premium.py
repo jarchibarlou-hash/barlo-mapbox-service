@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BARLO Premium PPTX Generator (Push 22.1 — Phase 1 : substitution textes)
+BARLO Premium PPTX Generator (Push 22.2 — template 22 slides)
 
-Charge le template Canva 'template_diagnostic_premium.pptx' et y remplace
-les textes pre-generes (specifiques a Vanelle) par les vraies donnees BARLO
-du lead courant. Les images du template (photos N&B) sont conservees a ce
-stade — elles seront supprimees/remplacees en Phase 22.2.
+Charge le template Canva 'template_diagnostic_premium.pptx' (22 slides,
+pre-rempli avec un cas Behalal Marcelle / 500m² Douala / 33M FCFA) et y
+remplace les textes par les vraies donnees BARLO du lead courant.
 
 Usage : python3 generate_pptx_premium.py <data.json> <template.pptx> <output.pptx>
 """
 import sys
 import json
 import os
-from copy import deepcopy
 from pptx import Presentation
-from pptx.util import Pt, Emu
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -23,7 +20,6 @@ from pptx.util import Pt, Emu
 # ─────────────────────────────────────────────────────────────────────────────
 
 def f(flat, key, default=""):
-    """Lecture securisee d'un champ flat. Retourne string."""
     val = flat.get(key, default)
     if val is None or val == "":
         return str(default)
@@ -31,7 +27,6 @@ def f(flat, key, default=""):
 
 
 def fnum(flat, key, default=0):
-    """Lecture numerique securisee."""
     try:
         v = flat.get(key, default)
         if isinstance(v, str):
@@ -41,329 +36,231 @@ def fnum(flat, key, default=0):
         return default
 
 
-def replace_text_in_shape(shape, old_text, new_text):
-    """
-    Remplace 'old_text' par 'new_text' dans un shape, en preservant le
-    formatting (police, taille, couleur) du premier run du paragraphe ou le
-    texte est trouve. Retourne True si remplacement effectue.
-
-    Strategie : on lit le texte complet du paragraphe (merge des runs) et si
-    'old_text' s'y trouve, on remplace tout le texte du paragraphe par
-    new_text en gardant le format du premier run.
-    """
-    if not shape.has_text_frame:
-        return False
-    tf = shape.text_frame
-    found = False
-    for para in tf.paragraphs:
-        para_text = "".join(r.text for r in para.runs)
-        if old_text in para_text:
-            replaced = para_text.replace(old_text, new_text)
-            # Vider tous les runs sauf le premier, et y mettre le texte complet
-            if para.runs:
-                first = para.runs[0]
-                first.text = replaced
-                for r in para.runs[1:]:
-                    r.text = ""
-                found = True
-                break  # un seul replacement par shape pour cette occurrence
-    return found
+def split_name(full_name):
+    """Decoupe 'Valcy Vanelle' en (first='Valcy', last='Vanelle')."""
+    parts = (full_name or "").strip().split()
+    if not parts:
+        return ("", "")
+    if len(parts) == 1:
+        return (parts[0], "")
+    return (parts[0], " ".join(parts[1:]))
 
 
-def replace_paragraph_text(shape, paragraph_index, new_text):
-    """
-    Remplace integralement le texte du paragraphe indique par new_text,
-    en gardant le format du premier run.
-    """
-    if not shape.has_text_frame:
-        return False
-    tf = shape.text_frame
-    if paragraph_index >= len(tf.paragraphs):
-        return False
-    para = tf.paragraphs[paragraph_index]
-    if not para.runs:
-        return False
-    first = para.runs[0]
-    first.text = new_text
-    for r in para.runs[1:]:
-        r.text = ""
-    return True
-
-
-def find_shape_containing(slide, fragment):
-    """Trouve le premier shape dont le texte contient 'fragment'."""
-    for shape in slide.shapes:
-        if shape.has_text_frame and fragment in shape.text_frame.text:
-            return shape
-    return None
-
-
-def find_shape_by_exact_text(slide, exact_text):
-    """Trouve le premier shape dont le texte est exactement egal a exact_text."""
-    for shape in slide.shapes:
-        if shape.has_text_frame and shape.text_frame.text.strip() == exact_text.strip():
-            return shape
-    return None
+def role_label(role):
+    """INTENSIFICATION → Intensification etc."""
+    return {
+        "INTENSIFICATION": "Intensification",
+        "EQUILIBRE": "Équilibre",
+        "PRUDENT": "Prudence",
+    }.get(str(role).upper(), str(role).title() if role else "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Mapping slide-par-slide : ancien_texte → nouveau_texte (depuis flat)
+# Mapping slide-par-slide (22 slides) : ancien_texte → nouveau_texte
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_slide_replacements(flat, scenarios=None):
-    """
-    Construit pour chaque slide (1-20) un dict {ancien_texte: nouveau_texte}.
-    L'ancien texte est ce qui est figé dans le template Canva. Le nouveau
-    texte est genere depuis les donnees BARLO du lead courant.
-    """
-    # ── Donnees globales ──
-    program = f(flat, "program_main", "Petit collectif")
-    units_a = f(flat, "A_units", "?")
-    units_b = f(flat, "B_units", "?")
-    units_c = f(flat, "C_units", "?")
-    standing = f(flat, "standing_level", "ECONOMIQUE").lower()
+    # ── Identifiants client ──
+    client_name = f(flat, "client_name", "")
+    first, last = split_name(client_name)
     city = f(flat, "city", "Douala")
-    site_area = f(flat, "site_area", "130")
-    budget_fcfa = f(flat, "budget_fcfa", "66M FCFA")
-    site_cos = f(flat, "site_cos_regl", "2.5")
-    site_ces = f(flat, "site_ces_regl", "60")
-    retrait_avant = f(flat, "retrait_avant", "5m")
-    retrait_lateral = f(flat, "retrait_lateral", "3m")
-    retrait_arriere = f(flat, "retrait_arriere", "3m")
-    retrait_mitoyennete = f(flat, "retrait_mitoyennete", "2")
-    emprise_constructible = f(flat, "retrait_emprise_constructible", "70 m²")
-    orient_zone = f(flat, "orient_zone", "Tropicale humide").capitalize()
+
+    # ── Donnees site ──
+    site_area = f(flat, "site_area", "500")
+    budget_fcfa = f(flat, "budget_fcfa", "33M FCFA")
+    program = f(flat, "program_main", "Petit collectif")
 
     # ── Recommandation ──
-    rec = f(flat, "rec_scenario", "B")
-    rec_role = f(flat, f"{rec}_role", "EQUILIBRE")
-    rec_role_label = {"INTENSIFICATION": "Intensification", "EQUILIBRE": "Équilibre", "PRUDENT": "Prudence"}.get(rec_role.upper(), rec_role)
-    rec_score = f(flat, "rec_score", "76")
-    rec_units = f(flat, f"{rec}_units", "?")
-    rec_sdp = f(flat, f"{rec}_sdp", "?")
-    rec_levels = f(flat, "rec_levels", "3")
-    rec_total_niv = int(fnum(flat, "rec_levels", 3)) + 1
-    rec_cost_total = f(flat, "rec_cost_total", "?")
-    rec_duree = f(flat, "rec_duree_chantier", "11 mois")
+    rec = f(flat, "rec_scenario", "C")
+    rec_role = f(flat, f"{rec}_role", "PRUDENT")
+    rec_role_lbl = role_label(rec_role)
+    rec_score = f(flat, "rec_score", "84")
+    rec_units = f(flat, f"{rec}_units", "2")
+    rec_sdp = f(flat, f"{rec}_sdp", "125")
+    rec_cost_total = f(flat, f"{rec}_cost_total", "23M FCFA")
 
-    # ── Per-scenario donnees ──
-    a_role = f(flat, "A_role", "INTENSIFICATION")
-    a_role_label = {"INTENSIFICATION": "Intensification", "EQUILIBRE": "Équilibre", "PRUDENT": "Prudence"}.get(a_role.upper(), a_role)
-    a_sdp = f(flat, "A_sdp", "?")
-    a_levels_total = int(fnum(flat, "A_levels", 3)) + 1
-    a_fp = f(flat, "A_fp", "?")
-    a_units = units_a
-    a_cost_total = f(flat, "A_cost_total", "?")
-    a_cost_unit = f(flat, "A_cost_unit", "?")
-    a_score = f(flat, "A_score", "?")
+    # ── Per-scenario ──
+    a_units = f(flat, "A_units", "3")
+    a_sdp = f(flat, "A_sdp", "200")
+    a_cost = f(flat, "A_cost_total", "42M FCFA")
+    a_score = f(flat, "A_score", "39")
+    a_role_lbl = role_label(f(flat, "A_role", "INTENSIFICATION"))
+    a_m2_logt = f(flat, "A_m2_par_logt", "75")
 
-    b_role = f(flat, "B_role", "EQUILIBRE")
-    b_role_label = {"INTENSIFICATION": "Intensification", "EQUILIBRE": "Équilibre", "PRUDENT": "Prudence"}.get(b_role.upper(), b_role)
-    b_sdp = f(flat, "B_sdp", "?")
-    b_levels_total = int(fnum(flat, "B_levels", 3)) + 1
-    b_fp = f(flat, "B_fp", "?")
-    b_units = units_b
-    b_cost_total = f(flat, "B_cost_total", "?")
-    b_cost_unit = f(flat, "B_cost_unit", "?")
-    b_score = f(flat, "B_score", "?")
+    b_units = f(flat, "B_units", "3")
+    b_sdp = f(flat, "B_sdp", "177")
+    b_cost = f(flat, "B_cost_total", "33M FCFA")
+    b_score = f(flat, "B_score", "71")
+    b_role_lbl = role_label(f(flat, "B_role", "EQUILIBRE"))
+    b_m2_logt = f(flat, "B_m2_par_logt", "64")
 
-    c_role = f(flat, "C_role", "PRUDENT")
-    c_role_label = {"INTENSIFICATION": "Intensification", "EQUILIBRE": "Équilibre", "PRUDENT": "Prudence"}.get(c_role.upper(), c_role)
-    c_sdp = f(flat, "C_sdp", "?")
-    c_levels_total = int(fnum(flat, "C_levels", 1)) + 1
-    c_fp = f(flat, "C_fp", "?")
-    c_units = units_c
-    c_cost_total = f(flat, "C_cost_total", "?")
-    c_cost_unit = f(flat, "C_cost_unit", "?")
-    c_score = f(flat, "C_score", "?")
+    c_units = f(flat, "C_units", "2")
+    c_sdp = f(flat, "C_sdp", "125")
+    c_cost = f(flat, "C_cost_total", "23M FCFA")
+    c_score = f(flat, "C_score", "84")
+    c_role_lbl = role_label(f(flat, "C_role", "PRUDENT"))
+    c_m2_logt = f(flat, "C_m2_par_logt", "75")
 
-    # ── Constraints summary (si overrides actifs) ──
-    has_constraints = f(flat, "_has_constraints", "") == "Y"
-    constraints_note = " (dérogations assumées)" if has_constraints else ""
+    # ── Calculs derives (gains B vs A) ──
+    a_cost_num = fnum(flat, "A_cost_total", 42)  # extrait le 42 de "42M FCFA"
+    b_cost_num = fnum(flat, "B_cost_total", 33)
+    c_cost_num = fnum(flat, "C_cost_total", 23)
+    gain_b_vs_a = max(0, int(round(a_cost_num - b_cost_num)))
+    a_sdp_num = fnum(flat, "A_sdp", 200)
+    b_sdp_num = fnum(flat, "B_sdp", 177)
+    diff_sdp_b_vs_a = max(0, int(round(a_sdp_num - b_sdp_num)))
 
-    # ─────────────────────────────────────────────────────────────
-    # MAPPING PAR SLIDE
-    # ─────────────────────────────────────────────────────────────
+    # ── Depassement budget A ──
+    budget_num = fnum(flat, "budget_fcfa", 33)
+    if budget_num > 0 and a_cost_num > budget_num:
+        depassement_pct = int(round((a_cost_num - budget_num) / budget_num * 100))
+    else:
+        depassement_pct = 0
+    depassement_text = f"{depassement_pct}%" if depassement_pct > 0 else "0%"
+
+    # ── Mix logements A/B/C ──
+    a_logt_count = max(0, int(fnum(flat, "A_units", 3)) - 1)  # commerce + (units-1) logements
+    b_logt_count = max(0, int(fnum(flat, "B_units", 3)) - 1)
+    c_logt_count = max(0, int(fnum(flat, "C_units", 2)) - 1)
+
     return {
-        # SLIDE 3 — PROJET EN BREF
+        # ── SLIDE 1 : COUVERTURE ──
+        1: {
+            "Behalal": first or "Client",
+            "Marcelle": last,
+            " 500 m² à ": f" {site_area} m² à ",
+            "Douala": city,
+            " 33M FCFA": f" {budget_fcfa}",
+        },
+
+        # ── SLIDE 2 : MANIFESTO (statique, pas de remplacement) ──
+        2: {},
+
+        # ── SLIDE 3 : CONTEXTE DU PROJET ──
         3: {
-            "Petit collectif de 8 logements en standing économique à Douala, Cameroun. Surface terrain : 130 m². Budget de référence : 66 millions FCFA.":
-                f"{program} de {units_a} logements en standing {standing} à {city}. Surface terrain : {site_area} m². Budget de référence : {budget_fcfa}.",
-            "L'objectif de ce diagnostic est de comparer plusieurs scénarios de développement (A, B, C) selon les contraintes réglementaires, financières et architecturales pour déterminer le meilleur potentiel de projet.":
-                "Notre objectif : comparer trois scénarios architecturaux (A, B, C) selon les contraintes réglementaires, financières et techniques pour identifier la meilleure stratégie de développement.",
-            "Méthode : Analyse croisée architecturale, financière et réglementaire permettant une vision globale et stratégique du potentiel immobilier.":
-                "Méthode : analyse croisée architecturale, financière et réglementaire — vision stratégique du potentiel immobilier.",
+            "Terrain de 500 m² situé à Douala, avec un budget initial de 33 millions FCFA. Le projet prévoit la construction de 3 unités dans une configuration mixte logement et activité commerciale.":
+                f"Terrain de {site_area} m² situé à {city}, avec un budget initial de {budget_fcfa}. Le projet prévoit la construction de {a_units} unités dans une configuration mixte logement et activité commerciale.",
         },
 
-        # SLIDE 4 — ANALYSE DU TERRAIN
+        # ── SLIDE 4 : LECTURE STRATÉGIQUE DU TERRAIN ──
         4: {
-            "Surface totale : 130 m²": f"Surface totale : {site_area} m²",
-            "Emprise constructible : 70 m² après retraits": f"Emprise constructible : {emprise_constructible} après retraits",
-            "Mitoyenneté : 2 côtés (est assumé, ouest 4 m)": f"Mitoyenneté : {retrait_mitoyennete} côté(s){constraints_note}",
-            "• COS (Coefficient d'Occupation des Sols) : 2,5": f"• COS (Coefficient d'Occupation des Sols) : {site_cos}",
-            "• CES (Coefficient d'Emprise au Sol) : 60%": f"• CES (Coefficient d'Emprise au Sol) : {site_ces} %",
-            "• Retraits : avant 5 m, latéraux 3 m, arrière 3 m":
-                f"• Retraits : avant {retrait_avant}, latéraux {retrait_lateral}, arrière {retrait_arriere}",
-            "Zone climatique : Tropicale humide": f"Zone climatique : {orient_zone}",
-            "Gabarit volumétrique : 4 niveaux maximum": f"Gabarit volumétrique : {rec_total_niv} niveaux maximum",
+            "L'analyse du terrain de 500 m² révèle une zone constructible optimisée après application des retraits réglementaires. Retrait avant : 5 mètres minimum depuis la voie publique. Retraits latéraux : 3 mètres de chaque côté pour ventilation et accès. Retrait arrière : 4 mètres pour conformité urbaine. Ces contraintes définissent l'emprise maximale exploitable pour le projet.":
+                f"L'analyse du terrain de {site_area} m² révèle une zone constructible optimisée après application des retraits réglementaires. Retraits : {f(flat, 'retrait_avant', '5m')} avant, {f(flat, 'retrait_lateral', '3m')} latéraux, {f(flat, 'retrait_arriere', '3m')} arrière. Mitoyenneté sur {f(flat, 'retrait_mitoyennete', '0')} côté(s). Ces contraintes définissent l'emprise constructible : {f(flat, 'retrait_emprise_constructible', '?')}.",
         },
 
-        # SLIDE 5 — CONTEXTE URBAIN & CONTRAINTES
-        5: {
-            "Le terrain s'inscrit dans un quartier dense et mixte de Douala, combinant fonctions résidentielles et commerciales. La mitoyenneté sur deux côtés impose une conception architecturale privilégiant la ventilation naturelle traversante, indispensable en climat tropical humide.":
-                f"Le terrain s'inscrit dans un quartier dense et mixte de {city}. La mitoyenneté sur {retrait_mitoyennete} côté(s) impose une conception architecturale privilégiant la ventilation naturelle traversante, indispensable en climat {orient_zone.lower()}.",
-            "Les conditions climatiques exigent une protection solaire efficace et une gestion optimale de l'humidité. Le gabarit volumétrique autorise un potentiel de 4 niveaux maximum, compatible avec le programme de 8 unités envisagé. Cette configuration permet d'exploiter pleinement le foncier disponible.":
-                f"Les conditions climatiques exigent une protection solaire efficace et une gestion optimale de l'humidité. Le gabarit volumétrique permet jusqu'à {rec_total_niv} niveaux, compatible avec le programme de {units_a} unités envisagé. Cette configuration valorise pleinement le foncier disponible.",
-        },
+        # ── SLIDE 5 : CONTRAINTES INVISIBLES (statique architectural) ──
+        5: {},
 
-        # SLIDE 6 — SCÉNARIO A
+        # ── SLIDE 6 : SCÉNARIO A ──
         6: {
-            "Maximiser la densité et exploiter pleinement le potentiel foncier du terrain de 130 m².":
-                f"Maximiser la densité et exploiter pleinement le potentiel foncier du terrain de {site_area} m².",
-            "Programme architectural : 8 logements répartis sur 4 niveaux (RDC + 3 étages). Surface habitable totale de 280 m², soit la densité maximale autorisée par le COS de 2,5. Cette configuration exploite l'intégralité du gabarit volumétrique permis, avec une emprise au sol de 70 m² respectant le CES de 60%. La mitoyenneté sur deux côtés est assumée, nécessitant une ventilation naturelle traversante optimisée sur les façades libres.":
-                f"Programme architectural : {a_units} logements sur {a_levels_total} niveaux. Surface habitable totale de {a_sdp} m², emprise au sol de {a_fp} m². La mitoyenneté sur {retrait_mitoyennete} côté(s) est assumée, nécessitant une ventilation naturelle traversante optimisée sur les façades libres.",
-            "Scénario A — Intensification": f"Scénario A — {a_role_label}",
+            "INTENSIFICATION": a_role_lbl.upper(),
+            "Programme: 3 unités | 200 m² SDP": f"Programme: {a_units} unités | {a_sdp} m² SDP",
+            "Commerce RDC + 2 logements T3 de 75 m² (circulation comprises )chacun":
+                f"Programme : {a_logt_count} logement(s) de {a_m2_logt} m² + commerce RDC. Configuration sur {int(fnum(flat, 'A_levels', 3)) + 1} niveaux.",
+            "Coût estimé: 42M FCFA": f"Coût estimé: {a_cost}",
+            "Ce scénario maximise l'exploitation du terrain avec une densité optimale, dépassant le budget initial de 27%.":
+                f"Ce scénario maximise l'exploitation du terrain avec une densité optimale" + (f", dépassant le budget initial de {depassement_text}." if depassement_pct > 0 else f", dans la cible budgétaire."),
         },
 
-        # SLIDE 7 — SCÉNARIO A FINANCE
+        # ── SLIDE 7 : RISQUES A — DÉPASSEMENT ──
         7: {
-            "Coût total du projet : 59 M FCFA": f"Coût total du projet : {a_cost_total}",
-            "Coût unitaire : 7 M FCFA/logement": f"Coût unitaire : {a_cost_unit}/logement",
-            "Score global : 64/100 (Acceptable)": f"Score global : {a_score}/100",
-            "L'intensification maximale du foncier génère un investissement conséquent de 59 millions FCFA pour 8 unités. Le coût unitaire de 7 M FCFA par logement reflète la complexité technique du projet sur 4 niveaux. Malgré une densité optimale, le score financier de 64/100 révèle un risque de surcoût lié aux contraintes structurelles et à la mitoyenneté. Budget de référence dépassé de 7 M FCFA.":
-                f"L'intensification du foncier représente un investissement de {a_cost_total} pour {a_units} unités. Le coût unitaire de {a_cost_unit}/logement reflète la complexité du projet sur {a_levels_total} niveaux. Score global : {a_score}/100 vs budget de référence {budget_fcfa}.",
-            "Scénario A — Analyse Financière": f"Scénario A — Analyse Financière",
+            "Coût estimé de 42M FCFA contre un budget initial de 33M FCFA, soit un dépassement de 27% impactant la viabilité financière.":
+                f"Coût estimé de {a_cost} contre un budget initial de {budget_fcfa}" + (f", soit un dépassement de {depassement_text} impactant la viabilité financière." if depassement_pct > 0 else f", aligné sur l'enveloppe."),
+            "Densité de construction maximale générant des contraintes structurelles, thermiques et réglementaires accrues sur le chantier.":
+                "Densité de construction maximale générant des contraintes structurelles, thermiques et réglementaires accrues sur le chantier.",
         },
 
-        # SLIDE 8 — SCÉNARIO A RISQUES
+        # ── SLIDE 8 : RISQUES A — SCORE ──
         8: {
-            "Le scénario d'intensification présente des risques significatifs liés à la complexité technique. La construction sur 4 niveaux avec 280 m² habitables nécessite une structure béton armé exigeante. Les fondations en mitoyenneté sur 2 côtés requièrent une étude géotechnique approfondie et des techniques de reprise en sous-œuvre coûteuses.":
-                f"Le scénario d'intensification présente des risques techniques notables. La construction sur {a_levels_total} niveaux avec {a_sdp} m² habitables nécessite une structure béton armé exigeante. Les fondations en mitoyenneté ({retrait_mitoyennete} côté(s)) requièrent une étude géotechnique approfondie.",
-            "Les dérogations réglementaires constituent un risque majeur. Le dépassement du COS standard et les retraits réduits nécessitent des autorisations spéciales dont l'obtention n'est pas garantie. Le surcoût estimé à 59 M FCFA dépasse le budget cible, avec un score global de 64/100 classé \"Acceptable\" — le plus faible des trois scénarios étudiés.":
-                f"Le coût de {a_cost_total} pour {a_units} unités est à comparer à l'enveloppe {budget_fcfa}. Score global de {a_score}/100. Vigilance sur la conformité urbanistique et la complexité technique du projet — dérogations à instruire en phase permis.",
-            "Scénario A — Analyse des Risques": f"Scénario A — Analyse des Risques",
+            "Score global de 39/100 - Ce scénario présente un niveau de risque significatif nécessitant une attention particulière aux facteurs critiques.":
+                f"Score global de {a_score}/100 — Ce scénario présente un niveau de risque {('significatif' if int(fnum(flat, 'A_score', 39)) < 60 else 'modéré')} nécessitant une attention particulière aux facteurs critiques.",
         },
 
-        # SLIDE 9 — SCÉNARIO B
+        # ── SLIDE 9 : SCÉNARIO B ──
         9: {
-            "8 logements sur 4 niveaux": f"{b_units} logements sur {b_levels_total} niveaux",
-            "240 m² de surface habitable": f"{b_sdp} m² de surface habitable",
-            "Compromis optimal densité/coût/faisabilité": "Compromis optimal densité/coût/faisabilité",
-            "Le scénario B propose un équilibre stratégique entre ambition et réalisme. Avec 8 unités réparties sur 4 niveaux (RDC + 3 étages), ce programme optimise l'emprise constructible de 70 m² tout en respectant les contraintes de mitoyenneté. La configuration permet une ventilation naturelle traversante sur les façades libres, essentielle en climat tropical humide. Score global : 76/100 — scénario recommandé.":
-                f"Le scénario B propose un équilibre stratégique entre ambition et réalisme. {b_units} unités sur {b_levels_total} niveaux, emprise constructible de {b_fp} m². La configuration permet une ventilation naturelle traversante sur les façades libres, essentielle en climat {orient_zone.lower()}. Score global : {b_score}/100.",
-            "Scénario B — Équilibre": f"Scénario B — {b_role_label}",
+            "Équilibre optimal entre ambition et maîtrise budgétaire. Programme de 3 unités pour 177 m² SDP, avec un coût total de 33M FCFA aligné sur le budget initial.":
+                f"{role_label(f(flat, 'B_role', 'EQUILIBRE'))} entre ambition et maîtrise budgétaire. Programme de {b_units} unités pour {b_sdp} m² SDP, avec un coût total de {b_cost} à comparer au budget initial de {budget_fcfa}.",
+            "Commerce RDC + 2 logements T3 de 64 m² (circulation comprises )chacun  Score de recommandation : 71/100.":
+                f"Programme : {b_logt_count} logement(s) de {b_m2_logt} m² + commerce RDC. Score de recommandation : {b_score}/100.",
         },
 
-        # SLIDE 10 — SCÉNARIO B FINANCE
+        # ── SLIDE 10 : GAINS B vs A + RISQUES B ──
         10: {
-            "Le scénario B présente le meilleur équilibre financier avec un coût total maîtrisé de 46 millions FCFA pour 8 logements.":
-                f"Le scénario B présente un équilibre financier maîtrisé : {b_cost_total} pour {b_units} logements.",
-            "Score global : 76/100 — Recommandé": f"Score global : {b_score}/100",
-            "Coût unitaire : 6 M FCFA par logement": f"Coût unitaire : {b_cost_unit}/logement",
-            "Budget travaux : 46 M FCFA": f"Budget travaux : {b_cost_total}",
-            "Frais annexes : 7 à 10 M FCFA": "Frais annexes : honoraires + études + permis + assurance",
-            "Provision imprévus : 5 à 8 %": "Provision imprévus recommandée : 5 à 8 %",
-            "Ce scénario respecte le budget cible de 66 M FCFA tout en optimisant le ratio surface habitable/investissement. La conformité urbanistique réduit les risques de surcoûts administratifs.":
-                f"Ce scénario respecte le budget cible de {budget_fcfa} tout en optimisant le ratio surface habitable / investissement. La conformité urbanistique réduit les risques administratifs.",
-            "Scénario B — Analyse Financière": "Scénario B — Analyse Financière",
+            "Réduction de 9M FCFA sur le coût total et diminution de23 m² SDP pour une meilleure rentabilité au m².":
+                f"Réduction de {gain_b_vs_a}M FCFA sur le coût total et diminution de {diff_sdp_b_vs_a} m² SDP pour une meilleure rentabilité au m².",
+            "Risques modérés : complexité technique moyenne, délais maîtrisés, budget respecté, flexibilité d'usage préservée.":
+                "Risques modérés : complexité technique moyenne, délais maîtrisés, budget respecté, flexibilité d'usage préservée.",
         },
 
-        # SLIDE 11 — SCÉNARIO B AVANTAGES
+        # ── SLIDE 11 : SCORE FIABILITÉ B ──
         11: {
-            "Le scénario B offre le meilleur équilibre entre coût maîtrisé et conformité urbanistique. Avec un budget de 46 M FCFA pour 240 m² habitables, il présente un ratio coût/surface optimal de 192 000 FCFA/m². La conformité réglementaire solide réduit les risques de blocage administratif et sécurise l'investissement à long terme.":
-                f"Le scénario B offre le meilleur équilibre coût/conformité. Budget de {b_cost_total} pour {b_sdp} m² habitables. Ratio coût/surface optimisé. Conformité réglementaire solide → risques administratifs réduits.",
-            "La rentabilité supérieure découle d'un coût unitaire de 6 M FCFA par logement, le plus bas des trois scénarios. Cette approche équilibrée permet une réalisation technique maîtrisable localement tout en maximisant le retour sur investissement. Score global : 76/100, le plus élevé de l'étude comparative.":
-                f"Coût unitaire de {b_cost_unit}/logement, particulièrement compétitif. Approche équilibrée : réalisation technique maîtrisable localement tout en valorisant l'investissement. Score global : {b_score}/100.",
-            "Scénario B — Avantages clés": "Scénario B — Avantages clés",
+            "Un score équilibré qui reflète un compromis optimal entre ambition et maîtrise des risques financiers et techniques.":
+                f"Score de {b_score}/100 reflétant un compromis entre ambition et maîtrise des risques financiers et techniques.",
+            "Score de Fiabilité : 71/100": f"Score de Fiabilité : {b_score}/100",
         },
 
-        # SLIDE 12 — SCÉNARIO C
+        # ── SLIDE 12 : SCÉNARIO C ──
         12: {
-            "Minimiser les coûts et sécuriser l'investissement avec une approche conservatrice du projet immobilier.":
-                "Minimiser les coûts et sécuriser l'investissement avec une approche conservatrice du projet immobilier.",
-            "Programme architectural : 6 logements répartis sur 3 niveaux (RDC + 2 étages), pour une surface habitable totale de 210 m². Cette configuration réduit la complexité structurelle et les contraintes techniques liées à la hauteur. Le coût total estimé s'élève à 39 M FCFA, soit 6,5 M FCFA par logement. Score global : 65/100 (Acceptable). Avantage principal : budget sécurisé et risques minimisés. Point d'attention : sous-exploitation relative du potentiel foncier disponible.":
-                f"Programme architectural : {c_units} logements sur {c_levels_total} niveaux, surface habitable totale de {c_sdp} m². Configuration réduisant la complexité structurelle. Coût total estimé : {c_cost_total}, soit {c_cost_unit}/logement. Score global : {c_score}/100. Budget sécurisé et risques minimisés.",
-            "Scénario C — Prudence": f"Scénario C — {c_role_label}",
+            "Le scénario Prudence propose 2 unités pour 125 m² SDP, avec un coût total de 23M FCFA, nettement sous le budget initial de 33M FCFA.":
+                f"Le scénario {c_role_lbl} propose {c_units} unités pour {c_sdp} m² SDP, avec un coût total de {c_cost} à comparer au budget initial de {budget_fcfa}.",
+            "Commerce RDC + 1 logements T3 de 75 m² (circulation comprises )chacun  Cette approche minimise les risques financiers tout en garantissant une rentabilité optimale. en prévoyant un phasage de construction.":
+                f"Programme : {c_logt_count} logement(s) de {c_m2_logt} m² + commerce RDC. Cette approche minimise les risques financiers et permet un phasage de construction.",
         },
 
-        # SLIDE 13 — SCÉNARIO C FINANCE
+        # ── SLIDE 13 : PROFIL RECOMMANDÉ C ──
         13: {
-            "Approche prudente et budget sécurisé": "Approche prudente et budget sécurisé",
-            "Coût total : 39 M FCFA": f"Coût total : {c_cost_total}",
-            "Coût unitaire : 6,5 M FCFA/logement": f"Coût unitaire : {c_cost_unit}/logement",
-            "Score global : 65/100 (Acceptable)": f"Score global : {c_score}/100",
-            "Le scénario C privilégie la prudence financière avec un investissement maîtrisé de 39 millions FCFA. Cette option offre un budget sécurisé avec des risques minimisés, idéale pour un premier projet ou un contexte économique incertain.":
-                f"Le scénario C privilégie la prudence financière avec un investissement maîtrisé de {c_cost_total}. Cette option offre un budget sécurisé avec des risques minimisés, adaptée à un contexte économique prudent.",
-            "Marge de sécurité intégrée permettant d'absorber les imprévus sans compromettre la viabilité du projet. Durée de chantier réduite à 8 mois, limitant l'exposition aux aléas.":
-                "Marge de sécurité intégrée permettant d'absorber les imprévus sans compromettre la viabilité du projet. Durée de chantier réduite limitant l'exposition aux aléas.",
-            "Scénario C — Analyse Financière": "Scénario C — Analyse Financière",
+            "Configuration prudente validée par l'analyse multicritères : risques financiers minimisés, faisabilité technique confirmée, délais réalistes.":
+                f"Configuration {c_role_lbl.lower()} validée par l'analyse multicritères : risques financiers minimisés, faisabilité technique confirmée, délais réalistes.",
+            "Indicateurs clés au vert : coût maîtrisé (23M FCFA), surface efficiente (125 m² SDP), complexité réduite et marge de sécurité préservée.":
+                f"Indicateurs clés : coût {c_cost}, surface {c_sdp} m² SDP, complexité réduite et marge de sécurité préservée.",
         },
 
-        # SLIDE 14 — SCÉNARIO C LIMITES
+        # ── SLIDE 14 : SCORE C ──
         14: {
-            "Le scénario C, bien que sécurisant sur le plan budgétaire (39 M FCFA), présente une sous-exploitation significative du potentiel foncier. Avec seulement 6 logements sur 3 niveaux et 210 m² habitables, ce choix ne valorise pas pleinement l'investissement initial dans le terrain.":
-                f"Le scénario C, sécurisant sur le plan budgétaire ({c_cost_total}), présente une sous-exploitation du potentiel foncier. Avec {c_units} logements sur {c_levels_total} niveaux et {c_sdp} m² habitables, ce choix ne valorise pas pleinement l'investissement initial dans le terrain.",
-            "Le score global de 65/100 reflète ce compromis défavorable : si les risques techniques sont minimisés, le rendement économique reste en deçà des possibilités offertes par le site. Cette approche prudente peut convenir à un investisseur averses au risque, mais limite la création de valeur à long terme.":
-                f"Le score global de {c_score}/100 reflète ce compromis : si les risques techniques sont minimisés, le rendement économique reste en deçà des possibilités du site. Approche convenant à un investisseur averse au risque, mais limitant la création de valeur à long terme.",
-            "Scénario C — Analyse des Limites": "Scénario C — Analyse des Limites",
+            "Score Global : 84/100": f"Score Global : {c_score}/100",
+            "Profil de risque optimal avec une excellente maîtrise des contraintes budgétaires et techniques. Ce scénario présente le meilleur équilibre risque/rendement.":
+                f"Profil de risque {('optimal' if int(fnum(flat, 'C_score', 84)) >= 80 else 'maîtrisé')} avec une bonne maîtrise des contraintes budgétaires et techniques. Score : {c_score}/100.",
         },
 
-        # SLIDE 15 — TRANSITION COMPARATIF
+        # ── SLIDE 15 : COMPARATIF GLOBAL ──
         15: {
-            "Synthèse comparative des trois approches selon les critères de surface, coût et score global pour identifier la meilleure option.":
-                "Synthèse comparative des trois scénarios selon les critères de surface, de coût et de score global pour identifier la meilleure option.",
-            "Analyse stratégique des scénarios": "Analyse stratégique des scénarios",
+            "Ce tableau synthétise les indicateurs clés des trois scénarios : SDP, surface habitable, efficacité spatiale, coût total, score de recommandation et durée de chantier. Le scénario C (Prudence) offre le meilleur équilibre risque/performance.":
+                f"Ce tableau synthétise les indicateurs clés des trois scénarios : SDP, surface habitable, efficacité spatiale, coût total, score de recommandation et durée de chantier. Le scénario {rec} ({rec_role_lbl}) est recommandé avec un score de {rec_score}/100.",
         },
 
-        # SLIDE 16 — ARBITRAGE STRATÉGIQUE
+        # ── SLIDE 16 : ARBITRAGE ──
         16: {
-            "Budget cible : 66 M FCFA": f"Budget cible : {budget_fcfa}",
-            "Scénario recommandé : B (Équilibre)": f"Scénario recommandé : {rec} ({rec_role_label})",
-            "Le scénario B s'impose comme le choix optimal pour ce projet immobilier à Douala. Avec un coût maîtrisé de 46 M FCFA, il offre le meilleur ratio coût/surface habitable (240 m² pour 8 logements). Sa conformité urbanistique solide et sa faisabilité technique locale garantissent une réalisation sans complications majeures. Ce scénario équilibre parfaitement ambition architecturale, rentabilité financière et maîtrise des risques.":
-                f"Le scénario {rec} s'impose comme le choix optimal pour ce projet à {city}. Avec un coût maîtrisé de {rec_cost_total}, il offre le meilleur ratio coût/surface habitable ({rec_sdp} m² pour {rec_units} logements). Conformité urbanistique solide et faisabilité technique locale. Score global : {rec_score}/100.",
-            "Arbitrage Stratégique": "Arbitrage Stratégique",
+            "Comparaison stratégique des trois scénarios selon les critères clés : coût total d'investissement, surface habitable générée et score de recommandation global. Le scénario C (orange) offre le meilleur équilibre risque/rendement.":
+                f"Comparaison stratégique des trois scénarios selon les critères clés : coût total, surface habitable générée et score de recommandation. Le scénario {rec} ({rec_role_lbl}) offre le meilleur équilibre risque/rendement.",
         },
 
-        # SLIDE 17 — CONDITIONS DE RÉUSSITE
+        # ── SLIDE 17 : ANALYSE BUDGETAIRE C ──
         17: {
-            "Le scénario B intègre des ouvertures traversantes sur les façades libres, essentielles en climat tropical humide. La mitoyenneté sur deux côtés impose une conception bioclimatique rigoureuse avec protection solaire et circulation d'air naturelle.":
-                f"Le scénario {rec} intègre des ouvertures traversantes sur les façades libres, essentielles en climat {orient_zone.lower()}. La mitoyenneté sur {retrait_mitoyennete} côté(s) impose une conception bioclimatique rigoureuse avec protection solaire et circulation d'air naturelle.",
-            "Coût Travaux : 46 M FCFA": f"Coût Travaux : {rec_cost_total}",
-            "Budget initial respecté avec frais annexes de 7 à 10 M FCFA (études, honoraires, taxes). Provision imprévus recommandée : 5-8%.":
-                f"Budget initial respecté avec frais annexes (études, honoraires, taxes). Provision imprévus recommandée : 5-8 %.",
-            "Phasage du Projet : 11 Mois": f"Phasage du Projet : {rec_duree}",
-            "Démarrage en saison sèche (novembre-janvier) pour optimiser les conditions de chantier et éviter les retards liés aux intempéries tropicales.":
-                "Démarrage en saison sèche (novembre-janvier) pour optimiser les conditions de chantier et éviter les retards liés aux intempéries tropicales.",
-            "Conditions de Réussite": "Conditions de Réussite",
+            "Coût travaux : 23M FCFA pour un budget initial de 33M FCFA.":
+                f"Coût travaux : {rec_cost_total} pour un budget initial de {budget_fcfa}.",
+            "Honoraires architecte : 2M-3M FCFA (10%-15% des travaux)":
+                f"Honoraires architecte : {f(flat, f'{rec}_hono_bas_M', '?')}M-{f(flat, f'{rec}_hono_haut_M', '?')}M FCFA (10%-15% des travaux)",
         },
 
-        # SLIDE 18 — POINTS INVISIBLES
-        18: {
-            "Les aspects techniques critiques souvent sous-estimés déterminent la pérennité du projet.":
-                "Les aspects techniques critiques souvent sous-estimés déterminent la pérennité du projet.",
-            "Structure : Béton armé 4 niveaux, système poteau-poutre adapté à la mitoyenneté sur 2 côtés.":
-                f"Structure : béton armé {rec_total_niv} niveaux, système poteau-poutre adapté à la mitoyenneté sur {retrait_mitoyennete} côté(s).",
-            "Fondations : Étude géotechnique indispensable avant démarrage des travaux.":
-                "Fondations : étude géotechnique indispensable avant démarrage des travaux.",
-            "Ventilation : Ouvertures traversantes obligatoires sur façades libres (climat tropical humide).":
-                f"Ventilation : ouvertures traversantes obligatoires sur façades libres (climat {orient_zone.lower()}).",
-            "Étanchéité : Toiture terrasse critique — membrane haute performance requise.":
-                "Étanchéité : toiture terrasse critique — membrane haute performance requise.",
-            "Checklist financière : Budget validé, trésorerie par tranches, 3 devis comparatifs minimum, provision imprévus 5-8%.":
-                "Checklist financière : budget validé, trésorerie par tranches, 3 devis comparatifs minimum, provision imprévus 5-8 %.",
-            "Points Invisibles": "Points Invisibles",
+        # ── SLIDE 18 : POINTS CLÉS & CHECKLIST (statique) ──
+        18: {},
+
+        # ── SLIDE 19 : ÉTUDE DE FAISABILITÉ — PHASAGE (statique) ──
+        19: {},
+
+        # ── SLIDE 20 : PÉRIMÈTRE DES ÉTUDES (statique) ──
+        20: {},
+
+        # ── SLIDE 21 : PROJECTION FINALE ──
+        21: {
+            "Le Scénario C représente l'aboutissement optimal de votre projet immobilier. Cette configuration prudente maximise la rentabilité tout en minimisant les risques structurels et financiers.":
+                f"Le Scénario {rec} représente l'aboutissement optimal de votre projet immobilier. Cette configuration {rec_role_lbl.lower()} équilibre rentabilité et maîtrise des risques structurels et financiers.",
+            "Avec un score de recommandation de 84/100, ce choix stratégique garantit une exécution maîtrisée dans le respect de votre enveloppe budgétaire dans le cas où vous voudriez phaser votre projet progressivement et le faire construire au fur et à mesure.":
+                f"Avec un score de recommandation de {rec_score}/100, ce choix stratégique garantit une exécution maîtrisée dans le respect de votre enveloppe budgétaire de {budget_fcfa}, avec possibilité de phasage progressif.",
         },
 
-        # SLIDE 19 — RECOMMANDATION FINALE
-        19: {
-            "Scénario B — Équilibre": f"Scénario {rec} — {rec_role_label}",
-            "Score global : 76/100": f"Score global : {rec_score}/100",
-            "Le choix stratégique optimal": "Le choix stratégique optimal",
-            "Après analyse croisée des trois scénarios, le Scénario B s'impose comme la recommandation du cabinet BARLO. Avec un budget maîtrisé de 46M FCFA pour 240m² habitables sur 11 mois de chantier, il offre le meilleur équilibre entre ambition architecturale, faisabilité technique locale et rentabilité financière. La conformité urbanistique solide et le ratio coût/surface optimisé en font la voie la plus sécurisée vers la réussite de votre projet immobilier à Douala.":
-                f"Après analyse croisée des trois scénarios, le Scénario {rec} s'impose comme la recommandation du cabinet BARLO. Budget maîtrisé de {rec_cost_total} pour {rec_sdp} m² habitables sur {rec_duree} de chantier. Meilleur équilibre entre ambition architecturale, faisabilité technique locale et rentabilité financière. La conformité urbanistique solide et le ratio coût/surface optimisé en font la voie la plus sécurisée pour la réussite de votre projet immobilier à {city}.",
-            "Recommandation Finale": "Recommandation Finale",
-        },
-        # SLIDE 20 — CONTACT (laisse le contact actuel du template, ne pas écraser)
+        # ── SLIDE 22 : MERCI (contact statique) ──
+        22: {},
     }
 
 
@@ -372,7 +269,6 @@ def build_slide_replacements(flat, scenarios=None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_replacements_to_slide(slide, replacements):
-    """Applique tous les replacements dict sur un slide donne."""
     applied = 0
     for old_text, new_text in replacements.items():
         if not old_text:
@@ -384,21 +280,15 @@ def apply_replacements_to_slide(slide, replacements):
             for para in tf.paragraphs:
                 para_text = "".join(r.text for r in para.runs)
                 if old_text in para_text:
-                    # Replace tout le texte du paragraphe par new_text
-                    # en preservant le format du premier run
                     if para.runs:
                         new_para_text = para_text.replace(old_text, new_text)
                         para.runs[0].text = new_para_text
                         for r in para.runs[1:]:
                             r.text = ""
                         applied += 1
-                        break  # ne pas re-matcher dans le meme shape
+                        break
     return applied
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     if len(sys.argv) < 4:
@@ -432,7 +322,7 @@ def main():
     total_applied = 0
     for i, slide in enumerate(prs.slides):
         slide_num = i + 1
-        if slide_num in slide_replacements:
+        if slide_num in slide_replacements and slide_replacements[slide_num]:
             applied = apply_replacements_to_slide(slide, slide_replacements[slide_num])
             print(f"[premium] Slide {slide_num} : {applied} replacements applied")
             total_applied += applied
