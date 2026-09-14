@@ -249,25 +249,57 @@ app.get("/studio", (req, res) => {
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || "";    // Google Apps Script Web App URL
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
 
-// ─── Apps Script Proxy helpers ──────────────────────────────────────────────
+// ─── Apps Script Proxy helpers (v73.7 : retry + HTML detection) ─────────────
 // All Google Sheets operations go through the Apps Script Web App — no OAuth needed
+// gasFetch wrapper : retry x3 avec backoff si Google renvoie HTML (cold start / rate limit)
+const GAS_MAX_ATTEMPTS = 3;
+const GAS_BACKOFF_MS = [0, 1500, 4000];
+
+async function gasFetch(url, options = {}) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < GAS_MAX_ATTEMPTS; attempt++) {
+    if (GAS_BACKOFF_MS[attempt] > 0) {
+      await new Promise(r => setTimeout(r, GAS_BACKOFF_MS[attempt]));
+    }
+    try {
+      const r = await fetch(url, { redirect: "follow", ...options });
+      const text = await r.text();
+      const trimmed = text.trimStart();
+      if (trimmed.startsWith("<") || trimmed.startsWith("<!DOCTYPE")) {
+        lastErr = new Error(`GAS returned HTML (attempt ${attempt + 1}/${GAS_MAX_ATTEMPTS}, status ${r.status}) — likely cold start or rate limit`);
+        console.warn(`[gasFetch] ${lastErr.message} for ${url.slice(0, 120)}...`);
+        continue;
+      }
+      try {
+        return JSON.parse(text);
+      } catch (parseErr) {
+        lastErr = new Error(`GAS invalid JSON (attempt ${attempt + 1}/${GAS_MAX_ATTEMPTS}): ${parseErr.message} — body starts with: ${text.slice(0, 100)}`);
+        console.warn(`[gasFetch] ${lastErr.message}`);
+        continue;
+      }
+    } catch (netErr) {
+      lastErr = netErr;
+      console.warn(`[gasFetch] network error (attempt ${attempt + 1}/${GAS_MAX_ATTEMPTS}): ${netErr.message}`);
+      continue;
+    }
+  }
+  throw lastErr || new Error("gasFetch: all attempts failed");
+}
+
 async function gasGet(action, params = {}) {
   const qs = new URLSearchParams({ action, ...params }).toString();
-  const r = await fetch(`${APPS_SCRIPT_URL}?${qs}`, { redirect: "follow" });
-  const data = await r.json();
+  const data = await gasFetch(`${APPS_SCRIPT_URL}?${qs}`);
   if (data.error) throw new Error(`GAS ${action}: ${data.error}`);
   return data;
 }
 
 async function gasPost(action, body = {}, params = {}) {
   const qs = new URLSearchParams({ action, ...params }).toString();
-  const r = await fetch(`${APPS_SCRIPT_URL}?${qs}`, {
+  const data = await gasFetch(`${APPS_SCRIPT_URL}?${qs}`, {
     method: "POST",
-    redirect: "follow",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
-  const data = await r.json();
   if (data.error) throw new Error(`GAS ${action}: ${data.error}`);
   return data;
 }
