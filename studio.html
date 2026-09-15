@@ -166,22 +166,32 @@
         .c-global-section{background:var(--card2);border:1px dashed var(--border);border-radius:7px;padding:.9rem;margin-bottom:.9rem}
         .c-global-section h4{color:var(--brick2)}
 
-        /* Actions bar */
-        .c-actions{display:flex;gap:.6rem;justify-content:flex-end;padding-top:.7rem;border-top:1px solid var(--border)}
-        .btn-c-clear,.btn-c-save{padding:.55rem 1.1rem;font-size:.76rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:opacity .15s;font-family:inherit}
-        .btn-c-clear{background:var(--navy);color:var(--text2)}
-        .btn-c-clear:hover{color:var(--text)}
-        .btn-c-save{background:var(--forest);color:#fff}
-        .btn-c-save:hover{opacity:.85}
+        /* Actions bar — v75.1.1 boutons plus visibles */
+        .c-actions{display:flex;gap:.9rem;justify-content:flex-end;padding-top:1rem;border-top:2px solid var(--border);margin-top:.5rem}
+        .btn-c-clear,.btn-c-save{padding:.75rem 1.6rem;font-size:.85rem;font-weight:700;border:none;border-radius:8px;cursor:pointer;transition:all .15s;font-family:inherit;display:inline-flex;align-items:center;gap:.4rem}
+        .btn-c-clear{background:#3a4a5c;color:#fff;border:1px solid var(--border)}
+        .btn-c-clear:hover{background:#4a5a6c;transform:translateY(-1px)}
+        .btn-c-save{background:linear-gradient(135deg,var(--forest),#145A32);color:#fff;box-shadow:0 3px 12px rgba(30,132,73,.35)}
+        .btn-c-save:hover{transform:translateY(-1px);box-shadow:0 5px 16px rgba(30,132,73,.5)}
+        .btn-c-save:active{transform:translateY(0)}
 
-        /* Toast */
-        .c-saved-toast{position:absolute;top:.7rem;right:.7rem;background:var(--forest);color:#fff;padding:.35rem .7rem;border-radius:6px;font-size:.7rem;font-weight:600;opacity:0;transition:opacity .3s;pointer-events:none;z-index:5}
-        .c-saved-toast.error{background:var(--brick)}
+        /* Toast — v75.1.1 position fixed en bas-droite pour visibilité partout */
+        .c-saved-toast{position:fixed;bottom:1.5rem;right:1.5rem;background:linear-gradient(135deg,var(--forest),#145A32);color:#fff;padding:.85rem 1.2rem;border-radius:8px;font-size:.85rem;font-weight:700;opacity:0;transition:opacity .3s,transform .3s;pointer-events:none;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.4);transform:translateY(20px)}
+        .c-saved-toast.show{opacity:1;transform:translateY(0)}
+        .c-saved-toast.error{background:linear-gradient(135deg,var(--brick),#7B241C)}
+
+        /* v75.1.1 — Preview parcelle SVG */
+        .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.8rem;margin-top:.4rem;position:relative}
+        .c-parcel-preview svg{width:100%;height:auto;max-height:340px;display:block}
+        .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.5rem;font-size:.62rem;color:var(--text2)}
+        .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.3rem}
+        .c-parcel-legend-swatch{width:11px;height:11px;border-radius:3px;display:inline-block}
+        .c-parcel-empty-msg{text-align:center;padding:2rem;color:var(--text2);font-size:.75rem}
     </style>
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.1.1</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -609,10 +619,145 @@ function scenarioPanelTemplate(L) {
       </div>
 
       <div class="c-section">
+        <h4>🧭 Preview de l'implantation sur la parcelle</h4>
+        <div class="c-parcel-preview" id="cParcelPreview${L}">
+          <svg id="cParcelSvg${L}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="c-parcel-legend" id="cParcelLegend${L}"></div>
+        </div>
+      </div>
+
+      <div class="c-section">
         <h4>📌 Rationale du scénario ${L}</h4>
         <textarea id="cScnRat${L}" data-scn="${L}" data-field="rationale" placeholder="Justification spécifique à ce scénario (par ex. « A colle au programme initial » ou « C phasé pour tester le marché »)"></textarea>
       </div>
     `;
+}
+
+// ═══ v75.1.1 — Preview SVG de la parcelle avec 8 secteurs + boussole + unités ═══
+const UNIT_COLORS = {
+    T1: "#3498DB", T2: "#3498DB", T3: "#3498DB", T4: "#3498DB", T5: "#3498DB",
+    COMMERCE: "#E67E22", BUREAU: "#9B59B6", ATELIER: "#95A5A6", AUTRE: "#7F8C8D"
+};
+const SECTOR_LIST = ["N","NE","E","SE","S","SW","W","NW"];
+
+function renderParcelSvg(label) {
+    const svg = $(`cParcelSvg${label}`);
+    const legend = $(`cParcelLegend${label}`);
+    if (!svg) return;
+    const poly = currentBody8D && currentBody8D.site_polygon;
+    if (!poly) {
+        svg.innerHTML = `<text x="200" y="200" text-anchor="middle" fill="#8899AA" font-size="12" font-family="Inter">Polygone parcelle non disponible</text>`;
+        if (legend) legend.innerHTML = "";
+        return;
+    }
+    // Parse "lat1,lon1|lat2,lon2|..."
+    const pts = poly.split("|").map(p => {
+        const [lat, lon] = p.trim().split(",").map(Number);
+        return {lat, lon};
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+    if (pts.length < 3) {
+        svg.innerHTML = `<text x="200" y="200" text-anchor="middle" fill="#8899AA" font-size="12">Polygone invalide</text>`;
+        return;
+    }
+    // Convert lat/lon to relative meters (centroïde origine)
+    const cLat = pts.reduce((s,p)=>s+p.lat,0) / pts.length;
+    const cLon = pts.reduce((s,p)=>s+p.lon,0) / pts.length;
+    const R = 6371000;
+    const cosC = Math.cos(cLat * Math.PI / 180);
+    const metersPts = pts.map(p => ({
+        x: (p.lon - cLon) * Math.PI / 180 * R * cosC,
+        y: -(p.lat - cLat) * Math.PI / 180 * R  // y inversé pour que Nord soit en haut
+    }));
+    // Bbox
+    const minX = Math.min(...metersPts.map(p=>p.x));
+    const maxX = Math.max(...metersPts.map(p=>p.x));
+    const minY = Math.min(...metersPts.map(p=>p.y));
+    const maxY = Math.max(...metersPts.map(p=>p.y));
+    const w = maxX - minX, h = maxY - minY;
+    // Scale to SVG 400x400 with margin 50
+    const margin = 55;
+    const svgSize = 400;
+    const scale = Math.min((svgSize - 2*margin) / Math.max(w,1), (svgSize - 2*margin) / Math.max(h,1));
+    const offX = (svgSize - w * scale) / 2 - minX * scale;
+    const offY = (svgSize - h * scale) / 2 - minY * scale;
+    const svgPts = metersPts.map(p => ({
+        x: p.x * scale + offX,
+        y: p.y * scale + offY
+    }));
+    const polyStr = svgPts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    // Centroïde en coord SVG
+    const cxSvg = svgPts.reduce((s,p)=>s+p.x,0) / svgPts.length;
+    const cySvg = svgPts.reduce((s,p)=>s+p.y,0) / svgPts.length;
+    // Sectors : 8 secteurs radiaux de 45°, positionnés depuis centroïde
+    const sectorRadius = Math.min(svgSize - 2*margin, 220) / 2 + 30;
+    // Angles : N = -90°, NE = -45°, E = 0°, SE = 45°, S = 90°, SW = 135°, W = 180°, NW = -135°
+    const sectorAngles = { N:-90, NE:-45, E:0, SE:45, S:90, SW:135, W:180, NW:-135 };
+    let sectorLinesHtml = "";
+    // 8 lignes radiales aux limites entre secteurs
+    for (let i = 0; i < 8; i++) {
+        const angle = (-90 + i*45 + 22.5) * Math.PI / 180;
+        const x2 = cxSvg + Math.cos(angle) * sectorRadius;
+        const y2 = cySvg + Math.sin(angle) * sectorRadius;
+        sectorLinesHtml += `<line x1="${cxSvg.toFixed(1)}" y1="${cySvg.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="rgba(212,133,14,0.15)" stroke-width="1" stroke-dasharray="3,3"/>`;
+    }
+    // Labels des 8 secteurs
+    let sectorLabelsHtml = "";
+    for (const [name, deg] of Object.entries(sectorAngles)) {
+        const rad = deg * Math.PI / 180;
+        const lx = cxSvg + Math.cos(rad) * (sectorRadius - 8);
+        const ly = cySvg + Math.sin(rad) * (sectorRadius - 8);
+        const isCardinal = ["N","E","S","W"].includes(name);
+        const color = isCardinal ? "#D4850E" : "rgba(212,133,14,0.6)";
+        const fw = isCardinal ? "700" : "500";
+        sectorLabelsHtml += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="11" font-weight="${fw}" font-family="Inter">${name}</text>`;
+    }
+    // Unités placées
+    const units = (cockpitState.scenarios[label].units || []).filter(u => u.placement_sector);
+    let unitsHtml = "";
+    const sectorCount = {};
+    units.forEach((u, i) => {
+        const s = u.placement_sector;
+        if (!sectorAngles[s]) return;
+        sectorCount[s] = (sectorCount[s] || 0) + 1;
+        const idxInSector = sectorCount[s] - 1;
+        const rad = sectorAngles[s] * Math.PI / 180;
+        // Rayon variable selon l'index dans le secteur pour éviter chevauchement
+        const distFromCenter = sectorRadius * 0.55 - idxInSector * 22;
+        const ux = cxSvg + Math.cos(rad) * distFromCenter;
+        const uy = cySvg + Math.sin(rad) * distFromCenter;
+        const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
+        const size = 16 + Math.min(10, Math.sqrt(Number(u.unit_size_m2) || 40) - 4);
+        const label2 = (u.unit_name || u.unit_type || "?").substring(0, 8);
+        unitsHtml += `<g><rect x="${(ux-size).toFixed(1)}" y="${(uy-size/2).toFixed(1)}" width="${(size*2).toFixed(1)}" height="${size.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.85" stroke="#fff" stroke-width="1"/>`;
+        unitsHtml += `<text x="${ux.toFixed(1)}" y="${uy.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="9" font-weight="700" font-family="Inter">${esc(label2)}</text></g>`;
+    });
+    // Boussole en haut à droite
+    const compass = `
+        <g transform="translate(360,45)">
+            <circle r="24" fill="rgba(11,17,32,0.9)" stroke="#c9a878" stroke-width="1.5"/>
+            <text x="0" y="-30" text-anchor="middle" fill="#c9a878" font-size="10" font-weight="700" font-family="Inter">N</text>
+            <polygon points="0,-16 -6,4 0,-4 6,4" fill="#C0392B" stroke="#8B0000" stroke-width="0.5"/>
+            <polygon points="0,16 -4,4 0,8 4,4" fill="#8899AA"/>
+        </g>
+    `;
+    svg.innerHTML = `
+        <rect x="0" y="0" width="400" height="400" fill="#0B1120"/>
+        ${sectorLinesHtml}
+        <polygon points="${polyStr}" fill="rgba(212,133,14,0.15)" stroke="#c9a878" stroke-width="2"/>
+        <circle cx="${cxSvg.toFixed(1)}" cy="${cySvg.toFixed(1)}" r="3" fill="#c9a878"/>
+        ${sectorLabelsHtml}
+        ${unitsHtml}
+        ${compass}
+    `;
+    // Légende types d'unités
+    if (legend) {
+        const typesInUse = [...new Set(units.map(u => u.unit_type))];
+        if (typesInUse.length === 0) {
+            legend.innerHTML = `<div style="color:var(--text2);font-size:.68rem">Aucune unité placée — remplis les secteurs dans la table ci-dessus</div>`;
+        } else {
+            legend.innerHTML = typesInUse.map(t => `<span class="c-parcel-legend-item"><span class="c-parcel-legend-swatch" style="background:${UNIT_COLORS[t]||UNIT_COLORS.AUTRE}"></span>${t}</span>`).join("");
+        }
+    }
 }
 
 function switchScenarioTab(tab) {
@@ -648,6 +793,7 @@ function addUnit(label) {
     units.push({ unit_index: nextIdx, unit_type: "T3", unit_name: "", unit_size_m2: "", placement_sector: "", notes: "" });
     cockpitState.scenarios[label].units = units;
     renderUnitsTable(label);
+    renderParcelSvg(label);
     updateConstraintsCount();
 }
 
@@ -657,6 +803,7 @@ function removeUnit(label, idx) {
     units.forEach((u, i) => u.unit_index = i + 1);
     cockpitState.scenarios[label].units = units;
     renderUnitsTable(label);
+    renderParcelSvg(label);
     updateConstraintsCount();
 }
 
@@ -664,6 +811,9 @@ function updateUnit(label, idx, field, val) {
     const units = cockpitState.scenarios[label].units || [];
     if (!units[idx]) return;
     units[idx][field] = val;
+    if (field === "placement_sector" || field === "unit_type" || field === "unit_name" || field === "unit_size_m2") {
+        renderParcelSvg(label);
+    }
     updateConstraintsCount();
 }
 
@@ -683,6 +833,7 @@ async function generatePlacementAuto(label) {
             if (u) u.placement_sector = p.sector;
         }
         renderUnitsTable(label);
+        renderParcelSvg(label);
         showToast(`Placement auto généré (${d.method||"heuristic"})`);
     } catch(e) { showToast(`Erreur : ${e.message}`, true); }
 }
@@ -789,6 +940,7 @@ function populateCockpitFromLead(L, units) {
         setInput(`cGap${label}`, s.gap_m);
         setInput(`cScnRat${label}`, s.rationale);
         renderUnitsTable(label);
+        renderParcelSvg(label);
     });
 
     updateCoherenceBadges();
@@ -904,26 +1056,34 @@ function updateConstraintsCount() {
 
 async function saveConstraints() {
     updateConstraintsCount();
+    syncCockpitStateFromForm();
+    console.log("[SAVE] Cockpit state:", cockpitState);
     // Persistance Supabase des unités
     const ref = selectedLead && (selectedLead.ref || selectedLead.barloCode);
-    if (ref) {
-        const unitsPayload = {
-            A: cockpitState.scenarios.A.units || [],
-            B: cockpitState.scenarios.B.units || [],
-            C: cockpitState.scenarios.C.units || []
-        };
-        try {
-            const r = await fetch(`${API}/api/lead-units/${encodeURIComponent(ref)}`, {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({units: unitsPayload})
-            });
-            const d = await r.json();
-            if (!d.ok) throw new Error(d.error||"Échec sauvegarde unités");
-            showToast(`✓ Enregistré (${d.inserted||0} unités Supabase)`);
-        } catch(e) { showToast(`Erreur : ${e.message}`, true); }
-    } else {
-        showToast("✓ Contraintes enregistrées (retraite pour appliquer)");
+    if (!ref) {
+        showToast("✓ Contraintes enregistrées en mémoire — sélectionne un lead pour Supabase");
+        return;
+    }
+    const unitsPayload = {
+        A: cockpitState.scenarios.A.units || [],
+        B: cockpitState.scenarios.B.units || [],
+        C: cockpitState.scenarios.C.units || []
+    };
+    const totalUnits = unitsPayload.A.length + unitsPayload.B.length + unitsPayload.C.length;
+    console.log(`[SAVE] Envoi vers /api/lead-units/${ref}, total unités : ${totalUnits}`);
+    try {
+        const r = await fetch(`${API}/api/lead-units/${encodeURIComponent(ref)}`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({units: unitsPayload})
+        });
+        const d = await r.json();
+        console.log("[SAVE] Response:", d);
+        if (!d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        showToast(`✓ Enregistré (${d.inserted||0} unités sauvegardées Supabase)`);
+    } catch(e) {
+        console.error("[SAVE] Error:", e);
+        showToast(`Erreur : ${e.message}`, true);
     }
 }
 
@@ -975,8 +1135,10 @@ function showToast(msg, isError) {
     if (!toast) return;
     toast.textContent = msg;
     toast.classList.toggle("error", !!isError);
-    toast.style.opacity = "1";
-    setTimeout(() => { toast.style.opacity = "0"; }, 2000);
+    toast.classList.add("show");
+    // Force reflow pour animation
+    void toast.offsetWidth;
+    setTimeout(() => { toast.classList.remove("show"); }, 2800);
 }
 
 // ═══ Helpers utilitaires ═══
