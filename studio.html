@@ -181,17 +181,61 @@
         .c-saved-toast.error{background:linear-gradient(135deg,var(--brick),#7B241C)}
 
         /* v75.1.1 — Preview parcelle SVG */
-        .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.8rem;margin-top:.4rem;position:relative}
-        .c-parcel-preview svg{width:100%;height:auto;max-height:340px;display:block}
-        .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.5rem;font-size:.62rem;color:var(--text2)}
-        .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.3rem}
-        .c-parcel-legend-swatch{width:11px;height:11px;border-radius:3px;display:inline-block}
-        .c-parcel-empty-msg{text-align:center;padding:2rem;color:var(--text2);font-size:.75rem}
+        .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.6rem;margin-top:.4rem;position:relative}
+        .c-parcel-preview svg{width:100%;height:auto;max-height:280px;display:block}
+        .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem;font-size:.58rem;color:var(--text2)}
+        .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.25rem}
+        .c-parcel-legend-swatch{width:9px;height:9px;border-radius:2px;display:inline-block}
+        .c-parcel-empty-msg{text-align:center;padding:1.5rem;color:var(--text2);font-size:.7rem}
+
+        /* ═══ v75.3.0 — Refonte 4 colonnes (inputs à gauche + A/B/C côte à côte) ═══ */
+        .c-4col-grid{display:grid;grid-template-columns:290px 1fr 1fr 1fr;gap:.7rem;margin-bottom:.9rem}
+        .c-inputs-col{background:var(--card2);border:1px solid var(--border);border-radius:7px;padding:.9rem;align-self:start}
+        .c-inputs-col h4{font-size:.62rem;text-transform:uppercase;letter-spacing:.7px;color:var(--brick2);margin:0 0 .5rem;font-weight:700}
+        .c-inputs-col h4.sep{margin-top:1rem;padding-top:.7rem;border-top:1px dashed var(--border)}
+        .c-scn-col{background:var(--card2);border:1px solid var(--border);border-radius:7px;padding:.65rem;display:flex;flex-direction:column;gap:.5rem;min-width:0}
+        .c-scn-col.recommended{border-color:var(--forest);box-shadow:0 0 0 1px var(--forest) inset}
+        .c-scn-col h5{font-size:.66rem;text-transform:uppercase;letter-spacing:.5px;color:var(--amber);margin:0;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:.4rem}
+        .c-scn-col h5 .role{font-size:.55rem;color:var(--text2);font-weight:500;text-transform:none;letter-spacing:0}
+        .c-scn-metrics{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;font-size:.65rem}
+        .c-scn-metrics > div{background:var(--navy);padding:.32rem .45rem;border-radius:5px;min-width:0}
+        .c-scn-metrics .lbl{color:var(--text2);font-size:.53rem;text-transform:uppercase;letter-spacing:.35px;display:block;margin-bottom:.1rem}
+        .c-scn-metrics .val{color:var(--text);font-weight:700;font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .c-scn-metrics input,.c-scn-metrics select{width:100%;padding:.2rem .3rem;background:transparent;color:var(--text);border:none;font-family:inherit;font-size:.72rem;font-weight:700;outline:none}
+        .c-scn-metrics input:focus,.c-scn-metrics select:focus{background:rgba(212,133,14,.08);border-radius:3px}
+        .c-scn-unit-actions{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center}
+        .c-scn-unit-actions .grow{flex:1;min-width:0}
+        .c-scn-col .c-parcel-preview{padding:.5rem;margin-top:0}
+        .c-scn-col .c-parcel-preview svg{max-height:210px}
+        .c-scn-col .c-units-table{font-size:.62rem}
+        .c-scn-col .c-units-table th{font-size:.5rem;padding:.25rem .2rem}
+        .c-scn-col .c-units-table td{padding:.2rem .18rem}
+        .c-scn-col .c-units-table input,.c-scn-col .c-units-table select{font-size:.6rem;padding:.22rem .28rem}
+        .c-scn-col .c-section h4{font-size:.55rem}
+        .c-scn-col textarea{min-height:38px;font-size:.65rem}
+        @media(max-width:1400px){.c-4col-grid{grid-template-columns:260px 1fr 1fr 1fr;gap:.5rem}}
+        @media(max-width:1150px){.c-4col-grid{grid-template-columns:1fr}.c-inputs-col{position:static}}
+
+        /* Contraintes globales : grid 2x2 lisible dans la colonne inputs */
+        .c-global-grid2{display:grid;grid-template-columns:1fr 1fr;gap:.55rem .7rem;margin-bottom:.5rem}
+        .c-global-grid2 label{margin-bottom:0;font-size:.65rem}
+        .c-checks-row{display:flex;flex-direction:column;gap:.3rem;margin:.4rem 0;font-size:.68rem}
+
+        /* Bouton Splitter (accent brick pour distinguer d'Ajouter) */
+        .c-btn-split{padding:.32rem .55rem;font-size:.62rem;font-weight:700;border:1px solid var(--brick);border-radius:4px;cursor:pointer;background:var(--navy);color:var(--brick2);font-family:inherit;transition:all .15s}
+        .c-btn-split:hover{background:rgba(192,57,43,.15)}
+        .c-btn-split.active{background:var(--brick);color:#fff}
+        .c-splitter-menu{display:inline-flex;gap:2px;background:var(--navy);border:1px solid var(--border);border-radius:5px;padding:2px}
+        .c-splitter-menu button{padding:.25rem .5rem;font-size:.6rem;background:none;border:none;color:var(--text2);cursor:pointer;font-weight:700;font-family:inherit;border-radius:3px}
+        .c-splitter-menu button:hover{background:var(--card);color:var(--text)}
+
+        /* Bouton Add unit compact (dans colonne serrée) */
+        .c-scn-col .c-btn-add-unit,.c-scn-col .c-btn-auto-place,.c-scn-col .c-btn-reset-moteur{padding:.28rem .55rem;font-size:.6rem}
     </style>
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.1.2</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.2.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -252,57 +296,52 @@
                         </div>
                     </div>
 
-                    <!-- Tabs scénarios -->
-                    <div class="c-scn-tabs">
-                        <button class="c-scn-tab active" data-tab="A" onclick="switchScenarioTab('A')">
-                            <span>A · Intensification</span>
-                            <span class="c-badge-coh" id="cBadgeA">—</span>
-                        </button>
-                        <button class="c-scn-tab" data-tab="B" onclick="switchScenarioTab('B')">
-                            <span>B · Équilibre</span>
-                            <span class="c-badge-coh" id="cBadgeB">—</span>
-                        </button>
-                        <button class="c-scn-tab" data-tab="C" onclick="switchScenarioTab('C')">
-                            <span>C · Prudent</span>
-                            <span class="c-badge-coh" id="cBadgeC">—</span>
-                        </button>
-                    </div>
+                    <!-- v6.2.0 : Layout 4 colonnes (inputs à gauche + A/B/C côte à côte, tous visibles) -->
+                    <div class="c-4col-grid">
+                        <!-- Colonne 1 : mes inputs globaux (édition centralisée) -->
+                        <div class="c-inputs-col">
+                            <h4>⚙️ Contraintes globales</h4>
+                            <div class="c-global-grid2">
+                                <label>Programme précis
+                                    <input type="text" id="cInputTypologies" placeholder="T3=2, COMMERCE=1">
+                                </label>
+                                <label>Mitoyenneté forcée
+                                    <select id="cLateralHug">
+                                        <option value="">Auto</option>
+                                        <option value="EAST">EAST (est)</option>
+                                        <option value="WEST">WEST (ouest)</option>
+                                        <option value="NORTH">NORTH (nord)</option>
+                                        <option value="SOUTH">SOUTH (sud)</option>
+                                    </select>
+                                </label>
+                                <label>Écart latéral opposé (m)
+                                    <input type="text" id="cLateralGap" placeholder="3">
+                                </label>
+                                <label>Emprise max globale (m²)
+                                    <input type="text" id="cMaxFp" placeholder="180">
+                                </label>
+                            </div>
+                            <div class="c-checks-row">
+                                <label><input type="checkbox" id="cIgnoreCos"> Ignorer plafond COS (dérogation assumée)</label>
+                                <label><input type="checkbox" id="cIgnoreSetbacks"> Ignorer retraits réglementaires</label>
+                            </div>
+                            <label style="font-size:.65rem">Rationale globale (contexte projet)
+                                <textarea id="cRationale" placeholder="Ex : Client accepte dérogation COS car mitoyenneté 2 côtés et tissu urbain dense" style="min-height:60px"></textarea>
+                            </label>
 
-                    <!-- Panels par scénario (générés via template) -->
-                    <div class="c-scn-panel active" data-panel="A" id="cPanelA"></div>
-                    <div class="c-scn-panel" data-panel="B" id="cPanelB"></div>
-                    <div class="c-scn-panel" data-panel="C" id="cPanelC"></div>
+                            <h4 class="sep">🏛 Retraits réglementaires (moteur)</h4>
+                            <div id="cRetraitsMoteur" style="font-size:.68rem;color:var(--text2);line-height:1.6">
+                                <div>Latéral : <strong id="cRetraitLateral" style="color:var(--amber)">—</strong></div>
+                                <div>Arrière : <strong id="cRetraitArriere" style="color:var(--amber)">—</strong></div>
+                                <div>Avant : <strong id="cRetraitAvant" style="color:var(--amber)">—</strong></div>
+                                <div style="font-size:.58rem;color:var(--text2);margin-top:.3rem">Utilisés pour tracer les limites séparatives sur les previews →</div>
+                            </div>
+                        </div>
 
-                    <!-- Contraintes globales -->
-                    <div class="c-global-section">
-                        <h4>⚙️ Contraintes globales (tous scénarios)</h4>
-                        <div class="c-block-grid">
-                            <label>Programme précis (input_typologies)
-                                <input type="text" id="cInputTypologies" placeholder="Ex : T3=2, COMMERCE=1">
-                            </label>
-                            <label>Mitoyenneté forcée (lateral_hug)
-                                <select id="cLateralHug">
-                                    <option value="">Auto (défaut)</option>
-                                    <option value="EAST">EAST (est)</option>
-                                    <option value="WEST">WEST (ouest)</option>
-                                    <option value="NORTH">NORTH (nord)</option>
-                                    <option value="SOUTH">SOUTH (sud)</option>
-                                </select>
-                            </label>
-                            <label>Écart latéral côté opposé (m)
-                                <input type="text" id="cLateralGap" placeholder="Ex : 3">
-                            </label>
-                            <label>Emprise maximale globale (m²)
-                                <input type="text" id="cMaxFp" placeholder="Ex : 180">
-                            </label>
-                        </div>
-                        <div style="margin-top:.6rem">
-                            <label><input type="checkbox" id="cIgnoreCos"> Ignorer plafond COS (dérogation assumée)</label>
-                            <label><input type="checkbox" id="cIgnoreSetbacks"> Ignorer retraits réglementaires</label>
-                        </div>
-                        <label style="margin-top:.5rem">Rationale globale (contexte projet)
-                            <textarea id="cRationale" placeholder="Ex : Client accepte dérogation COS car mitoyenneté 2 côtés et tissu urbain dense"></textarea>
-                        </label>
+                        <!-- Colonnes 2/3/4 : A / B / C (tous visibles, générés via template) -->
+                        <div class="c-scn-col" id="cScnColA"></div>
+                        <div class="c-scn-col" id="cScnColB"></div>
+                        <div class="c-scn-col" id="cScnColC"></div>
                     </div>
 
                     <div class="c-actions">
@@ -561,76 +600,101 @@ function renderDetail(L) {
     $("cardImages").innerHTML=imgs.length?imgs.map(i=>`<div class="img-thumb"><img src="${i.u}" onerror="this.style.display='none'"><div class="cap">${i.l}</div></div>`).join(""):'<div style="color:var(--text2);font-size:.8rem">Images générées avec le PPTX</div>';
 }
 
-// ═══ v75.1 — COCKPIT : rendu, collecte, sauvegarde ═══
+// ═══ v75.3.0 — COCKPIT 4 colonnes : rendu, collecte, sauvegarde ═══
+
+const SCN_ROLES = { A: "Intensification", B: "Équilibre", C: "Prudent" };
 
 function renderScenarioPanels() {
     ["A","B","C"].forEach(label => {
-        $(`cPanel${label}`).innerHTML = scenarioPanelTemplate(label);
+        const el = $(`cScnCol${label}`);
+        if (el) el.innerHTML = scenarioPanelTemplate(label);
     });
 }
 
 function scenarioPanelTemplate(L) {
-    const acc = {A:"var(--brick)", B:"var(--amber)", C:"var(--forest)"}[L] || "var(--amber)";
     return `
-      <div class="c-section">
-        <h4>🏗️ Configuration du bloc <span class="c-hint">(pré-rempli par le moteur — modifie ce que tu juges pertinent)</span></h4>
-        <div class="c-block-grid">
-          <label>COS cible (0–3)
-            <input type="text" id="cCos${L}" data-scn="${L}" data-field="cos" placeholder="Ex : 0.90">
-          </label>
-          <label>Layout
-            <select id="cLayout${L}" data-scn="${L}" data-field="layout">
-              <option value="">Auto (moteur)</option>
-              <option value="SPLIT_AV_AR">SPLIT_AV_AR (2 volumes)</option>
-              <option value="SUPERPOSE">SUPERPOSE (1 volume)</option>
-            </select>
-          </label>
-          <label>SDP cible (m²)
-            <input type="text" id="cTargetSdp${L}" data-scn="${L}" data-field="target_sdp" placeholder="Ex : 225">
-          </label>
-          <label>Emprise sol (m²)
-            <input type="text" id="cFp${L}" data-scn="${L}" data-field="fp" placeholder="Ex : 113">
-          </label>
-          <label>Niveaux (0=RDC, 1=R+1…)
-            <input type="text" id="cLevels${L}" data-scn="${L}" data-field="levels" placeholder="Ex : 2">
-          </label>
-          <label>Unités totales
-            <input type="text" id="cUnits${L}" data-scn="${L}" data-field="units_count" placeholder="Ex : 3">
-          </label>
-          <label>Gap latéral (m)
-            <input type="text" id="cGap${L}" data-scn="${L}" data-field="gap_m" placeholder="Ex : 3">
-          </label>
+      <h5>
+        <span>Scénario ${L} <span class="role">· ${SCN_ROLES[L]||""}</span></span>
+        <span class="c-badge-coh" id="cBadge${L}">—</span>
+      </h5>
+
+      <div class="c-scn-metrics">
+        <div><span class="lbl">COS</span><input type="text" id="cCos${L}" data-scn="${L}" data-field="cos" placeholder="0.90"></div>
+        <div><span class="lbl">SDP cible (m²)</span><input type="text" id="cTargetSdp${L}" data-scn="${L}" data-field="target_sdp" placeholder="225"></div>
+        <div><span class="lbl">Emprise (m²)</span><input type="text" id="cFp${L}" data-scn="${L}" data-field="fp" placeholder="113"></div>
+        <div><span class="lbl">Niveaux (R+X)</span><input type="text" id="cLevels${L}" data-scn="${L}" data-field="levels" placeholder="2"></div>
+        <div style="grid-column:1/-1"><span class="lbl">Layout</span>
+          <select id="cLayout${L}" data-scn="${L}" data-field="layout">
+            <option value="">Auto (moteur)</option>
+            <option value="SPLIT_AV_AR">SPLIT_AV_AR (2 volumes)</option>
+            <option value="SUPERPOSE">SUPERPOSE (1 volume)</option>
+          </select>
         </div>
       </div>
 
-      <div class="c-section">
-        <h4>🏠 Unités programmées <span class="c-hint">— nomme et place chaque unité</span></h4>
+      <div class="c-parcel-preview" id="cParcelPreview${L}">
+        <svg id="cParcelSvg${L}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div class="c-parcel-legend" id="cParcelLegend${L}"></div>
+      </div>
+
+      <div>
         <table class="c-units-table">
           <thead>
-            <tr><th style="width:22px">#</th><th>Type</th><th>Nom</th><th style="width:70px">m²</th><th style="width:70px">Placement</th><th>Notes</th><th style="width:24px"></th></tr>
+            <tr><th style="width:18px">#</th><th>Type</th><th>Nom</th><th style="width:44px">m²</th><th style="width:52px">Sect.</th><th style="width:20px"></th></tr>
           </thead>
           <tbody id="cUnitsBody${L}"></tbody>
         </table>
-        <div class="c-units-actions">
-          <button class="c-btn-add-unit" onclick="addUnit('${L}')">+ Ajouter une unité</button>
-          <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')">🎲 Générer placement auto</button>
-          <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')">🔄 Réinitialiser aux suggestions moteur</button>
+        <div class="c-scn-unit-actions" style="margin-top:.35rem">
+          <button class="c-btn-add-unit" onclick="addUnit('${L}')">+ Ajouter</button>
+          <div class="c-splitter-menu" title="Splitter le SDP cible en N unités égales">
+            <span style="font-size:.55rem;color:var(--text2);padding:.25rem .3rem;align-self:center">Splitter :</span>
+            <button onclick="splitScenarioIntoN('${L}',2)">2</button>
+            <button onclick="splitScenarioIntoN('${L}',3)">3</button>
+            <button onclick="splitScenarioIntoN('${L}',4)">4</button>
+            <button onclick="splitScenarioIntoN('${L}',5)">5</button>
+          </div>
+          <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')" title="Attribue automatiquement les secteurs">🎲 Auto place</button>
+          <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')" title="Réinitialise aux suggestions du moteur">🔄</button>
         </div>
       </div>
 
-      <div class="c-section">
-        <h4>🧭 Preview de l'implantation sur la parcelle</h4>
-        <div class="c-parcel-preview" id="cParcelPreview${L}">
-          <svg id="cParcelSvg${L}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
-          <div class="c-parcel-legend" id="cParcelLegend${L}"></div>
-        </div>
-      </div>
-
-      <div class="c-section">
-        <h4>📌 Rationale du scénario ${L}</h4>
-        <textarea id="cScnRat${L}" data-scn="${L}" data-field="rationale" placeholder="Justification spécifique à ce scénario (par ex. « A colle au programme initial » ou « C phasé pour tester le marché »)"></textarea>
+      <div>
+        <textarea id="cScnRat${L}" data-scn="${L}" data-field="rationale" placeholder="Rationale spécifique au scénario ${L}…" style="width:100%;padding:.35rem .5rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:inherit;font-size:.65rem;outline:none;resize:vertical;min-height:38px"></textarea>
       </div>
     `;
+}
+
+// v75.3.2 — Splitter le SDP cible du scénario en N unités égales
+// Type par défaut : T3 si logement dans programme, sinon RESI. Chaque unité prend sdp/N m².
+function splitScenarioIntoN(label, n) {
+    const s = cockpitState.scenarios[label];
+    const sdp = Number(s.target_sdp) || Number((currentBody8D||{})[`sdp_${label}`]) || 200;
+    if (sdp <= 0) { showToast("SDP cible manquante — remplis d'abord le champ SDP cible", true); return; }
+    const perUnit = Math.round(sdp / n);
+    // Type par défaut : COMMERCE en position 1 si programme mixte, sinon T3
+    const program = String((currentBody8D||{}).program_main || "").toLowerCase();
+    const hasCommerce = program.includes("commerc") || program.includes("mixt");
+    const units = [];
+    for (let i = 1; i <= n; i++) {
+        let t = "T3";
+        if (i === 1 && hasCommerce) t = "COMMERCE";
+        units.push({
+            unit_index: i,
+            unit_type: t,
+            unit_name: t === "COMMERCE" ? "Commerce" : `Logt ${i}`,
+            unit_size_m2: String(perUnit),
+            placement_sector: "",
+            notes: ""
+        });
+    }
+    // Pré-place selon heuristics du scénario
+    const placed = assignPreplacementForScenario(label, units);
+    cockpitState.scenarios[label].units = placed;
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    updateCoherenceBadges();
+    showToast(`Splitté en ${n} unités de ~${perUnit} m² sur scénario ${label}`);
 }
 
 // ═══ v75.1.1 — Preview SVG de la parcelle avec 8 secteurs + boussole + unités ═══
@@ -639,6 +703,75 @@ const UNIT_COLORS = {
     COMMERCE: "#E67E22", BUREAU: "#9B59B6", ATELIER: "#95A5A6", AUTRE: "#7F8C8D"
 };
 const SECTOR_LIST = ["N","NE","E","SE","S","SW","W","NW"];
+
+// v75.3.1 — Shrink polygone inward (bissectrice angulaire), utile pour tracer retraits + clipper unités
+function shrinkPolygonPx(pts, dPx) {
+    if (pts.length < 3 || dPx <= 0) return pts.slice();
+    // Détermine orientation via signed area (SVG y+ down → CW = positive)
+    let signedArea = 0;
+    for (let i = 0; i < pts.length; i++) {
+        const j = (i + 1) % pts.length;
+        signedArea += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    const isCW = signedArea > 0;  // en coord SVG
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+        const prev = pts[(i - 1 + pts.length) % pts.length];
+        const cur = pts[i];
+        const next = pts[(i + 1) % pts.length];
+        const dx1 = cur.x - prev.x, dy1 = cur.y - prev.y;
+        const dx2 = next.x - cur.x, dy2 = next.y - cur.y;
+        const l1 = Math.hypot(dx1, dy1) || 1;
+        const l2 = Math.hypot(dx2, dy2) || 1;
+        // Normales pointant vers l'intérieur (selon orientation)
+        const sign = isCW ? 1 : -1;
+        const n1x = sign * -dy1 / l1, n1y = sign * dx1 / l1;
+        const n2x = sign * -dy2 / l2, n2y = sign * dx2 / l2;
+        // Bissectrice
+        const bx = n1x + n2x, by = n1y + n2y;
+        const bl = Math.hypot(bx, by) || 1;
+        const proj = (n1x * bx + n1y * by) / bl;
+        const offset = dPx / Math.max(proj, 0.1);
+        out.push({
+            x: cur.x + bx / bl * offset,
+            y: cur.y + by / bl * offset
+        });
+    }
+    return out;
+}
+
+// v75.3.1 — Point dans polygone (algorithme ray casting)
+function pointInPolygonPx(pt, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        if (((yi > pt.y) !== (yj > pt.y)) &&
+            (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-9) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+// v75.3.1 — Cherche la distance depuis centroïde pour laquelle les 4 coins du rectangle restent dans le polygone
+function findSafeUnitDistance(cxSvg, cySvg, sectorRadDeg, maxDist, uW, uH, rotDeg, containerPoly) {
+    const rad = sectorRadDeg * Math.PI / 180;
+    const rot = rotDeg * Math.PI / 180;
+    const cornersLocal = [
+        [-uW/2, -uH/2], [uW/2, -uH/2], [uW/2, uH/2], [-uW/2, uH/2]
+    ];
+    for (let d = maxDist; d >= 10; d -= 4) {
+        const cx = cxSvg + Math.cos(rad) * d;
+        const cy = cySvg + Math.sin(rad) * d;
+        const corners = cornersLocal.map(([lx, ly]) => ({
+            x: cx + lx * Math.cos(rot) - ly * Math.sin(rot),
+            y: cy + lx * Math.sin(rot) + ly * Math.cos(rot)
+        }));
+        if (corners.every(p => pointInPolygonPx(p, containerPoly))) return d;
+    }
+    return 10;  // fallback : très proche du centre (moins de risque de déborder)
+}
 
 function renderParcelSvg(label) {
     const svg = $(`cParcelSvg${label}`);
@@ -650,8 +783,8 @@ function renderParcelSvg(label) {
         if (legend) legend.innerHTML = "";
         return;
     }
-    // Parse "lat1,lon1|lat2,lon2|..."
-    const pts = poly.split("|").map(p => {
+    // Parse "lat1,lon1|lat2,lon2|..." (ou avec ; comme séparateur alternatif)
+    const pts = poly.split(/[|;\n]/).map(p => {
         const [lat, lon] = p.trim().split(",").map(Number);
         return {lat, lon};
     }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
@@ -659,60 +792,65 @@ function renderParcelSvg(label) {
         svg.innerHTML = `<text x="200" y="200" text-anchor="middle" fill="#8899AA" font-size="12">Polygone invalide</text>`;
         return;
     }
-    // Convert lat/lon to relative meters (centroïde origine)
+    // Convert lat/lon to relative meters (centroïde origine, y inversé pour Nord en haut)
     const cLat = pts.reduce((s,p)=>s+p.lat,0) / pts.length;
     const cLon = pts.reduce((s,p)=>s+p.lon,0) / pts.length;
     const R = 6371000;
     const cosC = Math.cos(cLat * Math.PI / 180);
     const metersPts = pts.map(p => ({
         x: (p.lon - cLon) * Math.PI / 180 * R * cosC,
-        y: -(p.lat - cLat) * Math.PI / 180 * R  // y inversé pour que Nord soit en haut
+        y: -(p.lat - cLat) * Math.PI / 180 * R
     }));
-    // Bbox
     const minX = Math.min(...metersPts.map(p=>p.x));
     const maxX = Math.max(...metersPts.map(p=>p.x));
     const minY = Math.min(...metersPts.map(p=>p.y));
     const maxY = Math.max(...metersPts.map(p=>p.y));
     const w = maxX - minX, h = maxY - minY;
-    // Scale to SVG 400x400 with margin 50
     const margin = 55;
     const svgSize = 400;
     const scale = Math.min((svgSize - 2*margin) / Math.max(w,1), (svgSize - 2*margin) / Math.max(h,1));
     const offX = (svgSize - w * scale) / 2 - minX * scale;
     const offY = (svgSize - h * scale) / 2 - minY * scale;
-    const svgPts = metersPts.map(p => ({
-        x: p.x * scale + offX,
-        y: p.y * scale + offY
-    }));
+    const svgPts = metersPts.map(p => ({ x: p.x * scale + offX, y: p.y * scale + offY }));
     const polyStr = svgPts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-    // Centroïde en coord SVG
     const cxSvg = svgPts.reduce((s,p)=>s+p.x,0) / svgPts.length;
     const cySvg = svgPts.reduce((s,p)=>s+p.y,0) / svgPts.length;
-    // Sectors : 8 secteurs radiaux de 45°, positionnés depuis centroïde
+
+    // v75.3.1 — Retraits depuis moteur (setback_side, setback_back du body) → tracer polygone shrunk en pointillés
+    // Fallback : 3m latéral, 5m arrière, 4m avant
+    const retraitLateralM = Number((currentBody8D||{}).setback_side) || 3;
+    const retraitArriereM = Number((currentBody8D||{}).setback_back) || 5;
+    // On prend le retrait le plus contraignant comme approximation uniforme du polygone constructible
+    const retraitMaxM = Math.max(retraitLateralM, retraitArriereM);
+    const retraitLateralPx = retraitLateralM * scale;
+    const retraitMaxPx = retraitMaxM * scale;
+    const svgPtsBuildable = shrinkPolygonPx(svgPts, retraitMaxPx);          // zone constructible (retrait max)
+    const svgPtsRetraitLat = shrinkPolygonPx(svgPts, retraitLateralPx);     // ligne retrait latéral
+    const polyStrBuildable = svgPtsBuildable.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    const polyStrRetraitLat = svgPtsRetraitLat.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+
+    // Sectors : 8 secteurs radiaux
     const sectorRadius = Math.min(svgSize - 2*margin, 220) / 2 + 30;
-    // Angles : N = -90°, NE = -45°, E = 0°, SE = 45°, S = 90°, SW = 135°, W = 180°, NW = -135°
     const sectorAngles = { N:-90, NE:-45, E:0, SE:45, S:90, SW:135, W:180, NW:-135 };
     let sectorLinesHtml = "";
-    // 8 lignes radiales aux limites entre secteurs
     for (let i = 0; i < 8; i++) {
         const angle = (-90 + i*45 + 22.5) * Math.PI / 180;
         const x2 = cxSvg + Math.cos(angle) * sectorRadius;
         const y2 = cySvg + Math.sin(angle) * sectorRadius;
-        sectorLinesHtml += `<line x1="${cxSvg.toFixed(1)}" y1="${cySvg.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="rgba(212,133,14,0.15)" stroke-width="1" stroke-dasharray="3,3"/>`;
+        sectorLinesHtml += `<line x1="${cxSvg.toFixed(1)}" y1="${cySvg.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="rgba(212,133,14,0.12)" stroke-width="1" stroke-dasharray="3,3"/>`;
     }
-    // Labels des 8 secteurs
     let sectorLabelsHtml = "";
     for (const [name, deg] of Object.entries(sectorAngles)) {
         const rad = deg * Math.PI / 180;
         const lx = cxSvg + Math.cos(rad) * (sectorRadius - 8);
         const ly = cySvg + Math.sin(rad) * (sectorRadius - 8);
         const isCardinal = ["N","E","S","W"].includes(name);
-        const color = isCardinal ? "#D4850E" : "rgba(212,133,14,0.6)";
+        const color = isCardinal ? "#D4850E" : "rgba(212,133,14,0.55)";
         const fw = isCardinal ? "700" : "500";
-        sectorLabelsHtml += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="11" font-weight="${fw}" font-family="Inter">${name}</text>`;
+        sectorLabelsHtml += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="10" font-weight="${fw}" font-family="Inter">${name}</text>`;
     }
-    // v75.1.2 — Calcul du ratio px²/m² pour dimensionner les unités à leur vraie proportion
-    // Surface de la parcelle en pixels (formule shoelace sur svgPts)
+
+    // Ratio px²/m² pour dimensionner les unités à leur vraie proportion
     let parcelAreaPx = 0;
     for (let i = 0; i < svgPts.length; i++) {
         const j = (i + 1) % svgPts.length;
@@ -722,7 +860,7 @@ function renderParcelSvg(label) {
     const siteAreaM2 = Number(currentBody8D && currentBody8D.site_area) || 250;
     const pxPerM2 = parcelAreaPx > 0 && siteAreaM2 > 0 ? parcelAreaPx / siteAreaM2 : 1;
 
-    // Unités placées avec taille proportionnelle
+    // v75.3.1 — Unités placées avec clip dans polygone constructible
     const units = (cockpitState.scenarios[label].units || []).filter(u => u.placement_sector);
     let unitsHtml = "";
     const sectorCount = {};
@@ -731,86 +869,93 @@ function renderParcelSvg(label) {
         if (!sectorAngles[s]) return;
         sectorCount[s] = (sectorCount[s] || 0) + 1;
         const idxInSector = sectorCount[s] - 1;
-        const rad = sectorAngles[s] * Math.PI / 180;
-        // v75.1.2 — Taille proportionnelle : rectangle 1.5:1 avec surface = m² × ratio
         const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
         const areaPx = areaM2 * pxPerM2;
-        // ratio 2:1 pour COMMERCE (façade), 1.5:1 pour BUREAU, 1.2:1 pour logements (plus carré)
         const cat = categorizeUnitType(u.unit_type);
         const aspectRatio = cat === "COMMERCE" ? 2.0 : cat === "BUREAU" ? 1.5 : 1.2;
-        // W × H = area, W/H = aspectRatio → W = sqrt(area × ratio), H = W / ratio
         let uW = Math.sqrt(areaPx * aspectRatio);
         let uH = uW / aspectRatio;
-        // Cap à des tailles raisonnables SVG
-        uW = Math.max(18, Math.min(120, uW));
-        uH = Math.max(10, Math.min(80, uH));
-        // Position : ajustement selon la taille pour ne pas déborder
-        const distFromCenter = Math.max(30, sectorRadius * 0.55 - idxInSector * (uH + 6));
-        const ux = cxSvg + Math.cos(rad) * distFromCenter;
-        const uy = cySvg + Math.sin(rad) * distFromCenter;
-        const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
-        // Rotation optionnelle : le rectangle s'aligne perpendiculairement au rayon secteur (façade vers le vide)
+        uW = Math.max(16, Math.min(110, uW));
+        uH = Math.max(10, Math.min(75, uH));
         const rotDeg = ((sectorAngles[s] + 90) % 360);
+        // Distance max possible (avant clip)
+        const maxDist = sectorRadius * 0.7 - idxInSector * (uH + 5);
+        // Trouve la distance safe pour que les 4 coins restent dans le polygone constructible
+        const safeDist = findSafeUnitDistance(cxSvg, cySvg, sectorAngles[s], Math.max(15, maxDist), uW, uH, rotDeg, svgPtsBuildable);
+        const rad = sectorAngles[s] * Math.PI / 180;
+        const ux = cxSvg + Math.cos(rad) * safeDist;
+        const uy = cySvg + Math.sin(rad) * safeDist;
+        const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
         const label2 = (u.unit_name || u.unit_type || "?").substring(0, 10);
         unitsHtml += `<g transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg})">`;
-        unitsHtml += `<rect x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.85" stroke="#fff" stroke-width="1.2"/>`;
-        // Le texte reste horizontal — contre-rotation
-        unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(8, Math.min(11, uH * 0.35)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${esc(label2)}</text>`;
-        // Petit tag surface m² dans un coin
-        unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="8" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${areaM2}m²</text>`;
+        unitsHtml += `<rect x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="#fff" stroke-width="1.2"/>`;
+        unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(7, Math.min(10, uH * 0.32)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${esc(label2)}</text>`;
+        unitsHtml += `<text x="0" y="${(uH/2 + 7).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="7" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${areaM2}m²</text>`;
         unitsHtml += `</g>`;
     });
-    // Boussole en haut à droite
+
+    // Boussole en haut à droite (plus compact)
     const compass = `
-        <g transform="translate(360,45)">
-            <circle r="24" fill="rgba(11,17,32,0.9)" stroke="#c9a878" stroke-width="1.5"/>
-            <text x="0" y="-30" text-anchor="middle" fill="#c9a878" font-size="10" font-weight="700" font-family="Inter">N</text>
-            <polygon points="0,-16 -6,4 0,-4 6,4" fill="#C0392B" stroke="#8B0000" stroke-width="0.5"/>
-            <polygon points="0,16 -4,4 0,8 4,4" fill="#8899AA"/>
+        <g transform="translate(365,42)">
+            <circle r="20" fill="rgba(11,17,32,0.9)" stroke="#c9a878" stroke-width="1.3"/>
+            <text x="0" y="-26" text-anchor="middle" fill="#c9a878" font-size="9" font-weight="700" font-family="Inter">N</text>
+            <polygon points="0,-14 -5,3 0,-3 5,3" fill="#C0392B" stroke="#8B0000" stroke-width="0.5"/>
+            <polygon points="0,14 -4,3 0,7 4,3" fill="#8899AA"/>
         </g>
     `;
+    // Retraits label
+    const retraitsLabel = `<text x="8" y="392" fill="rgba(201,168,120,0.7)" font-size="8" font-family="Inter">Retraits : lat ${retraitLateralM}m · arr ${retraitArriereM}m</text>`;
+
     svg.innerHTML = `
         <rect x="0" y="0" width="400" height="400" fill="#0B1120"/>
         ${sectorLinesHtml}
-        <polygon points="${polyStr}" fill="rgba(212,133,14,0.15)" stroke="#c9a878" stroke-width="2"/>
-        <circle cx="${cxSvg.toFixed(1)}" cy="${cySvg.toFixed(1)}" r="3" fill="#c9a878"/>
+        <polygon points="${polyStr}" fill="rgba(212,133,14,0.13)" stroke="#c9a878" stroke-width="2"/>
+        <polygon points="${polyStrRetraitLat}" fill="none" stroke="rgba(201,168,120,0.55)" stroke-width="1" stroke-dasharray="4,3"/>
+        <polygon points="${polyStrBuildable}" fill="rgba(30,132,73,0.06)" stroke="rgba(30,132,73,0.6)" stroke-width="1" stroke-dasharray="2,3"/>
+        <circle cx="${cxSvg.toFixed(1)}" cy="${cySvg.toFixed(1)}" r="2.5" fill="#c9a878"/>
         ${sectorLabelsHtml}
         ${unitsHtml}
         ${compass}
+        ${retraitsLabel}
     `;
-    // Légende types d'unités
+    // Légende types d'unités + retraits
     if (legend) {
         const typesInUse = [...new Set(units.map(u => u.unit_type))];
+        const legendParts = [];
+        legendParts.push(`<span class="c-parcel-legend-item"><span class="c-parcel-legend-swatch" style="background:rgba(201,168,120,0.55);border:1px dashed #c9a878"></span>Ret. lat</span>`);
+        legendParts.push(`<span class="c-parcel-legend-item"><span class="c-parcel-legend-swatch" style="background:rgba(30,132,73,0.15);border:1px dashed rgba(30,132,73,0.7)"></span>Zone constr.</span>`);
+        typesInUse.forEach(t => {
+            legendParts.push(`<span class="c-parcel-legend-item"><span class="c-parcel-legend-swatch" style="background:${UNIT_COLORS[t]||UNIT_COLORS.AUTRE}"></span>${t}</span>`);
+        });
         if (typesInUse.length === 0) {
-            legend.innerHTML = `<div style="color:var(--text2);font-size:.68rem">Aucune unité placée — remplis les secteurs dans la table ci-dessus</div>`;
-        } else {
-            legend.innerHTML = typesInUse.map(t => `<span class="c-parcel-legend-item"><span class="c-parcel-legend-swatch" style="background:${UNIT_COLORS[t]||UNIT_COLORS.AUTRE}"></span>${t}</span>`).join("");
+            legendParts.push(`<span style="color:var(--text2)">— place des unités dans le tableau</span>`);
         }
+        legend.innerHTML = legendParts.join("");
     }
 }
 
+// v6.2.0 — 3 scénarios toujours visibles → switchScenarioTab devient no-op (compat)
 function switchScenarioTab(tab) {
     cockpitState.activeTab = tab;
-    document.querySelectorAll(".c-scn-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
-    document.querySelectorAll(".c-scn-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === tab));
 }
 
+// v6.2.0 — Template compact 6 colonnes (Notes supprimées de l'affichage pour la lisibilité colonne étroite ;
+// notes préservées côté state, ré-éditables via addUnit)
 function renderUnitsTable(label) {
     const tbody = $(`cUnitsBody${label}`);
     if (!tbody) return;
     const units = cockpitState.scenarios[label].units || [];
     if (units.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text2);font-size:.7rem;padding:.6rem">Aucune unité — clique « + Ajouter une unité »</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text2);font-size:.62rem;padding:.5rem">Aucune unité — clique « + Ajouter » ou « Splitter »</td></tr>`;
         return;
     }
     tbody.innerHTML = units.map((u, i) => `
         <tr>
           <td style="color:var(--amber);font-weight:700;font-family:'JetBrains Mono',monospace">${i+1}</td>
           <td><select onchange="updateUnit('${label}',${i},'unit_type',this.value)">${UNIT_TYPES.map(t=>`<option value="${t}"${u.unit_type===t?" selected":""}>${t}</option>`).join("")}</select></td>
-          <td><input type="text" value="${esc(u.unit_name||"")}" placeholder="Nom" oninput="updateUnit('${label}',${i},'unit_name',this.value)"></td>
+          <td><input type="text" value="${esc(u.unit_name||"")}" placeholder="Nom" oninput="updateUnit('${label}',${i},'unit_name',this.value)" title="${esc(u.notes||"")}"></td>
           <td><input type="text" value="${esc(u.unit_size_m2||"")}" placeholder="m²" oninput="updateUnit('${label}',${i},'unit_size_m2',this.value)"></td>
           <td><select onchange="updateUnit('${label}',${i},'placement_sector',this.value)">${PLACEMENT_SECTORS.map(s=>`<option value="${s}"${u.placement_sector===s?" selected":""}>${s||"—"}</option>`).join("")}</select></td>
-          <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
           <td><button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button></td>
         </tr>
     `).join("");
@@ -981,6 +1126,12 @@ function populateCockpitFromLead(L, units) {
     setCheckbox("cIgnoreCos", String(L.override_ignore_cos||"").toUpperCase() === "Y");
     setCheckbox("cIgnoreSetbacks", String(L.override_ignore_setbacks||"").toUpperCase() === "Y");
     setInput("cRationale", L.constraints_rationale);
+
+    // v6.2.0 — Retraits du moteur affichés dans la colonne inputs (utilisés pour tracer les limites sur previews)
+    const _fmt = (v) => (v === undefined || v === null || v === "") ? "—" : `${v} m`;
+    if ($("cRetraitLateral")) $("cRetraitLateral").textContent = _fmt(L.setback_side);
+    if ($("cRetraitArriere")) $("cRetraitArriere").textContent = _fmt(L.setback_back);
+    if ($("cRetraitAvant"))   $("cRetraitAvant").textContent   = _fmt(L.setback_front);
 
     // 3) Par scénario
     ["A","B","C"].forEach(label => {
@@ -1186,23 +1337,42 @@ function resetCockpit() {
     ["cTargetProgram","cTargetUnits","cTargetSurface","cTargetStanding","cTargetBudget"].forEach(id => { const el = $(id); if (el) el.textContent = "—"; });
 }
 
+// v6.2.0 — Auto-rerender de la preview d'un scénario dès qu'un input le concernant change (debounce 200ms)
+let _cRerenderTimer = null;
+function scheduleScenarioRerender(label) {
+    if (!label) return;
+    clearTimeout(_cRerenderTimer);
+    _cRerenderTimer = setTimeout(() => {
+        // Sync form → state pour ce scénario spécifiquement
+        syncCockpitStateFromForm();
+        renderParcelSvg(label);
+        updateCoherenceBadges();
+    }, 200);
+}
+
 function attachCockpitListeners() {
-    // Live update sur inputs globaux
+    // Live update sur inputs globaux (avec re-render des 3 previews car les retraits changent)
     const ids = ["cInputTypologies","cLateralHug","cLateralGap","cMaxFp","cRationale","cIgnoreCos","cIgnoreSetbacks"];
     ids.forEach(id => {
         const el = $(id);
         if (!el) return;
-        el.addEventListener("input", updateConstraintsCount);
-        el.addEventListener("change", updateConstraintsCount);
+        el.addEventListener("input", () => { updateConstraintsCount(); scheduleScenarioRerender("A"); ["B","C"].forEach(l => setTimeout(() => renderParcelSvg(l), 250)); });
+        el.addEventListener("change", () => { updateConstraintsCount(); scheduleScenarioRerender("A"); ["B","C"].forEach(l => setTimeout(() => renderParcelSvg(l), 250)); });
     });
     // Live update sur inputs par scénario (délégation)
     document.addEventListener("input", (e) => {
         const t = e.target;
-        if (t && t.dataset && t.dataset.scn && t.dataset.field) updateConstraintsCount();
+        if (t && t.dataset && t.dataset.scn && t.dataset.field) {
+            updateConstraintsCount();
+            scheduleScenarioRerender(t.dataset.scn);
+        }
     });
     document.addEventListener("change", (e) => {
         const t = e.target;
-        if (t && t.dataset && t.dataset.scn && t.dataset.field) updateConstraintsCount();
+        if (t && t.dataset && t.dataset.scn && t.dataset.field) {
+            updateConstraintsCount();
+            scheduleScenarioRerender(t.dataset.scn);
+        }
     });
 }
 
