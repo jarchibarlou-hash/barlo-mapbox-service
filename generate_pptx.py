@@ -2,13 +2,23 @@
 """
 BARLO -- Server-side PPTX generation from diagnostic data.
 v4.0 -- Premium density: font sizes calibrated, structural text templates.
+v75.2 -- ADD "Plan d'implantation" slide after each massing slide (A/B/C).
+         Reads data['units_by_scenario'] and data['parcel_polygon'] injected by server.js.
+         The plan slide is ADDITIONAL, does NOT replace the existing 3D massing slide.
 """
-import json, sys, os, re, copy, tempfile, urllib.request, shutil
+import json, sys, os, re, copy, math, tempfile, urllib.request, shutil
 from pptx import Presentation
 from pptx.util import Inches, Emu, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
 from generate_charts import generate_all_charts
+
+# v75.2 — matplotlib (deja utilise par generate_charts) pour dessiner le plan d'implantation
+import matplotlib
+matplotlib.use('Agg')  # backend non-interactif
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon as MplPolygon, Rectangle as MplRectangle, FancyArrowPatch
+from matplotlib.transforms import Affine2D
 
 # -------------------------------------------------------------
 # PLACEHOLDER MAPPINGS
@@ -439,6 +449,449 @@ def _apply_text_to_shape(shape, placeholder, text, slide_num):
 # -------------------------------------------------------------
 # MAIN ASSEMBLY
 # -------------------------------------------------------------
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v75.2 — PLAN D'IMPLANTATION (nouvelle slide par scénario, s'AJOUTE à la vue axo)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Rayon Terre pour projection GPS -> mètres locaux (identique au frontend cockpit)
+_R_EARTH = 6378137.0
+
+# Miroir des heuristiques du cockpit (studio.html PLACEMENT_HEURISTICS)
+_PLACEMENT_HEURISTICS = {
+    'A': {'COMMERCE': ['N', 'NE', 'NW'], 'BUREAU': ['E', 'W', 'NE', 'NW'], 'ATELIER': ['E', 'W'], 'RESI': ['S', 'SE', 'SW', 'E', 'W']},
+    'B': {'COMMERCE': ['N', 'NE'],       'BUREAU': ['NE', 'NW'],           'ATELIER': ['E', 'W'], 'RESI': ['S', 'SE', 'SW', 'E', 'W', 'NW']},
+    'C': {'COMMERCE': ['N'],             'BUREAU': ['NE'],                 'ATELIER': ['E'],     'RESI': ['S', 'SW']},
+}
+
+# Aspect ratio (largeur/hauteur) par catégorie — identique au SVG cockpit
+_UNIT_ASPECT = {'COMMERCE': 2.0, 'BUREAU': 1.5, 'ATELIER': 1.5, 'RESI': 1.2}
+
+# Couleurs par catégorie (cohérence visuelle avec studio)
+_UNIT_COLOR = {
+    'COMMERCE': '#F59E0B',
+    'BUREAU':   '#0EA5E9',
+    'ATELIER':  '#8B5CF6',
+    'RESI':     '#22C55E',
+}
+
+# 8 secteurs cardinaux : (angle_from_north_deg, sens horaire) au centre du secteur
+_SECTOR_CENTER_DEG = {
+    'N':  0.0,   'NE': 45.0,  'E':  90.0, 'SE': 135.0,
+    'S':  180.0, 'SW': 225.0, 'W':  270.0, 'NW': 315.0,
+}
+
+# Titres de scénarios pour la slide plan
+_SCENARIO_TITLES = {
+    'A': "Scénario A — Plan d'implantation vu du ciel",
+    'B': "Scénario B — Plan d'implantation vu du ciel",
+    'C': "Scénario C — Plan d'implantation vu du ciel",
+}
+
+
+def _plan_categorize_unit_type(t):
+    """Miroir de categorizeUnitType() du studio."""
+    t = str(t or '').upper().strip()
+    if t == 'COMMERCE': return 'COMMERCE'
+    if t == 'BUREAU':   return 'BUREAU'
+    if t == 'ATELIER':  return 'ATELIER'
+    return 'RESI'  # T1..T5, AUTRE → logement
+
+
+def _plan_project_polygon_to_xy(polygon_latlon):
+    """
+    Projette une liste de [lat, lon] en (x, y) mètres locaux (centré sur centroïde du polygone).
+    Le Nord géographique correspond à y croissant. Utilisé pour dessiner le plan orienté Nord.
+    """
+    if not polygon_latlon:
+        return []
+    # centroïde grossier (moyenne des sommets)
+    lat0 = sum(p[0] for p in polygon_latlon) / len(polygon_latlon)
+    lon0 = sum(p[1] for p in polygon_latlon) / len(polygon_latlon)
+    lat0_rad = math.radians(lat0)
+    xy = []
+    for lat, lon in polygon_latlon:
+        x = math.radians(lon - lon0) * _R_EARTH * math.cos(lat0_rad)
+        y = math.radians(lat - lat0) * _R_EARTH
+        xy.append((x, y))
+    return xy
+
+
+def _plan_polygon_area_m2(xy):
+    """Shoelace pour l'aire du polygone en mètres carrés."""
+    if len(xy) < 3:
+        return 0.0
+    a = 0.0
+    n = len(xy)
+    for i in range(n):
+        x1, y1 = xy[i]
+        x2, y2 = xy[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return abs(a) / 2.0
+
+
+def _plan_polygon_centroid(xy):
+    """Centroïde géométrique (barycentre) du polygone."""
+    if not xy:
+        return (0.0, 0.0)
+    cx = sum(p[0] for p in xy) / len(xy)
+    cy = sum(p[1] for p in xy) / len(xy)
+    return (cx, cy)
+
+
+def _plan_sector_direction_vector(sector):
+    """
+    Retourne (dx, dy) unitaire depuis le centroïde vers le secteur donné.
+    Nord = (0, 1). Sens horaire pour NE, E, SE, S, SW, W, NW.
+    """
+    ang_deg = _SECTOR_CENTER_DEG.get(sector, 0.0)
+    ang_rad = math.radians(ang_deg)
+    # 0° = Nord (y+), sens horaire = x augmente vers l'Est
+    dx = math.sin(ang_rad)
+    dy = math.cos(ang_rad)
+    return (dx, dy)
+
+
+def _plan_assign_preplacement(scenario_label, units):
+    """
+    Attribue un placement_sector aux unités qui n'en ont pas encore.
+    Miroir de assignPreplacementForScenario() du studio.
+    """
+    rules = _PLACEMENT_HEURISTICS.get(scenario_label, _PLACEMENT_HEURISTICS['B'])
+    counters = {'COMMERCE': 0, 'BUREAU': 0, 'ATELIER': 0, 'RESI': 0}
+    out = []
+    for u in units:
+        u2 = dict(u)
+        cat = _plan_categorize_unit_type(u2.get('type', ''))
+        if not u2.get('sector'):
+            sectors = rules.get(cat) or rules.get('RESI') or ['S']
+            u2['sector'] = sectors[counters[cat] % len(sectors)]
+        counters[cat] += 1
+        out.append(u2)
+    return out
+
+
+def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, output_path):
+    """
+    Génère une image PNG du plan d'implantation vue du ciel.
+    - polygon_latlon : [[lat, lon], ...] du polygone parcelle
+    - units : liste de {type, name, size_m2, sector, notes}
+    - site_area_m2 : superficie site (m²) pour l'échelle (fallback si polygone absent)
+    - output_path : chemin fichier PNG à écrire
+    Retourne output_path si succès, None sinon.
+    """
+    xy = _plan_project_polygon_to_xy(polygon_latlon)
+    if len(xy) < 3:
+        print(f"[PLAN {scenario_label}] Polygone parcelle absent ou insuffisant ({len(xy)} pts) — slide plan skipped", file=sys.stderr)
+        return None
+
+    poly_area = _plan_polygon_area_m2(xy)
+    if poly_area <= 0:
+        print(f"[PLAN {scenario_label}] Aire polygone nulle — slide plan skipped", file=sys.stderr)
+        return None
+
+    # Attribue placement par défaut aux unités sans sector
+    units = _plan_assign_preplacement(scenario_label, units or [])
+
+    cx, cy = _plan_polygon_centroid(xy)
+
+    # Bounding box du polygone pour cadrer la figure
+    xs = [p[0] for p in xy]
+    ys = [p[1] for p in xy]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    dx_span = max(xmax - xmin, 1.0)
+    dy_span = max(ymax - ymin, 1.0)
+    max_span = max(dx_span, dy_span)
+    # Marge 25% autour pour légende, compass, secteurs
+    margin = max_span * 0.35
+    xlim = (xmin - margin, xmax + margin)
+    ylim = (ymin - margin * 0.6, ymax + margin * 0.6)
+
+    # Rayon effectif du polygone pour placer les rectangles (distance moyenne centroïde -> sommets)
+    r_poly = sum(math.hypot(p[0] - cx, p[1] - cy) for p in xy) / len(xy)
+
+    fig, ax = plt.subplots(figsize=(10, 6.2), dpi=140)
+    fig.patch.set_facecolor('#0B0F19')  # fond dark cohérent avec studio
+    ax.set_facecolor('#0B0F19')
+
+    # --- Secteurs cardinaux en fond léger (8 triangles depuis le centroïde) ---
+    sector_r = max_span * 0.75
+    for sec, ang_center in _SECTOR_CENTER_DEG.items():
+        a_start = math.radians(ang_center - 22.5)
+        a_end = math.radians(ang_center + 22.5)
+        n_arc = 12
+        arc_x = [cx]
+        arc_y = [cy]
+        for i in range(n_arc + 1):
+            a = a_start + (a_end - a_start) * i / n_arc
+            arc_x.append(cx + math.sin(a) * sector_r)
+            arc_y.append(cy + math.cos(a) * sector_r)
+        ax.fill(arc_x, arc_y, color='#1E293B', alpha=0.35, edgecolor='#334155', linewidth=0.5, linestyle=':')
+        # Label du secteur (à 90% du rayon secteur)
+        lx = cx + math.sin(math.radians(ang_center)) * sector_r * 0.92
+        ly = cy + math.cos(math.radians(ang_center)) * sector_r * 0.92
+        ax.text(lx, ly, sec, color='#F59E0B', fontsize=11, fontweight='bold',
+                ha='center', va='center', alpha=0.85)
+
+    # --- Polygone parcelle ---
+    poly_patch = MplPolygon(xy, closed=True, facecolor='#78350F', edgecolor='#FBBF24',
+                            linewidth=2.2, alpha=0.55, zorder=3)
+    ax.add_patch(poly_patch)
+
+    # Centroïde
+    ax.plot([cx], [cy], marker='o', color='#FBBF24', markersize=5, zorder=6)
+
+    # --- Unités : rectangles proportionnels m² avec aspect ratio par catégorie ---
+    # Ratio de conversion m² -> unités matplotlib (déjà en mètres) → 1:1
+    counters_by_sector = {}  # pour espacer si plusieurs unités dans le même secteur
+    for u in units:
+        area_m2 = max(4.0, float(u.get('size_m2') or 20.0))
+        cat = _plan_categorize_unit_type(u.get('type', ''))
+        aspect = _UNIT_ASPECT.get(cat, 1.2)
+        color = _UNIT_COLOR.get(cat, '#22C55E')
+        w = math.sqrt(area_m2 * aspect)
+        h = w / aspect
+        sector = u.get('sector') or 'S'
+        counters_by_sector[sector] = counters_by_sector.get(sector, 0) + 1
+        n_in_sector = counters_by_sector[sector]
+
+        # Direction depuis centroïde vers secteur
+        dx, dy = _plan_sector_direction_vector(sector)
+        # Distance : à mi-chemin entre centroïde et rayon polygone, en s'éloignant pour chaque unité successive
+        dist = r_poly * (0.45 + 0.12 * (n_in_sector - 1))
+        # Clip : ne pas dépasser 90% du rayon polygone (évite débordement — même logique que le fix studio)
+        dist = min(dist, r_poly * 0.90 - max(w, h) * 0.5)
+        dist = max(dist, r_poly * 0.15)
+
+        rx = cx + dx * dist
+        ry = cy + dy * dist
+
+        # Rotation : la façade (côté long) regarde vers l'extérieur du secteur
+        # Angle du rayon centroïde→unité en degrés (depuis +x, sens antihoraire)
+        angle_rad = math.atan2(dy, dx)
+        # La face longue perpendiculaire au rayon → rotation matplotlib = angle rayon - 90°
+        rot_deg = math.degrees(angle_rad) - 90.0
+
+        # Rectangle centré sur (rx, ry) avec rotation autour de son centre
+        transform = Affine2D().rotate_deg_around(rx, ry, rot_deg) + ax.transData
+        rect = MplRectangle((rx - w/2, ry - h/2), w, h, facecolor=color, edgecolor='#F8FAFC',
+                            linewidth=1.4, alpha=0.85, zorder=5)
+        rect.set_transform(transform)
+        ax.add_patch(rect)
+
+        # Label unité (nom + m²)
+        label = str(u.get('name') or u.get('type') or '').strip() or cat.title()
+        ax.text(rx, ry, label, color='#F8FAFC', fontsize=8, fontweight='bold',
+                ha='center', va='center', zorder=7)
+        # Petit label m² sous le rectangle
+        ax.text(rx + dx * (h/2 + 1.5), ry + dy * (h/2 + 1.5),
+                f"{int(round(area_m2))} m²", color='#FBBF24', fontsize=7,
+                ha='center', va='center', zorder=7)
+
+    # --- Compass Nord en haut à droite ---
+    cnx = xlim[1] - max_span * 0.10
+    cny = ylim[1] - max_span * 0.12
+    cnr = max_span * 0.07
+    ax.add_patch(plt.Circle((cnx, cny), cnr, facecolor='#111827', edgecolor='#FBBF24', linewidth=1.2, zorder=8))
+    arrow = FancyArrowPatch((cnx, cny - cnr * 0.5), (cnx, cny + cnr * 0.7),
+                            arrowstyle='->', color='#EF4444', mutation_scale=14, linewidth=2, zorder=9)
+    ax.add_patch(arrow)
+    ax.text(cnx, cny + cnr * 0.95, 'N', color='#FBBF24', fontsize=11, fontweight='bold',
+            ha='center', va='bottom', zorder=9)
+
+    # --- Titre + légende types ---
+    ax.set_title(_SCENARIO_TITLES.get(scenario_label, f"Scénario {scenario_label}"),
+                 color='#FBBF24', fontsize=14, fontweight='bold', pad=12)
+
+    # Légende types présents
+    present_cats = []
+    for u in units:
+        c = _plan_categorize_unit_type(u.get('type', ''))
+        if c not in present_cats:
+            present_cats.append(c)
+    if present_cats:
+        legend_x = xlim[0] + max_span * 0.05
+        legend_y = ylim[0] + max_span * 0.10
+        for i, c in enumerate(present_cats):
+            yy = legend_y + i * max_span * 0.045
+            ax.add_patch(MplRectangle((legend_x, yy), max_span * 0.03, max_span * 0.02,
+                                       facecolor=_UNIT_COLOR[c], edgecolor='#F8FAFC', linewidth=0.8, zorder=8))
+            ax.text(legend_x + max_span * 0.04, yy + max_span * 0.01, c.title(),
+                    color='#F8FAFC', fontsize=8, ha='left', va='center', zorder=8)
+
+    # Info parcelle (superficie affichée en bas)
+    ax.text(xlim[0] + max_span * 0.05, ylim[0] + max_span * 0.02,
+            f"Superficie parcelle : {int(round(poly_area))} m²", color='#94A3B8',
+            fontsize=8, ha='left', va='bottom', zorder=8)
+
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.set_aspect('equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.tight_layout()
+    fig.savefig(output_path, facecolor=fig.get_facecolor(), bbox_inches='tight', dpi=140)
+    plt.close(fig)
+    return output_path
+
+
+def _plan_find_scenario_slide_indices(prs):
+    """
+    Parcourt les slides ET repère celles contenant un placeholder scenario_X_massing
+    OU (si placeholders déjà remplacés) qui portent un texte titre "Scénario X".
+    Retourne {'A': idx or None, 'B': idx or None, 'C': idx or None} (0-based).
+    """
+    found = {'A': None, 'B': None, 'C': None}
+    # Passe 1 — recherche placeholder brut (si assemble_pptx n'a pas encore tourné, non applicable ici)
+    for idx, slide in enumerate(prs.slides):
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            txt = shape.text_frame.text or ''
+            if '{{scenario_A_massing}}' in txt and found['A'] is None: found['A'] = idx
+            if '{{scenario_B_massing}}' in txt and found['B'] is None: found['B'] = idx
+            if '{{scenario_C_massing}}' in txt and found['C'] is None: found['C'] = idx
+    # Passe 2 — fallback : titre "Scénario X" dans le texte
+    if any(v is None for v in found.values()):
+        for idx, slide in enumerate(prs.slides):
+            full = ''
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    full += ' ' + (shape.text_frame.text or '')
+            up = full.upper()
+            if found['A'] is None and ('SCÉNARIO A' in up or 'SCENARIO A' in up): found['A'] = idx
+            if found['B'] is None and ('SCÉNARIO B' in up or 'SCENARIO B' in up): found['B'] = idx
+            if found['C'] is None and ('SCÉNARIO C' in up or 'SCENARIO C' in up): found['C'] = idx
+    return found
+
+
+def _plan_insert_slide_after(prs, target_slide_idx, image_path, title_text):
+    """
+    Ajoute une nouvelle slide (layout blank) contenant :
+    - titre "Scénario X — Plan d'implantation vu du ciel"
+    - image PNG plan (généré par _plan_generate_image) sur toute la surface utile
+    Puis déplace cette slide en position (target_slide_idx + 1) via manipulation XML _sldIdLst.
+    Retourne l'index final de la slide insérée.
+    """
+    # Slide layout "blank" — dernier layout du template en général, ou premier si non trouvé
+    blank_layout = None
+    for lay in prs.slide_layouts:
+        # heuristique : layout dont le nom contient "blank" ou "blanc"
+        name = (getattr(lay, 'name', '') or '').lower()
+        if 'blank' in name or 'blanc' in name or 'vide' in name:
+            blank_layout = lay
+            break
+    if blank_layout is None:
+        # Fallback : dernier layout dispo (souvent = blank)
+        try:
+            blank_layout = prs.slide_layouts[-1]
+        except Exception:
+            blank_layout = prs.slide_layouts[0]
+
+    slide = prs.slides.add_slide(blank_layout)
+
+    # Nettoyer les placeholders du layout si présents (on veut une slide propre)
+    for shape in list(slide.shapes):
+        try:
+            if shape.is_placeholder:
+                sp = shape._element
+                sp.getparent().remove(sp)
+        except Exception:
+            pass
+
+    # Fond dark plein slide (rectangle)
+    slide_w = prs.slide_width
+    slide_h = prs.slide_height
+    bg = slide.shapes.add_shape(1, 0, 0, slide_w, slide_h)  # 1 = MSO_SHAPE.RECTANGLE
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = RGBColor(0x0B, 0x0F, 0x19)
+    bg.line.fill.background()
+
+    # Titre (bandeau haut)
+    title_h = Emu(457200)  # 0.5"
+    title_box = slide.shapes.add_textbox(Emu(228600), Emu(228600), slide_w - Emu(457200), title_h)
+    tf = title_box.text_frame
+    tf.word_wrap = True
+    tf.text = title_text
+    for para in tf.paragraphs:
+        para.alignment = PP_ALIGN.LEFT
+        for run in para.runs:
+            run.font.size = Pt(20)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(0xFB, 0xBF, 0x24)
+
+    # Image plan (occupe la surface principale, sous le titre, avec marge)
+    img_left = Emu(228600)
+    img_top = Emu(228600) + title_h + Emu(114300)
+    img_width = slide_w - Emu(457200)
+    img_height = slide_h - img_top - Emu(228600)
+    slide.shapes.add_picture(image_path, img_left, img_top, img_width, img_height)
+
+    # Réordonner via XML : la slide ajoutée est en dernier, on la déplace après target_slide_idx
+    xml_slides = prs.slides._sldIdLst
+    slide_ids = list(xml_slides)
+    last = slide_ids[-1]
+    xml_slides.remove(last)
+    xml_slides.insert(target_slide_idx + 1, last)
+    return target_slide_idx + 1
+
+
+def _plan_maybe_insert_all(prs, data, chart_dir):
+    """
+    Point d'entrée v75.2 : lit data['units_by_scenario'] et data['parcel_polygon'],
+    génère 3 images PNG et insère 3 slides plan APRÈS chaque slide massing existante.
+    Best-effort : toute erreur est logguée mais ne casse pas le PPTX principal.
+    """
+    units_by_scenario = data.get('units_by_scenario') or {}
+    polygon = data.get('parcel_polygon') or []
+    site_area = float(data.get('site_area') or 0)
+
+    total_units = sum(len(units_by_scenario.get(k) or []) for k in ('A', 'B', 'C'))
+    if total_units == 0:
+        print("[PLAN v75.2] Aucune unité en base sb_lead_units — slides plan non insérées.", file=sys.stderr)
+        return
+    if len(polygon) < 3:
+        print(f"[PLAN v75.2] Polygone parcelle absent ou insuffisant ({len(polygon)} pts) — slides plan non insérées.", file=sys.stderr)
+        return
+
+    # Repérer les indices des slides massing existantes AVANT insertion
+    indices = _plan_find_scenario_slide_indices(prs)
+    print(f"[PLAN v75.2] Indices slides massing détectés : {indices}", file=sys.stderr)
+
+    # Générer les 3 images d'abord (dans chart_dir pour partager le cleanup)
+    plan_images = {}
+    for label in ('A', 'B', 'C'):
+        units = units_by_scenario.get(label) or []
+        if not units:
+            continue
+        out_png = os.path.join(chart_dir, f'plan_scenario_{label}.png')
+        try:
+            path = _plan_generate_image(label, polygon, units, site_area, out_png)
+            if path:
+                plan_images[label] = path
+        except Exception as e:
+            print(f"[PLAN v75.2] Erreur génération image scénario {label} : {e}", file=sys.stderr)
+
+    # Insérer en ordre INVERSE (C, B, A) pour ne pas décaler les indices amont
+    inserted = 0
+    for label in ('C', 'B', 'A'):
+        target_idx = indices.get(label)
+        img = plan_images.get(label)
+        if target_idx is None or not img:
+            continue
+        try:
+            new_idx = _plan_insert_slide_after(prs, target_idx, img, _SCENARIO_TITLES[label])
+            print(f"[PLAN v75.2] Slide plan {label} insérée à index {new_idx} (après massing index {target_idx})", file=sys.stderr)
+            inserted += 1
+        except Exception as e:
+            print(f"[PLAN v75.2] Erreur insertion slide plan {label} : {e}", file=sys.stderr)
+
+    print(f"[PLAN v75.2] {inserted}/3 slides plan insérées.", file=sys.stderr)
+
 
 def assemble_pptx(data, template_path, output_path):
     chart_dir = tempfile.mkdtemp(prefix='barlo_charts_')
@@ -913,6 +1366,13 @@ def assemble_pptx(data, template_path, output_path):
                     enable_auto_shrink(shape, fontScale=80000)
                     shrink_count += 1
     print(f"Auto-shrink applied to {shrink_count} text shapes (fontScale=80000)", file=sys.stderr)
+
+    # v75.2 — Insertion des slides "Plan d'implantation" APRÈS chaque slide massing
+    # Best-effort : n'échoue jamais le PPTX principal, log-only en cas d'erreur.
+    try:
+        _plan_maybe_insert_all(prs, data, chart_dir)
+    except Exception as e:
+        print(f"[PLAN v75.2] Insertion globale échouée : {e}", file=sys.stderr)
 
     prs.save(output_path)
     print(f"PPTX saved to {output_path}", file=sys.stderr)
