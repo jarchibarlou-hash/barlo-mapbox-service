@@ -191,7 +191,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.1.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.1.2</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -711,7 +711,18 @@ function renderParcelSvg(label) {
         const fw = isCardinal ? "700" : "500";
         sectorLabelsHtml += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="11" font-weight="${fw}" font-family="Inter">${name}</text>`;
     }
-    // Unités placées
+    // v75.1.2 — Calcul du ratio px²/m² pour dimensionner les unités à leur vraie proportion
+    // Surface de la parcelle en pixels (formule shoelace sur svgPts)
+    let parcelAreaPx = 0;
+    for (let i = 0; i < svgPts.length; i++) {
+        const j = (i + 1) % svgPts.length;
+        parcelAreaPx += svgPts[i].x * svgPts[j].y - svgPts[j].x * svgPts[i].y;
+    }
+    parcelAreaPx = Math.abs(parcelAreaPx) / 2;
+    const siteAreaM2 = Number(currentBody8D && currentBody8D.site_area) || 250;
+    const pxPerM2 = parcelAreaPx > 0 && siteAreaM2 > 0 ? parcelAreaPx / siteAreaM2 : 1;
+
+    // Unités placées avec taille proportionnelle
     const units = (cockpitState.scenarios[label].units || []).filter(u => u.placement_sector);
     let unitsHtml = "";
     const sectorCount = {};
@@ -721,15 +732,33 @@ function renderParcelSvg(label) {
         sectorCount[s] = (sectorCount[s] || 0) + 1;
         const idxInSector = sectorCount[s] - 1;
         const rad = sectorAngles[s] * Math.PI / 180;
-        // Rayon variable selon l'index dans le secteur pour éviter chevauchement
-        const distFromCenter = sectorRadius * 0.55 - idxInSector * 22;
+        // v75.1.2 — Taille proportionnelle : rectangle 1.5:1 avec surface = m² × ratio
+        const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
+        const areaPx = areaM2 * pxPerM2;
+        // ratio 2:1 pour COMMERCE (façade), 1.5:1 pour BUREAU, 1.2:1 pour logements (plus carré)
+        const cat = categorizeUnitType(u.unit_type);
+        const aspectRatio = cat === "COMMERCE" ? 2.0 : cat === "BUREAU" ? 1.5 : 1.2;
+        // W × H = area, W/H = aspectRatio → W = sqrt(area × ratio), H = W / ratio
+        let uW = Math.sqrt(areaPx * aspectRatio);
+        let uH = uW / aspectRatio;
+        // Cap à des tailles raisonnables SVG
+        uW = Math.max(18, Math.min(120, uW));
+        uH = Math.max(10, Math.min(80, uH));
+        // Position : ajustement selon la taille pour ne pas déborder
+        const distFromCenter = Math.max(30, sectorRadius * 0.55 - idxInSector * (uH + 6));
         const ux = cxSvg + Math.cos(rad) * distFromCenter;
         const uy = cySvg + Math.sin(rad) * distFromCenter;
         const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
-        const size = 16 + Math.min(10, Math.sqrt(Number(u.unit_size_m2) || 40) - 4);
-        const label2 = (u.unit_name || u.unit_type || "?").substring(0, 8);
-        unitsHtml += `<g><rect x="${(ux-size).toFixed(1)}" y="${(uy-size/2).toFixed(1)}" width="${(size*2).toFixed(1)}" height="${size.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.85" stroke="#fff" stroke-width="1"/>`;
-        unitsHtml += `<text x="${ux.toFixed(1)}" y="${uy.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="9" font-weight="700" font-family="Inter">${esc(label2)}</text></g>`;
+        // Rotation optionnelle : le rectangle s'aligne perpendiculairement au rayon secteur (façade vers le vide)
+        const rotDeg = ((sectorAngles[s] + 90) % 360);
+        const label2 = (u.unit_name || u.unit_type || "?").substring(0, 10);
+        unitsHtml += `<g transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg})">`;
+        unitsHtml += `<rect x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.85" stroke="#fff" stroke-width="1.2"/>`;
+        // Le texte reste horizontal — contre-rotation
+        unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(8, Math.min(11, uH * 0.35)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${esc(label2)}</text>`;
+        // Petit tag surface m² dans un coin
+        unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="8" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${areaM2}m²</text>`;
+        unitsHtml += `</g>`;
     });
     // Boussole en haut à droite
     const compass = `
@@ -855,6 +884,52 @@ async function resetScenarioToMoteur(label) {
     showToast(`Scénario ${label} réinitialisé aux suggestions moteur`);
 }
 
+// v75.1.2 — Pré-placage automatique selon le rôle du scénario
+// A (Intensification) : dense, commerce front, logements back, tout collé mitoyennetés
+// B (Équilibre)       : mieux réparti, plus d'espaces verts
+// C (Prudent)         : concentré sur peu de secteurs, phasable
+const PLACEMENT_HEURISTICS = {
+    A: {
+        COMMERCE: ["N", "NE", "NW"],
+        BUREAU:   ["E", "W", "NE", "NW"],
+        ATELIER:  ["E", "W"],
+        RESI:     ["S", "SE", "SW", "E", "W"]
+    },
+    B: {
+        COMMERCE: ["N", "NE"],
+        BUREAU:   ["NE", "NW"],
+        ATELIER:  ["E", "W"],
+        RESI:     ["S", "SE", "SW", "E", "W", "NW"]
+    },
+    C: {
+        COMMERCE: ["N"],
+        BUREAU:   ["NE"],
+        ATELIER:  ["E"],
+        RESI:     ["S", "SW"]
+    }
+};
+
+function categorizeUnitType(type) {
+    const t = String(type||"").toUpperCase();
+    if (t === "COMMERCE") return "COMMERCE";
+    if (t === "BUREAU") return "BUREAU";
+    if (t === "ATELIER") return "ATELIER";
+    return "RESI";  // T1/T2/T3/T4/T5/AUTRE
+}
+
+function assignPreplacementForScenario(label, units) {
+    const rules = PLACEMENT_HEURISTICS[label] || PLACEMENT_HEURISTICS.B;
+    const counters = { COMMERCE: 0, BUREAU: 0, ATELIER: 0, RESI: 0 };
+    return units.map(u => {
+        if (u.placement_sector) return u; // respecte déjà un placement forcé
+        const cat = categorizeUnitType(u.unit_type);
+        const sectors = rules[cat] || rules.RESI;
+        const sector = sectors[counters[cat] % sectors.length];
+        counters[cat]++;
+        return { ...u, placement_sector: sector };
+    });
+}
+
 function defaultUnitsFromMoteur(label) {
     if (!currentDisplay) return [];
     const mixDetail = currentDisplay[`unit_mix_${label}`] || "";
@@ -879,7 +954,8 @@ function defaultUnitsFromMoteur(label) {
             });
         }
     }
-    return units;
+    // v75.1.2 — Applique le pré-placage automatique selon le rôle du scénario
+    return assignPreplacementForScenario(label, units);
 }
 
 function populateCockpitFromLead(L, units) {
