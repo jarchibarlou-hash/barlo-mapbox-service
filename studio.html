@@ -182,7 +182,11 @@
 
         /* v75.1.1 — Preview parcelle SVG */
         .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.6rem;margin-top:.4rem;position:relative}
-        .c-parcel-preview svg{width:100%;height:auto;max-height:280px;display:block}
+        .c-parcel-preview svg{width:100%;height:auto;max-height:340px;display:block;touch-action:none;user-select:none}
+        /* v75.4.0 — Rectangles unités draggables */
+        .draggable-unit{cursor:grab}
+        .draggable-unit.dragging{cursor:grabbing;opacity:.9}
+        .draggable-unit:hover rect{stroke-width:2px}
         .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem;font-size:.58rem;color:var(--text2)}
         .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.25rem}
         .c-parcel-legend-swatch{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -262,7 +266,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.2.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.3.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -461,6 +465,7 @@ document.addEventListener("DOMContentLoaded", () => {
     checkHealth(); fetchAll(); setInterval(fetchAll, 15000);
     renderScenarioPanels();
     attachCockpitListeners();
+    attachDragListeners();   // v75.4.0
 });
 
 async function checkHealth() {
@@ -771,6 +776,11 @@ const UNIT_COLORS = {
 };
 const SECTOR_LIST = ["N","NE","E","SE","S","SW","W","NW"];
 
+// v75.4.0 — Références SVG par scénario, mises à jour dans renderParcelSvg (utilisées par drag handlers)
+let _svgRefs = { A: null, B: null, C: null };
+// v75.4.0 — État du drag en cours (unit index, scenario label, deltas)
+let _dragState = null;
+
 // ═══ v75.3.1 — Segments de parcelle (retraits par arête) ═══
 
 // Initialise ou resynchronise cockpitState.segments à partir du polygone parcelle
@@ -1064,8 +1074,16 @@ function renderParcelSvg(label) {
     const siteAreaM2 = Number(currentBody8D && currentBody8D.site_area) || 250;
     const pxPerM2 = parcelAreaPx > 0 && siteAreaM2 > 0 ? parcelAreaPx / siteAreaM2 : 1;
 
-    // v75.3.1 — Unités placées avec clip dans polygone constructible
-    const units = (cockpitState.scenarios[label].units || []).filter(u => u.placement_sector);
+    // v75.4.0 — Placement unités : fix superposition (fan angulaire dans secteur) + support offset drag explicite
+    const allUnits = cockpitState.scenarios[label].units || [];
+    // Passe pré-comptage : combien d'unités dans chaque secteur (pour fan angulaire)
+    const sectorTotal = {};
+    allUnits.forEach(u => {
+        if (u.placement_sector && sectorAngles[u.placement_sector]) {
+            sectorTotal[u.placement_sector] = (sectorTotal[u.placement_sector] || 0) + 1;
+        }
+    });
+    const units = allUnits.filter(u => u.placement_sector);
     let unitsHtml = "";
     const sectorCount = {};
     units.forEach((u, i) => {
@@ -1073,6 +1091,7 @@ function renderParcelSvg(label) {
         if (!sectorAngles[s]) return;
         sectorCount[s] = (sectorCount[s] || 0) + 1;
         const idxInSector = sectorCount[s] - 1;
+        const nInSector = sectorTotal[s];
         const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
         const areaPx = areaM2 * pxPerM2;
         const cat = categorizeUnitType(u.unit_type);
@@ -1081,22 +1100,67 @@ function renderParcelSvg(label) {
         let uH = uW / aspectRatio;
         uW = Math.max(16, Math.min(110, uW));
         uH = Math.max(10, Math.min(75, uH));
-        const rotDeg = ((sectorAngles[s] + 90) % 360);
-        // Distance max possible (avant clip)
-        const maxDist = sectorRadius * 0.7 - idxInSector * (uH + 5);
-        // Trouve la distance safe pour que les 4 coins restent dans le polygone constructible
-        const safeDist = findSafeUnitDistance(cxSvg, cySvg, sectorAngles[s], Math.max(15, maxDist), uW, uH, rotDeg, svgPtsBuildable);
-        const rad = sectorAngles[s] * Math.PI / 180;
-        const ux = cxSvg + Math.cos(rad) * safeDist;
-        const uy = cySvg + Math.sin(rad) * safeDist;
+
+        let ux, uy, rotDeg;
+        const globalIdx = allUnits.indexOf(u);
+
+        // Position explicite (post-drag) OU heuristique
+        if (u.offset_x_m !== undefined && u.offset_x_m !== null && u.offset_y_m !== undefined && u.offset_y_m !== null) {
+            // Position drag stockée en mètres depuis centroïde
+            ux = cxSvg + Number(u.offset_x_m) * scale;
+            uy = cySvg - Number(u.offset_y_m) * scale;  // y SVG inversé (nord=+y en mètres, mais y SVG down)
+            // Rotation : recalcul depuis secteur (position → façade vers l'extérieur)
+            const dxToCenter = ux - cxSvg, dyToCenter = uy - cySvg;
+            const angleRad = Math.atan2(dyToCenter, dxToCenter);
+            rotDeg = (angleRad * 180 / Math.PI + 90) % 360;
+            // Clip : si les 4 coins débordent, rétracter vers le centroïde
+            const cornersOK = [
+                [-uW/2, -uH/2], [uW/2, -uH/2], [uW/2, uH/2], [-uW/2, uH/2]
+            ].map(([lx, ly]) => {
+                const rot = rotDeg * Math.PI / 180;
+                return {
+                    x: ux + lx * Math.cos(rot) - ly * Math.sin(rot),
+                    y: uy + lx * Math.sin(rot) + ly * Math.cos(rot)
+                };
+            }).every(p => pointInPolygonPx(p, svgPtsBuildable));
+            if (!cornersOK) {
+                // Rétracte vers le centroïde par pas de 5%
+                for (let t = 0.95; t >= 0.1; t -= 0.05) {
+                    const tx = cxSvg + (ux - cxSvg) * t;
+                    const ty = cySvg + (uy - cySvg) * t;
+                    const rot = rotDeg * Math.PI / 180;
+                    const ok = [[-uW/2,-uH/2],[uW/2,-uH/2],[uW/2,uH/2],[-uW/2,uH/2]].map(([lx,ly]) => ({
+                        x: tx + lx*Math.cos(rot) - ly*Math.sin(rot),
+                        y: ty + lx*Math.sin(rot) + ly*Math.cos(rot)
+                    })).every(p => pointInPolygonPx(p, svgPtsBuildable));
+                    if (ok) { ux = tx; uy = ty; break; }
+                }
+            }
+        } else {
+            // Heuristique : fan angulaire au sein du secteur (fix superposition)
+            const spreadHalfDeg = Math.min(18, 12 + nInSector * 2);
+            const spreadStep = nInSector > 1 ? (spreadHalfDeg * 2) / (nInSector - 1) : 0;
+            const angleOffsetDeg = nInSector > 1 ? (idxInSector - (nInSector - 1) / 2) * spreadStep : 0;
+            const effectiveAngleDeg = sectorAngles[s] + angleOffsetDeg;
+            rotDeg = ((effectiveAngleDeg + 90) % 360);
+            const maxDist = sectorRadius * 0.7;
+            const safeDist = findSafeUnitDistance(cxSvg, cySvg, effectiveAngleDeg, Math.max(15, maxDist), uW, uH, rotDeg, svgPtsBuildable);
+            const rad = effectiveAngleDeg * Math.PI / 180;
+            ux = cxSvg + Math.cos(rad) * safeDist;
+            uy = cySvg + Math.sin(rad) * safeDist;
+        }
+
         const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
         const label2 = (u.unit_name || u.unit_type || "?").substring(0, 10);
-        unitsHtml += `<g transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg})">`;
+        unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
         unitsHtml += `<rect x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="#fff" stroke-width="1.2"/>`;
-        unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(7, Math.min(10, uH * 0.32)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${esc(label2)}</text>`;
-        unitsHtml += `<text x="0" y="${(uH/2 + 7).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="7" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})">${areaM2}m²</text>`;
+        unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(7, Math.min(10, uH * 0.32)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
+        unitsHtml += `<text x="0" y="${(uH/2 + 7).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="7" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${areaM2}m²</text>`;
         unitsHtml += `</g>`;
     });
+
+    // v75.4.0 — Mémorise les refs SVG pour handlers drag (scale/centre/polygone buildable)
+    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, sectorAngles };
 
     // Boussole en haut à droite (plus compact)
     const compass = `
@@ -1137,6 +1201,144 @@ function renderParcelSvg(label) {
         }
         legend.innerHTML = legendParts.join("");
     }
+}
+
+// ═══ v75.4.0 — DRAG & DROP V1 des unités sur le SVG ═══
+
+// Convertit un angle (radians, 0=E, sens horaire pour y-down SVG) en nom de secteur cardinal
+function angleToSector(angleRadSvg) {
+    // Nos secteurs sont centrés sur (deg SVG y-down) : N=-90, NE=-45, E=0, SE=45, S=90, SW=135, W=180, NW=-135
+    // Normalise en [0, 360)
+    let deg = angleRadSvg * 180 / Math.PI;
+    // Décale de +90 pour que N corresponde à 0
+    let a = ((deg + 90) % 360 + 360) % 360;
+    // Chaque secteur = 45°, centré → idx = round(a / 45) % 8
+    const idx = Math.round(a / 45) % 8;
+    return ["N","NE","E","SE","S","SW","W","NW"][idx];
+}
+
+// Convertit clientX/clientY en coord SVG (viewBox 400x400 mais rendu à taille variable)
+function clientToSvg(svgEl, clientX, clientY) {
+    const rect = svgEl.getBoundingClientRect();
+    // Preserve aspect ratio via viewBox : rendu = min(rect.w, rect.h) mais viewBox 400x400 → scale uniforme
+    // On calcule le scale réel appliqué (SVG preserveAspectRatio par défaut = xMidYMid meet)
+    const svgScale = Math.min(rect.width, rect.height) / 400;
+    const offX = (rect.width - 400 * svgScale) / 2;
+    const offY = (rect.height - 400 * svgScale) / 2;
+    return {
+        x: (clientX - rect.left - offX) / svgScale,
+        y: (clientY - rect.top - offY) / svgScale
+    };
+}
+
+function onUnitDragStart(e) {
+    // Cherche l'ancêtre .draggable-unit
+    let el = e.target;
+    while (el && el !== e.currentTarget && !(el.classList && el.classList.contains("draggable-unit"))) {
+        el = el.parentNode;
+    }
+    if (!el || !el.classList || !el.classList.contains("draggable-unit")) return;
+    const label = el.dataset.scn;
+    const uidx = parseInt(el.dataset.uidx);
+    const refs = _svgRefs[label];
+    if (!refs || isNaN(uidx)) return;
+    const svgEl = $(`cParcelSvg${label}`);
+    const svgPt = clientToSvg(svgEl, e.clientX, e.clientY);
+    // Position actuelle du rectangle : cxSvg + offset (px)
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    if (!u) return;
+    // Determine position courante (px SVG)
+    let curX, curY;
+    if (u.offset_x_m !== undefined && u.offset_x_m !== null) {
+        curX = refs.cxSvg + Number(u.offset_x_m) * refs.scale;
+        curY = refs.cySvg - Number(u.offset_y_m) * refs.scale;
+    } else {
+        // Extrait de la transform actuelle du <g>
+        const tr = el.getAttribute("transform") || "";
+        const m = tr.match(/translate\(([-\d.]+),([-\d.]+)\)/);
+        curX = m ? parseFloat(m[1]) : refs.cxSvg;
+        curY = m ? parseFloat(m[2]) : refs.cySvg;
+    }
+    _dragState = {
+        label, uidx, el,
+        deltaX: svgPt.x - curX,
+        deltaY: svgPt.y - curY,
+        svgEl,
+        refs
+    };
+    el.classList.add("dragging");
+    e.preventDefault();
+}
+
+function onUnitDragMove(e) {
+    if (!_dragState) return;
+    const svgPt = clientToSvg(_dragState.svgEl, e.clientX, e.clientY);
+    const newX = svgPt.x - _dragState.deltaX;
+    const newY = svgPt.y - _dragState.deltaY;
+    // Update transform visuellement en direct (rotation conservée)
+    const tr = _dragState.el.getAttribute("transform") || "";
+    const rotMatch = tr.match(/rotate\(([-\d.]+)\)/);
+    const rot = rotMatch ? parseFloat(rotMatch[1]) : 0;
+    _dragState.el.setAttribute("transform", `translate(${newX.toFixed(1)},${newY.toFixed(1)}) rotate(${rot.toFixed(1)})`);
+    _dragState.lastX = newX;
+    _dragState.lastY = newY;
+    e.preventDefault();
+}
+
+function onUnitDragEnd(e) {
+    if (!_dragState) return;
+    const { label, uidx, el, refs, lastX, lastY } = _dragState;
+    _dragState = null;
+    el.classList.remove("dragging");
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    if (!u || lastX === undefined) return;
+    // Convertit position finale en offset mètres depuis centroïde
+    const offsetXm = (lastX - refs.cxSvg) / refs.scale;
+    const offsetYm = -(lastY - refs.cySvg) / refs.scale;  // y SVG inversé
+    u.offset_x_m = Number(offsetXm.toFixed(2));
+    u.offset_y_m = Number(offsetYm.toFixed(2));
+    // Recalc secteur depuis angle centroïde→position
+    const dxSvg = lastX - refs.cxSvg, dySvg = lastY - refs.cySvg;
+    if (dxSvg * dxSvg + dySvg * dySvg > 25) {  // > 5px
+        u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
+    }
+    // Update table (dropdown Placement)
+    renderUnitsTable(label);
+    // Rerender preview (clip vérif + rotation propre)
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`Unité "${u.unit_name || u.unit_type}" → secteur ${u.placement_sector}`);
+}
+
+// Attache les listeners drag une seule fois (délégation sur document)
+let _dragListenersAttached = false;
+function attachDragListeners() {
+    if (_dragListenersAttached) return;
+    _dragListenersAttached = true;
+    document.addEventListener("mousedown", (e) => {
+        // Ne trigger que dans un c-parcel-preview SVG
+        if (e.target && e.target.closest && e.target.closest(".c-parcel-preview")) {
+            onUnitDragStart(e);
+        }
+    });
+    document.addEventListener("mousemove", onUnitDragMove);
+    document.addEventListener("mouseup", onUnitDragEnd);
+    // Touch support (mobile)
+    const touchToMouse = (type) => (e) => {
+        if (!e.touches || e.touches.length === 0) {
+            if (type === "mouseup") onUnitDragEnd(e);
+            return;
+        }
+        const t = e.touches[0];
+        const fake = { clientX: t.clientX, clientY: t.clientY, target: e.target, currentTarget: e.currentTarget, preventDefault: () => e.preventDefault() };
+        if (type === "mousedown") onUnitDragStart(fake);
+        else if (type === "mousemove") onUnitDragMove(fake);
+    };
+    document.addEventListener("touchstart", (e) => {
+        if (e.target && e.target.closest && e.target.closest(".c-parcel-preview")) touchToMouse("mousedown")(e);
+    }, { passive: false });
+    document.addEventListener("touchmove", (e) => { if (_dragState) touchToMouse("mousemove")(e); }, { passive: false });
+    document.addEventListener("touchend", (e) => onUnitDragEnd(e));
 }
 
 // v6.2.1 — Restaure la logique tabs (1 scénario à la fois)
@@ -1192,6 +1394,11 @@ function updateUnit(label, idx, field, val) {
     const units = cockpitState.scenarios[label].units || [];
     if (!units[idx]) return;
     units[idx][field] = val;
+    // v75.4.0 : changer le secteur via dropdown = reset des offsets drag (repositionnement heuristique)
+    if (field === "placement_sector") {
+        units[idx].offset_x_m = null;
+        units[idx].offset_y_m = null;
+    }
     if (field === "placement_sector" || field === "unit_type" || field === "unit_name" || field === "unit_size_m2") {
         renderParcelSvg(label);
     }
@@ -1211,7 +1418,11 @@ async function generatePlacementAuto(label) {
         if (!d.ok) throw new Error(d.error||"Échec");
         for (const p of (d.placement||[])) {
             const u = units.find(x => x.unit_index === p.unit_index);
-            if (u) u.placement_sector = p.sector;
+            if (u) {
+                u.placement_sector = p.sector;
+                u.offset_x_m = null;   // v75.4.0 : reset drag → recalcul heuristique
+                u.offset_y_m = null;
+            }
         }
         renderUnitsTable(label);
         renderParcelSvg(label);
