@@ -272,7 +272,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.5.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.5.1</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1551,6 +1551,30 @@ function updateUnit(label, idx, field, val) {
         units[idx].rotation_deg = null;
         units[idx].width_m = null;
         units[idx].height_m = null;
+    }
+    // v75.5.1 : si surface m² change ET unité a des dimensions custom (post auto-shape/snap),
+    // recalcule width_m/height_m en préservant le ratio actuel → le rectangle change visuellement en direct
+    if (field === "unit_size_m2") {
+        const u = units[idx];
+        const newArea = Number(val) || 0;
+        if (newArea > 0 && u.width_m && u.height_m) {
+            const ratio = Number(u.width_m) / Number(u.height_m);
+            const newWidth = Math.sqrt(newArea * ratio);
+            u.width_m = Number(newWidth.toFixed(2));
+            u.height_m = Number((newWidth / ratio).toFixed(2));
+        }
+    }
+    // v75.5.1 : si type change ET width/height custom, recalcule aussi selon nouveau aspect stretch
+    if (field === "unit_type") {
+        const u = units[idx];
+        if (u.width_m && u.height_m) {
+            const areaM2 = Math.max(4, Number(u.unit_size_m2) || (Number(u.width_m) * Number(u.height_m)));
+            const cat = categorizeUnitType(val);
+            const aspectStretch = cat === "COMMERCE" ? 3.5 : cat === "BUREAU" ? 2.5 : 1.8;
+            const newWidth = Math.sqrt(areaM2 * aspectStretch);
+            u.width_m = Number(newWidth.toFixed(2));
+            u.height_m = Number((areaM2 / newWidth).toFixed(2));
+        }
     }
     if (field === "placement_sector" || field === "unit_type" || field === "unit_name" || field === "unit_size_m2") {
         renderParcelSvg(label);
