@@ -346,7 +346,20 @@ const EXTRA_DISPLAY_COLS = [
   "rendement_A", "rendement_B", "rendement_C", "recommended_scenario_final",
   "total_units_A", "total_units_B", "total_units_C",
   "slide_4_image_url", "plot_area_m2", "barlo_status",
-  "Disposition", "input_typologies", "diagnostic_narrative"
+  "Disposition", "input_typologies", "diagnostic_narrative",
+  // v75 — Lead Constraints (v75 initial : geometry + regulatory + per-scenario overrides simples)
+  "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
+  "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
+  "override_units_A", "override_units_B", "override_units_C",
+  "override_fp_A", "override_fp_B", "override_fp_C",
+  "override_levels_A", "override_levels_B", "override_levels_C",
+  "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
+  // v75.1 — Cockpit config par scénario (COS/layout/target_sdp/rationale/unités JSON)
+  "override_cos_A", "override_cos_B", "override_cos_C",
+  "override_layout_A", "override_layout_B", "override_layout_C",
+  "override_target_sdp_A", "override_target_sdp_B", "override_target_sdp_C",
+  "scenario_rationale_A", "scenario_rationale_B", "scenario_rationale_C",
+  "override_units_detail_A", "override_units_detail_B", "override_units_detail_C"
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -577,6 +590,23 @@ app.post("/api/process-lead", async (req, res) => {
       setC("override_ignore_cos", constraints.override_ignore_cos ? "Y" : "");
       setC("override_ignore_setbacks", constraints.override_ignore_setbacks ? "Y" : "");
       setC("constraints_rationale", constraints.constraints_rationale);
+      // v75.1 — Nouveaux overrides par scénario (Cockpit config par scénario)
+      setC("override_cos_A", constraints.override_cos_A);
+      setC("override_cos_B", constraints.override_cos_B);
+      setC("override_cos_C", constraints.override_cos_C);
+      setC("override_layout_A", constraints.override_layout_A);        // SPLIT | SUPERPOSE
+      setC("override_layout_B", constraints.override_layout_B);
+      setC("override_layout_C", constraints.override_layout_C);
+      setC("override_target_sdp_A", constraints.override_target_sdp_A);
+      setC("override_target_sdp_B", constraints.override_target_sdp_B);
+      setC("override_target_sdp_C", constraints.override_target_sdp_C);
+      setC("scenario_rationale_A", constraints.scenario_rationale_A);
+      setC("scenario_rationale_B", constraints.scenario_rationale_B);
+      setC("scenario_rationale_C", constraints.scenario_rationale_C);
+      // v75.1 — Structure unités JSON (préparation Phase 2 — stockée AUSSI en PIPELINE)
+      setC("override_units_detail_A", constraints.override_units_detail_A);
+      setC("override_units_detail_B", constraints.override_units_detail_B);
+      setC("override_units_detail_C", constraints.override_units_detail_C);
       if (count > 0) console.log(`[CONSTRAINTS-INBOUND] Applied ${count} user constraints from body`);
       return count;
     }
@@ -597,7 +627,13 @@ app.post("/api/process-lead", async (req, res) => {
                               "override_units_A", "override_units_B", "override_units_C",
                               "override_fp_A", "override_fp_B", "override_fp_C",
                               "override_levels_A", "override_levels_B", "override_levels_C",
-                              "override_gap_m_A", "override_gap_m_B", "override_gap_m_C"];
+                              "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
+                              // v75.1 — Cockpit config par scénario (COS/layout/target_sdp/rationale/unités JSON)
+                              "override_cos_A", "override_cos_B", "override_cos_C",
+                              "override_layout_A", "override_layout_B", "override_layout_C",
+                              "override_target_sdp_A", "override_target_sdp_B", "override_target_sdp_C",
+                              "scenario_rationale_A", "scenario_rationale_B", "scenario_rationale_C",
+                              "override_units_detail_A", "override_units_detail_B", "override_units_detail_C"];
         for (const col of preserveCols) {
           const idx = pipeHeaders.indexOf(col);
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
@@ -3489,12 +3525,17 @@ function computeSmartScenarios({
     const marketCostPerM2 = marketCostV84;
     let costPerM2 = marketCostPerM2;
     let costAdjusted = false;
-    if (budgetMax > 0 && sdp > 0) {
+    // v75.1 HONEST PRICING — le prix marché du standing est le prix affiché, TOUJOURS.
+    // Plus jamais d'ajustement à la baisse même si le client est low budget.
+    // Le budget_fit dira "HORS_BUDGET" si le devis dépasse — c'est un signal honnête.
+    //
+    // Rollback : ENABLE_BUDGET_ADJUST=true réactive l'ancien comportement (ajustement vers COST_FLOOR).
+    const ENABLE_BUDGET_ADJUST = process.env.ENABLE_BUDGET_ADJUST === "true";
+    if (ENABLE_BUDGET_ADJUST && budgetMax > 0 && sdp > 0) {
       const budgetCapForRole = budgetMax * (BUDGET_CAP_FACTOR_V84[label] || 1.00);
       const marketEstimatedCost = Math.round(sdp * marketCostPerM2 * 1.05);
       if (marketEstimatedCost > budgetCapForRole) {
-        // v72.90: COST_FLOOR par standing × rôle — évite l'effondrement identique A=B=C
-        // Quand le budget est serré, A reste au prix marché, B légèrement en dessous, C au plancher
+        // v72.90 (legacy) COST_FLOOR — activé uniquement si ENABLE_BUDGET_ADJUST=true.
         const COST_FLOOR_BY_STANDING_ROLE = {
           ECONOMIQUE: { A: 200000, B: 180000, C: 160000 },
           ECO:        { A: 200000, B: 180000, C: 160000 },
@@ -3505,11 +3546,13 @@ function computeSmartScenarios({
         const floorTable = COST_FLOOR_BY_STANDING_ROLE[standingKey] || COST_FLOOR_BY_STANDING_ROLE.STANDARD;
         const costFloor = floorTable[label] || floorTable.B;
         const budgetDriven = Math.floor(budgetCapForRole / (sdp * 1.05));
-        // v72.90: Use the HIGHER of budget-driven and floor — but never exceed market price
         costPerM2 = Math.min(marketCostPerM2, Math.max(costFloor, budgetDriven));
         costAdjusted = true;
-        console.log(`│   v72.90 COST-DIFF: ${label} market=${marketCostPerM2/1000}k budgetDriven=${Math.round(budgetDriven/1000)}k floor=${costFloor/1000}k → final=${costPerM2/1000}k/m²`);
+        console.log(`│   v72.90 (LEGACY) COST-DIFF: ${label} market=${marketCostPerM2/1000}k budgetDriven=${Math.round(budgetDriven/1000)}k floor=${costFloor/1000}k → final=${costPerM2/1000}k/m²`);
       }
+    } else {
+      // v75.1 : chemin par défaut — prix marché maintenu.
+      // console.log(`│   v75.1 HONEST-PRICING: ${label} costPerM2=${marketCostPerM2/1000}k/m² (prix marché du standing)`);
     }
     const constructionCost = sdp * costPerM2;
     const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
@@ -4805,12 +4848,30 @@ function parseLeadConstraints(body) {
     const lev = parseLevelsSmart(get(`override_levels_${lbl}`));
     const u = parseInt(get(`override_units_${lbl}`));
     const gap = parseFloat(get(`override_gap_m_${lbl}`));
-    if (fp > 0 || lev > 0 || u > 0 || gap > 0) {
+    // v75.1 — Nouveaux overrides par scénario
+    const cosOv = parseFloat(get(`override_cos_${lbl}`));
+    const layoutOv = String(get(`override_layout_${lbl}`) || "").trim().toUpperCase();
+    const targetSdpOv = parseFloat(get(`override_target_sdp_${lbl}`));
+    const rat = String(get(`scenario_rationale_${lbl}`) || "").trim();
+    // v75.1 — Structure unités détaillée (JSON parsé si présent)
+    const unitsDetailRaw = String(get(`override_units_detail_${lbl}`) || "").trim();
+    let unitsDetail = null;
+    if (unitsDetailRaw) {
+      try { unitsDetail = JSON.parse(unitsDetailRaw); }
+      catch (e) { console.warn(`│ [CONSTRAINTS] override_units_detail_${lbl} JSON invalide, ignoré : ${e.message}`); }
+    }
+    if (fp > 0 || lev > 0 || u > 0 || gap > 0 || cosOv > 0 || (layoutOv === "SPLIT" || layoutOv === "SPLIT_AV_AR" || layoutOv === "SUPERPOSE") || targetSdpOv > 0 || rat || (Array.isArray(unitsDetail) && unitsDetail.length > 0)) {
       scOverrides[lbl] = {};
       if (fp > 0) scOverrides[lbl].fp = fp;
       if (lev > 0) scOverrides[lbl].levels = lev;
       if (u > 0) scOverrides[lbl].units = u;
       if (gap > 0) scOverrides[lbl].gap_m = gap;
+      if (cosOv > 0) scOverrides[lbl].cos = cosOv;
+      if (layoutOv === "SPLIT" || layoutOv === "SPLIT_AV_AR") scOverrides[lbl].layout = "SPLIT_AV_AR";
+      else if (layoutOv === "SUPERPOSE") scOverrides[lbl].layout = "SUPERPOSE";
+      if (targetSdpOv > 0) scOverrides[lbl].target_sdp = targetSdpOv;
+      if (rat) scOverrides[lbl].rationale = rat;
+      if (Array.isArray(unitsDetail) && unitsDetail.length > 0) scOverrides[lbl].units_detail = unitsDetail;
       hasScOverride = true;
     }
   }
@@ -4824,6 +4885,10 @@ function parseLeadConstraints(body) {
         scOverrides[l].levels ? `R+${scOverrides[l].levels - 1}` : "",
         scOverrides[l].units ? `${scOverrides[l].units}u` : "",
         scOverrides[l].gap_m ? `gap${scOverrides[l].gap_m}m` : "",
+        scOverrides[l].cos ? `COS${scOverrides[l].cos}` : "",
+        scOverrides[l].layout ? scOverrides[l].layout : "",
+        scOverrides[l].target_sdp ? `SDP${scOverrides[l].target_sdp}` : "",
+        scOverrides[l].units_detail ? `${scOverrides[l].units_detail.length}unites` : "",
       ].filter(Boolean).join(",")}]`)
       .join(" ");
     c.activeList.push(`scenarios forces : ${summary}`);
@@ -4963,8 +5028,19 @@ function applyConstraintsToScenarios(scenarios, constraints) {
         sc.height_m = Math.round(ov.levels * 3.2 * 10) / 10;
       }
       if (ov.units > 0) sc.total_units = ov.units;
+      // v75.1 — Nouveaux overrides par scénario (COS/layout/target_sdp)
+      if (ov.layout === "SPLIT_AV_AR" || ov.layout === "SUPERPOSE") {
+        sc.layout_mode = ov.layout;
+        console.log(`│ [CONSTRAINTS] ${lbl} layout forcé : ${ov.layout}`);
+      }
       // Cascade SDP
       sc.sdp_m2 = Math.round(sc.fp_m2 * sc.levels);
+      // v75.1 — target_sdp force la SDP cible et recalcule fp en conséquence
+      if (ov.target_sdp > 0) {
+        sc.sdp_m2 = Math.round(ov.target_sdp);
+        if (sc.levels > 0) sc.fp_m2 = Math.round(sc.sdp_m2 / sc.levels);
+        console.log(`│ [CONSTRAINTS] ${lbl} target_sdp forcé : ${sc.sdp_m2}m² (fp recalculé : ${sc.fp_m2}m²)`);
+      }
       const sdpScale = oldSdp > 0 ? sc.sdp_m2 / oldSdp : 1;
       // m²/logt = SDP / units (BRUT, sans ratio circulations)
       if (sc.total_units > 0) {
@@ -4996,6 +5072,38 @@ function applyConstraintsToScenarios(scenarios, constraints) {
         sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
           : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
           : "AMBITIEUX_HORS_COS";
+      }
+      // v75.1 — COS force par scénario : override le pourcentage affiché
+      if (ov.cos > 0) {
+        sc.cos_ratio_pct = Math.round(ov.cos * 100);
+        sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
+          : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
+          : "AMBITIEUX_HORS_COS";
+        console.log(`│ [CONSTRAINTS] ${lbl} COS forcé : ${sc.cos_ratio_pct}%`);
+      }
+      // v75.1 — units_detail force le mix complet (par ex. bureaux + logement mixte)
+      if (Array.isArray(ov.units_detail) && ov.units_detail.length > 0) {
+        let mixDetailParts = [];
+        let mixObj = {};
+        let totalM2 = 0;
+        for (const u of ov.units_detail) {
+          const t = String(u.type || "").toUpperCase();
+          const sz = Number(u.size_m2 || 0);
+          if (!t || sz <= 0) continue;
+          mixObj[t] = (mixObj[t] || 0) + 1;
+          totalM2 += sz;
+          mixDetailParts.push(`1×${t}(${sz}m²)`);
+        }
+        if (mixDetailParts.length > 0) {
+          sc.unit_mix = mixObj;
+          sc.unit_mix_detail = mixDetailParts.join(" + ");
+          sc.total_units = ov.units_detail.length;
+          console.log(`│ [CONSTRAINTS] ${lbl} units_detail forcé : ${sc.unit_mix_detail}`);
+        }
+      }
+      // v75.1 — rationale par scénario (stockée sur sc pour affichage dans les slides)
+      if (ov.rationale) {
+        sc.scenario_rationale = ov.rationale;
       }
       sc.programmatic_override = true;
       console.log(`│ [CONSTRAINTS] ${lbl} OVERRIDE : fp=${sc.fp_m2}m² × levels=${sc.levels} = SDP=${sc.sdp_m2}m² | ${sc.total_units} unites de ${m2pu}m² (${type}) | cout=${Math.round((sc.cost_total_fcfa || 0) / 1e6)}M FCFA`);
@@ -10453,10 +10561,208 @@ app.post("/generate-pptx-premium", async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v75.1 — Endpoints Cockpit Contraintes (Phase 1 + prep Phase 2 / 3)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Supabase helper : client sécurisé pour sb_lead_units (utilise SERVICE_ROLE_KEY)
+function getLeadUnitsSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+}
+
+// ─── GET /api/lead-units/:ref — Récupère les unités structurées d'un lead ────
+// Retour : { ok:true, units: { A:[...], B:[...], C:[...] } }
+app.get("/api/lead-units/:ref", async (req, res) => {
+  const ref = String(req.params.ref || "").trim();
+  if (!ref) return res.status(400).json({ ok: false, error: "ref requis" });
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  try {
+    const { data, error } = await sb
+      .from("sb_lead_units")
+      .select("*")
+      .eq("lead_ref", ref)
+      .order("scenario", { ascending: true })
+      .order("unit_index", { ascending: true });
+    if (error) throw error;
+    const grouped = { A: [], B: [], C: [] };
+    for (const row of data || []) {
+      if (grouped[row.scenario]) grouped[row.scenario].push(row);
+    }
+    res.json({ ok: true, ref, units: grouped, total: (data || []).length });
+  } catch (err) {
+    console.error(`[LEAD-UNITS GET] ${ref} : ${err.message}`);
+    // Table peut ne pas exister encore — dégradation gracieuse
+    if (String(err.message || "").includes("does not exist")) {
+      return res.json({ ok: true, ref, units: { A: [], B: [], C: [] }, total: 0, note: "table sb_lead_units absente — migration à appliquer" });
+    }
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─── POST /api/lead-units/:ref — Upsert les unités d'un lead ─────────────────
+// Body : { units: { A: [...], B: [...], C: [...] } }
+// Chaque unité : { unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes }
+// Stratégie : delete-then-insert par (lead_ref, scenario) pour garantir cohérence.
+app.post("/api/lead-units/:ref", async (req, res) => {
+  const ref = String(req.params.ref || "").trim();
+  if (!ref) return res.status(400).json({ ok: false, error: "ref requis" });
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  const { units } = req.body || {};
+  if (!units || typeof units !== "object") return res.status(400).json({ ok: false, error: "body.units requis" });
+  const t0 = Date.now();
+  try {
+    let inserted = 0, deleted = 0;
+    for (const scenario of ["A", "B", "C"]) {
+      const list = Array.isArray(units[scenario]) ? units[scenario] : [];
+      // Delete existants pour ce (lead_ref, scenario) — remplacement atomique
+      const { error: delErr, count: delCount } = await sb
+        .from("sb_lead_units")
+        .delete({ count: "exact" })
+        .eq("lead_ref", ref)
+        .eq("scenario", scenario);
+      if (delErr) throw new Error(`delete ${scenario}: ${delErr.message}`);
+      deleted += (delCount || 0);
+      if (list.length === 0) continue;
+      // Prépare insert
+      const rows = list.map((u, i) => ({
+        lead_ref: ref,
+        scenario,
+        unit_index: Number(u.unit_index) > 0 ? Number(u.unit_index) : (i + 1),
+        unit_type: String(u.unit_type || "AUTRE").toUpperCase(),
+        unit_name: u.unit_name || null,
+        unit_size_m2: Number(u.unit_size_m2) > 0 ? Number(u.unit_size_m2) : null,
+        placement_sector: u.placement_sector || null,
+        notes: u.notes || null
+      }));
+      const { error: insErr, count: insCount } = await sb
+        .from("sb_lead_units")
+        .insert(rows, { count: "exact" });
+      if (insErr) throw new Error(`insert ${scenario}: ${insErr.message}`);
+      inserted += (insCount || rows.length);
+    }
+    console.log(`[LEAD-UNITS POST] ${ref} : ${inserted} inserted, ${deleted} deleted, ${Date.now() - t0}ms`);
+    res.json({ ok: true, ref, inserted, deleted, duration_ms: Date.now() - t0 });
+  } catch (err) {
+    console.error(`[LEAD-UNITS POST] ${ref} : ${err.message}`);
+    if (String(err.message || "").includes("does not exist")) {
+      return res.status(503).json({ ok: false, error: "table sb_lead_units absente — appliquer la migration v75.1 sur Supabase" });
+    }
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─── POST /api/suggest-config — Bonus : renvoyer 3 propositions A/B/C fraîches ─
+// Body : mêmes champs que /compute-scenarios (site_area, envelope_w/d, program_main, target_units, standing_level, budget_range...)
+// Retour : { ok:true, suggestions: { A:{...}, B:{...}, C:{...} }, meta: {...} }
+// Utilité : le studio peut afficher des suggestions sans lancer un pipeline 8A-8F complet.
+app.post("/api/suggest-config", (req, res) => {
+  const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
+  if (!p.site_area) return res.status(400).json({ ok: false, error: "site_area requis" });
+  const t0 = Date.now();
+  try {
+    const scenarios = computeSmartScenarios({
+      site_area: Number(p.site_area),
+      envelope_w: Number(p.envelope_w) || Math.sqrt(Number(p.site_area) * 0.8),
+      envelope_d: Number(p.envelope_d) || Math.sqrt(Number(p.site_area) * 1.25),
+      envelope_area: Number(p.envelope_area) || undefined,
+      zoning_type: p.zoning_type || "URBAIN",
+      floor_height: Number(p.floor_height) || 3.2,
+      primary_driver: p.primary_driver || "MAX_CAPACITE",
+      max_floors: Number(p.max_floors) || 99,
+      max_height_m: Number(p.max_height_m) || 99,
+      program_main: p.program_main || "",
+      target_surface_m2: Number(p.target_surface_m2) || 0,
+      target_units: Number(p.target_units) || 0,
+      site_saturation_level: p.site_saturation_level || "MEDIUM",
+      financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
+      density_band: p.density_band || "",
+      feasibility_posture: p.feasibility_posture || "BALANCED",
+      budget_range: Number(p.budget_range) || 0,
+      budget_range_raw: String(p.budget_range || ""),
+      budget_band: p.budget_band || "",
+      standing_level: p.standing_level || "STANDARD",
+      layout_mode: p.layout_mode || "SUPERPOSE",
+      input_typologies: p.input_typologies || "",
+      commerce_size_m2: Number(p.commerce_size_m2) || 0,
+    });
+    // Retourne l'essentiel pour chaque scénario (le studio n'a pas besoin de tout le détail moteur)
+    const summarize = (sc) => sc ? ({
+      role: sc.role,
+      label_fr: sc.label_fr,
+      fp_m2: sc.fp_m2,
+      levels: sc.levels,
+      height_m: sc.height_m,
+      sdp_m2: sc.sdp_m2,
+      cos_ratio_pct: sc.cos_ratio_pct,
+      cos_compliance: sc.cos_compliance,
+      total_units: sc.total_units,
+      unit_mix: sc.unit_mix || {},
+      unit_mix_detail: sc.unit_mix_detail,
+      m2_habitable_par_logement: sc.m2_habitable_par_logement,
+      layout_mode: sc.layout_mode,
+      has_pilotis: sc.has_pilotis,
+      cost_total_fcfa: sc.cost_total_fcfa,
+      cost_per_m2_sdp: sc.cost_per_m2_sdp,
+      recommendation_score: sc.recommendation_score,
+      budget_fit: sc.budget_fit
+    }) : null;
+    res.json({
+      ok: true,
+      suggestions: {
+        A: summarize(scenarios.A),
+        B: summarize(scenarios.B),
+        C: summarize(scenarios.C)
+      },
+      recommended: (scenarios.diagnostic || {}).recommandation?.scenario || null,
+      duration_ms: Date.now() - t0
+    });
+  } catch (err) {
+    console.error(`[SUGGEST-CONFIG] ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─── POST /api/suggest-placement — Stub Phase 3 (générateur placement auto) ─
+// Body : { lead_ref, scenario, units, polygon_points, road_bearing }
+// Retour : { ok:true, placement: [{unit_index, sector}, ...] }
+// Stub Phase 3 : heuristique simple (front = commerce, arrière = logement, secteurs répartis)
+app.post("/api/suggest-placement", (req, res) => {
+  const { scenario, units, road_bearing } = req.body || {};
+  if (!Array.isArray(units) || units.length === 0) {
+    return res.status(400).json({ ok: false, error: "units[] requis" });
+  }
+  // Heuristique très simple pour l'MVP :
+  //   Commerce → FRONT (côté rue, NE ou NW selon road_bearing)
+  //   Bureau  → près du front (E/W)
+  //   Logement → arrière (SE/SW/S)
+  //   Réparti sur les 8 secteurs si beaucoup d'unités.
+  const SECTORS_FRONT = ["N", "NE", "NW"];
+  const SECTORS_SIDE = ["E", "W"];
+  const SECTORS_BACK = ["S", "SE", "SW"];
+  const placement = [];
+  let iFront = 0, iSide = 0, iBack = 0;
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i];
+    const t = String(u.unit_type || "").toUpperCase();
+    let sect;
+    if (t === "COMMERCE") { sect = SECTORS_FRONT[iFront % SECTORS_FRONT.length]; iFront++; }
+    else if (t === "BUREAU" || t === "ATELIER") { sect = SECTORS_SIDE[iSide % SECTORS_SIDE.length]; iSide++; }
+    else { sect = SECTORS_BACK[iBack % SECTORS_BACK.length]; iBack++; }
+    placement.push({ unit_index: u.unit_index || (i + 1), sector: sect });
+  }
+  res.json({ ok: true, scenario, placement, method: "heuristic_v1" });
+});
+
 app.listen(PORT, () => {
-  console.log(`BARLO v73.6.0-apps-script on port ${PORT}`);
+  console.log(`BARLO v75.1.0-cockpit on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
   console.log(`Google Maps: ${GOOGLE_MAPS_API_KEY ? "OK" : "MISSING (fallback Mapbox satellite)"}`);
+  console.log(`Supabase:    ${SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY ? "OK (sb_lead_units)" : "MISSING"}`);
+  console.log(`Pricing:     ${process.env.ENABLE_BUDGET_ADJUST === "true" ? "LEGACY (adjust to floor)" : "HONEST (market price always)"}`);
 });
