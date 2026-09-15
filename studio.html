@@ -186,7 +186,13 @@
         /* v75.4.0 — Rectangles unités draggables */
         .draggable-unit{cursor:grab}
         .draggable-unit.dragging{cursor:grabbing;opacity:.9}
-        .draggable-unit:hover rect{stroke-width:2px}
+        .draggable-unit:hover rect.body{stroke-width:2px}
+        /* v75.5.0 — Poignée rotation + auto-shape */
+        .rot-handle{cursor:crosshair;fill:#FBBF24;stroke:#0B1120;stroke-width:1.2}
+        .rot-handle:hover{fill:#F59E0B;r:5}
+        .rot-link{stroke:#FBBF24;stroke-width:1;stroke-dasharray:2,2;opacity:.6;pointer-events:none}
+        .snap-hint{stroke:#22C55E;stroke-width:2;stroke-dasharray:5,3;opacity:.9;pointer-events:none}
+        .align-guide{stroke:#F59E0B;stroke-width:1;stroke-dasharray:3,2;opacity:.7;pointer-events:none}
         .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem;font-size:.58rem;color:var(--text2)}
         .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.25rem}
         .c-parcel-legend-swatch{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -266,7 +272,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.3.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.5.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1100,6 +1106,11 @@ function renderParcelSvg(label) {
         let uH = uW / aspectRatio;
         uW = Math.max(16, Math.min(110, uW));
         uH = Math.max(10, Math.min(75, uH));
+        // v75.5.0 — dimensions custom (auto-shape stretch le long segment) via width_m/height_m
+        if (u.width_m && u.height_m) {
+            uW = Math.max(12, Math.min(180, Number(u.width_m) * scale));
+            uH = Math.max(8, Math.min(120, Number(u.height_m) * scale));
+        }
 
         let ux, uy, rotDeg;
         const globalIdx = allUnits.indexOf(u);
@@ -1109,10 +1120,14 @@ function renderParcelSvg(label) {
             // Position drag stockée en mètres depuis centroïde
             ux = cxSvg + Number(u.offset_x_m) * scale;
             uy = cySvg - Number(u.offset_y_m) * scale;  // y SVG inversé (nord=+y en mètres, mais y SVG down)
-            // Rotation : recalcul depuis secteur (position → façade vers l'extérieur)
-            const dxToCenter = ux - cxSvg, dyToCenter = uy - cySvg;
-            const angleRad = Math.atan2(dyToCenter, dxToCenter);
-            rotDeg = (angleRad * 180 / Math.PI + 90) % 360;
+            // v75.5.0 : rotation explicite prioritaire (post-poignée ou auto-shape), sinon depuis position
+            if (u.rotation_deg !== undefined && u.rotation_deg !== null) {
+                rotDeg = Number(u.rotation_deg);
+            } else {
+                const dxToCenter = ux - cxSvg, dyToCenter = uy - cySvg;
+                const angleRad = Math.atan2(dyToCenter, dxToCenter);
+                rotDeg = (angleRad * 180 / Math.PI + 90) % 360;
+            }
             // Clip : si les 4 coins débordent, rétracter vers le centroïde
             const cornersOK = [
                 [-uW/2, -uH/2], [uW/2, -uH/2], [uW/2, uH/2], [-uW/2, uH/2]
@@ -1152,15 +1167,35 @@ function renderParcelSvg(label) {
 
         const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
         const label2 = (u.unit_name || u.unit_type || "?").substring(0, 10);
+        const handleDist = uH/2 + 12;
         unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
-        unitsHtml += `<rect x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="#fff" stroke-width="1.2"/>`;
+        unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="#fff" stroke-width="1.2"/>`;
         unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(7, Math.min(10, uH * 0.32)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
         unitsHtml += `<text x="0" y="${(uH/2 + 7).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="7" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${areaM2}m²</text>`;
+        // v75.5.0 — trait vers poignée + poignée rotation (position "au-dessus" du rectangle en repère local)
+        unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
+        unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
         unitsHtml += `</g>`;
     });
 
-    // v75.4.0 — Mémorise les refs SVG pour handlers drag (scale/centre/polygone buildable)
-    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, sectorAngles };
+    // v75.4.0/v75.5.0 — Mémorise refs SVG + lignes retrait (magnet snap)
+    const segLinesForSnap = [];
+    for (let i = 0; i < N; i++) {
+        const seg = (cockpitState.segments || [])[i] || { retrait_m: 3 };
+        const retraitPx = seg.retrait_m * scale;
+        const p1 = svgPts[i], p2 = svgPts[(i + 1) % N];
+        const dx = p2.x - p1.x, dy = p2.y - p1.y;
+        const l = Math.hypot(dx, dy) || 1;
+        const nx = inwardSign * (-dy) / l, ny = inwardSign * dx / l;
+        segLinesForSnap.push({
+            i,
+            p1: { x: p1.x + nx * retraitPx, y: p1.y + ny * retraitPx },
+            p2: { x: p2.x + nx * retraitPx, y: p2.y + ny * retraitPx },
+            angleDeg: Math.atan2(dy, dx) * 180 / Math.PI,
+            lengthPx: l
+        });
+    }
+    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, sectorAngles, segLinesForSnap };
 
     // Boussole en haut à droite (plus compact)
     const compass = `
@@ -1232,7 +1267,8 @@ function clientToSvg(svgEl, clientX, clientY) {
 }
 
 function onUnitDragStart(e) {
-    // Cherche l'ancêtre .draggable-unit
+    // v75.5.0 — distingue clic sur poignée rotation (data-role="rotate") vs rectangle (move)
+    const roleEl = e.target && e.target.closest ? e.target.closest("[data-role='rotate']") : null;
     let el = e.target;
     while (el && el !== e.currentTarget && !(el.classList && el.classList.contains("draggable-unit"))) {
         el = el.parentNode;
@@ -1244,70 +1280,181 @@ function onUnitDragStart(e) {
     if (!refs || isNaN(uidx)) return;
     const svgEl = $(`cParcelSvg${label}`);
     const svgPt = clientToSvg(svgEl, e.clientX, e.clientY);
-    // Position actuelle du rectangle : cxSvg + offset (px)
     const u = (cockpitState.scenarios[label].units || [])[uidx];
     if (!u) return;
-    // Determine position courante (px SVG)
-    let curX, curY;
-    if (u.offset_x_m !== undefined && u.offset_x_m !== null) {
-        curX = refs.cxSvg + Number(u.offset_x_m) * refs.scale;
-        curY = refs.cySvg - Number(u.offset_y_m) * refs.scale;
+
+    // Position et rotation courantes du <g>
+    const tr = el.getAttribute("transform") || "";
+    const mT = tr.match(/translate\(([-\d.]+),([-\d.]+)\)/);
+    const mR = tr.match(/rotate\(([-\d.]+)\)/);
+    const curX = mT ? parseFloat(mT[1]) : refs.cxSvg;
+    const curY = mT ? parseFloat(mT[2]) : refs.cySvg;
+    const curRot = mR ? parseFloat(mR[1]) : 0;
+
+    if (roleEl) {
+        // Mode rotation manuelle : capture angle initial souris → centre + rotation initiale
+        const initAngle = Math.atan2(svgPt.y - curY, svgPt.x - curX) * 180 / Math.PI;
+        _dragState = {
+            mode: "rotate",
+            label, uidx, el, svgEl, refs,
+            curX, curY,
+            startAngleDeg: initAngle,
+            startRotDeg: curRot,
+            lastRot: curRot
+        };
     } else {
-        // Extrait de la transform actuelle du <g>
-        const tr = el.getAttribute("transform") || "";
-        const m = tr.match(/translate\(([-\d.]+),([-\d.]+)\)/);
-        curX = m ? parseFloat(m[1]) : refs.cxSvg;
-        curY = m ? parseFloat(m[2]) : refs.cySvg;
+        // Mode déplacement
+        _dragState = {
+            mode: "move",
+            label, uidx, el, svgEl, refs,
+            deltaX: svgPt.x - curX,
+            deltaY: svgPt.y - curY,
+            curRot,
+            lastX: curX,
+            lastY: curY,
+            lastRot: curRot,
+            snappedSegmentIdx: null
+        };
     }
-    _dragState = {
-        label, uidx, el,
-        deltaX: svgPt.x - curX,
-        deltaY: svgPt.y - curY,
-        svgEl,
-        refs
-    };
     el.classList.add("dragging");
     e.preventDefault();
 }
 
+// v75.5.0 — Projection d'un point sur un segment ; retourne {proj, dist, t}
+function projectPointOnSegment(p, p1, p2) {
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const l2 = dx * dx + dy * dy;
+    if (l2 === 0) return { proj: { x: p1.x, y: p1.y }, dist: Math.hypot(p.x - p1.x, p.y - p1.y), t: 0 };
+    const t = ((p.x - p1.x) * dx + (p.y - p1.y) * dy) / l2;
+    const clampedT = Math.max(0, Math.min(1, t));
+    const proj = { x: p1.x + clampedT * dx, y: p1.y + clampedT * dy };
+    return { proj, dist: Math.hypot(p.x - proj.x, p.y - proj.y), t: clampedT };
+}
+
+// v75.5.0 — Efface les visuels temporaires (snap hint, guides d'alignement)
+function clearDragVisuals(svgEl) {
+    if (!svgEl) return;
+    svgEl.querySelectorAll(".snap-hint, .align-guide").forEach(n => n.remove());
+}
+
 function onUnitDragMove(e) {
     if (!_dragState) return;
-    const svgPt = clientToSvg(_dragState.svgEl, e.clientX, e.clientY);
-    const newX = svgPt.x - _dragState.deltaX;
-    const newY = svgPt.y - _dragState.deltaY;
-    // Update transform visuellement en direct (rotation conservée)
-    const tr = _dragState.el.getAttribute("transform") || "";
-    const rotMatch = tr.match(/rotate\(([-\d.]+)\)/);
-    const rot = rotMatch ? parseFloat(rotMatch[1]) : 0;
-    _dragState.el.setAttribute("transform", `translate(${newX.toFixed(1)},${newY.toFixed(1)}) rotate(${rot.toFixed(1)})`);
-    _dragState.lastX = newX;
-    _dragState.lastY = newY;
+    const { mode, svgEl, refs, el, label, uidx } = _dragState;
+    const svgPt = clientToSvg(svgEl, e.clientX, e.clientY);
+
+    if (mode === "rotate") {
+        // Rotation libre : angle souris → centre unit + delta initial
+        const curAngle = Math.atan2(svgPt.y - _dragState.curY, svgPt.x - _dragState.curX) * 180 / Math.PI;
+        const newRot = _dragState.startRotDeg + (curAngle - _dragState.startAngleDeg);
+        _dragState.lastRot = newRot;
+        el.setAttribute("transform", `translate(${_dragState.curX.toFixed(1)},${_dragState.curY.toFixed(1)}) rotate(${newRot.toFixed(1)})`);
+    } else {
+        // Déplacement
+        let newX = svgPt.x - _dragState.deltaX;
+        let newY = svgPt.y - _dragState.deltaY;
+        let newRot = _dragState.curRot;
+        clearDragVisuals(svgEl);
+        _dragState.snappedSegmentIdx = null;
+
+        // v75.5.0 — SNAP MAGNET sur les lignes retrait segment (seuil 14 px)
+        const SNAP_THRESHOLD = 14;
+        let bestSnap = null;
+        for (const s of (refs.segLinesForSnap || [])) {
+            const { proj, dist } = projectPointOnSegment({ x: newX, y: newY }, s.p1, s.p2);
+            if (dist < SNAP_THRESHOLD && (!bestSnap || dist < bestSnap.dist)) {
+                bestSnap = { proj, dist, angleDeg: s.angleDeg, segIdx: s.i, p1: s.p1, p2: s.p2 };
+            }
+        }
+        if (bestSnap) {
+            newX = bestSnap.proj.x;
+            newY = bestSnap.proj.y;
+            // Rotation parallèle au segment : rect longueur alignée sur segment
+            newRot = bestSnap.angleDeg;
+            _dragState.snappedSegmentIdx = bestSnap.segIdx;
+            // Visuel : ligne verte le long du segment retrait complet
+            const hint = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            hint.setAttribute("class", "snap-hint");
+            hint.setAttribute("x1", bestSnap.p1.x.toFixed(1));
+            hint.setAttribute("y1", bestSnap.p1.y.toFixed(1));
+            hint.setAttribute("x2", bestSnap.p2.x.toFixed(1));
+            hint.setAttribute("y2", bestSnap.p2.y.toFixed(1));
+            svgEl.appendChild(hint);
+        } else {
+            // v75.5.0 — GUIDES D'ALIGNEMENT avec autres unités (± 4px en x ou y)
+            const ALIGN_THRESHOLD = 4;
+            const otherUnits = (cockpitState.scenarios[label].units || []).filter((u, i) => i !== uidx && u.offset_x_m !== undefined && u.offset_x_m !== null);
+            for (const u of otherUnits) {
+                const ox = refs.cxSvg + Number(u.offset_x_m) * refs.scale;
+                const oy = refs.cySvg - Number(u.offset_y_m) * refs.scale;
+                if (Math.abs(newX - ox) < ALIGN_THRESHOLD) {
+                    newX = ox;
+                    const guide = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                    guide.setAttribute("class", "align-guide");
+                    guide.setAttribute("x1", ox.toFixed(1)); guide.setAttribute("y1", "0");
+                    guide.setAttribute("x2", ox.toFixed(1)); guide.setAttribute("y2", "400");
+                    svgEl.appendChild(guide);
+                    break;
+                }
+                if (Math.abs(newY - oy) < ALIGN_THRESHOLD) {
+                    newY = oy;
+                    const guide = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                    guide.setAttribute("class", "align-guide");
+                    guide.setAttribute("x1", "0"); guide.setAttribute("y1", oy.toFixed(1));
+                    guide.setAttribute("x2", "400"); guide.setAttribute("y2", oy.toFixed(1));
+                    svgEl.appendChild(guide);
+                    break;
+                }
+            }
+        }
+
+        el.setAttribute("transform", `translate(${newX.toFixed(1)},${newY.toFixed(1)}) rotate(${newRot.toFixed(1)})`);
+        _dragState.lastX = newX;
+        _dragState.lastY = newY;
+        _dragState.lastRot = newRot;
+    }
     e.preventDefault();
 }
 
 function onUnitDragEnd(e) {
     if (!_dragState) return;
-    const { label, uidx, el, refs, lastX, lastY } = _dragState;
+    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl } = _dragState;
     _dragState = null;
     el.classList.remove("dragging");
+    clearDragVisuals(svgEl);
     const u = (cockpitState.scenarios[label].units || [])[uidx];
-    if (!u || lastX === undefined) return;
-    // Convertit position finale en offset mètres depuis centroïde
+    if (!u) return;
+
+    if (mode === "rotate") {
+        u.rotation_deg = Number(((lastRot % 360) + 360) % 360);
+        renderUnitsTable(label);
+        renderParcelSvg(label);
+        updateConstraintsCount();
+        showToast(`Rotation "${u.unit_name || u.unit_type}" : ${Math.round(u.rotation_deg)}°`);
+        return;
+    }
+
+    if (lastX === undefined) return;
     const offsetXm = (lastX - refs.cxSvg) / refs.scale;
-    const offsetYm = -(lastY - refs.cySvg) / refs.scale;  // y SVG inversé
+    const offsetYm = -(lastY - refs.cySvg) / refs.scale;
     u.offset_x_m = Number(offsetXm.toFixed(2));
     u.offset_y_m = Number(offsetYm.toFixed(2));
+    // Si snappé à un segment, on fixe rotation_deg = angle du segment
+    if (snappedSegmentIdx !== null) {
+        u.rotation_deg = Number(lastRot);
+    } else {
+        // Move sans snap : on garde éventuellement la rotation manuelle précédente ; sinon recalcul auto
+        // (u.rotation_deg est laissé tel quel — si non défini, renderParcelSvg calcule auto)
+    }
     // Recalc secteur depuis angle centroïde→position
     const dxSvg = lastX - refs.cxSvg, dySvg = lastY - refs.cySvg;
-    if (dxSvg * dxSvg + dySvg * dySvg > 25) {  // > 5px
+    if (dxSvg * dxSvg + dySvg * dySvg > 25) {
         u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
     }
-    // Update table (dropdown Placement)
     renderUnitsTable(label);
-    // Rerender preview (clip vérif + rotation propre)
     renderParcelSvg(label);
     updateConstraintsCount();
-    showToast(`Unité "${u.unit_name || u.unit_type}" → secteur ${u.placement_sector}`);
+    const suffix = snappedSegmentIdx !== null ? ` (snap segment ${(cockpitState.segments[snappedSegmentIdx]||{}).from}–${(cockpitState.segments[snappedSegmentIdx]||{}).to})` : "";
+    showToast(`Unité "${u.unit_name || u.unit_type}" → secteur ${u.placement_sector}${suffix}`);
 }
 
 // Attache les listeners drag une seule fois (délégation sur document)
@@ -1365,7 +1512,10 @@ function renderUnitsTable(label) {
           <td><input type="text" value="${esc(u.unit_size_m2||"")}" placeholder="m²" oninput="updateUnit('${label}',${i},'unit_size_m2',this.value)"></td>
           <td><select onchange="updateUnit('${label}',${i},'placement_sector',this.value)">${PLACEMENT_SECTORS.map(s=>`<option value="${s}"${u.placement_sector===s?" selected":""}>${s||"—"}</option>`).join("")}</select></td>
           <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
-          <td><button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button></td>
+          <td style="white-space:nowrap">
+            <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Adapter la forme au segment de parcelle le plus proche (étire le long du bord)" style="color:#22C55E">🪄</button>
+            <button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button>
+          </td>
         </tr>
     `).join("");
 }
@@ -1394,15 +1544,71 @@ function updateUnit(label, idx, field, val) {
     const units = cockpitState.scenarios[label].units || [];
     if (!units[idx]) return;
     units[idx][field] = val;
-    // v75.4.0 : changer le secteur via dropdown = reset des offsets drag (repositionnement heuristique)
+    // v75.4.0/v75.5.0 : changer secteur via dropdown = reset overrides drag+rotate+shape
     if (field === "placement_sector") {
         units[idx].offset_x_m = null;
         units[idx].offset_y_m = null;
+        units[idx].rotation_deg = null;
+        units[idx].width_m = null;
+        units[idx].height_m = null;
     }
     if (field === "placement_sector" || field === "unit_type" || field === "unit_name" || field === "unit_size_m2") {
         renderParcelSvg(label);
     }
     updateConstraintsCount();
+}
+
+// v75.6.0 — Adapte une unité au segment le plus proche (auto-shape stretch le long du segment)
+function adaptUnitToParcelSegment(label, idx) {
+    const u = (cockpitState.scenarios[label].units || [])[idx];
+    if (!u) return;
+    const refs = _svgRefs[label];
+    if (!refs || !refs.segLinesForSnap || refs.segLinesForSnap.length === 0) {
+        showToast("Preview non prête — recharge le lead", true);
+        return;
+    }
+    // Position actuelle en px SVG (drag OU centre secteur)
+    let cx, cy;
+    if (u.offset_x_m !== undefined && u.offset_x_m !== null) {
+        cx = refs.cxSvg + Number(u.offset_x_m) * refs.scale;
+        cy = refs.cySvg - Number(u.offset_y_m) * refs.scale;
+    } else {
+        const angDeg = refs.sectorAngles[u.placement_sector] || 0;
+        const rad = angDeg * Math.PI / 180;
+        cx = refs.cxSvg + Math.cos(rad) * 60;
+        cy = refs.cySvg + Math.sin(rad) * 60;
+    }
+    // Trouve le segment le plus proche
+    let bestSeg = null, bestDist = Infinity;
+    for (const s of refs.segLinesForSnap) {
+        const { proj, dist } = projectPointOnSegment({ x: cx, y: cy }, s.p1, s.p2);
+        if (dist < bestDist) { bestDist = dist; bestSeg = { ...s, proj }; }
+    }
+    if (!bestSeg) { showToast("Aucun segment détecté", true); return; }
+    // Stretch : largeur = min(85% de la longueur segment, sqrt(area * aspect_stretch))
+    const lengthMseg = bestSeg.lengthPx / refs.scale;
+    const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
+    const cat = categorizeUnitType(u.unit_type);
+    const aspectStretch = cat === "COMMERCE" ? 3.5 : cat === "BUREAU" ? 2.5 : 1.8;
+    let width_m = Math.min(lengthMseg * 0.85, Math.sqrt(areaM2 * aspectStretch));
+    width_m = Math.max(3, width_m);
+    let height_m = areaM2 / width_m;
+    // Position : projeté sur le segment retrait
+    u.offset_x_m = Number(((bestSeg.proj.x - refs.cxSvg) / refs.scale).toFixed(2));
+    u.offset_y_m = Number((-(bestSeg.proj.y - refs.cySvg) / refs.scale).toFixed(2));
+    u.rotation_deg = Number(bestSeg.angleDeg);
+    u.width_m = Number(width_m.toFixed(2));
+    u.height_m = Number(height_m.toFixed(2));
+    // Recalc secteur
+    const dxSvg = bestSeg.proj.x - refs.cxSvg, dySvg = bestSeg.proj.y - refs.cySvg;
+    if (dxSvg*dxSvg + dySvg*dySvg > 25) {
+        u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
+    }
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    const seg = (cockpitState.segments[bestSeg.i] || {});
+    showToast(`Adaptée au segment ${seg.from||"?"}–${seg.to||"?"} · ${Math.round(width_m)}×${Math.round(height_m)}m`);
 }
 
 async function generatePlacementAuto(label) {
@@ -1420,8 +1626,9 @@ async function generatePlacementAuto(label) {
             const u = units.find(x => x.unit_index === p.unit_index);
             if (u) {
                 u.placement_sector = p.sector;
-                u.offset_x_m = null;   // v75.4.0 : reset drag → recalcul heuristique
-                u.offset_y_m = null;
+                // v75.4.0/v75.5.0 : reset toutes les overrides (drag/rotation/shape) → recalcul heuristique
+                u.offset_x_m = null; u.offset_y_m = null;
+                u.rotation_deg = null; u.width_m = null; u.height_m = null;
             }
         }
         renderUnitsTable(label);
