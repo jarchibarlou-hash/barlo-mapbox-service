@@ -394,7 +394,8 @@ app.get("/api/form-leads", async (req, res) => {
 app.post("/api/process-lead", async (req, res) => {
   const t0 = Date.now();
   // v73.9 — accepter formRow (nouveau lead) OU ref (retraitement lead existant)
-  let { formRow, ref } = req.body;
+  // v75 — accepter aussi constraints (Lead Constraints depuis studio, panneau UI)
+  let { formRow, ref, constraints } = req.body;
   if (!formRow && !ref) return res.status(400).json({ error: "formRow ou ref requis" });
   console.log(`\n╔══ PROCESS-LEAD ${formRow ? `row ${formRow}` : `ref ${ref}`} ══╗`);
 
@@ -547,6 +548,39 @@ app.post("/api/process-lead", async (req, res) => {
       }
     } catch (e) { console.warn(`[8A] readPipelineAll lookup error: ${e.message}`); }
 
+    // v75 — Helper : applique les contraintes du body (Lead Constraints) à un rowArray
+    // avant écriture PIPELINE. No-op si `constraints` est absent du body → 100% backward-compat.
+    function applyBodyConstraints(rowArray) {
+      if (!constraints || typeof constraints !== "object") return 0;
+      let count = 0;
+      const setC = (col, val) => {
+        if (val === undefined || val === null || val === "") return;
+        const idx = pipeHeaders.indexOf(col);
+        if (idx >= 0) { rowArray[idx] = String(val); count++; }
+      };
+      setC("input_typologies", constraints.input_typologies);
+      setC("override_lateral_hug", constraints.override_lateral_hug);
+      setC("override_lateral_gap_m", constraints.override_lateral_gap_m);
+      setC("override_max_fp_m2", constraints.override_max_fp_m2);
+      setC("override_units_A", constraints.override_units_A);
+      setC("override_units_B", constraints.override_units_B);
+      setC("override_units_C", constraints.override_units_C);
+      setC("override_fp_A", constraints.override_fp_A);
+      setC("override_fp_B", constraints.override_fp_B);
+      setC("override_fp_C", constraints.override_fp_C);
+      setC("override_levels_A", constraints.override_levels_A);
+      setC("override_levels_B", constraints.override_levels_B);
+      setC("override_levels_C", constraints.override_levels_C);
+      setC("override_gap_m_A", constraints.override_gap_m_A);
+      setC("override_gap_m_B", constraints.override_gap_m_B);
+      setC("override_gap_m_C", constraints.override_gap_m_C);
+      setC("override_ignore_cos", constraints.override_ignore_cos ? "Y" : "");
+      setC("override_ignore_setbacks", constraints.override_ignore_setbacks ? "Y" : "");
+      setC("constraints_rationale", constraints.constraints_rationale);
+      if (count > 0) console.log(`[CONSTRAINTS-INBOUND] Applied ${count} user constraints from body`);
+      return count;
+    }
+
     if (isReprocessing) {
       console.log(`[8A] Lead ${leadRef} EXISTS at row ${pipeRowNum} (matched by ${matchedBy}) → RETRAITEMENT (UPDATE mode)`);
       // Préserver les URLs images valides depuis l'existant (le cache 8E/8F décidera de regen ou pas)
@@ -569,9 +603,13 @@ app.post("/api/process-lead", async (req, res) => {
           if (idx >= 0 && existing[idx]) newRow[idx] = existing[idx];
         }
       } catch (e) { console.warn(`[8A] Preserve images error: ${e.message}`); }
+      // v75 — appliquer contraintes du body APRÈS preserveCols (les nouvelles écrasent les anciennes)
+      applyBodyConstraints(newRow);
       await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: newRow });
       console.log(`[8A] Lead ${leadRef} UPDATED at row ${pipeRowNum} ✓`);
     } else {
+      // v75 — appliquer contraintes du body avant l'append (nouveau lead)
+      applyBodyConstraints(newRow);
       const appendResult = await gasPost("appendPipeline", { row: newRow });
       pipeRowNum = appendResult.appendedRow;
       if (!pipeRowNum) throw new Error("Failed to append row to PIPELINE");
