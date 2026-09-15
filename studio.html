@@ -101,6 +101,35 @@
         .img-thumb img{max-width:100%;border-radius:5px;border:1px solid var(--border)}
         .img-thumb .cap{font-size:.65rem;color:var(--text2);margin-top:.2rem}
         @media(max-width:900px){.kpi-strip{grid-template-columns:repeat(2,1fr)}.cards-grid{grid-template-columns:1fr}}
+        /* v75 — Panneau Contraintes du diagnostic */
+        .constraints-panel{background:var(--card);border:1px solid var(--border);border-radius:9px;margin-bottom:1rem;overflow:hidden;position:relative}
+        .constraints-panel summary{padding:.85rem 1rem;cursor:pointer;font-size:.78rem;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.6px;list-style:none;display:flex;justify-content:space-between;align-items:center}
+        .constraints-panel summary::-webkit-details-marker{display:none}
+        .constraints-panel summary::after{content:"▼";font-size:.6rem;transition:transform .2s;color:var(--text2)}
+        .constraints-panel[open] summary::after{transform:rotate(180deg)}
+        .constraints-panel summary:hover{background:var(--card2)}
+        .c-count-badge{font-size:.62rem;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--navy);color:var(--text2);margin-left:auto;margin-right:.6rem;text-transform:none;letter-spacing:0}
+        .c-body{padding:1rem;border-top:1px solid var(--border)}
+        .c-section{margin-bottom:1.1rem}
+        .c-section h4{font-size:.62rem;text-transform:uppercase;letter-spacing:.7px;color:var(--text2);margin-bottom:.5rem;font-weight:700}
+        .c-section label{display:block;font-size:.75rem;color:var(--text);margin-bottom:.4rem}
+        .c-section input[type="text"],.c-section input[type="number"],.c-section select,.c-section textarea{width:100%;padding:.4rem .6rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:.78rem;outline:none;margin-top:.2rem}
+        .c-section input:focus,.c-section select:focus,.c-section textarea:focus{border-color:var(--amber)}
+        .c-section input[type="checkbox"]{margin-right:.4rem;vertical-align:middle}
+        .c-section textarea{resize:vertical;font-family:inherit;min-height:60px}
+        .c-scn-table{width:100%;border-collapse:collapse;font-size:.72rem}
+        .c-scn-table th,.c-scn-table td{padding:.3rem;text-align:left;border-bottom:1px solid var(--border)}
+        .c-scn-table th{color:var(--text2);font-weight:600;text-transform:uppercase;font-size:.6rem;letter-spacing:.5px}
+        .c-scn-table td:first-child{color:var(--amber);font-weight:700;font-family:'JetBrains Mono',monospace;width:30px}
+        .c-scn-table input{width:100%;padding:.3rem .4rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:5px;font-family:'JetBrains Mono',monospace;font-size:.72rem;outline:none}
+        .c-scn-table input:focus{border-color:var(--amber)}
+        .c-actions{display:flex;gap:.6rem;justify-content:flex-end;padding-top:.6rem;border-top:1px solid var(--border);margin-top:.4rem}
+        .btn-c-clear,.btn-c-save{padding:.5rem 1rem;font-size:.75rem;font-weight:600;border:none;border-radius:6px;cursor:pointer;transition:opacity .15s;font-family:inherit}
+        .btn-c-clear{background:var(--navy);color:var(--text2)}
+        .btn-c-clear:hover{color:var(--text)}
+        .btn-c-save{background:var(--forest);color:#fff}
+        .btn-c-save:hover{opacity:.85}
+        .c-saved-toast{position:absolute;top:.7rem;right:.7rem;background:var(--forest);color:#fff;padding:.35rem .7rem;border-radius:6px;font-size:.7rem;font-weight:600;opacity:0;transition:opacity .3s;pointer-events:none;z-index:5}
     </style>
 </head>
 <body>
@@ -146,6 +175,66 @@
                 <div class="kpi"><div class="kpi-label">Niveaux</div><div class="kpi-value brick" id="kFloors">—</div></div>
                 <div class="kpi"><div class="kpi-label">Posture</div><div class="kpi-value forest" id="kPosture">—</div></div>
             </div>
+            <!-- v75 — Panneau Contraintes du diagnostic (Lead Constraints Framework) -->
+            <details class="constraints-panel" id="constraintsPanel">
+                <summary>
+                    <span>⚙ Contraintes du diagnostic</span>
+                    <span class="c-count-badge" id="cCountBadge">Aucune</span>
+                </summary>
+                <div class="c-body">
+                    <div class="c-section">
+                        <h4>Programme précis</h4>
+                        <label>Typologies détaillées (input_typologies)
+                            <input type="text" id="cInputTypologies" placeholder="Ex : T3=2, COMMERCE=1">
+                        </label>
+                    </div>
+                    <div class="c-section">
+                        <h4>Overrides par scénario</h4>
+                        <table class="c-scn-table">
+                            <thead>
+                                <tr><th></th><th>Unités</th><th>Emprise m²</th><th>Niveaux</th><th>Gap m</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>A</td><td><input type="text" id="cUnitsA" placeholder=""></td><td><input type="text" id="cFpA" placeholder=""></td><td><input type="text" id="cLevelsA" placeholder=""></td><td><input type="text" id="cGapA" placeholder=""></td></tr>
+                                <tr><td>B</td><td><input type="text" id="cUnitsB" placeholder=""></td><td><input type="text" id="cFpB" placeholder=""></td><td><input type="text" id="cLevelsB" placeholder=""></td><td><input type="text" id="cGapB" placeholder=""></td></tr>
+                                <tr><td>C</td><td><input type="text" id="cUnitsC" placeholder=""></td><td><input type="text" id="cFpC" placeholder=""></td><td><input type="text" id="cLevelsC" placeholder=""></td><td><input type="text" id="cGapC" placeholder=""></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="c-section">
+                        <h4>Géométrie globale</h4>
+                        <label>Mitoyenneté forcée (lateral_hug)
+                            <select id="cLateralHug">
+                                <option value="">Auto (défaut)</option>
+                                <option value="EAST">EAST (est)</option>
+                                <option value="WEST">WEST (ouest)</option>
+                                <option value="NORTH">NORTH (nord)</option>
+                                <option value="SOUTH">SOUTH (sud)</option>
+                            </select>
+                        </label>
+                        <label>Écart latéral côté opposé (lateral_gap_m)
+                            <input type="text" id="cLateralGap" placeholder="Ex : 3">
+                        </label>
+                        <label>Emprise maximale forcée (max_fp_m2)
+                            <input type="text" id="cMaxFp" placeholder="Ex : 180">
+                        </label>
+                    </div>
+                    <div class="c-section">
+                        <h4>Dérogations assumées</h4>
+                        <label><input type="checkbox" id="cIgnoreCos"> Ignorer plafond COS (dérogation assumée)</label>
+                        <label><input type="checkbox" id="cIgnoreSetbacks"> Ignorer retraits réglementaires (bâti sur toute la parcelle)</label>
+                    </div>
+                    <div class="c-section">
+                        <h4>Rationale (justification client)</h4>
+                        <textarea id="cRationale" placeholder="Ex : Client accepte dérogation COS car mitoyenneté 2 côtés et tissu urbain dense"></textarea>
+                    </div>
+                    <div class="c-actions">
+                        <button class="btn-c-clear" onclick="clearConstraints()">Effacer</button>
+                        <button class="btn-c-save" onclick="saveConstraints()">✓ Enregistrer les contraintes</button>
+                    </div>
+                </div>
+                <div class="c-saved-toast" id="cSavedToast">✓ Contraintes enregistrées</div>
+            </details>
             <div class="cards-grid">
                 <div class="card"><div class="card-title">Terrain & Localisation</div><div id="cardTerrain"></div></div>
                 <div class="card"><div class="card-title">Scores diagnostiques</div><div id="cardScores"></div></div>
@@ -179,7 +268,113 @@
 const API = window.location.origin;
 let formLeads = [], pipeLeads = [], currentTab = "form", selectedLead = null, currentBody8D = null, leadProcessed = false;
 
-document.addEventListener("DOMContentLoaded", () => { checkHealth(); fetchAll(); setInterval(fetchAll, 15000); });
+document.addEventListener("DOMContentLoaded", () => {
+    checkHealth(); fetchAll(); setInterval(fetchAll, 15000);
+    // v75 — Panneau contraintes : attache les listeners pour mise à jour live du badge
+    const constraintIds = ["cInputTypologies","cLateralHug","cLateralGap","cMaxFp","cUnitsA","cUnitsB","cUnitsC","cFpA","cFpB","cFpC","cLevelsA","cLevelsB","cLevelsC","cGapA","cGapB","cGapC","cRationale","cIgnoreCos","cIgnoreSetbacks"];
+    constraintIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("input", updateConstraintsCount);
+        el.addEventListener("change", updateConstraintsCount);
+    });
+});
+
+// ═══ v75 — Panneau Contraintes du diagnostic (Lead Constraints Framework) ═══
+function collectConstraintsFromForm() {
+    const val = (id) => { const el = $(id); return el ? String(el.value || "").trim() : ""; };
+    const chk = (id) => { const el = $(id); return el ? !!el.checked : false; };
+    return {
+        input_typologies: val("cInputTypologies"),
+        override_lateral_hug: val("cLateralHug"),
+        override_lateral_gap_m: val("cLateralGap"),
+        override_max_fp_m2: val("cMaxFp"),
+        override_units_A: val("cUnitsA"),
+        override_units_B: val("cUnitsB"),
+        override_units_C: val("cUnitsC"),
+        override_fp_A: val("cFpA"),
+        override_fp_B: val("cFpB"),
+        override_fp_C: val("cFpC"),
+        override_levels_A: val("cLevelsA"),
+        override_levels_B: val("cLevelsB"),
+        override_levels_C: val("cLevelsC"),
+        override_gap_m_A: val("cGapA"),
+        override_gap_m_B: val("cGapB"),
+        override_gap_m_C: val("cGapC"),
+        override_ignore_cos: chk("cIgnoreCos"),
+        override_ignore_setbacks: chk("cIgnoreSetbacks"),
+        constraints_rationale: val("cRationale")
+    };
+}
+
+function countActiveConstraints(c) {
+    if (!c) return 0;
+    let n = 0;
+    for (const [k, v] of Object.entries(c)) {
+        if (k === "constraints_rationale") continue;
+        if (v === true) n++;
+        else if (typeof v === "string" && v !== "") n++;
+    }
+    return n;
+}
+
+function updateConstraintsCount() {
+    const c = collectConstraintsFromForm();
+    const n = countActiveConstraints(c);
+    const badge = $("cCountBadge");
+    if (!badge) return;
+    badge.textContent = n === 0 ? "Aucune" : `${n} active${n > 1 ? "s" : ""}`;
+    badge.style.color = n > 0 ? "var(--amber)" : "var(--text2)";
+    badge.style.background = n > 0 ? "rgba(212,133,14,.15)" : "var(--navy)";
+}
+
+function saveConstraints() {
+    updateConstraintsCount();
+    const toast = $("cSavedToast");
+    if (!toast) return;
+    toast.style.opacity = "1";
+    setTimeout(() => { toast.style.opacity = "0"; }, 1500);
+}
+
+function clearConstraints() {
+    ["cInputTypologies","cLateralHug","cLateralGap","cMaxFp","cUnitsA","cUnitsB","cUnitsC","cFpA","cFpB","cFpC","cLevelsA","cLevelsB","cLevelsC","cGapA","cGapB","cGapC","cRationale"].forEach(id => {
+        const el = $(id);
+        if (el) el.value = "";
+    });
+    ["cIgnoreCos","cIgnoreSetbacks"].forEach(id => {
+        const el = $(id);
+        if (el) el.checked = false;
+    });
+    updateConstraintsCount();
+}
+
+function populateConstraintsFromLead(L) {
+    if (!L) return;
+    const set = (id, val) => { const el = $(id); if (el) el.value = (val === undefined || val === null) ? "" : String(val); };
+    const setChk = (id, val) => { const el = $(id); if (el) el.checked = (String(val || "").toUpperCase() === "Y"); };
+    set("cInputTypologies", L.input_typologies);
+    set("cLateralHug", L.override_lateral_hug);
+    set("cLateralGap", L.override_lateral_gap_m);
+    set("cMaxFp", L.override_max_fp_m2);
+    set("cUnitsA", L.override_units_A);
+    set("cUnitsB", L.override_units_B);
+    set("cUnitsC", L.override_units_C);
+    set("cFpA", L.override_fp_A);
+    set("cFpB", L.override_fp_B);
+    set("cFpC", L.override_fp_C);
+    set("cLevelsA", L.override_levels_A);
+    set("cLevelsB", L.override_levels_B);
+    set("cLevelsC", L.override_levels_C);
+    set("cGapA", L.override_gap_m_A);
+    set("cGapB", L.override_gap_m_B);
+    set("cGapC", L.override_gap_m_C);
+    setChk("cIgnoreCos", L.override_ignore_cos);
+    setChk("cIgnoreSetbacks", L.override_ignore_setbacks);
+    set("cRationale", L.constraints_rationale);
+    updateConstraintsCount();
+}
+
+function resetConstraintsForNewLead() { clearConstraints(); }
 
 async function checkHealth() {
     try { const r = await fetch(`${API}/health`); const d = await r.json(); $("statusDot").className="status-dot ok"; $("statusText").textContent=d.version||"OK"; }
@@ -232,7 +427,7 @@ function selectFormLead(lead) {
     $("processBtn").disabled=false;
     $("processBtn").textContent=lead.processed?"↻ Retraiter (8A→8F)":"⚙ Traiter le lead (8A→8F)";
     $("generateBtn").disabled=!lead.processed;
-    if (lead.processed) { loadPipelineData(lead.ref); } else { clearCards(); showDetail(); }
+    if (lead.processed) { loadPipelineData(lead.ref); } else { clearCards(); resetConstraintsForNewLead(); showDetail(); }
 }
 
 async function selectPipeLead(ref) {
@@ -262,7 +457,11 @@ async function processLead() {
     try {
         const steps=["8a","8b","8c","8d","8e","8f","write"]; let si=0;
         const timer=setInterval(()=>{if(si<steps.length-1){stepState(steps[si],"done");si++;stepState(steps[si],"active");}},15000);
-        const payload = selectedLead.formRow ? {formRow:selectedLead.formRow} : {ref:selectedLead.ref};
+        // v75 — envoyer les contraintes du panneau avec la requête de traitement
+        const constraintsToSend = collectConstraintsFromForm();
+        const payload = selectedLead.formRow
+            ? {formRow:selectedLead.formRow, constraints:constraintsToSend}
+            : {ref:selectedLead.ref, constraints:constraintsToSend};
         const r=await fetch(`${API}/api/process-lead`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
         clearInterval(timer); const d=await r.json();
         if (!r.ok||!d.ok) throw new Error(d.error||"Échec");
@@ -326,6 +525,8 @@ function renderDetail(L) {
     ["A","B","C"].forEach(s=>{const rec=(L.recommended_scenario_final||"").toUpperCase().includes(s);$(`scn${s}`).innerHTML=`${rec?'<div style="color:var(--forest);font-weight:700;font-size:.78rem;margin-bottom:.5rem">★ Recommandé</div>':''}<div style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem"><div>${dRows([["Rôle",L[`scenario_${s}_role`]||"—"],["Label",L[`scenario_${s}_label`]||"—"],["Emprise",fmt(L[`fp_${s}_m2`]," m²")],["Niveaux",L[`levels_${s}`]||"—"]])}</div><div>${dRows([["SDP",fmt(L[`sdp_${s}`]," m²")],["Coût",fmtC(L[`${s}_cost_total`])],["Unités",L[`total_units_${s}`]||"—"],["Rendement",L[`rendement_${s}`]?`${(Number(L[`rendement_${s}`])*100).toFixed(1)}%`:"—"]])}</div></div>`;});
     const imgs=[{l:"Satellite",u:L.satellite_url},{l:"Axo",u:L.axo_url},{l:"Massing A",u:L.massing_A_url},{l:"Massing B",u:L.massing_B_url},{l:"Massing C",u:L.massing_C_url}].filter(i=>i.u);
     $("cardImages").innerHTML=imgs.length?imgs.map(i=>`<div class="img-thumb"><img src="${i.u}" onerror="this.style.display='none'"><div class="cap">${i.l}</div></div>`).join(""):'<div style="color:var(--text2);font-size:.8rem">Images générées avec le PPTX</div>';
+    // v75 — Repopule le panneau contraintes depuis les données du lead
+    populateConstraintsFromLead(L);
 }
 
 function clearCards(){["cardTerrain","cardScores","cardZoning","cardBudget","scnA","scnB","scnC"].forEach(id=>$(id).innerHTML='<div style="color:var(--text2);font-size:.8rem;padding:.3rem">Données disponibles après traitement</div>');$("cardImages").innerHTML="";["kSurface","kEnvelope","kFloors","kPosture"].forEach(id=>$(id).textContent="—");}
