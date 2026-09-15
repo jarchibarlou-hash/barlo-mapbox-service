@@ -10291,6 +10291,14 @@ app.post("/generate-pptx", async (req, res) => {
     // Step 5: Prepare data JSON for Python
     // generate_pptx.py reads: data['texts'], data['images'], data['scenarios'],
     //   data['client_name'], data['recommended']
+
+    // v75.2 — fetch unites structurees + polygone parcelle pour slides "Plan d'implantation"
+    const leadRefForUnits = String(p.barlo_code || p.lead_ref || p.lead_id || p.ref || "").trim();
+    const unitsByScenario = await fetchLeadUnitsForPptx(leadRefForUnits);
+    const parcelPolygon = parseSitePolygonForPptx(p.site_polygon || p.site_polygon_points);
+    const totalUnitsPptx = (unitsByScenario.A.length || 0) + (unitsByScenario.B.length || 0) + (unitsByScenario.C.length || 0);
+    console.log(`[GENERATE-PPTX] v75.2 plan slides : leadRef="${leadRefForUnits}", units total=${totalUnitsPptx}, polygon pts=${parcelPolygon.length}`);
+
     const pptxData = {
       ...flat,
       client_name: p.client_name || "",
@@ -10316,6 +10324,10 @@ app.post("/generate-pptx", async (req, res) => {
       rec_score: flat.rec_score,
       // Top-level 'recommended' key (generate_charts.py line 614)
       recommended: flat.rec_scenario || "A",
+      // v75.2 — Plan d'implantation slides (nouvelles slides par scénario, s'AJOUTENT à la vue axo)
+      units_by_scenario: unitsByScenario,
+      parcel_polygon: parcelPolygon,
+      lead_ref: leadRefForUnits,
     };
     // Step 5: Write data to temp file and call Python
     const tmpDir = `/tmp/pptx_${Date.now()}`;
@@ -10572,6 +10584,75 @@ function getLeadUnitsSupabase() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 }
 
+// v75.2 — Lit sb_lead_units et retourne { A:[], B:[], C:[] } pour injection dans le body Python
+// leadRef : ex "BARLO-FMM4". Retourne {A:[],B:[],C:[]} vide si Supabase absent, table manquante, ou lead sans unités.
+async function fetchLeadUnitsForPptx(leadRef) {
+  const empty = { A: [], B: [], C: [] };
+  if (!leadRef) return empty;
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return empty;
+  try {
+    const { data, error } = await sb
+      .from("sb_lead_units")
+      .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes")
+      .eq("lead_ref", String(leadRef).trim())
+      .order("scenario", { ascending: true })
+      .order("unit_index", { ascending: true });
+    if (error) {
+      console.warn(`[FETCH-LEAD-UNITS-PPTX] ${leadRef} : ${error.message}`);
+      return empty;
+    }
+    const grouped = { A: [], B: [], C: [] };
+    for (const row of data || []) {
+      if (grouped[row.scenario]) {
+        grouped[row.scenario].push({
+          index: row.unit_index,
+          type: row.unit_type,
+          name: row.unit_name || "",
+          size_m2: Number(row.unit_size_m2) || 0,
+          sector: row.placement_sector || null,
+          notes: row.notes || ""
+        });
+      }
+    }
+    return grouped;
+  } catch (err) {
+    console.warn(`[FETCH-LEAD-UNITS-PPTX] ${leadRef} : ${err.message}`);
+    return empty;
+  }
+}
+
+// v75.2 — Parse un polygone GPS depuis site_polygon_points / site_polygon (string ou array)
+// Formats acceptés : "lat,lon;lat,lon;..." OU "lat,lon lat,lon ..." OU JSON array [[lat,lon], ...]
+// Retourne [[lat,lon], ...] ou [] si impossible
+function parseSitePolygonForPptx(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map(p => {
+      if (Array.isArray(p) && p.length >= 2) return [Number(p[0]), Number(p[1])];
+      if (p && typeof p === "object" && "lat" in p && "lon" in p) return [Number(p.lat), Number(p.lon)];
+      return null;
+    }).filter(Boolean);
+  }
+  const s = String(raw).trim();
+  if (!s) return [];
+  // Try JSON first
+  if (s.startsWith("[")) {
+    try {
+      const arr = JSON.parse(s);
+      return parseSitePolygonForPptx(arr);
+    } catch (e) { /* fallthrough */ }
+  }
+  // Comma+semicolon or space-separated
+  const parts = s.split(/[;\n]+/).map(x => x.trim()).filter(Boolean);
+  const pts = [];
+  for (const part of parts) {
+    const nums = part.split(/[,\s]+/).map(Number).filter(n => Number.isFinite(n));
+    if (nums.length >= 2) pts.push([nums[0], nums[1]]);
+  }
+  return pts;
+}
+
 // ─── GET /api/lead-units/:ref — Récupère les unités structurées d'un lead ────
 // Retour : { ok:true, units: { A:[...], B:[...], C:[...] } }
 app.get("/api/lead-units/:ref", async (req, res) => {
@@ -10758,11 +10839,12 @@ app.post("/api/suggest-placement", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v75.1.0-cockpit on port ${PORT}`);
+  console.log(`BARLO v75.2.0-plan-pptx on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
   console.log(`Google Maps: ${GOOGLE_MAPS_API_KEY ? "OK" : "MISSING (fallback Mapbox satellite)"}`);
   console.log(`Supabase:    ${SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY ? "OK (sb_lead_units)" : "MISSING"}`);
   console.log(`Pricing:     ${process.env.ENABLE_BUDGET_ADJUST === "true" ? "LEGACY (adjust to floor)" : "HONEST (market price always)"}`);
+  console.log(`Plan slides: ADD after each massing (v75.2.0)`);
 });
