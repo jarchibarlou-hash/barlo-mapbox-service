@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.2</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.3</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1952,20 +1952,62 @@ function renderParcelSvg(label) {
         p.hasOverlap = hasOverlap;
     });
 
+    // v75.8.6 — CLIP AUTO parcelle + tetris mutuel pour tous les rects standard (sans u.polygon custom)
+    placements.forEach(p => {
+        if (p.u.polygon && p.u.polygon.length >= 3) return;   // custom polygon, skip
+        const rectPoly = rectToPolygonXY(p.ux, p.uy, p.uW, p.uH, p.rotDeg);
+        const clipped = sutherlandHodgmanClip(rectPoly, svgPtsBuildable);
+        if (clipped && clipped.length >= 3) p.pxPolyClipped = clipped;
+    });
+    // Clip mutuel entre placements clippés (max 3 itérations pour cascade)
+    for (let iter = 0; iter < 3; iter++) {
+        let anyClip = false;
+        for (let i = 0; i < placements.length; i++) {
+            for (let j = i + 1; j < placements.length; j++) {
+                const A = placements[i], B = placements[j];
+                if (!A.pxPolyClipped || !B.pxPolyClipped) continue;
+                if (A.pxPolyClipped.length < 3 || B.pxPolyClipped.length < 3) continue;
+                const cxA = A.pxPolyClipped.reduce((s,pt)=>s+pt.x,0)/A.pxPolyClipped.length;
+                const cyA = A.pxPolyClipped.reduce((s,pt)=>s+pt.y,0)/A.pxPolyClipped.length;
+                const cxB = B.pxPolyClipped.reduce((s,pt)=>s+pt.x,0)/B.pxPolyClipped.length;
+                const cyB = B.pxPolyClipped.reduce((s,pt)=>s+pt.y,0)/B.pxPolyClipped.length;
+                const rA = Math.max(...A.pxPolyClipped.map(pt=>Math.hypot(pt.x-cxA,pt.y-cyA)));
+                const rB = Math.max(...B.pxPolyClipped.map(pt=>Math.hypot(pt.x-cxB,pt.y-cyB)));
+                const d = Math.hypot(cxB-cxA, cyB-cyA) || 0.01;
+                if (d < rA + rB - 2) {
+                    anyClip = true;
+                    const midX = (cxA + cxB) / 2, midY = (cyA + cyB) / 2;
+                    const nAx = (cxA - cxB) / d, nAy = (cyA - cyB) / d;
+                    A.pxPolyClipped = clipByHalfPlane(A.pxPolyClipped, midX, midY, nAx, nAy);
+                    B.pxPolyClipped = clipByHalfPlane(B.pxPolyClipped, midX, midY, -nAx, -nAy);
+                }
+            }
+        }
+        if (!anyClip) break;
+    }
+
     // v75.6.3 — Rendu HTML depuis placements finaux
     let unitsHtml = "";
     placements.forEach(p => {
-        const { u, i, globalIdx, ux, uy, uW, uH, rotDeg, areaM2, displayW_m, displayH_m, color, label2, hasOverlap } = p;
+        const { u, i, globalIdx, ux, uy, uW, uH, rotDeg, areaM2, displayW_m, displayH_m, color, label2, hasOverlap, pxPolyClipped } = p;
         const handleDist = uH/2 + 12;
         const strokeColor = hasOverlap ? "#EF4444" : "#fff";
         const strokeDash = hasOverlap ? ' stroke-dasharray="4,2"' : "";
-        unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
-        // v75.8.0 — Si u.polygon défini, rendu polygone libre au lieu de rectangle
+        // v75.8.6 — Priorité de rendu : (1) u.polygon custom (2) pxPolyClipped auto (3) rect fallback
         if (u.polygon && u.polygon.length >= 3) {
+            unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
             const scaleP = _svgRefs[label] ? _svgRefs[label].scale : 1;
             const polyPtsStr = u.polygon.map(pt => `${(pt.x_m * scaleP).toFixed(1)},${(-pt.y_m * scaleP).toFixed(1)}`).join(" ");
             unitsHtml += `<polygon class="body" points="${polyPtsStr}" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
+        } else if (pxPolyClipped && pxPolyClipped.length >= 3) {
+            // Clip auto : polygone en coord absolues, wrapper translate(centroïde) sans rotate
+            const cxAbs = pxPolyClipped.reduce((s,pt)=>s+pt.x,0) / pxPolyClipped.length;
+            const cyAbs = pxPolyClipped.reduce((s,pt)=>s+pt.y,0) / pxPolyClipped.length;
+            const localPts = pxPolyClipped.map(pt => `${(pt.x - cxAbs).toFixed(1)},${(pt.y - cyAbs).toFixed(1)}`).join(" ");
+            unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${cxAbs.toFixed(1)},${cyAbs.toFixed(1)})">`;
+            unitsHtml += `<polygon class="body" points="${localPts}" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
         } else {
+            unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
             unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
         }
         if (hasOverlap) {
