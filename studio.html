@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.2</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.3</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -915,6 +915,77 @@ function resetSegmentsToMoteur() {
     showToast("Retraits par segment réinitialisés aux valeurs moteur");
 }
 
+// v75.6.3 — Push local d'un rectangle DANS le polygone (sans retour au centre)
+// À chaque itération : pour chaque corner outside, calcule le vecteur vers le projeté sur l'arête violée
+// et applique la somme des vecteurs de push. Termine quand tous corners inside OU maxIter atteint.
+function pushRectInsidePolygon(cx, cy, w, h, rd, poly, maxIter) {
+    if (!poly || poly.length < 3) return { x: cx, y: cy };
+    maxIter = maxIter || 40;
+    const rot = rd * Math.PI / 180;
+    const localCorners = [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
+    let px = cx, py = cy;
+    for (let iter = 0; iter < maxIter; iter++) {
+        const corners = localCorners.map(([lx, ly]) => ({
+            x: px + lx*Math.cos(rot) - ly*Math.sin(rot),
+            y: py + lx*Math.sin(rot) + ly*Math.cos(rot)
+        }));
+        const outside = corners.filter(c => !pointInPolygonPx(c, poly));
+        if (outside.length === 0) return { x: px, y: py };
+        // Somme des vecteurs de push (corner outside → projeté le plus proche sur polygone)
+        let pushX = 0, pushY = 0;
+        for (const c of outside) {
+            let bestProj = null, bestDist = Infinity;
+            for (let i = 0; i < poly.length; i++) {
+                const { proj, dist } = projectPointOnSegment(c, poly[i], poly[(i + 1) % poly.length]);
+                if (dist < bestDist) { bestDist = dist; bestProj = proj; }
+            }
+            if (bestProj) {
+                pushX += bestProj.x - c.x;
+                pushY += bestProj.y - c.y;
+            }
+        }
+        // Push proportionnel (facteur 1.05 pour éviter oscillations)
+        px += (pushX / outside.length) * 1.05;
+        py += (pushY / outside.length) * 1.05;
+    }
+    return { x: px, y: py };
+}
+
+// v75.6.3 — Overlap check + résolution pairwise (approx via cercles englobants)
+function circleFromRect(w, h) { return Math.hypot(w, h) / 2; }
+function resolveOverlaps(placements, poly, maxIter) {
+    maxIter = maxIter || 12;
+    for (let iter = 0; iter < maxIter; iter++) {
+        let anyOverlap = false;
+        for (let i = 0; i < placements.length; i++) {
+            for (let j = i + 1; j < placements.length; j++) {
+                const A = placements[i], B = placements[j];
+                const rA = circleFromRect(A.uW, A.uH) * 0.85;   // approx léger tighter
+                const rB = circleFromRect(B.uW, B.uH) * 0.85;
+                const dx = B.ux - A.ux, dy = B.uy - A.uy;
+                const d = Math.hypot(dx, dy) || 0.01;
+                const overlap = (rA + rB) - d;
+                if (overlap > 2) {
+                    anyOverlap = true;
+                    // Pousse chacun de la moitié dans la direction opposée
+                    const push = overlap / 2 + 0.5;
+                    const ux = dx / d, uy = dy / d;
+                    A.ux -= ux * push; A.uy -= uy * push;
+                    B.ux += ux * push; B.uy += uy * push;
+                    // Re-clip DANS polygone après push
+                    if (poly) {
+                        const pa = pushRectInsidePolygon(A.ux, A.uy, A.uW, A.uH, A.rotDeg, poly, 15);
+                        A.ux = pa.x; A.uy = pa.y;
+                        const pb = pushRectInsidePolygon(B.ux, B.uy, B.uW, B.uH, B.rotDeg, poly, 15);
+                        B.ux = pb.x; B.uy = pb.y;
+                    }
+                }
+            }
+        }
+        if (!anyOverlap) break;
+    }
+}
+
 // v75.6.2 — Snap dimensions aux valeurs "architecte" (entier/demi-entier)
 // Ex : 50m² 1.2:1 → 8×6, 50m² 2:1 → 10×5, 36m² 1:1 → 6×6, 48m² 1.5:1 → 8×6
 function niceRoundDimensions(areaM2, targetAspect) {
@@ -1161,7 +1232,7 @@ function renderParcelSvg(label) {
         segCotesHtml += `<g><rect x="${(midX - 13).toFixed(1)}" y="${(midY - 6).toFixed(1)}" width="26" height="12" rx="2" fill="rgba(11,17,32,0.85)" stroke="#c9a878" stroke-width="0.5"/><text x="${midX.toFixed(1)}" y="${(midY + 0.5).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#FBBF24" font-size="8.5" font-weight="700" font-family="Inter">${segLenM}m</text></g>`;
     }
 
-    // v75.4.0 — Placement unités : fix superposition (fan angulaire dans secteur) + support offset drag explicite
+    // v75.4.0/v75.6.3 — Placement unités : 2 passes (collecte + resolve overlaps + render)
     const allUnits = cockpitState.scenarios[label].units || [];
     // Passe pré-comptage : combien d'unités dans chaque secteur (pour fan angulaire)
     const sectorTotal = {};
@@ -1171,7 +1242,7 @@ function renderParcelSvg(label) {
         }
     });
     const units = allUnits.filter(u => u.placement_sector);
-    let unitsHtml = "";
+    const placements = [];   // v75.6.3 : collecte des placements avant resolve overlaps
     const sectorCount = {};
     units.forEach((u, i) => {
         const s = u.placement_sector;
@@ -1258,74 +1329,60 @@ function renderParcelSvg(label) {
             uy = cySvg + Math.sin(rad) * safeDist;
         }
 
-        // v75.6.2 — Fix débordement : distingue mode DRAG (respect position user) vs HEURISTIQUE (shrink OK)
-        const checkCornersInPoly = (cx, cy, w, h, rd) => {
-            const rot = rd * Math.PI / 180;
-            return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx,ly]) => ({
-                x: cx + lx*Math.cos(rot) - ly*Math.sin(rot),
-                y: cy + lx*Math.sin(rot) + ly*Math.cos(rot)
+        // v75.6.3 — Push inside polygon (locale, sans retour au centre) : le rect ne peut plus déborder
+        const wasOutside = !((()=>{
+            const rot = rotDeg * Math.PI / 180;
+            return [[-uW/2,-uH/2],[uW/2,-uH/2],[uW/2,uH/2],[-uW/2,uH/2]].map(([lx,ly]) => ({
+                x: ux + lx*Math.cos(rot) - ly*Math.sin(rot),
+                y: uy + lx*Math.sin(rot) + ly*Math.cos(rot)
             })).every(p => pointInPolygonPx(p, svgPtsBuildable));
-        };
-        let isOversized = false;
-        const hasExplicitPosition = (u.offset_x_m !== undefined && u.offset_x_m !== null);
-
-        if (hasExplicitPosition) {
-            // MODE DRAG/EXPLICITE : RESPECTE la position user. Juste warning si déborde.
-            if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
-                isOversized = true;
-            }
-        } else if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
-            // MODE HEURISTIQUE : shrink/rétractation OK
-            let placedFullSize = false;
-            for (let t = 0.9; t >= 0.05; t -= 0.05) {
-                const tx = cxSvg + (ux - cxSvg) * t;
-                const ty = cySvg + (uy - cySvg) * t;
-                if (checkCornersInPoly(tx, ty, uW, uH, rotDeg)) {
-                    ux = tx; uy = ty; placedFullSize = true; break;
-                }
-            }
-            if (!placedFullSize) {
-                let shrunkOK = false;
-                for (let shrink = 0.98; shrink >= 0.60; shrink -= 0.03) {
-                    for (let t = 1.0; t >= 0.10; t -= 0.15) {
-                        const tx = cxSvg + (ux - cxSvg) * t;
-                        const ty = cySvg + (uy - cySvg) * t;
-                        if (checkCornersInPoly(tx, ty, uW * shrink, uH * shrink, rotDeg)) {
-                            uW *= shrink; uH *= shrink; ux = tx; uy = ty;
-                            shrunkOK = true;
-                            if (shrink < 0.85) isOversized = true;
-                            break;
-                        }
-                    }
-                    if (shrunkOK) break;
-                }
-                if (!shrunkOK) {
-                    uW *= 0.60; uH *= 0.60;
-                    ux = cxSvg; uy = cySvg;
-                    isOversized = true;
-                }
-            }
+        })());
+        if (wasOutside) {
+            const pos = pushRectInsidePolygon(ux, uy, uW, uH, rotDeg, svgPtsBuildable, 40);
+            ux = pos.x; uy = pos.y;
         }
+        placements.push({
+            u, i, globalIdx, ux, uy, uW, uH, rotDeg,
+            areaM2, displayW_m, displayH_m,
+            color: UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE,
+            label2: (u.unit_name || u.unit_type || "?").substring(0, 10),
+            wasOutside
+        });
+    });
 
-        const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
-        const label2 = (u.unit_name || u.unit_type || "?").substring(0, 10);
+    // v75.6.3 — Résolution overlaps entre unités + re-clip dans polygone
+    resolveOverlaps(placements, svgPtsBuildable, 15);
+    placements.forEach(p => {
+        // Final re-clip après résolution
+        const pos = pushRectInsidePolygon(p.ux, p.uy, p.uW, p.uH, p.rotDeg, svgPtsBuildable, 25);
+        p.ux = pos.x; p.uy = pos.y;
+        // Détecte overlap résiduel (pour warning visuel)
+        for (const q of placements) {
+            if (q === p) continue;
+            const rP = circleFromRect(p.uW, p.uH) * 0.85;
+            const rQ = circleFromRect(q.uW, q.uH) * 0.85;
+            const d = Math.hypot(q.ux - p.ux, q.uy - p.uy);
+            if (d < rP + rQ - 3) { p.hasOverlap = true; break; }
+        }
+    });
+
+    // v75.6.3 — Rendu HTML depuis placements finaux
+    let unitsHtml = "";
+    placements.forEach(p => {
+        const { u, i, globalIdx, ux, uy, uW, uH, rotDeg, areaM2, displayW_m, displayH_m, color, label2, hasOverlap } = p;
         const handleDist = uH/2 + 12;
-        // v75.6.2 : bordure rouge pointillée si l'unité a été shrinkée (>15%) — signal qu'elle ne rentre pas physiquement
-        const strokeColor = isOversized ? "#EF4444" : "#fff";
-        const strokeDash = isOversized ? ' stroke-dasharray="4,2"' : "";
+        const strokeColor = hasOverlap ? "#EF4444" : "#fff";
+        const strokeDash = hasOverlap ? ' stroke-dasharray="4,2"' : "";
         unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
-        unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${isOversized?"2":"1.2"}"${strokeDash}/>`;
-        if (isOversized) {
-            unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ trop grand</text>`;
+        unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
+        if (hasOverlap) {
+            unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ conflit</text>`;
         }
-        // v75.6.2 : Nom au-dessus + dimensions "W×H · area m²" sous, TOUS DEUX DANS le rectangle
         const fsName = Math.max(7, Math.min(13, uH * 0.24));
         const fsArea = Math.max(6, Math.min(10, uH * 0.18));
-        const dimsLabel = `${displayW_m}×${displayH_m}m`;
-        const areaLabel = `${dimsLabel} · ${areaM2}m²`;
+        const areaLabel = `${displayW_m}×${displayH_m}m · ${areaM2}m²`;
         unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
         unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
-        // v75.5.0 — trait vers poignée + poignée rotation (position "au-dessus" du rectangle en repère local)
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
         unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
         unitsHtml += `</g>`;
