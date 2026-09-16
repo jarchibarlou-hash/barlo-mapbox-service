@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.3</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.7.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -915,6 +915,55 @@ function resetSegmentsToMoteur() {
     showToast("Retraits par segment réinitialisés aux valeurs moteur");
 }
 
+// v75.7.0 — Auto-adaptation intelligente : cherche la meilleure (W, H, rot) préservant l'aire m²
+// qui rentre dans le polygone constructible sans overlap avec les autres unités.
+// Balaie ratios (0.5→4) et rotations (0, pref, pref+45, pref+90).
+function autoFitShape(areaM2, cx, cy, prefRotDeg, scale, poly, otherPlacements) {
+    if (areaM2 <= 0 || !poly || poly.length < 3) return null;
+    // Fonction test : rect (cx, cy, w, h, rot) rentre dans poly + no overlap
+    const testFit = (wPx, hPx, rotDeg) => {
+        const rot = rotDeg * Math.PI / 180;
+        // Corners in poly ?
+        const cornersOK = [[-wPx/2,-hPx/2],[wPx/2,-hPx/2],[wPx/2,hPx/2],[-wPx/2,hPx/2]].map(([lx,ly]) => ({
+            x: cx + lx*Math.cos(rot) - ly*Math.sin(rot),
+            y: cy + lx*Math.sin(rot) + ly*Math.cos(rot)
+        })).every(p => pointInPolygonPx(p, poly));
+        if (!cornersOK) return false;
+        // No overlap avec autres unités (approx cercle englobant)
+        const rMe = Math.hypot(wPx, hPx) / 2 * 0.85;
+        for (const q of (otherPlacements || [])) {
+            const rQ = Math.hypot(q.uW, q.uH) / 2 * 0.85;
+            const d = Math.hypot(q.ux - cx, q.uy - cy);
+            if (d < rMe + rQ - 3) return false;
+        }
+        return true;
+    };
+    // Ratios W/H à essayer (préservant area) : range architecte
+    const ratios = [1, 1.2, 1.5, 1.8, 2, 2.5, 3, 4, 0.5, 0.67, 0.83];
+    // Rotations candidates (priorité à celle proposée + variantes 45/90)
+    const rots = [prefRotDeg, prefRotDeg + 90, prefRotDeg + 45, prefRotDeg - 45, 0, 90]
+        .map(r => ((r % 360) + 360) % 360);
+    const candidates = [];
+    for (const ratio of ratios) {
+        const w_m = Math.sqrt(areaM2 * ratio);
+        const h_m = areaM2 / w_m;
+        if (w_m < 2 || h_m < 2 || w_m > 40 || h_m > 40) continue;
+        const wPx = w_m * scale;
+        const hPx = h_m * scale;
+        for (const rot of rots) {
+            if (testFit(wPx, hPx, rot)) {
+                // Score : préfère ratio proche de 1.5 (rectangle classique) et rotation proche de prefRotDeg
+                const ratioScore = Math.abs(ratio - 1.5);
+                const rotScore = Math.min(Math.abs(rot - prefRotDeg), Math.abs(rot - prefRotDeg - 180)) / 90;
+                candidates.push({ w_m, h_m, rot, score: ratioScore + rotScore * 0.5 });
+            }
+        }
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.score - b.score);
+    return candidates[0];
+}
+
 // v75.6.3 — Push local d'un rectangle DANS le polygone (sans retour au centre)
 // À chaque itération : pour chaque corner outside, calcule le vecteur vers le projeté sur l'arête violée
 // et applique la somme des vecteurs de push. Termine quand tous corners inside OU maxIter atteint.
@@ -1329,41 +1378,68 @@ function renderParcelSvg(label) {
             uy = cySvg + Math.sin(rad) * safeDist;
         }
 
-        // v75.6.3 — Push inside polygon (locale, sans retour au centre) : le rect ne peut plus déborder
-        const wasOutside = !((()=>{
-            const rot = rotDeg * Math.PI / 180;
-            return [[-uW/2,-uH/2],[uW/2,-uH/2],[uW/2,uH/2],[-uW/2,uH/2]].map(([lx,ly]) => ({
-                x: ux + lx*Math.cos(rot) - ly*Math.sin(rot),
-                y: uy + lx*Math.sin(rot) + ly*Math.cos(rot)
-            })).every(p => pointInPolygonPx(p, svgPtsBuildable));
-        })());
-        if (wasOutside) {
+        // v75.6.3 — Push inside polygon
+        const checkCorners = (cx, cy, w, h, rd, poly) => {
+            const rot = rd * Math.PI / 180;
+            return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx,ly]) => ({
+                x: cx + lx*Math.cos(rot) - ly*Math.sin(rot),
+                y: cy + lx*Math.sin(rot) + ly*Math.cos(rot)
+            })).every(p => pointInPolygonPx(p, poly));
+        };
+        if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
             const pos = pushRectInsidePolygon(ux, uy, uW, uH, rotDeg, svgPtsBuildable, 40);
             ux = pos.x; uy = pos.y;
+        }
+        // v75.7.0 — AUTO-FIT : si le rect ne rentre toujours pas après push, cherche meilleure (W, H, rot)
+        // en préservant la surface m². Utilise autres unités déjà placées comme contrainte no-overlap.
+        if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
+            const fit = autoFitShape(areaM2, ux, uy, rotDeg, scale, svgPtsBuildable, placements);
+            if (fit) {
+                uW = fit.w_m * scale;
+                uH = fit.h_m * scale;
+                rotDeg = fit.rot;
+                displayW_m = fit.w_m;
+                displayH_m = fit.h_m;
+                // Si dimensions non entières après auto-fit, arrondi léger (0.5)
+                displayW_m = Math.round(displayW_m * 2) / 2;
+                displayH_m = Math.round(displayH_m * 2) / 2;
+            }
         }
         placements.push({
             u, i, globalIdx, ux, uy, uW, uH, rotDeg,
             areaM2, displayW_m, displayH_m,
             color: UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE,
-            label2: (u.unit_name || u.unit_type || "?").substring(0, 10),
-            wasOutside
+            label2: (u.unit_name || u.unit_type || "?").substring(0, 10)
         });
     });
 
     // v75.6.3 — Résolution overlaps entre unités + re-clip dans polygone
     resolveOverlaps(placements, svgPtsBuildable, 15);
-    placements.forEach(p => {
-        // Final re-clip après résolution
+    placements.forEach((p, idx) => {
         const pos = pushRectInsidePolygon(p.ux, p.uy, p.uW, p.uH, p.rotDeg, svgPtsBuildable, 25);
         p.ux = pos.x; p.uy = pos.y;
-        // Détecte overlap résiduel (pour warning visuel)
+        // v75.7.0 — Si overlap résiduel avec autres, tente auto-fit sous contrainte
+        let hasOverlap = false;
         for (const q of placements) {
             if (q === p) continue;
             const rP = circleFromRect(p.uW, p.uH) * 0.85;
             const rQ = circleFromRect(q.uW, q.uH) * 0.85;
             const d = Math.hypot(q.ux - p.ux, q.uy - p.uy);
-            if (d < rP + rQ - 3) { p.hasOverlap = true; break; }
+            if (d < rP + rQ - 3) { hasOverlap = true; break; }
         }
+        if (hasOverlap) {
+            const others = placements.filter(q => q !== p);
+            const fit = autoFitShape(p.areaM2, p.ux, p.uy, p.rotDeg, scale, svgPtsBuildable, others);
+            if (fit) {
+                p.uW = fit.w_m * scale;
+                p.uH = fit.h_m * scale;
+                p.rotDeg = fit.rot;
+                p.displayW_m = Math.round(fit.w_m * 2) / 2;
+                p.displayH_m = Math.round(fit.h_m * 2) / 2;
+                hasOverlap = false;   // auto-fit résolu
+            }
+        }
+        p.hasOverlap = hasOverlap;
     });
 
     // v75.6.3 — Rendu HTML depuis placements finaux
