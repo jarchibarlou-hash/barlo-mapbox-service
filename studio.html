@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.7.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.7.1</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1000,7 +1000,8 @@ function pushRectInsidePolygon(cx, cy, w, h, rd, poly, maxIter) {
     return { x: px, y: py };
 }
 
-// v75.6.3 — Overlap check + résolution pairwise (approx via cercles englobants)
+// v75.6.3 / v75.7.1 — Overlap check + résolution pairwise avec PRIORITÉ POSITION DRAG
+// Les placements avec placement.isDragged = true sont FIXES : les autres s'écartent d'eux.
 function circleFromRect(w, h) { return Math.hypot(w, h) / 2; }
 function resolveOverlaps(placements, poly, maxIter) {
     maxIter = maxIter || 12;
@@ -1009,24 +1010,35 @@ function resolveOverlaps(placements, poly, maxIter) {
         for (let i = 0; i < placements.length; i++) {
             for (let j = i + 1; j < placements.length; j++) {
                 const A = placements[i], B = placements[j];
-                const rA = circleFromRect(A.uW, A.uH) * 0.85;   // approx léger tighter
+                const rA = circleFromRect(A.uW, A.uH) * 0.85;
                 const rB = circleFromRect(B.uW, B.uH) * 0.85;
                 const dx = B.ux - A.ux, dy = B.uy - A.uy;
                 const d = Math.hypot(dx, dy) || 0.01;
                 const overlap = (rA + rB) - d;
                 if (overlap > 2) {
                     anyOverlap = true;
-                    // Pousse chacun de la moitié dans la direction opposée
-                    const push = overlap / 2 + 0.5;
+                    const push = overlap + 1;
                     const ux = dx / d, uy = dy / d;
-                    A.ux -= ux * push; A.uy -= uy * push;
-                    B.ux += ux * push; B.uy += uy * push;
-                    // Re-clip DANS polygone après push
+                    // v75.7.1 : priorité positions user (drag). Si A est drag et B pas → B seul bouge, et vice-versa.
+                    // Si les 2 sont drag → chacun bouge moitié (compromis). Si aucun n'est drag → chacun moitié.
+                    if (A.isDragged && !B.isDragged) {
+                        B.ux += ux * push; B.uy += uy * push;
+                    } else if (B.isDragged && !A.isDragged) {
+                        A.ux -= ux * push; A.uy -= uy * push;
+                    } else {
+                        A.ux -= ux * (push / 2); A.uy -= uy * (push / 2);
+                        B.ux += ux * (push / 2); B.uy += uy * (push / 2);
+                    }
+                    // Re-clip DANS polygone après push — MAIS pas pour les unités drag (position user preservée)
                     if (poly) {
-                        const pa = pushRectInsidePolygon(A.ux, A.uy, A.uW, A.uH, A.rotDeg, poly, 15);
-                        A.ux = pa.x; A.uy = pa.y;
-                        const pb = pushRectInsidePolygon(B.ux, B.uy, B.uW, B.uH, B.rotDeg, poly, 15);
-                        B.ux = pb.x; B.uy = pb.y;
+                        if (!A.isDragged) {
+                            const pa = pushRectInsidePolygon(A.ux, A.uy, A.uW, A.uH, A.rotDeg, poly, 15);
+                            A.ux = pa.x; A.uy = pa.y;
+                        }
+                        if (!B.isDragged) {
+                            const pb = pushRectInsidePolygon(B.ux, B.uy, B.uW, B.uH, B.rotDeg, poly, 15);
+                            B.ux = pb.x; B.uy = pb.y;
+                        }
                     }
                 }
             }
@@ -1378,7 +1390,8 @@ function renderParcelSvg(label) {
             uy = cySvg + Math.sin(rad) * safeDist;
         }
 
-        // v75.6.3 — Push inside polygon
+        // v75.7.1 — Distingue mode DRAG (position user prioritaire) vs mode HEURISTIQUE
+        const isDragged = (u.offset_x_m !== undefined && u.offset_x_m !== null);
         const checkCorners = (cx, cy, w, h, rd, poly) => {
             const rot = rd * Math.PI / 180;
             return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx,ly]) => ({
@@ -1386,38 +1399,54 @@ function renderParcelSvg(label) {
                 y: cy + lx*Math.sin(rot) + ly*Math.cos(rot)
             })).every(p => pointInPolygonPx(p, poly));
         };
-        if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
-            const pos = pushRectInsidePolygon(ux, uy, uW, uH, rotDeg, svgPtsBuildable, 40);
-            ux = pos.x; uy = pos.y;
-        }
-        // v75.7.0 — AUTO-FIT : si le rect ne rentre toujours pas après push, cherche meilleure (W, H, rot)
-        // en préservant la surface m². Utilise autres unités déjà placées comme contrainte no-overlap.
-        if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
-            const fit = autoFitShape(areaM2, ux, uy, rotDeg, scale, svgPtsBuildable, placements);
-            if (fit) {
-                uW = fit.w_m * scale;
-                uH = fit.h_m * scale;
-                rotDeg = fit.rot;
-                displayW_m = fit.w_m;
-                displayH_m = fit.h_m;
-                // Si dimensions non entières après auto-fit, arrondi léger (0.5)
-                displayW_m = Math.round(displayW_m * 2) / 2;
-                displayH_m = Math.round(displayH_m * 2) / 2;
+
+        if (isDragged) {
+            // Mode DRAG : GARDE la position user. Si déborde → essaie autoFit (change W/H/rot, garde ux/uy).
+            // Si aucune forme ne rentre à cette position → juste warning (bordure rouge).
+            if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
+                const fit = autoFitShape(areaM2, ux, uy, rotDeg, scale, svgPtsBuildable, placements);
+                if (fit) {
+                    uW = fit.w_m * scale;
+                    uH = fit.h_m * scale;
+                    rotDeg = fit.rot;
+                    displayW_m = Math.round(fit.w_m * 2) / 2;
+                    displayH_m = Math.round(fit.h_m * 2) / 2;
+                }
+                // Si toujours pas de fit trouvé → position user gardée, sera flag hasOverlap
+            }
+        } else {
+            // Mode HEURISTIQUE : push inside polygon + autoFit si besoin
+            if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
+                const pos = pushRectInsidePolygon(ux, uy, uW, uH, rotDeg, svgPtsBuildable, 40);
+                ux = pos.x; uy = pos.y;
+            }
+            if (!checkCorners(ux, uy, uW, uH, rotDeg, svgPtsBuildable)) {
+                const fit = autoFitShape(areaM2, ux, uy, rotDeg, scale, svgPtsBuildable, placements);
+                if (fit) {
+                    uW = fit.w_m * scale;
+                    uH = fit.h_m * scale;
+                    rotDeg = fit.rot;
+                    displayW_m = Math.round(fit.w_m * 2) / 2;
+                    displayH_m = Math.round(fit.h_m * 2) / 2;
+                }
             }
         }
         placements.push({
             u, i, globalIdx, ux, uy, uW, uH, rotDeg,
             areaM2, displayW_m, displayH_m,
+            isDragged,   // v75.7.1 : flag pour resolveOverlaps
             color: UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE,
             label2: (u.unit_name || u.unit_type || "?").substring(0, 10)
         });
     });
 
-    // v75.6.3 — Résolution overlaps entre unités + re-clip dans polygone
+    // v75.6.3 / v75.7.1 — Résolution overlaps + re-clip (SAUF pour placements drag qui gardent leur position)
     resolveOverlaps(placements, svgPtsBuildable, 15);
     placements.forEach((p, idx) => {
-        const pos = pushRectInsidePolygon(p.ux, p.uy, p.uW, p.uH, p.rotDeg, svgPtsBuildable, 25);
-        p.ux = pos.x; p.uy = pos.y;
+        if (!p.isDragged) {
+            const pos = pushRectInsidePolygon(p.ux, p.uy, p.uW, p.uH, p.rotDeg, svgPtsBuildable, 25);
+            p.ux = pos.x; p.uy = pos.y;
+        }
         // v75.7.0 — Si overlap résiduel avec autres, tente auto-fit sous contrainte
         let hasOverlap = false;
         for (const q of placements) {
