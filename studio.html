@@ -269,6 +269,18 @@
         /* Bouton Add unit compact (dans colonne serrée) */
         .c-scn-col .c-btn-add-unit,.c-scn-col .c-btn-auto-place,.c-scn-col .c-btn-reset-moteur{padding:.28rem .55rem;font-size:.6rem}
 
+        /* v75.6.1 — Accordion détails techniques inline (sous chaque ligne unité) */
+        .c-unit-details-row{background:rgba(11,17,32,.5)}
+        .c-unit-details-row td{padding:.5rem .7rem !important;border-bottom:1px solid var(--border) !important}
+        .c-unit-details-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.4rem .8rem;font-size:.66rem}
+        .c-unit-details-grid label{display:flex;align-items:center;gap:.35rem;color:var(--text);cursor:pointer;margin-bottom:0}
+        .c-unit-details-grid label.stacked{flex-direction:column;align-items:flex-start;gap:.2rem}
+        .c-unit-details-grid input[type="number"]{width:60px;padding:.2rem .3rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:3px;font-size:.66rem;outline:none}
+        .c-unit-details-grid input[type="number"]:focus{border-color:var(--amber)}
+        .c-unit-details-grid textarea{grid-column:1/-1;padding:.3rem .5rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.66rem;outline:none;resize:vertical;min-height:38px;font-family:inherit;width:100%}
+        .c-unit-details-grid textarea:focus{border-color:var(--amber)}
+        .c-btn-details-active{color:#FBBF24 !important;background:rgba(251,191,36,.15) !important}
+
         /* v75.5.2 — Modal détails unité (pilotis, sous-sols, étages, etc.) */
         .c-modal-overlay{position:fixed;inset:0;background:rgba(11,17,32,.75);z-index:10000;display:none;align-items:center;justify-content:center;padding:1rem}
         .c-modal-overlay.active{display:flex}
@@ -292,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.5.2</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1100,6 +1112,24 @@ function renderParcelSvg(label) {
     const siteAreaM2 = Number(currentBody8D && currentBody8D.site_area) || 250;
     const pxPerM2 = parcelAreaPx > 0 && siteAreaM2 > 0 ? parcelAreaPx / siteAreaM2 : 1;
 
+    // v75.6.1 — Précalcul des lignes retrait par segment (utilisé pour rotation adaptative + snap magnet)
+    const segLinesForSnapPre = [];
+    for (let i = 0; i < N; i++) {
+        const seg = (cockpitState.segments || [])[i] || { retrait_m: 3 };
+        const retraitPx = seg.retrait_m * scale;
+        const p1 = svgPts[i], p2 = svgPts[(i + 1) % N];
+        const dx = p2.x - p1.x, dy = p2.y - p1.y;
+        const l = Math.hypot(dx, dy) || 1;
+        const nx = inwardSign * (-dy) / l, ny = inwardSign * dx / l;
+        segLinesForSnapPre.push({
+            i,
+            p1: { x: p1.x + nx * retraitPx, y: p1.y + ny * retraitPx },
+            p2: { x: p2.x + nx * retraitPx, y: p2.y + ny * retraitPx },
+            angleDeg: Math.atan2(dy, dx) * 180 / Math.PI,
+            lengthPx: l
+        });
+    }
+
     // v75.4.0 — Placement unités : fix superposition (fan angulaire dans secteur) + support offset drag explicite
     const allUnits = cockpitState.scenarios[label].units || [];
     // Passe pré-comptage : combien d'unités dans chaque secteur (pour fan angulaire)
@@ -1179,12 +1209,52 @@ function renderParcelSvg(label) {
             const spreadStep = nInSector > 1 ? (spreadHalfDeg * 2) / (nInSector - 1) : 0;
             const angleOffsetDeg = nInSector > 1 ? (idxInSector - (nInSector - 1) / 2) * spreadStep : 0;
             const effectiveAngleDeg = sectorAngles[s] + angleOffsetDeg;
-            rotDeg = ((effectiveAngleDeg + 90) % 360);
+            // v75.6.1 : ROTATION ADAPTATIVE — angle du segment de parcelle le plus proche (pas secteur cardinal)
+            const rad0 = effectiveAngleDeg * Math.PI / 180;
+            const candX = cxSvg + Math.cos(rad0) * sectorRadius * 0.55;
+            const candY = cySvg + Math.sin(rad0) * sectorRadius * 0.55;
+            let closestSeg = null, closestDist = Infinity;
+            for (const s2 of segLinesForSnapPre) {
+                const { dist } = projectPointOnSegment({x: candX, y: candY}, s2.p1, s2.p2);
+                if (dist < closestDist) { closestDist = dist; closestSeg = s2; }
+            }
+            rotDeg = closestSeg ? closestSeg.angleDeg : ((effectiveAngleDeg + 90) % 360);
             const maxDist = sectorRadius * 0.7;
             const safeDist = findSafeUnitDistance(cxSvg, cySvg, effectiveAngleDeg, Math.max(15, maxDist), uW, uH, rotDeg, svgPtsBuildable);
             const rad = effectiveAngleDeg * Math.PI / 180;
             ux = cxSvg + Math.cos(rad) * safeDist;
             uy = cySvg + Math.sin(rad) * safeDist;
+        }
+
+        // v75.6.1 — DÉBORDEMENT STRICT : si les 4 coins débordent, shrink dimensions proportionnellement
+        // Cette passe s'applique à TOUS les modes (drag/heuristique) pour garantir aucun débordement
+        const checkCornersInPoly = (cx, cy, w, h, rd) => {
+            const rot = rd * Math.PI / 180;
+            return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx,ly]) => ({
+                x: cx + lx*Math.cos(rot) - ly*Math.sin(rot),
+                y: cy + lx*Math.sin(rot) + ly*Math.cos(rot)
+            })).every(p => pointInPolygonPx(p, svgPtsBuildable));
+        };
+        if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
+            // Étape 1 : shrink dimensions par pas de 5% en préservant ratio
+            let shrunkOK = false;
+            for (let shrink = 0.95; shrink >= 0.15; shrink -= 0.05) {
+                if (checkCornersInPoly(ux, uy, uW * shrink, uH * shrink, rotDeg)) {
+                    uW = uW * shrink; uH = uH * shrink;
+                    shrunkOK = true; break;
+                }
+            }
+            // Étape 2 : si shrink insuffisant, taille micro et rétractation vers centre
+            if (!shrunkOK) {
+                uW = Math.max(10, uW * 0.15); uH = Math.max(8, uH * 0.15);
+                for (let t = 0.9; t >= 0.05; t -= 0.1) {
+                    const tx = cxSvg + (ux - cxSvg) * t;
+                    const ty = cySvg + (uy - cySvg) * t;
+                    if (checkCornersInPoly(tx, ty, uW, uH, rotDeg)) {
+                        ux = tx; uy = ty; break;
+                    }
+                }
+            }
         }
 
         const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
@@ -1203,24 +1273,8 @@ function renderParcelSvg(label) {
         unitsHtml += `</g>`;
     });
 
-    // v75.4.0/v75.5.0 — Mémorise refs SVG + lignes retrait (magnet snap)
-    const segLinesForSnap = [];
-    for (let i = 0; i < N; i++) {
-        const seg = (cockpitState.segments || [])[i] || { retrait_m: 3 };
-        const retraitPx = seg.retrait_m * scale;
-        const p1 = svgPts[i], p2 = svgPts[(i + 1) % N];
-        const dx = p2.x - p1.x, dy = p2.y - p1.y;
-        const l = Math.hypot(dx, dy) || 1;
-        const nx = inwardSign * (-dy) / l, ny = inwardSign * dx / l;
-        segLinesForSnap.push({
-            i,
-            p1: { x: p1.x + nx * retraitPx, y: p1.y + ny * retraitPx },
-            p2: { x: p2.x + nx * retraitPx, y: p2.y + ny * retraitPx },
-            angleDeg: Math.atan2(dy, dx) * 180 / Math.PI,
-            lengthPx: l
-        });
-    }
-    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, sectorAngles, segLinesForSnap };
+    // v75.6.1 — Réutilise segLinesForSnapPre calculé avant boucle (évite recompute)
+    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, sectorAngles, segLinesForSnap: segLinesForSnapPre };
 
     // Boussole en haut à droite (plus compact)
     const compass = `
@@ -1520,7 +1574,29 @@ function switchScenarioTab(tab) {
     document.querySelectorAll(".c-scn-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === tab));
 }
 
-// v6.2.1 — Table complète 7 colonnes (avec Notes)
+// v6.2.1/v6.6.0 — Table 7 colonnes avec accordion inline détails techniques
+let _openUnitDetails = new Set();  // clés "A:0", "B:1", ...
+
+function toggleUnitDetails(label, idx) {
+    const key = `${label}:${idx}`;
+    if (_openUnitDetails.has(key)) _openUnitDetails.delete(key);
+    else _openUnitDetails.add(key);
+    renderUnitsTable(label);
+}
+
+function updateUnitDetail(label, idx, field, val) {
+    const u = (cockpitState.scenarios[label].units || [])[idx];
+    if (!u) return;
+    if (field === "pilotis" || field === "parking_ss" || field === "terrasse" || field === "balcon") {
+        u[field] = !!val;
+    } else if (field === "etages_unit" || field === "sous_sols") {
+        u[field] = val === "" ? null : Number(val);
+    } else {
+        u[field] = val;
+    }
+    updateConstraintsCount();
+}
+
 function renderUnitsTable(label) {
     const tbody = $(`cUnitsBody${label}`);
     if (!tbody) return;
@@ -1529,7 +1605,28 @@ function renderUnitsTable(label) {
         tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text2);font-size:.7rem;padding:.6rem">Aucune unité — clique « + Ajouter » ou utilise « Splitter »</td></tr>`;
         return;
     }
-    tbody.innerHTML = units.map((u, i) => `
+    tbody.innerHTML = units.map((u, i) => {
+        const isOpen = _openUnitDetails.has(`${label}:${i}`);
+        const gearClass = isOpen ? "c-btn-del c-btn-details-active" : "c-btn-del";
+        const detailsRow = isOpen ? `
+        <tr class="c-unit-details-row">
+          <td colspan="7">
+            <div class="c-unit-details-grid">
+              <label class="stacked">Étages (R+X override)
+                <input type="number" min="0" max="10" step="1" value="${u.etages_unit != null ? u.etages_unit : ""}" placeholder="scenario" oninput="updateUnitDetail('${label}',${i},'etages_unit',this.value)">
+              </label>
+              <label class="stacked">Sous-sols
+                <input type="number" min="0" max="3" step="1" value="${u.sous_sols != null ? u.sous_sols : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'sous_sols',this.value)">
+              </label>
+              <label><input type="checkbox" ${u.pilotis?"checked":""} onchange="updateUnitDetail('${label}',${i},'pilotis',this.checked)"> Pilotis (RDC surélevé)</label>
+              <label><input type="checkbox" ${u.parking_ss?"checked":""} onchange="updateUnitDetail('${label}',${i},'parking_ss',this.checked)"> Parking sous-sol</label>
+              <label><input type="checkbox" ${u.terrasse?"checked":""} onchange="updateUnitDetail('${label}',${i},'terrasse',this.checked)"> Terrasse accessible</label>
+              <label><input type="checkbox" ${u.balcon?"checked":""} onchange="updateUnitDetail('${label}',${i},'balcon',this.checked)"> Balcon(s)</label>
+              <textarea placeholder="Notes techniques (orientation, façade, escalier, etc.)" oninput="updateUnitDetail('${label}',${i},'notes_tech',this.value)">${esc(u.notes_tech||"")}</textarea>
+            </div>
+          </td>
+        </tr>` : "";
+        return `
         <tr>
           <td style="color:var(--amber);font-weight:700;font-family:'JetBrains Mono',monospace">${i+1}</td>
           <td><select onchange="updateUnit('${label}',${i},'unit_type',this.value)">${UNIT_TYPES.map(t=>`<option value="${t}"${u.unit_type===t?" selected":""}>${t}</option>`).join("")}</select></td>
@@ -1538,12 +1635,12 @@ function renderUnitsTable(label) {
           <td><select onchange="updateUnit('${label}',${i},'placement_sector',this.value)">${PLACEMENT_SECTORS.map(s=>`<option value="${s}"${u.placement_sector===s?" selected":""}>${s||"—"}</option>`).join("")}</select></td>
           <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
           <td style="white-space:nowrap">
-            <button class="c-btn-del" onclick="openUnitDetailsModal('${label}',${i})" title="Détails techniques (pilotis, sous-sols, étages, terrasse, balcon, notes)" style="color:#c9a878">⚙</button>
+            <button class="${gearClass}" onclick="toggleUnitDetails('${label}',${i})" title="Détails techniques (pilotis, sous-sols, étages, terrasse, balcon, notes)" style="color:${isOpen?'#FBBF24':'#c9a878'}">⚙</button>
             <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Adapter la forme au segment de parcelle le plus proche" style="color:#22C55E">🪄</button>
             <button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button>
           </td>
-        </tr>
-    `).join("");
+        </tr>${detailsRow}`;
+    }).join("");
 }
 
 function addUnit(label) {
