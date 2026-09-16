@@ -10296,8 +10296,45 @@ app.post("/generate-pptx", async (req, res) => {
     const leadRefForUnits = String(p.barlo_code || p.lead_ref || p.lead_id || p.ref || "").trim();
     const unitsByScenario = await fetchLeadUnitsForPptx(leadRefForUnits);
     const parcelPolygon = parseSitePolygonForPptx(p.site_polygon || p.site_polygon_points);
+    // v75.11.1 (Phase D) — Merge override_units_detail_* du body (contient polygones, W×H, rotation, pilotis, etc.)
+    for (const scen of ["A", "B", "C"]) {
+      const overrideRaw = p[`override_units_detail_${scen}`];
+      if (!overrideRaw) continue;
+      try {
+        const overrideParsed = typeof overrideRaw === "string" ? JSON.parse(overrideRaw) : overrideRaw;
+        if (!Array.isArray(overrideParsed) || overrideParsed.length === 0) continue;
+        // Merge : les valeurs du body override écrasent celles de Supabase (mais on garde les units Supabase pour ordre)
+        const supaUnits = unitsByScenario[scen] || [];
+        overrideParsed.forEach((ov, i) => {
+          const match = supaUnits.find(u => (u.type||"").toUpperCase() === (ov.type||"").toUpperCase() && (u.name||"") === (ov.name||"")) || supaUnits[i];
+          if (match) {
+            // Enrichir avec les champs custom du frontend
+            if (ov.offset_x_m != null) match.offset_x_m = Number(ov.offset_x_m);
+            if (ov.offset_y_m != null) match.offset_y_m = Number(ov.offset_y_m);
+            if (ov.rotation_deg != null) match.rotation_deg = Number(ov.rotation_deg);
+            if (ov.width_m != null) match.width_m = Number(ov.width_m);
+            if (ov.height_m != null) match.height_m = Number(ov.height_m);
+            if (ov.polygon) match.polygon = ov.polygon;
+            if (ov.etages_unit != null) match.etages_unit = Number(ov.etages_unit);
+            if (ov.sous_sols != null) match.sous_sols = Number(ov.sous_sols);
+            if (ov.pilotis != null) match.pilotis = !!ov.pilotis;
+            if (ov.parking_ss != null) match.parking_ss = !!ov.parking_ss;
+            if (ov.terrasse != null) match.terrasse = !!ov.terrasse;
+            if (ov.balcon != null) match.balcon = !!ov.balcon;
+            if (ov.notes_tech) match.notes_tech = String(ov.notes_tech);
+          } else {
+            // Nouvelle unité pas dans Supabase (ex splitter côté user sans save intermédiaire)
+            supaUnits.push({ index: supaUnits.length + 1, ...ov });
+          }
+        });
+        unitsByScenario[scen] = supaUnits;
+      } catch(e) {
+        console.warn(`[GENERATE-PPTX] override_units_detail_${scen} parse failed: ${e.message}`);
+      }
+    }
     const totalUnitsPptx = (unitsByScenario.A.length || 0) + (unitsByScenario.B.length || 0) + (unitsByScenario.C.length || 0);
-    console.log(`[GENERATE-PPTX] v75.2 plan slides : leadRef="${leadRefForUnits}", units total=${totalUnitsPptx}, polygon pts=${parcelPolygon.length}`);
+    const totalCustomShapes = ["A","B","C"].reduce((s, k) => s + (unitsByScenario[k]||[]).filter(u => u.polygon || u.width_m).length, 0);
+    console.log(`[GENERATE-PPTX] v75.11.1 : leadRef="${leadRefForUnits}", units total=${totalUnitsPptx}, custom shapes=${totalCustomShapes}, polygon pts=${parcelPolygon.length}`);
 
     const pptxData = {
       ...flat,

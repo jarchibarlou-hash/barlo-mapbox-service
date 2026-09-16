@@ -642,36 +642,82 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
     # Centroïde
     ax.plot([cx], [cy], marker='o', color='#FBBF24', markersize=5, zorder=6)
 
-    # --- Unités : rectangles proportionnels m² avec aspect ratio par catégorie ---
-    # Ratio de conversion m² -> unités matplotlib (déjà en mètres) → 1:1
-    counters_by_sector = {}  # pour espacer si plusieurs unités dans le même secteur
+    # --- Unités : v75.11.1 utilise VRAIES dimensions/rotation/polygone si dispos, sinon fallback heuristique
+    counters_by_sector = {}
     for u in units:
         area_m2 = max(4.0, float(u.get('size_m2') or 20.0))
         cat = _plan_categorize_unit_type(u.get('type', ''))
-        aspect = _UNIT_ASPECT.get(cat, 1.2)
         color = _UNIT_COLOR.get(cat, '#22C55E')
-        w = math.sqrt(area_m2 * aspect)
-        h = w / aspect
+
+        # v75.11.1 : utilise polygone custom s'il existe (formes L/T/U/circle etc.)
+        custom_polygon = u.get('polygon')
+        if custom_polygon and isinstance(custom_polygon, list) and len(custom_polygon) >= 3:
+            # Points polygone en mètres relatifs au centroïde unit
+            offset_x = float(u.get('offset_x_m') or 0)
+            offset_y = float(u.get('offset_y_m') or 0)
+            rot_deg = float(u.get('rotation_deg') or 0)
+            rot_rad = math.radians(rot_deg)
+            cos_r, sin_r = math.cos(rot_rad), math.sin(rot_rad)
+            poly_pts = []
+            for pt in custom_polygon:
+                lx = float(pt.get('x_m') or 0)
+                ly = float(pt.get('y_m') or 0)
+                px = cx + offset_x + lx * cos_r - ly * sin_r
+                py = cy + offset_y + lx * sin_r + ly * cos_r
+                poly_pts.append((px, py))
+            up = MplPolygon(poly_pts, closed=True, facecolor=color, edgecolor='#F8FAFC',
+                            linewidth=1.4, alpha=0.85, zorder=5)
+            ax.add_patch(up)
+            # Label au centroïde du polygone custom
+            cxu = sum(p[0] for p in poly_pts) / len(poly_pts)
+            cyu = sum(p[1] for p in poly_pts) / len(poly_pts)
+            label_txt = str(u.get('name') or cat.title()).strip()[:14]
+            ax.text(cxu, cyu, label_txt, color='#F8FAFC', fontsize=8, fontweight='bold',
+                    ha='center', va='center', zorder=7)
+            # Détails techniques dans le label (pilotis, sous-sols)
+            details = []
+            if u.get('pilotis'): details.append('pilotis')
+            if u.get('sous_sols'):
+                ss = int(u.get('sous_sols'))
+                if ss > 0: details.append(f"-{ss}ss")
+            if u.get('terrasse'): details.append('T')
+            if u.get('balcon'): details.append('B')
+            detail_str = ' · '.join(details) if details else ''
+            ax.text(cxu, cyu - 2, f"{int(round(area_m2))}m² {detail_str}",
+                    color='#FBBF24', fontsize=6.5, ha='center', va='center', zorder=7)
+            continue
+
+        # v75.11.1 : sinon utilise width_m/height_m custom si dispos, sinon fallback aspect ratio
+        if u.get('width_m') and u.get('height_m'):
+            w = float(u['width_m'])
+            h = float(u['height_m'])
+        else:
+            aspect = _UNIT_ASPECT.get(cat, 1.2)
+            w = math.sqrt(area_m2 * aspect)
+            h = w / aspect
         sector = u.get('sector') or 'S'
         counters_by_sector[sector] = counters_by_sector.get(sector, 0) + 1
         n_in_sector = counters_by_sector[sector]
 
-        # Direction depuis centroïde vers secteur
-        dx, dy = _plan_sector_direction_vector(sector)
-        # Distance : à mi-chemin entre centroïde et rayon polygone, en s'éloignant pour chaque unité successive
-        dist = r_poly * (0.45 + 0.12 * (n_in_sector - 1))
-        # Clip : ne pas dépasser 90% du rayon polygone (évite débordement — même logique que le fix studio)
-        dist = min(dist, r_poly * 0.90 - max(w, h) * 0.5)
-        dist = max(dist, r_poly * 0.15)
+        # v75.11.1 : si offset_x_m/y_m défini (drag user), utilise-le, sinon calcul secteur
+        if u.get('offset_x_m') is not None and u.get('offset_y_m') is not None:
+            rx = cx + float(u['offset_x_m'])
+            ry = cy + float(u['offset_y_m'])
+        else:
+            dx, dy = _plan_sector_direction_vector(sector)
+            dist = r_poly * (0.45 + 0.12 * (n_in_sector - 1))
+            dist = min(dist, r_poly * 0.90 - max(w, h) * 0.5)
+            dist = max(dist, r_poly * 0.15)
+            rx = cx + dx * dist
+            ry = cy + dy * dist
 
-        rx = cx + dx * dist
-        ry = cy + dy * dist
-
-        # Rotation : la façade (côté long) regarde vers l'extérieur du secteur
-        # Angle du rayon centroïde→unité en degrés (depuis +x, sens antihoraire)
-        angle_rad = math.atan2(dy, dx)
-        # La face longue perpendiculaire au rayon → rotation matplotlib = angle rayon - 90°
-        rot_deg = math.degrees(angle_rad) - 90.0
+        # v75.11.1 : rotation depuis u.rotation_deg si défini (drag user), sinon fallback secteur
+        if u.get('rotation_deg') is not None:
+            rot_deg = float(u['rotation_deg'])
+        else:
+            dxs, dys = _plan_sector_direction_vector(sector)
+            angle_rad = math.atan2(dys, dxs)
+            rot_deg = math.degrees(angle_rad) - 90.0
 
         # Rectangle centré sur (rx, ry) avec rotation autour de son centre
         transform = Affine2D().rotate_deg_around(rx, ry, rot_deg) + ax.transData
@@ -680,14 +726,23 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
         rect.set_transform(transform)
         ax.add_patch(rect)
 
-        # Label unité (nom + m²)
+        # Label unité (nom + détails techniques)
         label = str(u.get('name') or u.get('type') or '').strip() or cat.title()
-        ax.text(rx, ry, label, color='#F8FAFC', fontsize=8, fontweight='bold',
+        ax.text(rx, ry - 0.4, label, color='#F8FAFC', fontsize=8, fontweight='bold',
                 ha='center', va='center', zorder=7)
-        # Petit label m² sous le rectangle
-        ax.text(rx + dx * (h/2 + 1.5), ry + dy * (h/2 + 1.5),
-                f"{int(round(area_m2))} m²", color='#FBBF24', fontsize=7,
-                ha='center', va='center', zorder=7)
+        # v75.11.1 : label m² + détails (pilotis, sous-sols, terrasse, balcon)
+        details = []
+        if u.get('pilotis'): details.append('pilotis')
+        if u.get('sous_sols'):
+            try:
+                ss = int(u.get('sous_sols') or 0)
+                if ss > 0: details.append(f"-{ss}ss")
+            except: pass
+        if u.get('terrasse'): details.append('T')
+        if u.get('balcon'): details.append('B')
+        detail_str = ' · '.join(details) if details else ''
+        ax.text(rx, ry + 1.0, f"{int(round(area_m2))}m² {detail_str}".strip(),
+                color='#FBBF24', fontsize=7, ha='center', va='center', zorder=7)
 
     # --- Compass Nord en haut à droite ---
     cnx = xlim[1] - max_span * 0.10
