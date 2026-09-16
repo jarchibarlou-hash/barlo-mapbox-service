@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.8</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.9</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2224,12 +2224,18 @@ function renderParcelSvg(label) {
         if (hasOverlap) {
             unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ conflit</text>`;
         }
-        // v75.8.8 — label simplifié : nom + surface m² seule (fini les dimensions W×H dans le label)
+        // v75.8.12 — label affiche la surface RÉELLE rendue (post clip parcelle), avec warning si divergence
         const fsName = Math.max(7, Math.min(13, uH * 0.24));
         const fsArea = Math.max(6, Math.min(10, uH * 0.18));
-        const areaLabel = `${areaM2} m²`;
+        let realAreaM2 = areaM2;
+        if (pxPolyClipped && pxPolyClipped.length >= 3) {
+            realAreaM2 = Math.round(polygonAreaXY(pxPolyClipped) / (scale * scale));
+        }
+        const divergence = Math.abs(realAreaM2 - areaM2) / Math.max(1, areaM2);
+        const areaTextColor = divergence > 0.05 ? "#FBBF24" : "#fff";
+        const areaLabel = divergence > 0.05 ? `${realAreaM2} m² (cible ${areaM2})` : `${areaM2} m²`;
         unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
-        unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
+        unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${areaTextColor}" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
         unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
         unitsHtml += `</g>`;
@@ -2630,8 +2636,11 @@ function renderUnitsTable(label) {
           <td><select onchange="updateUnit('${label}',${i},'placement_sector',this.value)">${PLACEMENT_SECTORS.map(s=>`<option value="${s}"${u.placement_sector===s?" selected":""}>${s||"—"}</option>`).join("")}</select></td>
           <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
           <td style="white-space:nowrap">
+            <select onchange="applyShapeToUnit('${label}',${i},this.value)" title="Choisir la forme géométrique (clippée automatiquement à la parcelle)" style="width:auto;padding:.15rem .2rem;font-size:.7rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:3px;margin-right:2px">
+              ${SHAPE_TYPES.map(s => `<option value="${s.value}"${(u.shape_type||"rectangle")===s.value?" selected":""}>${s.label.split(' ')[0]}</option>`).join("")}
+            </select>
             <button class="${gearClass}" onclick="toggleUnitDetails('${label}',${i})" title="Détails techniques (pilotis, sous-sols, étages, terrasse, balcon, notes)" style="color:${isOpen?'#FBBF24':'#c9a878'}">⚙</button>
-            <button class="c-btn-del" onclick="toggleShapeMode('${label}',${i})" title="${(u.shape_mode==='rect')?'Mode RECTANGLE strict actif — clique pour repasser en Adaptatif':'Mode ADAPTATIF actif (défaut) — clique pour forcer Rectangle strict'}" style="color:${(u.shape_mode==='rect')?'#F59E0B':'#94A3B8'};font-weight:${(u.shape_mode==='rect')?'700':'400'}">${(u.shape_mode==='rect')?'▭':'▧'}</button>
+            <button class="c-btn-del" onclick="toggleShapeMode('${label}',${i})" title="${(u.shape_mode==='rect')?'Mode RECTANGLE strict actif':'Mode ADAPTATIF actif (défaut)'}" style="color:${(u.shape_mode==='rect')?'#F59E0B':'#94A3B8'};font-weight:${(u.shape_mode==='rect')?'700':'400'}">${(u.shape_mode==='rect')?'▭':'▧'}</button>
             <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Étirer le rectangle le long du segment de parcelle le plus proche" style="color:#22C55E">🪄</button>
             <button class="c-btn-del" onclick="adaptUnitToCornerLShape('${label}',${i})" title="Adapter forme en L à l'angle de parcelle le plus proche" style="color:#8B5CF6">🧩</button>
             <button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button>
