@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.2</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -969,6 +969,64 @@ function polygonAreaXY(pts) {
     return Math.abs(a) / 2;
 }
 
+// v75.8.5 — Clip un polygone par un demi-plan (garde le côté où (p - lineOrigin) · normal >= 0)
+// lineOrigin = point sur la ligne, normal = vecteur normal pointant vers le côté à GARDER
+function clipByHalfPlane(polygon, lineOriginX, lineOriginY, normalX, normalY) {
+    if (!polygon || polygon.length < 3) return [];
+    const inside = (p) => (p.x - lineOriginX) * normalX + (p.y - lineOriginY) * normalY >= 0;
+    const intersect = (P, Q) => {
+        const dPx = P.x - lineOriginX, dPy = P.y - lineOriginY;
+        const dQx = Q.x - lineOriginX, dQy = Q.y - lineOriginY;
+        const dotP = dPx * normalX + dPy * normalY;
+        const dotQ = dQx * normalX + dQy * normalY;
+        const denom = dotP - dotQ;
+        if (Math.abs(denom) < 1e-9) return P;
+        const t = dotP / denom;
+        return { x: P.x + t * (Q.x - P.x), y: P.y + t * (Q.y - P.y) };
+    };
+    const out = [];
+    for (let i = 0; i < polygon.length; i++) {
+        const cur = polygon[i], prev = polygon[(i - 1 + polygon.length) % polygon.length];
+        const curIn = inside(cur), prevIn = inside(prev);
+        if (curIn) {
+            if (!prevIn) out.push(intersect(prev, cur));
+            out.push(cur);
+        } else if (prevIn) {
+            out.push(intersect(prev, cur));
+        }
+    }
+    return out;
+}
+
+// v75.8.5 — Reconvertit un polygone {x, y} en pixels SVG → coord locales unit (mètres depuis centroïde du polygone)
+function pxPolygonToLocalUnit(pxPoly, scale) {
+    if (!pxPoly || pxPoly.length < 3) return { polygon: null, cxSvg: 0, cySvg: 0 };
+    const cxUnit = pxPoly.reduce((s, p) => s + p.x, 0) / pxPoly.length;
+    const cyUnit = pxPoly.reduce((s, p) => s + p.y, 0) / pxPoly.length;
+    const polygon = pxPoly.map(p => ({
+        x_m: (p.x - cxUnit) / scale,
+        y_m: -(p.y - cyUnit) / scale
+    }));
+    return { polygon, cxSvg: cxUnit, cySvg: cyUnit };
+}
+
+// v75.8.5 — Reconvertit u.polygon (local m) en pixels SVG absolus
+function unitPolygonToPx(u, cxSvg, cySvg, scale) {
+    if (!u.polygon || u.polygon.length < 3) return null;
+    const offsetX = (u.offset_x_m || 0) * scale;
+    const offsetY = -(u.offset_y_m || 0) * scale;
+    const rot = (u.rotation_deg || 0) * Math.PI / 180;
+    const c = Math.cos(rot), s = Math.sin(rot);
+    return u.polygon.map(pt => {
+        const lx = pt.x_m * scale;
+        const ly = -pt.y_m * scale;   // y_m nord+ → y SVG down
+        return {
+            x: cxSvg + offsetX + lx * c - ly * s,
+            y: cySvg + offsetY + lx * s + ly * c
+        };
+    });
+}
+
 // Convertit un rect (cx, cy, w, h, rotDeg) en polygone {x, y}
 function rectToPolygonXY(cx, cy, w, h, rotDeg) {
     const rot = rotDeg * Math.PI / 180;
@@ -1284,10 +1342,58 @@ function optimizeScenarioLayout(label) {
             u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
         }
     });
+
+    // v75.8.5 — Imbrication mutuelle : chaque paire d'unités qui se chevauchent est coupée
+    // par la médiatrice de leurs centroïdes → elles se "touchent" sans overlap (tetris)
+    const unitsWithPoly = units.filter(u => u.polygon && u.polygon.length >= 3);
+    // Convertit chaque u.polygon en polygone pixels absolus pour clip
+    const pxPolys = unitsWithPoly.map(u => ({
+        u,
+        px: unitPolygonToPx(u, refs.cxSvg, refs.cySvg, refs.scale)
+    })).filter(p => p.px && p.px.length >= 3);
+    // Passe pairwise : clip mutuel si overlap
+    for (let iter = 0; iter < 3; iter++) {
+        let anyClip = false;
+        for (let i = 0; i < pxPolys.length; i++) {
+            for (let j = i + 1; j < pxPolys.length; j++) {
+                const A = pxPolys[i], B = pxPolys[j];
+                // Test overlap approx (cercle englobant)
+                const cxA = A.px.reduce((s, p) => s + p.x, 0) / A.px.length;
+                const cyA = A.px.reduce((s, p) => s + p.y, 0) / A.px.length;
+                const cxB = B.px.reduce((s, p) => s + p.x, 0) / B.px.length;
+                const cyB = B.px.reduce((s, p) => s + p.y, 0) / B.px.length;
+                const rA = Math.max(...A.px.map(p => Math.hypot(p.x - cxA, p.y - cyA)));
+                const rB = Math.max(...B.px.map(p => Math.hypot(p.x - cxB, p.y - cyB)));
+                const d = Math.hypot(cxB - cxA, cyB - cyA) || 0.01;
+                if (d < rA + rB - 3) {
+                    anyClip = true;
+                    // Ligne de séparation = médiatrice AB, normale vers A pour clipper A, vers B pour clipper B
+                    const midX = (cxA + cxB) / 2;
+                    const midY = (cyA + cyB) / 2;
+                    const nAx = (cxA - cxB) / d, nAy = (cyA - cyB) / d;
+                    // Clip A : garde côté A (normale vers A)
+                    A.px = clipByHalfPlane(A.px, midX, midY, nAx, nAy);
+                    // Clip B : garde côté B (normale vers B = opposé)
+                    B.px = clipByHalfPlane(B.px, midX, midY, -nAx, -nAy);
+                }
+            }
+        }
+        if (!anyClip) break;
+    }
+    // Réapplique polygone clippé au state u
+    pxPolys.forEach(({ u, px }) => {
+        if (!px || px.length < 3) return;
+        const { polygon, cxSvg: cxU, cySvg: cyU } = pxPolygonToLocalUnit(px, refs.scale);
+        u.polygon = polygon;
+        u.offset_x_m = Number(((cxU - refs.cxSvg) / refs.scale).toFixed(2));
+        u.offset_y_m = Number((-(cyU - refs.cySvg) / refs.scale).toFixed(2));
+        u.rotation_deg = 0;
+    });
+
     renderUnitsTable(label);
     renderParcelSvg(label);
     updateConstraintsCount();
-    showToast(`Scénario ${label} optimisé : ${units.length} unités implantées selon diagnostic`);
+    showToast(`Scénario ${label} optimisé + imbriqué : ${units.length} unités`);
 }
 
 // v75.7.0 — Auto-adaptation intelligente : cherche la meilleure (W, H, rot) préservant l'aire m²
