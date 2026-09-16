@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.3</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.4</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -754,9 +754,9 @@ function scenarioPanelTemplate(L) {
             <button onclick="splitScenarioIntoN('${L}',4)">4</button>
             <button onclick="splitScenarioIntoN('${L}',5)">5</button>
           </div>
-          <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')">🎲 Placement auto</button>
-          <button class="c-btn-auto-place" onclick="optimizeScenarioLayout('${L}')" style="color:#8B5CF6;border-color:#8B5CF6" title="Optimise l'implantation de toutes les unités selon le diagnostic (orientation solaire, types de segments, mitoyennetés)">🧠 Optimiser scénario</button>
-          <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')">🔄 Réinitialiser</button>
+          <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')" title="🤖 Utilise le moteur BARLO backend (/api/suggest-placement) pour proposer les secteurs cardinaux N/NE/E/... par unité selon les règles du diagnostic. Modifie ensuite librement.">🤖 Placement moteur</button>
+          <button class="c-btn-auto-place" onclick="proposeOptimizedLayout('${L}')" style="color:#8B5CF6;border-color:#8B5CF6" title="🧠 Propose une implantation optimisée (algorithme frontend) : assigne chaque unité à un segment de parcelle selon son type (COMMERCE=rue, BUREAU=est/ouest, RESI=sud), avec forme adaptée. Écrase les ajustements manuels — un confirm apparaît sinon.">🧠 Proposer implantation</button>
+          <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')" title="Revient aux suggestions initiales du moteur (unit_mix_X du sheet)">🔄 Réinitialiser</button>
         </div>
       </div>
 
@@ -1229,6 +1229,22 @@ function adaptUnitToCornerLShape(label, idx) {
     renderParcelSvg(label);
     updateConstraintsCount();
     showToast(`Unité adaptée en L au coin ${vertexLabel(corner.index)}`);
+}
+
+// v75.8.7 — Wrapper : demande confirmation avant d'écraser les ajustements manuels
+function proposeOptimizedLayout(label) {
+    const units = cockpitState.scenarios[label].units || [];
+    const hasManual = units.some(u =>
+        u.offset_x_m != null || u.rotation_deg != null ||
+        (u.width_m != null && u.height_m != null) ||
+        (u.polygon && u.polygon.length >= 3)
+    );
+    if (hasManual) {
+        if (!confirm("Tu as des ajustements manuels (drag / rotation / forme) sur ce scénario.\n\n« OK » pour ÉCRASER par la proposition optimisée.\n« Annuler » pour garder tes ajustements.")) {
+            return;
+        }
+    }
+    optimizeScenarioLayout(label);
 }
 
 // v75.8.3 — Optimise l'implantation de TOUTES les unités d'un scénario selon diagnostic
