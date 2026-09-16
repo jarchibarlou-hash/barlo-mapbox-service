@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.1</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1113,9 +1113,11 @@ function renderParcelSvg(label) {
     const pxPerM2 = parcelAreaPx > 0 && siteAreaM2 > 0 ? parcelAreaPx / siteAreaM2 : 1;
 
     // v75.6.1 — Précalcul des lignes retrait par segment (utilisé pour rotation adaptative + snap magnet)
+    // v75.6.2 — Ajoute les cotes segments en mètres affichées au milieu de chaque arête polygone
     const segLinesForSnapPre = [];
+    let segCotesHtml = "";
     for (let i = 0; i < N; i++) {
-        const seg = (cockpitState.segments || [])[i] || { retrait_m: 3 };
+        const seg = (cockpitState.segments || [])[i] || { retrait_m: 3, length_m: 0 };
         const retraitPx = seg.retrait_m * scale;
         const p1 = svgPts[i], p2 = svgPts[(i + 1) % N];
         const dx = p2.x - p1.x, dy = p2.y - p1.y;
@@ -1128,6 +1130,11 @@ function renderParcelSvg(label) {
             angleDeg: Math.atan2(dy, dx) * 180 / Math.PI,
             lengthPx: l
         });
+        // v75.6.2 — cote au milieu de l'arête, décalée vers l'extérieur (opposé à la normale intérieure)
+        const midX = (p1.x + p2.x) / 2 - nx * 13;
+        const midY = (p1.y + p2.y) / 2 - ny * 13;
+        const segLenM = Math.round(seg.length_m || (l / scale));
+        segCotesHtml += `<g><rect x="${(midX - 13).toFixed(1)}" y="${(midY - 6).toFixed(1)}" width="26" height="12" rx="2" fill="rgba(11,17,32,0.85)" stroke="#c9a878" stroke-width="0.5"/><text x="${midX.toFixed(1)}" y="${(midY + 0.5).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#FBBF24" font-size="8.5" font-weight="700" font-family="Inter">${segLenM}m</text></g>`;
     }
 
     // v75.4.0 — Placement unités : fix superposition (fan angulaire dans secteur) + support offset drag explicite
@@ -1226,8 +1233,8 @@ function renderParcelSvg(label) {
             uy = cySvg + Math.sin(rad) * safeDist;
         }
 
-        // v75.6.1 — DÉBORDEMENT STRICT : si les 4 coins débordent, shrink dimensions proportionnellement
-        // Cette passe s'applique à TOUS les modes (drag/heuristique) pour garantir aucun débordement
+        // v75.6.2 — Placement dans zone constructible avec priorité 1) rétracter position 2) shrink modéré
+        // (au lieu de shrink brutal 15% qui cassait l'échelle : Logt 150m² apparaissait plus petit qu'un 50m²)
         const checkCornersInPoly = (cx, cy, w, h, rd) => {
             const rot = rd * Math.PI / 180;
             return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx,ly]) => ({
@@ -1235,24 +1242,39 @@ function renderParcelSvg(label) {
                 y: cy + lx*Math.sin(rot) + ly*Math.cos(rot)
             })).every(p => pointInPolygonPx(p, svgPtsBuildable));
         };
+        let isOversized = false;
         if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
-            // Étape 1 : shrink dimensions par pas de 5% en préservant ratio
-            let shrunkOK = false;
-            for (let shrink = 0.95; shrink >= 0.15; shrink -= 0.05) {
-                if (checkCornersInPoly(ux, uy, uW * shrink, uH * shrink, rotDeg)) {
-                    uW = uW * shrink; uH = uH * shrink;
-                    shrunkOK = true; break;
+            // Étape 1 : essayer 10 positions rétractées vers centroïde (garde taille pleine)
+            let placedFullSize = false;
+            for (let t = 0.9; t >= 0.05; t -= 0.05) {
+                const tx = cxSvg + (ux - cxSvg) * t;
+                const ty = cySvg + (uy - cySvg) * t;
+                if (checkCornersInPoly(tx, ty, uW, uH, rotDeg)) {
+                    ux = tx; uy = ty; placedFullSize = true; break;
                 }
             }
-            // Étape 2 : si shrink insuffisant, taille micro et rétractation vers centre
-            if (!shrunkOK) {
-                uW = Math.max(10, uW * 0.15); uH = Math.max(8, uH * 0.15);
-                for (let t = 0.9; t >= 0.05; t -= 0.1) {
-                    const tx = cxSvg + (ux - cxSvg) * t;
-                    const ty = cySvg + (uy - cySvg) * t;
-                    if (checkCornersInPoly(tx, ty, uW, uH, rotDeg)) {
-                        ux = tx; uy = ty; break;
+            // Étape 2 : si toujours pas → shrink DOUX (max 40% de réduction, préserve ratio)
+            if (!placedFullSize) {
+                let shrunkOK = false;
+                for (let shrink = 0.98; shrink >= 0.60; shrink -= 0.03) {
+                    // Combine shrink + rétractation position (petit t)
+                    for (let t = 1.0; t >= 0.10; t -= 0.15) {
+                        const tx = cxSvg + (ux - cxSvg) * t;
+                        const ty = cySvg + (uy - cySvg) * t;
+                        if (checkCornersInPoly(tx, ty, uW * shrink, uH * shrink, rotDeg)) {
+                            uW *= shrink; uH *= shrink; ux = tx; uy = ty;
+                            shrunkOK = true;
+                            if (shrink < 0.85) isOversized = true;  // > 15% shrink = signale
+                            break;
+                        }
                     }
+                    if (shrunkOK) break;
+                }
+                // Étape 3 : ultime — accepte shrink jusqu'à 40% avec position au centre parcelle
+                if (!shrunkOK) {
+                    uW *= 0.60; uH *= 0.60;
+                    ux = cxSvg; uy = cySvg;
+                    isOversized = true;
                 }
             }
         }
@@ -1260,8 +1282,14 @@ function renderParcelSvg(label) {
         const color = UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE;
         const label2 = (u.unit_name || u.unit_type || "?").substring(0, 10);
         const handleDist = uH/2 + 12;
+        // v75.6.2 : bordure rouge pointillée si l'unité a été shrinkée (>15%) — signal qu'elle ne rentre pas physiquement
+        const strokeColor = isOversized ? "#EF4444" : "#fff";
+        const strokeDash = isOversized ? ' stroke-dasharray="4,2"' : "";
         unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
-        unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="#fff" stroke-width="1.2"/>`;
+        unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${isOversized?"2":"1.2"}"${strokeDash}/>`;
+        if (isOversized) {
+            unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ trop grand</text>`;
+        }
         // v75.5.2 : Nom au-dessus centre + surface m² sous le nom, TOUS DEUX DANS le rectangle
         const fsName = Math.max(7, Math.min(13, uH * 0.24));
         const fsArea = Math.max(6, Math.min(11, uH * 0.20));
@@ -1292,6 +1320,7 @@ function renderParcelSvg(label) {
         ${segRetraitsHtml}
         <polygon points="${polyStrBuildable}" fill="rgba(30,132,73,0.05)" stroke="rgba(30,132,73,0.4)" stroke-width="1" stroke-dasharray="2,3"/>
         <circle cx="${cxSvg.toFixed(1)}" cy="${cySvg.toFixed(1)}" r="2.5" fill="#c9a878"/>
+        ${segCotesHtml}
         ${vertexLabelsHtml}
         ${sectorLabelsHtml}
         ${unitsHtml}
