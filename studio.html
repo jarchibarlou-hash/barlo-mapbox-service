@@ -193,6 +193,11 @@
         .rot-link{stroke:#FBBF24;stroke-width:1;stroke-dasharray:2,2;opacity:.6;pointer-events:none}
         .snap-hint{stroke:#22C55E;stroke-width:2;stroke-dasharray:5,3;opacity:.9;pointer-events:none}
         .align-guide{stroke:#F59E0B;stroke-width:1;stroke-dasharray:3,2;opacity:.7;pointer-events:none}
+        /* v75.9.0 — Poignées resize sur les 4 arêtes du rect */
+        .resize-handle{fill:#22C55E;stroke:#0B1120;stroke-width:1}
+        .resize-handle.ew{cursor:ew-resize}
+        .resize-handle.ns{cursor:ns-resize}
+        .resize-handle:hover{fill:#16A34A}
         .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem;font-size:.58rem;color:var(--text2)}
         .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.25rem}
         .c-parcel-legend-swatch{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -304,7 +309,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.9</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2238,6 +2243,14 @@ function renderParcelSvg(label) {
         unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${areaTextColor}" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
         unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
+        // v75.9.0 — 4 poignées de resize aux arêtes (seulement sur rects, pas polygones custom)
+        if (!(u.polygon && u.polygon.length >= 3)) {
+            const hs = 3.5;
+            unitsHtml += `<rect class="resize-handle ew" data-scn="${label}" data-uidx="${globalIdx}" data-role="resize-e" x="${(uW/2 - hs).toFixed(1)}" y="${(-hs).toFixed(1)}" width="${(hs*2).toFixed(1)}" height="${(hs*2).toFixed(1)}"/>`;
+            unitsHtml += `<rect class="resize-handle ew" data-scn="${label}" data-uidx="${globalIdx}" data-role="resize-w" x="${(-uW/2 - hs).toFixed(1)}" y="${(-hs).toFixed(1)}" width="${(hs*2).toFixed(1)}" height="${(hs*2).toFixed(1)}"/>`;
+            unitsHtml += `<rect class="resize-handle ns" data-scn="${label}" data-uidx="${globalIdx}" data-role="resize-n" x="${(-hs).toFixed(1)}" y="${(-uH/2 - hs).toFixed(1)}" width="${(hs*2).toFixed(1)}" height="${(hs*2).toFixed(1)}"/>`;
+            unitsHtml += `<rect class="resize-handle ns" data-scn="${label}" data-uidx="${globalIdx}" data-role="resize-s" x="${(-hs).toFixed(1)}" y="${(uH/2 - hs).toFixed(1)}" width="${(hs*2).toFixed(1)}" height="${(hs*2).toFixed(1)}"/>`;
+        }
         unitsHtml += `</g>`;
     });
 
@@ -2315,8 +2328,9 @@ function clientToSvg(svgEl, clientX, clientY) {
 }
 
 function onUnitDragStart(e) {
-    // v75.5.0 — distingue clic sur poignée rotation (data-role="rotate") vs rectangle (move)
-    const roleEl = e.target && e.target.closest ? e.target.closest("[data-role='rotate']") : null;
+    // v75.5.0/v75.9.0 — distingue clic sur poignée rotation/resize/rectangle
+    const roleAnyEl = e.target && e.target.closest ? e.target.closest("[data-role]") : null;
+    const role = roleAnyEl ? roleAnyEl.dataset.role : null;
     let el = e.target;
     while (el && el !== e.currentTarget && !(el.classList && el.classList.contains("draggable-unit"))) {
         el = el.parentNode;
@@ -2339,30 +2353,25 @@ function onUnitDragStart(e) {
     const curY = mT ? parseFloat(mT[2]) : refs.cySvg;
     const curRot = mR ? parseFloat(mR[1]) : 0;
 
-    if (roleEl) {
-        // Mode rotation manuelle : capture angle initial souris → centre + rotation initiale
+    if (role === "rotate") {
         const initAngle = Math.atan2(svgPt.y - curY, svgPt.x - curX) * 180 / Math.PI;
+        _dragState = { mode: "rotate", label, uidx, el, svgEl, refs, curX, curY, startAngleDeg: initAngle, startRotDeg: curRot, lastRot: curRot };
+    } else if (role && role.startsWith("resize-")) {
+        // v75.9.0 — Poignées resize aux arêtes du rect
+        const bodyRect = el.querySelector("rect.body");
+        const startW = bodyRect ? parseFloat(bodyRect.getAttribute("width")) : 40;
+        const startH = bodyRect ? parseFloat(bodyRect.getAttribute("height")) : 40;
         _dragState = {
-            mode: "rotate",
+            mode: role,   // "resize-e" / "resize-w" / "resize-n" / "resize-s"
             label, uidx, el, svgEl, refs,
+            startSvgPt: { x: svgPt.x, y: svgPt.y },
             curX, curY,
-            startAngleDeg: initAngle,
-            startRotDeg: curRot,
-            lastRot: curRot
+            curRot,
+            startW, startH,
+            lastW: startW, lastH: startH
         };
     } else {
-        // Mode déplacement
-        _dragState = {
-            mode: "move",
-            label, uidx, el, svgEl, refs,
-            deltaX: svgPt.x - curX,
-            deltaY: svgPt.y - curY,
-            curRot,
-            lastX: curX,
-            lastY: curY,
-            lastRot: curRot,
-            snappedSegmentIdx: null
-        };
+        _dragState = { mode: "move", label, uidx, el, svgEl, refs, deltaX: svgPt.x - curX, deltaY: svgPt.y - curY, curRot, lastX: curX, lastY: curY, lastRot: curRot, snappedSegmentIdx: null };
     }
     el.classList.add("dragging");
     e.preventDefault();
@@ -2420,6 +2429,39 @@ function onUnitDragMove(e) {
         const newRot = _dragState.startRotDeg + (curAngle - _dragState.startAngleDeg);
         _dragState.lastRot = newRot;
         el.setAttribute("transform", `translate(${_dragState.curX.toFixed(1)},${_dragState.curY.toFixed(1)}) rotate(${newRot.toFixed(1)})`);
+    } else if (mode.startsWith("resize-")) {
+        // v75.9.0 — Resize par arête : compute delta souris projeté sur axe local (avant rotation)
+        const dxSvg = svgPt.x - _dragState.startSvgPt.x;
+        const dySvg = svgPt.y - _dragState.startSvgPt.y;
+        const rotRad = -_dragState.curRot * Math.PI / 180;
+        const localDx = dxSvg * Math.cos(rotRad) - dySvg * Math.sin(rotRad);
+        const localDy = dxSvg * Math.sin(rotRad) + dySvg * Math.cos(rotRad);
+        let newW = _dragState.startW, newH = _dragState.startH;
+        // Centre reste fixe : W et H changent de 2*delta (les 2 côtés opposés bougent)
+        if (mode === "resize-e")      newW = Math.max(10, _dragState.startW + 2 * localDx);
+        else if (mode === "resize-w") newW = Math.max(10, _dragState.startW - 2 * localDx);
+        else if (mode === "resize-s") newH = Math.max(10, _dragState.startH + 2 * localDy);
+        else if (mode === "resize-n") newH = Math.max(10, _dragState.startH - 2 * localDy);
+        _dragState.lastW = newW;
+        _dragState.lastH = newH;
+        // Update visuel du rect body + poignées
+        const body = el.querySelector("rect.body");
+        if (body) {
+            body.setAttribute("x", (-newW/2).toFixed(1));
+            body.setAttribute("y", (-newH/2).toFixed(1));
+            body.setAttribute("width", newW.toFixed(1));
+            body.setAttribute("height", newH.toFixed(1));
+        }
+        // Update poignées positions
+        const hs = 3.5;
+        const handleE = el.querySelector("[data-role='resize-e']");
+        if (handleE) handleE.setAttribute("x", (newW/2 - hs).toFixed(1));
+        const handleW = el.querySelector("[data-role='resize-w']");
+        if (handleW) handleW.setAttribute("x", (-newW/2 - hs).toFixed(1));
+        const handleN = el.querySelector("[data-role='resize-n']");
+        if (handleN) handleN.setAttribute("y", (-newH/2 - hs).toFixed(1));
+        const handleS = el.querySelector("[data-role='resize-s']");
+        if (handleS) handleS.setAttribute("y", (newH/2 - hs).toFixed(1));
     } else {
         // Déplacement
         let newX = svgPt.x - _dragState.deltaX;
@@ -2491,7 +2533,7 @@ function onUnitDragMove(e) {
 
 function onUnitDragEnd(e) {
     if (!_dragState) return;
-    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl } = _dragState;
+    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl, lastW, lastH } = _dragState;
     _dragState = null;
     el.classList.remove("dragging");
     clearDragVisuals(svgEl);
@@ -2504,6 +2546,21 @@ function onUnitDragEnd(e) {
         renderParcelSvg(label);
         updateConstraintsCount();
         showToast(`Rotation "${u.unit_name || u.unit_type}" : ${Math.round(u.rotation_deg)}°`);
+        return;
+    }
+
+    if (mode && mode.startsWith("resize-")) {
+        // v75.9.0 — Persiste W et H → recalcule m² automatiquement
+        const newW_m = Number((lastW / refs.scale).toFixed(2));
+        const newH_m = Number((lastH / refs.scale).toFixed(2));
+        u.width_m = newW_m;
+        u.height_m = newH_m;
+        u.unit_size_m2 = Math.round(newW_m * newH_m);
+        u.polygon = null;   // reset polygone custom éventuel
+        renderUnitsTable(label);
+        renderParcelSvg(label);
+        updateConstraintsCount();
+        showToast(`Nouvelle taille : ${newW_m}×${newH_m}m = ${u.unit_size_m2}m²`);
         return;
     }
 
