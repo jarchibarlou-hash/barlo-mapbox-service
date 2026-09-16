@@ -198,6 +198,15 @@
         .resize-handle.ew{cursor:ew-resize}
         .resize-handle.ns{cursor:ns-resize}
         .resize-handle:hover{fill:#16A34A}
+        /* v75.11.0 — Edge editing Revit-like */
+        .edge-selected{stroke:#06B6D4;stroke-width:3;fill:none;pointer-events:none;filter:drop-shadow(0 0 4px #06B6D4)}
+        .revit-panel{position:fixed;z-index:9998;background:var(--card);border:2px solid #06B6D4;border-radius:8px;padding:.6rem;display:none;flex-direction:column;gap:.35rem;box-shadow:0 8px 24px rgba(6,182,212,.4);min-width:180px}
+        .revit-panel.active{display:flex}
+        .revit-panel h5{margin:0 0 .3rem;font-size:.7rem;color:#06B6D4;text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+        .revit-panel button{padding:.4rem .6rem;font-size:.7rem;font-weight:700;border:1px solid var(--border);background:var(--navy);color:var(--text);border-radius:5px;cursor:pointer;font-family:inherit;text-align:left}
+        .revit-panel button:hover{background:var(--card2);border-color:#06B6D4;color:#06B6D4}
+        .revit-panel button.close{background:transparent;color:var(--text2);border:none;text-align:center;font-size:.75rem;margin-top:.3rem}
+        .revit-panel .waiting{background:rgba(6,182,212,.15);color:#06B6D4;padding:.35rem .5rem;border-radius:4px;font-size:.65rem;font-style:italic}
         .c-parcel-legend{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem;font-size:.58rem;color:var(--text2)}
         .c-parcel-legend-item{display:inline-flex;align-items:center;gap:.25rem}
         .c-parcel-legend-swatch{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -309,7 +318,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.3</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.4</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2235,6 +2244,16 @@ function renderParcelSvg(label) {
             unitsHtml += `<rect class="resize-handle ns" data-scn="${label}" data-uidx="${globalIdx}" data-role="resize-n" x="${(-hs).toFixed(1)}" y="${(-uH/2 - hs).toFixed(1)}" width="${(hs*2).toFixed(1)}" height="${(hs*2).toFixed(1)}"/>`;
             unitsHtml += `<rect class="resize-handle ns" data-scn="${label}" data-uidx="${globalIdx}" data-role="resize-s" x="${(-hs).toFixed(1)}" y="${(uH/2 - hs).toFixed(1)}" width="${(hs*2).toFixed(1)}" height="${(hs*2).toFixed(1)}"/>`;
         }
+        // v75.11.0 — Highlight arête sélectionnée (cyan)
+        if (_selectedEdge && _selectedEdge.label === label && _selectedEdge.uidx === globalIdx) {
+            const e = _selectedEdge.edge;
+            let x1, y1, x2, y2;
+            if (e === "n") { x1 = -uW/2; y1 = -uH/2; x2 = uW/2; y2 = -uH/2; }
+            else if (e === "s") { x1 = -uW/2; y1 = uH/2; x2 = uW/2; y2 = uH/2; }
+            else if (e === "e") { x1 = uW/2; y1 = -uH/2; x2 = uW/2; y2 = uH/2; }
+            else { x1 = -uW/2; y1 = -uH/2; x2 = -uW/2; y2 = uH/2; }
+            unitsHtml += `<line class="edge-selected" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
+        }
         unitsHtml += `</g>`;
     });
 
@@ -2336,6 +2355,65 @@ function onUnitDragStart(e) {
     const curX = mT ? parseFloat(mT[1]) : refs.cxSvg;
     const curY = mT ? parseFloat(mT[2]) : refs.cySvg;
     const curRot = mR ? parseFloat(mR[1]) : 0;
+
+    // v75.11.0 (Phase C) — Mode Revit : gérer clic sur arête ou cible d'alignement
+    if (_revitMode === "align" && _selectedEdge) {
+        // Le user vient de cliquer sur une CIBLE pour l'alignement
+        // Détecte : segment retrait le plus proche OU arête d'une autre unité
+        const svgPtRev = svgPt;
+        // Priorité 1 : segment retrait (les segLinesForSnap contiennent {p1, p2, angleDeg})
+        let bestSeg = null, bestDist = 15;
+        for (const s of (refs.segLinesForSnap || [])) {
+            const { dist } = projectPointOnSegment(svgPtRev, s.p1, s.p2);
+            if (dist < bestDist) { bestDist = dist; bestSeg = s; }
+        }
+        // Priorité 2 : arête d'une autre unité (l'unité cliquée si différente de la source)
+        if (!bestSeg && uidx !== _selectedEdge.uidx) {
+            // Détection arête de l'unité cible
+            const rotInvT = -curRot * Math.PI / 180;
+            const localXt = (svgPt.x - curX) * Math.cos(rotInvT) - (svgPt.y - curY) * Math.sin(rotInvT);
+            const localYt = (svgPt.x - curX) * Math.sin(rotInvT) + (svgPt.y - curY) * Math.cos(rotInvT);
+            const bodyT = el.querySelector("rect.body");
+            const targetW = bodyT ? parseFloat(bodyT.getAttribute("width")) : 40;
+            const targetH = bodyT ? parseFloat(bodyT.getAttribute("height")) : 40;
+            const targetEdge = detectEdgeAtLocalPoint(localXt, localYt, targetW, targetH, 12);
+            if (targetEdge) {
+                // Convertit l'arête cible en ligne globale (2 points)
+                let p1L, p2L;
+                if (targetEdge === "e") { p1L = { x: targetW/2, y: -targetH/2 }; p2L = { x: targetW/2, y: targetH/2 }; }
+                else if (targetEdge === "w") { p1L = { x: -targetW/2, y: -targetH/2 }; p2L = { x: -targetW/2, y: targetH/2 }; }
+                else if (targetEdge === "n") { p1L = { x: -targetW/2, y: -targetH/2 }; p2L = { x: targetW/2, y: -targetH/2 }; }
+                else { p1L = { x: -targetW/2, y: targetH/2 }; p2L = { x: targetW/2, y: targetH/2 }; }
+                const rotT = curRot * Math.PI / 180;
+                const t1 = { x: curX + p1L.x * Math.cos(rotT) - p1L.y * Math.sin(rotT), y: curY + p1L.x * Math.sin(rotT) + p1L.y * Math.cos(rotT) };
+                const t2 = { x: curX + p2L.x * Math.cos(rotT) - p2L.y * Math.sin(rotT), y: curY + p2L.x * Math.sin(rotT) + p2L.y * Math.cos(rotT) };
+                bestSeg = { p1: t1, p2: t2, angleDeg: Math.atan2(t2.y - t1.y, t2.x - t1.x) * 180 / Math.PI };
+            }
+        }
+        if (bestSeg) {
+            revitApplyAlign(bestSeg);
+            e.preventDefault();
+            return;
+        }
+    }
+    // Détection clic sur arête (avant de démarrer un drag body)
+    if (!role) {
+        const rotInv = -curRot * Math.PI / 180;
+        const localX = (svgPt.x - curX) * Math.cos(rotInv) - (svgPt.y - curY) * Math.sin(rotInv);
+        const localY = (svgPt.x - curX) * Math.sin(rotInv) + (svgPt.y - curY) * Math.cos(rotInv);
+        const bodyR = el.querySelector("rect.body");
+        const bodyW = bodyR ? parseFloat(bodyR.getAttribute("width")) : 40;
+        const bodyH = bodyR ? parseFloat(bodyR.getAttribute("height")) : 40;
+        // Zone "arête" = frange de 8px de chaque côté du rect
+        const nearEdge = detectEdgeAtLocalPoint(localX, localY, bodyW, bodyH, 8);
+        // On ne sélectionne que si on est dans la frange bord ET pas à l'intérieur du rect
+        const insideRect = Math.abs(localX) < bodyW/2 - 8 && Math.abs(localY) < bodyH/2 - 8;
+        if (nearEdge && !insideRect) {
+            selectEdge(label, uidx, nearEdge, e.clientX, e.clientY);
+            e.preventDefault();
+            return;
+        }
+    }
 
     if (role === "rotate") {
         const initAngle = Math.atan2(svgPt.y - curY, svgPt.x - curX) * 180 / Math.PI;
@@ -3002,6 +3080,154 @@ function defaultUnitsFromMoteur(label) {
     return assignPreplacementForScenario(label, units);
 }
 
+// ═══ v75.11.0 (Phase C) — REVIT-LIKE EDGE EDITING (Align, Trim, Offset) ═══
+let _selectedEdge = null;   // { label, uidx, edge: "n"|"s"|"e"|"w" }
+let _revitMode = null;      // "align" | "trim" | "offset" | null
+
+// Détecte l'arête proche d'un clic (coord local repère unit, avant rotation)
+function detectEdgeAtLocalPoint(localX, localY, W, H, threshold) {
+    threshold = threshold || 10;
+    const distN = Math.abs(localY - (-H/2));
+    const distS = Math.abs(localY - (H/2));
+    const distE = Math.abs(localX - (W/2));
+    const distW = Math.abs(localX - (-W/2));
+    // Ne détecte que si le point est dans les limites du côté (pas en dehors du rect)
+    const inH = localY >= -H/2 - threshold && localY <= H/2 + threshold;
+    const inW = localX >= -W/2 - threshold && localX <= W/2 + threshold;
+    const min = Math.min(distN, distS, distE, distW);
+    if (min > threshold) return null;
+    if (min === distN && inW) return "n";
+    if (min === distS && inW) return "s";
+    if (min === distE && inH) return "e";
+    if (min === distW && inH) return "w";
+    return null;
+}
+
+function selectEdge(label, uidx, edge, svgClientX, svgClientY) {
+    _selectedEdge = { label, uidx, edge };
+    // Positionne le panel près du curseur
+    const panel = $("revitPanel");
+    if (panel) {
+        panel.classList.add("active");
+        const w = panel.offsetWidth || 200, h = panel.offsetHeight || 180;
+        const px = Math.min(window.innerWidth - w - 10, Math.max(10, svgClientX + 15));
+        const py = Math.min(window.innerHeight - h - 10, Math.max(10, svgClientY - h / 2));
+        panel.style.left = px + "px";
+        panel.style.top = py + "px";
+        const u = (cockpitState.scenarios[label].units || [])[uidx];
+        const edgeName = { n: "Nord", s: "Sud", e: "Est", w: "Ouest" }[edge] || edge;
+        $("revitPanelInfo").innerHTML = `<strong style="color:#06B6D4">${esc(u.unit_name||u.unit_type||"Unité")}</strong> · Arête <strong>${edgeName}</strong>`;
+    }
+    renderParcelSvg(label);
+}
+
+function revitCloseAll() {
+    const label = _selectedEdge && _selectedEdge.label;
+    _selectedEdge = null;
+    _revitMode = null;
+    $("revitPanel").classList.remove("active");
+    if (label) renderParcelSvg(label);
+}
+
+function revitStartAlign() {
+    if (!_selectedEdge) return;
+    _revitMode = "align";
+    $("revitPanelInfo").innerHTML = `<div class="waiting">🎯 Clique maintenant sur une arête CIBLE (segment de parcelle OU arête d'une autre unité)</div>`;
+}
+
+function revitStartTrim() {
+    if (!_selectedEdge) return;
+    _revitMode = "trim";
+    $("revitPanelInfo").innerHTML = `<div class="waiting">✂ Drag l'arête sélectionnée pour la déplacer (voir poignées vertes)</div>`;
+}
+
+function revitStartOffset() {
+    if (!_selectedEdge) return;
+    const dist = prompt("Offset en mètres (positif = vers l'extérieur, négatif = vers l'intérieur) :", "3");
+    if (dist === null) return;
+    const dm = parseFloat(dist);
+    if (isNaN(dm)) { showToast("Distance invalide", true); return; }
+    revitApplyOffset(dm);
+}
+
+// Applique un offset à l'arête sélectionnée (déplace le côté de X mètres, l'opposé reste fixe)
+function revitApplyOffset(dm) {
+    const { label, uidx, edge } = _selectedEdge;
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    if (!u) return;
+    const refs = _svgRefs[label];
+    if (!refs) return;
+    let w_m = u.width_m ? Number(u.width_m) : 8;
+    let h_m = u.height_m ? Number(u.height_m) : 6;
+    const rot = (u.rotation_deg || 0) * Math.PI / 180;
+    // Delta en local : positif = vers l'extérieur du rect selon l'arête
+    let dLocalX = 0, dLocalY = 0;
+    if (edge === "e") { w_m += dm; dLocalX = dm / 2; }
+    else if (edge === "w") { w_m += dm; dLocalX = -dm / 2; }
+    else if (edge === "s") { h_m += dm; dLocalY = dm / 2; }
+    else if (edge === "n") { h_m += dm; dLocalY = -dm / 2; }
+    if (w_m < 1 || h_m < 1) { showToast("Dimensions trop petites", true); return; }
+    // Convert delta local → global (rotation)
+    const shiftGlobalX = dLocalX * Math.cos(rot) - dLocalY * Math.sin(rot);
+    const shiftGlobalY = dLocalX * Math.sin(rot) + dLocalY * Math.cos(rot);
+    u.width_m = Number(w_m.toFixed(2));
+    u.height_m = Number(h_m.toFixed(2));
+    u.unit_size_m2 = Math.round(w_m * h_m);
+    u.offset_x_m = Number(((u.offset_x_m || 0) + shiftGlobalX).toFixed(2));
+    u.offset_y_m = Number(((u.offset_y_m || 0) - shiftGlobalY).toFixed(2));  // y inversé
+    u.polygon = null;
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`Offset ${dm}m appliqué sur arête ${edge.toUpperCase()} → ${u.unit_size_m2}m²`);
+    revitCloseAll();
+}
+
+// Applique Align : source (arête sélectionnée) → cible (arête cliquée après)
+// Le rect entier se déplace pour que son arête source coïncide avec la ligne de la cible
+function revitApplyAlign(targetLine) {
+    // targetLine = { p1: {x, y}, p2: {x, y}, angleDeg } en pixels absolus
+    const { label, uidx, edge } = _selectedEdge;
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    if (!u) return;
+    const refs = _svgRefs[label];
+    if (!refs) return;
+    const w_m = u.width_m ? Number(u.width_m) : 8;
+    const h_m = u.height_m ? Number(u.height_m) : 6;
+    const w_px = w_m * refs.scale, h_px = h_m * refs.scale;
+    const curX = refs.cxSvg + (u.offset_x_m || 0) * refs.scale;
+    const curY = refs.cySvg - (u.offset_y_m || 0) * refs.scale;
+    // Rotation du rect = angle de la cible (pour alignement parallèle)
+    const newRotDeg = targetLine.angleDeg;
+    const rot = newRotDeg * Math.PI / 180;
+    // Position de l'arête source (relatif au centre du rect en local)
+    let edgeLocalX = 0, edgeLocalY = 0;
+    if (edge === "e") edgeLocalX = w_px / 2;
+    else if (edge === "w") edgeLocalX = -w_px / 2;
+    else if (edge === "n") edgeLocalY = -h_px / 2;
+    else if (edge === "s") edgeLocalY = h_px / 2;
+    // Direction perpendiculaire à l'arête source (en local = vers l'extérieur)
+    // Pour aligner, on veut que le milieu de l'arête source se trouve sur la target line
+    // Projection du milieu source actuel sur target line
+    const edgeGlobalX = curX + edgeLocalX * Math.cos(rot) - edgeLocalY * Math.sin(rot);
+    const edgeGlobalY = curY + edgeLocalX * Math.sin(rot) + edgeLocalY * Math.cos(rot);
+    const { proj } = projectPointOnSegment({ x: edgeGlobalX, y: edgeGlobalY }, targetLine.p1, targetLine.p2);
+    // Shift = proj - edgeCurrent
+    const shiftX = proj.x - edgeGlobalX;
+    const shiftY = proj.y - edgeGlobalY;
+    const newCX = curX + shiftX;
+    const newCY = curY + shiftY;
+    u.offset_x_m = Number(((newCX - refs.cxSvg) / refs.scale).toFixed(2));
+    u.offset_y_m = Number((-(newCY - refs.cySvg) / refs.scale).toFixed(2));
+    u.rotation_deg = Number(newRotDeg);
+    u.polygon = null;
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`Align appliqué → arête ${edge.toUpperCase()} collée`);
+    revitCloseAll();
+}
+
 // v75.10.1 (Phase A.2) — Feedback loop : capture baseline moteur → log deltas au save
 let _moteurBaseline = { A: null, B: null, C: null };
 
@@ -3557,6 +3783,16 @@ function backToInbox(){$("panelRight").classList.remove("active")}
 function showGenLog(title,steps){$("genLogTitle").textContent=title;$("genSteps").innerHTML=steps.map(s=>`<li class="gen-step" data-step="${s.id}"><span class="icon">○</span> ${s.label}</li>`).join("");$("genLog").classList.add("active")}
 function stepState(id,state){const el=document.querySelector(`[data-step="${id}"]`);if(!el)return;el.className=`gen-step ${state}`;el.querySelector(".icon").textContent=state==="done"?"✓":state==="active"?"◉":state==="error"?"✕":"○"}
 </script>
+
+<!-- v75.11.0 (Phase C) — Panneau flottant Revit-like edge editing -->
+<div class="revit-panel" id="revitPanel">
+  <h5 id="revitPanelTitle">✎ Édition d'arête</h5>
+  <div id="revitPanelInfo" style="font-size:.62rem;color:var(--text2)">Aucune arête sélectionnée</div>
+  <button onclick="revitStartAlign()">🎯 Align (aligner à une arête)</button>
+  <button onclick="revitStartTrim()">✂ Trim / Extend (drag)</button>
+  <button onclick="revitStartOffset()">↔ Offset (décaler de X m)</button>
+  <button class="close" onclick="revitCloseAll()">✕ Fermer</button>
+</div>
 
 <!-- v75.5.2 — Modal détails techniques par unité (pilotis, sous-sols, étages, terrasse, balcon…) -->
 <div class="c-modal-overlay" id="unitDetailsOverlay" onclick="if(event.target===this)closeUnitDetailsModal()">
