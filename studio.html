@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.4</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.5</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2029,9 +2029,10 @@ function renderParcelSvg(label) {
         if (hasOverlap) {
             unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ conflit</text>`;
         }
+        // v75.8.8 — label simplifié : nom + surface m² seule (fini les dimensions W×H dans le label)
         const fsName = Math.max(7, Math.min(13, uH * 0.24));
         const fsArea = Math.max(6, Math.min(10, uH * 0.18));
-        const areaLabel = `${displayW_m}×${displayH_m}m · ${areaM2}m²`;
+        const areaLabel = `${areaM2} m²`;
         unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
         unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
@@ -2183,6 +2184,30 @@ function clearDragVisuals(svgEl) {
     svgEl.querySelectorAll(".snap-hint, .align-guide").forEach(n => n.remove());
 }
 
+// v75.8.8 — Live re-render throttled à 50ms pendant le drag pour clip parcelle + tetris en direct
+let _dragLastRenderTs = 0;
+function throttledRenderParcelDuringDrag(label, uidx, newX, newY, newRot) {
+    const now = Date.now();
+    if (now - _dragLastRenderTs < 50) return;
+    _dragLastRenderTs = now;
+    // Sync u.offset_x_m/y_m et rotation avant render pour que le clip soit correct
+    const refs = _svgRefs[label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    if (!u) return;
+    u.offset_x_m = Number(((newX - refs.cxSvg) / refs.scale).toFixed(2));
+    u.offset_y_m = Number((-(newY - refs.cySvg) / refs.scale).toFixed(2));
+    if (newRot !== undefined && newRot !== null) u.rotation_deg = Number(newRot);
+    // Re-render : clip parcelle + tetris s'appliqueront
+    renderParcelSvg(label);
+    // Restaure le classe dragging sur le nouvel élément (car innerHTML remplace tout)
+    const newEl = document.querySelector(`#cParcelSvg${label} .draggable-unit[data-uidx="${uidx}"]`);
+    if (newEl && _dragState) {
+        newEl.classList.add("dragging");
+        _dragState.el = newEl;
+    }
+}
+
 function onUnitDragMove(e) {
     if (!_dragState) return;
     const { mode, svgEl, refs, el, label, uidx } = _dragState;
@@ -2257,6 +2282,8 @@ function onUnitDragMove(e) {
         _dragState.lastX = newX;
         _dragState.lastY = newY;
         _dragState.lastRot = newRot;
+        // v75.8.8 : re-render throttled pendant le drag → clip parcelle + tetris en direct
+        throttledRenderParcelDuringDrag(label, uidx, newX, newY, newRot);
     }
     e.preventDefault();
 }
@@ -2444,8 +2471,8 @@ function updateUnit(label, idx, field, val) {
         units[idx].height_m = null;
         units[idx].polygon = null;
     }
-    // v75.5.1 : si surface m² change ET unité a des dimensions custom (post auto-shape/snap),
-    // recalcule width_m/height_m en préservant le ratio actuel → le rectangle change visuellement en direct
+    // v75.5.1 / v75.8.8 : si surface m² change ET unité a dimensions custom OU polygon custom,
+    // re-scale pour préserver la forme mais atteindre la nouvelle surface
     if (field === "unit_size_m2") {
         const u = units[idx];
         const newArea = Number(val) || 0;
@@ -2454,6 +2481,10 @@ function updateUnit(label, idx, field, val) {
             const newWidth = Math.sqrt(newArea * ratio);
             u.width_m = Number(newWidth.toFixed(2));
             u.height_m = Number((newWidth / ratio).toFixed(2));
+        }
+        // v75.8.8 : re-scale du polygone si custom (post 🧠 Proposer ou 🧩 L-shape)
+        if (newArea > 0 && u.polygon && u.polygon.length >= 3) {
+            u.polygon = scalePolygonToArea(u.polygon, newArea);
         }
     }
     // v75.5.1 : si type change ET width/height custom, recalcule aussi selon nouveau aspect stretch
