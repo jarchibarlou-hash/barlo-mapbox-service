@@ -268,11 +268,31 @@
 
         /* Bouton Add unit compact (dans colonne serrée) */
         .c-scn-col .c-btn-add-unit,.c-scn-col .c-btn-auto-place,.c-scn-col .c-btn-reset-moteur{padding:.28rem .55rem;font-size:.6rem}
+
+        /* v75.5.2 — Modal détails unité (pilotis, sous-sols, étages, etc.) */
+        .c-modal-overlay{position:fixed;inset:0;background:rgba(11,17,32,.75);z-index:10000;display:none;align-items:center;justify-content:center;padding:1rem}
+        .c-modal-overlay.active{display:flex}
+        .c-modal{background:var(--card);border:1px solid var(--amber);border-radius:10px;padding:1.5rem;max-width:520px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+        .c-modal h3{margin:0 0 1rem;font-size:1rem;color:var(--amber);font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:.8rem}
+        .c-modal h3 .c-modal-close{background:none;border:none;color:var(--text2);cursor:pointer;font-size:1.4rem;line-height:1;padding:0 .4rem}
+        .c-modal h3 .c-modal-close:hover{color:var(--text)}
+        .c-modal-body{display:grid;grid-template-columns:1fr 1fr;gap:.8rem .9rem}
+        .c-modal-body label{font-size:.72rem;color:var(--text);display:flex;flex-direction:column;gap:.3rem}
+        .c-modal-body label.full{grid-column:1/-1}
+        .c-modal-body label.check{flex-direction:row;align-items:center;gap:.4rem;cursor:pointer}
+        .c-modal-body input[type="number"],.c-modal-body input[type="text"],.c-modal-body textarea{width:100%;padding:.4rem .55rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:5px;font-family:inherit;font-size:.75rem;outline:none}
+        .c-modal-body input:focus,.c-modal-body textarea:focus{border-color:var(--amber)}
+        .c-modal-body textarea{resize:vertical;min-height:60px}
+        .c-modal-footer{display:flex;gap:.7rem;justify-content:flex-end;margin-top:1.2rem;padding-top:.9rem;border-top:1px solid var(--border)}
+        .c-modal-footer button{padding:.55rem 1.2rem;border-radius:6px;font-family:inherit;font-size:.78rem;font-weight:700;cursor:pointer;border:1px solid var(--border);background:var(--navy);color:var(--text)}
+        .c-modal-footer button.primary{background:linear-gradient(135deg,var(--forest),#145A32);color:#fff;border-color:transparent;box-shadow:0 3px 10px rgba(30,132,73,.35)}
+        .c-modal-footer button.primary:hover{transform:translateY(-1px)}
+        .c-modal-hint{font-size:.6rem;color:var(--text2);margin-top:.2rem;font-weight:400}
     </style>
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.5.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.5.2</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1104,12 +1124,14 @@ function renderParcelSvg(label) {
         const aspectRatio = cat === "COMMERCE" ? 2.0 : cat === "BUREAU" ? 1.5 : 1.2;
         let uW = Math.sqrt(areaPx * aspectRatio);
         let uH = uW / aspectRatio;
-        uW = Math.max(16, Math.min(110, uW));
-        uH = Math.max(10, Math.min(75, uH));
+        // v75.5.2 — Proportions STRICTES : minimum absolu 8px pour visibilité, PAS de max cap
+        // (les caps 110/75 précédents cassaient la surface réelle — findSafeUnitDistance clip si déborde)
+        if (uW < 8) { const k = 8 / uW; uW *= k; uH *= k; }  // scale up proportionnel si trop petit
         // v75.5.0 — dimensions custom (auto-shape stretch le long segment) via width_m/height_m
         if (u.width_m && u.height_m) {
-            uW = Math.max(12, Math.min(180, Number(u.width_m) * scale));
-            uH = Math.max(8, Math.min(120, Number(u.height_m) * scale));
+            uW = Number(u.width_m) * scale;
+            uH = Number(u.height_m) * scale;
+            if (uW < 8) { const k = 8 / uW; uW *= k; uH *= k; }
         }
 
         let ux, uy, rotDeg;
@@ -1170,8 +1192,11 @@ function renderParcelSvg(label) {
         const handleDist = uH/2 + 12;
         unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
         unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="#fff" stroke-width="1.2"/>`;
-        unitsHtml += `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${Math.max(7, Math.min(10, uH * 0.32)).toFixed(0)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
-        unitsHtml += `<text x="0" y="${(uH/2 + 7).toFixed(0)}" text-anchor="middle" fill="#c9a878" font-size="7" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${areaM2}m²</text>`;
+        // v75.5.2 : Nom au-dessus centre + surface m² sous le nom, TOUS DEUX DANS le rectangle
+        const fsName = Math.max(7, Math.min(13, uH * 0.24));
+        const fsArea = Math.max(6, Math.min(11, uH * 0.20));
+        unitsHtml += `<text x="0" y="${(-uH * 0.10).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
+        unitsHtml += `<text x="0" y="${(uH * 0.20).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.9">${areaM2} m²</text>`;
         // v75.5.0 — trait vers poignée + poignée rotation (position "au-dessus" du rectangle en repère local)
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
         unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
@@ -1513,7 +1538,8 @@ function renderUnitsTable(label) {
           <td><select onchange="updateUnit('${label}',${i},'placement_sector',this.value)">${PLACEMENT_SECTORS.map(s=>`<option value="${s}"${u.placement_sector===s?" selected":""}>${s||"—"}</option>`).join("")}</select></td>
           <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
           <td style="white-space:nowrap">
-            <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Adapter la forme au segment de parcelle le plus proche (étire le long du bord)" style="color:#22C55E">🪄</button>
+            <button class="c-btn-del" onclick="openUnitDetailsModal('${label}',${i})" title="Détails techniques (pilotis, sous-sols, étages, terrasse, balcon, notes)" style="color:#c9a878">⚙</button>
+            <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Adapter la forme au segment de parcelle le plus proche" style="color:#22C55E">🪄</button>
             <button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button>
           </td>
         </tr>
@@ -1581,6 +1607,56 @@ function updateUnit(label, idx, field, val) {
     }
     updateConstraintsCount();
 }
+
+// v75.5.2 — Modal détails techniques par unité (pilotis, sous-sols, étages, terrasse, balcon, notes)
+let _editingUnit = null;
+
+function openUnitDetailsModal(label, idx) {
+    const u = (cockpitState.scenarios[label].units || [])[idx];
+    if (!u) return;
+    _editingUnit = { label, idx };
+    $("udmUnitLabel").textContent = `Scénario ${label} · ${u.unit_name || u.unit_type || "unité "+(idx+1)}`;
+    $("udmEtages").value = (u.etages_unit != null && u.etages_unit !== "") ? u.etages_unit : "";
+    $("udmSousSols").value = (u.sous_sols != null && u.sous_sols !== "") ? u.sous_sols : "";
+    $("udmPilotis").checked = !!u.pilotis;
+    $("udmParkingSs").checked = !!u.parking_ss;
+    $("udmTerrasse").checked = !!u.terrasse;
+    $("udmBalcon").checked = !!u.balcon;
+    $("udmNotesTech").value = u.notes_tech || "";
+    $("unitDetailsOverlay").classList.add("active");
+    // Focus premier champ
+    setTimeout(() => { const el = $("udmEtages"); if (el) el.focus(); }, 50);
+}
+
+function closeUnitDetailsModal() {
+    $("unitDetailsOverlay").classList.remove("active");
+    _editingUnit = null;
+}
+
+function saveUnitDetails() {
+    if (!_editingUnit) return;
+    const u = (cockpitState.scenarios[_editingUnit.label].units || [])[_editingUnit.idx];
+    if (!u) { closeUnitDetailsModal(); return; }
+    const etV = $("udmEtages").value;
+    const ssV = $("udmSousSols").value;
+    u.etages_unit = etV !== "" ? Number(etV) : null;
+    u.sous_sols = ssV !== "" ? Number(ssV) : null;
+    u.pilotis = !!$("udmPilotis").checked;
+    u.parking_ss = !!$("udmParkingSs").checked;
+    u.terrasse = !!$("udmTerrasse").checked;
+    u.balcon = !!$("udmBalcon").checked;
+    u.notes_tech = $("udmNotesTech").value || "";
+    const label = _editingUnit.label;
+    closeUnitDetailsModal();
+    renderUnitsTable(label);
+    updateConstraintsCount();
+    showToast(`Détails enregistrés pour "${u.unit_name || u.unit_type}"`);
+}
+
+// Escape pour fermer modal
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && _editingUnit) closeUnitDetailsModal();
+});
 
 // v75.6.0 — Adapte une unité au segment le plus proche (auto-shape stretch le long du segment)
 function adaptUnitToParcelSegment(label, idx) {
@@ -1854,11 +1930,24 @@ function collectAllConstraints() {
         out[`override_gap_m_${label}`] = s.gap_m || "";
         out[`scenario_rationale_${label}`] = s.rationale || "";
         // Unités structurées : JSON (le server les lit AUSSI depuis Supabase, mais on met en PIPELINE pour redondance)
+        // v75.5.2 : inclut tous les nouveaux champs (drag, rotation, shape, détails techniques)
         const unitsForBackend = (s.units || []).map(u => ({
             type: (u.unit_type||"").toUpperCase(),
             name: u.unit_name || "",
             size_m2: Number(u.unit_size_m2) || 0,
-            sector: u.placement_sector || ""
+            sector: u.placement_sector || "",
+            offset_x_m: u.offset_x_m != null ? Number(u.offset_x_m) : null,
+            offset_y_m: u.offset_y_m != null ? Number(u.offset_y_m) : null,
+            rotation_deg: u.rotation_deg != null ? Number(u.rotation_deg) : null,
+            width_m: u.width_m != null ? Number(u.width_m) : null,
+            height_m: u.height_m != null ? Number(u.height_m) : null,
+            etages_unit: u.etages_unit != null ? Number(u.etages_unit) : null,
+            sous_sols: u.sous_sols != null ? Number(u.sous_sols) : null,
+            pilotis: !!u.pilotis,
+            parking_ss: !!u.parking_ss,
+            terrasse: !!u.terrasse,
+            balcon: !!u.balcon,
+            notes_tech: u.notes_tech || ""
         })).filter(u => u.type && u.size_m2 > 0);
         out[`override_units_detail_${label}`] = unitsForBackend.length > 0 ? JSON.stringify(unitsForBackend) : "";
     });
@@ -2055,5 +2144,37 @@ function backToInbox(){$("panelRight").classList.remove("active")}
 function showGenLog(title,steps){$("genLogTitle").textContent=title;$("genSteps").innerHTML=steps.map(s=>`<li class="gen-step" data-step="${s.id}"><span class="icon">○</span> ${s.label}</li>`).join("");$("genLog").classList.add("active")}
 function stepState(id,state){const el=document.querySelector(`[data-step="${id}"]`);if(!el)return;el.className=`gen-step ${state}`;el.querySelector(".icon").textContent=state==="done"?"✓":state==="active"?"◉":state==="error"?"✕":"○"}
 </script>
+
+<!-- v75.5.2 — Modal détails techniques par unité (pilotis, sous-sols, étages, terrasse, balcon…) -->
+<div class="c-modal-overlay" id="unitDetailsOverlay" onclick="if(event.target===this)closeUnitDetailsModal()">
+  <div class="c-modal">
+    <h3>
+      <span>⚙️ Détails techniques — <span id="udmUnitLabel">…</span></span>
+      <button class="c-modal-close" onclick="closeUnitDetailsModal()">✕</button>
+    </h3>
+    <div class="c-modal-body">
+      <label>Étages (R+X spécifique)
+        <input type="number" id="udmEtages" min="0" max="10" step="1" placeholder="ex : 2">
+        <span class="c-modal-hint">Override du R+X global du scénario (laisse vide pour utiliser la valeur scenario)</span>
+      </label>
+      <label>Sous-sols (niveaux)
+        <input type="number" id="udmSousSols" min="0" max="3" step="1" placeholder="0">
+        <span class="c-modal-hint">0 = pas de sous-sol, 1-3 = niveaux enterrés</span>
+      </label>
+      <label class="check"><input type="checkbox" id="udmPilotis"> Pilotis (RDC surélevé)</label>
+      <label class="check"><input type="checkbox" id="udmParkingSs"> Parking en sous-sol</label>
+      <label class="check"><input type="checkbox" id="udmTerrasse"> Terrasse accessible</label>
+      <label class="check"><input type="checkbox" id="udmBalcon"> Balcon(s)</label>
+      <label class="full">Notes techniques
+        <textarea id="udmNotesTech" placeholder="Ex : orientation dominante Nord, escalier extérieur métallique, façade béton brut, etc."></textarea>
+      </label>
+    </div>
+    <div class="c-modal-footer">
+      <button onclick="closeUnitDetailsModal()">Annuler</button>
+      <button class="primary" onclick="saveUnitDetails()">✓ Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
