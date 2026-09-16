@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.7</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.8</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1133,6 +1133,148 @@ function rectToPolygon(width_m, height_m) {
         { x_m:  w2, y_m:  h2 },
         { x_m: -w2, y_m:  h2 }
     ];
+}
+
+// ═══ v75.8.11 — Formes géométriques prédéfinies (rectangle, cercle, triangle, hexagone, L, T, U, losange) ═══
+// Tous préservent area_m2 et sont centrés sur (0, 0). Y+ = nord (convention interne).
+
+function shapeRectangle(area, aspect) {
+    aspect = aspect || 1.5;
+    const w = Math.sqrt(area * aspect), h = area / w;
+    return rectToPolygon(w, h);
+}
+
+function shapeCircle(area) {
+    const r = Math.sqrt(area / Math.PI);
+    const n = 32;
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+        const a = i / n * 2 * Math.PI;
+        pts.push({ x_m: r * Math.cos(a), y_m: r * Math.sin(a) });
+    }
+    return pts;
+}
+
+function shapeTriangle(area) {
+    // Triangle équilatéral, sommet en haut
+    const side = Math.sqrt(4 * area / Math.sqrt(3));
+    const h = side * Math.sqrt(3) / 2;
+    return [
+        { x_m: 0,        y_m: h * 2 / 3 },
+        { x_m: side / 2, y_m: -h / 3 },
+        { x_m: -side / 2, y_m: -h / 3 }
+    ];
+}
+
+function shapeHexagon(area) {
+    const r = Math.sqrt((2 * area) / (3 * Math.sqrt(3)));
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+        const a = i / 6 * 2 * Math.PI + Math.PI / 6;
+        pts.push({ x_m: r * Math.cos(a), y_m: r * Math.sin(a) });
+    }
+    return pts;
+}
+
+function shapeLosange(area) {
+    const d1 = Math.sqrt(2 * area * 1.5);
+    const d2 = 2 * area / d1;
+    return [
+        { x_m: 0,       y_m: d2 / 2 },
+        { x_m: d1 / 2,  y_m: 0 },
+        { x_m: 0,       y_m: -d2 / 2 },
+        { x_m: -d1 / 2, y_m: 0 }
+    ];
+}
+
+function shapeTrapeze(area) {
+    // Grande base en bas, petite en haut (ratio 2:1)
+    const h = Math.sqrt(area * 3 / 4);
+    const base = 4 * area / (3 * h);
+    return [
+        { x_m: -base / 4, y_m: h / 2 },
+        { x_m:  base / 4, y_m: h / 2 },
+        { x_m:  base / 2, y_m: -h / 2 },
+        { x_m: -base / 2, y_m: -h / 2 }
+    ];
+}
+
+function shapeLPredefined(area) {
+    // Utilise generateLShape avec angle 0
+    return generateLShape(area, 0, 0.6);
+}
+
+function shapeTPredefined(area) {
+    // T = bras horizontal + tige verticale
+    const armArea = area * 0.55, stemArea = area * 0.45;
+    const armW = Math.sqrt(armArea * 3), armH = armArea / armW;
+    const stemH = Math.sqrt(stemArea * 3), stemW = stemArea / stemH;
+    const local = [
+        { x_m: -armW/2,  y_m: armH/2 },
+        { x_m:  armW/2,  y_m: armH/2 },
+        { x_m:  armW/2,  y_m: -armH/2 },
+        { x_m:  stemW/2, y_m: -armH/2 },
+        { x_m:  stemW/2, y_m: -armH/2 - stemH },
+        { x_m: -stemW/2, y_m: -armH/2 - stemH },
+        { x_m: -stemW/2, y_m: -armH/2 },
+        { x_m: -armW/2,  y_m: -armH/2 }
+    ];
+    return centerPolygon(local);
+}
+
+function shapeUPredefined(area) {
+    // U = 2 branches verticales reliées par une base
+    const branchArea = area * 0.35, baseArea = area * 0.3;
+    const branchH = Math.sqrt(branchArea * 3), branchW = branchArea / branchH;
+    const baseW = Math.sqrt(baseArea * 2.5), baseH = baseArea / baseW;
+    const bx = baseW / 2;
+    const local = [
+        { x_m: -bx,            y_m: branchH },
+        { x_m: -bx + branchW,  y_m: branchH },
+        { x_m: -bx + branchW,  y_m: baseH },
+        { x_m:  bx - branchW,  y_m: baseH },
+        { x_m:  bx - branchW,  y_m: branchH },
+        { x_m:  bx,            y_m: branchH },
+        { x_m:  bx,            y_m: 0 },
+        { x_m: -bx,            y_m: 0 }
+    ];
+    return centerPolygon(local);
+}
+
+const SHAPE_TYPES = [
+    { value: "rectangle", label: "▭ Rectangle", generator: shapeRectangle },
+    { value: "losange",   label: "◇ Losange",   generator: shapeLosange },
+    { value: "trapeze",   label: "⏢ Trapèze",  generator: shapeTrapeze },
+    { value: "circle",    label: "◯ Cercle",    generator: shapeCircle },
+    { value: "hexagon",   label: "⬡ Hexagone", generator: shapeHexagon },
+    { value: "triangle",  label: "△ Triangle",  generator: shapeTriangle },
+    { value: "L",         label: "L Coin",      generator: shapeLPredefined },
+    { value: "T",         label: "T Croix",     generator: shapeTPredefined },
+    { value: "U",         label: "U Cour",      generator: shapeUPredefined }
+];
+
+// v75.8.11 — Applique une forme prédéfinie à une unité
+function applyShapeToUnit(label, idx, shapeType) {
+    const u = (cockpitState.scenarios[label].units || [])[idx];
+    if (!u) return;
+    const shape = SHAPE_TYPES.find(s => s.value === shapeType);
+    if (!shape) return;
+    const area = Math.max(4, Number(u.unit_size_m2) || 20);
+    if (shapeType === "rectangle") {
+        // Rectangle : reset polygon → forme rect standard, respecte shape_mode
+        u.polygon = null;
+        u.shape_type = "rectangle";
+    } else {
+        u.polygon = shape.generator(area);
+        u.shape_type = shapeType;
+    }
+    // Reset dimensions rect custom
+    u.width_m = null;
+    u.height_m = null;
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`"${u.unit_name || u.unit_type}" → ${shape.label}`);
 }
 
 // v75.8.1 — Génère un polygone en L qui remplit un coin de parcelle
@@ -1994,11 +2136,29 @@ function renderParcelSvg(label) {
         p.hasOverlap = hasOverlap;
     });
 
-    // v75.8.9/v75.8.10 — CLIP AUTO : clip parcelle brute toujours (jamais de débordement).
-    // Puis affine par constructible + tetris mutuel UNIQUEMENT si u.shape_mode !== "rect"
+    // v75.8.9/v75.8.10/v75.8.11 — CLIP AUTO : parcelle brute toujours + retrait/tetris selon shape_mode
+    // v75.8.11 : les formes géométriques prédéfinies (u.polygon) sont AUSSI clippées à la parcelle
     placements.forEach(p => {
-        if (p.u.polygon && p.u.polygon.length >= 3) return;   // custom polygon
         const isRectMode = p.u.shape_mode === "rect";
+        // Cas 1 : u.polygon défini (forme prédéfinie ou custom L/optimize) → clip par parcelle
+        if (p.u.polygon && p.u.polygon.length >= 3) {
+            const pxPoly = unitPolygonToPx(p.u, cxSvg, cySvg, scale);
+            if (!pxPoly || pxPoly.length < 3) return;
+            let clipped = sutherlandHodgmanClip(pxPoly, svgPts);
+            if (!clipped || clipped.length < 3) return;
+            if (!isRectMode) {
+                const areaAfterParcel = polygonAreaXY(clipped);
+                const clippedRetrait = sutherlandHodgmanClip(clipped, svgPtsBuildable);
+                if (clippedRetrait && clippedRetrait.length >= 3) {
+                    const areaAfterRetrait = polygonAreaXY(clippedRetrait);
+                    if (areaAfterRetrait >= areaAfterParcel * 0.6) clipped = clippedRetrait;
+                }
+            }
+            p.pxPolyClipped = clipped;
+            p.customPolyClipped = true;
+            return;
+        }
+        // Cas 2 : rectangle standard → clip auto
         const rectPoly = rectToPolygonXY(p.ux, p.uy, p.uW, p.uH, p.rotDeg);
         // Étape 1 : clip par parcelle brute — TOUJOURS appliqué (garantit no débordement)
         let clipped = sutherlandHodgmanClip(rectPoly, svgPts);
@@ -2049,13 +2209,8 @@ function renderParcelSvg(label) {
         const handleDist = uH/2 + 12;
         const strokeColor = hasOverlap ? "#EF4444" : "#fff";
         const strokeDash = hasOverlap ? ' stroke-dasharray="4,2"' : "";
-        // v75.8.6 — Priorité de rendu : (1) u.polygon custom (2) pxPolyClipped auto (3) rect fallback
-        if (u.polygon && u.polygon.length >= 3) {
-            unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
-            const scaleP = _svgRefs[label] ? _svgRefs[label].scale : 1;
-            const polyPtsStr = u.polygon.map(pt => `${(pt.x_m * scaleP).toFixed(1)},${(-pt.y_m * scaleP).toFixed(1)}`).join(" ");
-            unitsHtml += `<polygon class="body" points="${polyPtsStr}" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
-        } else if (pxPolyClipped && pxPolyClipped.length >= 3) {
+        // v75.8.11 — Priorité de rendu : (1) pxPolyClipped (custom OU auto) (2) u.polygon direct (3) rect fallback
+        if (pxPolyClipped && pxPolyClipped.length >= 3) {
             // Clip auto : polygone en coord absolues, wrapper translate(centroïde) sans rotate
             const cxAbs = pxPolyClipped.reduce((s,pt)=>s+pt.x,0) / pxPolyClipped.length;
             const cyAbs = pxPolyClipped.reduce((s,pt)=>s+pt.y,0) / pxPolyClipped.length;
@@ -2446,6 +2601,12 @@ function renderUnitsTable(label) {
         <tr class="c-unit-details-row">
           <td colspan="7">
             <div class="c-unit-details-grid">
+              <label class="stacked">Forme géométrique
+                <select onchange="applyShapeToUnit('${label}',${i},this.value)">
+                  ${SHAPE_TYPES.map(s => `<option value="${s.value}"${(u.shape_type||"rectangle")===s.value?" selected":""}>${s.label}</option>`).join("")}
+                </select>
+                <span class="c-modal-hint">Toutes les formes sont clippées automatiquement aux limites de la parcelle.</span>
+              </label>
               <label class="stacked">Étages (R+X override)
                 <input type="number" min="0" max="10" step="1" value="${u.etages_unit != null ? u.etages_unit : ""}" placeholder="scenario" oninput="updateUnitDetail('${label}',${i},'etages_unit',this.value)">
               </label>
