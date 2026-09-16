@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.5</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.6</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -757,6 +757,14 @@ function scenarioPanelTemplate(L) {
           <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')" title="🤖 Utilise le moteur BARLO backend (/api/suggest-placement) pour proposer les secteurs cardinaux N/NE/E/... par unité selon les règles du diagnostic. Modifie ensuite librement.">🤖 Placement moteur</button>
           <button class="c-btn-auto-place" onclick="proposeOptimizedLayout('${L}')" style="color:#8B5CF6;border-color:#8B5CF6" title="🧠 Propose une implantation optimisée (algorithme frontend) : assigne chaque unité à un segment de parcelle selon son type (COMMERCE=rue, BUREAU=est/ouest, RESI=sud), avec forme adaptée. Écrase les ajustements manuels — un confirm apparaît sinon.">🧠 Proposer implantation</button>
           <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')" title="Revient aux suggestions initiales du moteur (unit_mix_X du sheet)">🔄 Réinitialiser</button>
+        </div>
+      </div>
+
+      <!-- v75.8.9 — Préconisation du moteur BARLO pour ce scénario -->
+      <div class="c-section c-moteur-brief" id="cMoteurBriefSection${L}" style="background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.35);border-radius:7px;padding:.6rem .8rem">
+        <h4 style="color:#A78BFA;font-size:.6rem">🧭 Le moteur BARLO préconise pour le Scénario ${L}</h4>
+        <div id="cMoteurBrief${L}" style="font-size:.68rem;color:var(--text);line-height:1.55">
+          <div style="color:var(--text2);font-style:italic">Charge un lead pour voir la préconisation du moteur.</div>
         </div>
       </div>
 
@@ -1968,12 +1976,29 @@ function renderParcelSvg(label) {
         p.hasOverlap = hasOverlap;
     });
 
-    // v75.8.6 — CLIP AUTO parcelle + tetris mutuel pour tous les rects standard (sans u.polygon custom)
+    // v75.8.9 — CLIP AUTO ROBUSTE : d'abord par parcelle brute (JAMAIS de débordement),
+    // puis affine par zone constructible si le résultat garde ≥60% de surface
     placements.forEach(p => {
         if (p.u.polygon && p.u.polygon.length >= 3) return;   // custom polygon, skip
         const rectPoly = rectToPolygonXY(p.ux, p.uy, p.uW, p.uH, p.rotDeg);
-        const clipped = sutherlandHodgmanClip(rectPoly, svgPtsBuildable);
-        if (clipped && clipped.length >= 3) p.pxPolyClipped = clipped;
+        // Étape 1 : clip par parcelle brute (svgPts) — garantit no débordement
+        let clipped = sutherlandHodgmanClip(rectPoly, svgPts);
+        if (!clipped || clipped.length < 3) {
+            // Rect complètement hors parcelle : skip (rendu rect fallback qui pourrait déborder)
+            // Force au moins un clip minimal au centre parcelle
+            return;
+        }
+        // Étape 2 : essaye clip supplémentaire par zone constructible (retrait) si ça garde ≥60%
+        const areaAfterParcel = polygonAreaXY(clipped);
+        const clippedRetrait = sutherlandHodgmanClip(clipped, svgPtsBuildable);
+        if (clippedRetrait && clippedRetrait.length >= 3) {
+            const areaAfterRetrait = polygonAreaXY(clippedRetrait);
+            if (areaAfterRetrait >= areaAfterParcel * 0.6) {
+                clipped = clippedRetrait;   // respecte les retraits
+            }
+            // Sinon garde clip parcelle brute (mord sur retrait mais reste dans parcelle)
+        }
+        p.pxPolyClipped = clipped;
     });
     // Clip mutuel entre placements clippés (max 3 itérations pour cascade)
     for (let iter = 0; iter < 3; iter++) {
@@ -2725,6 +2750,41 @@ function defaultUnitsFromMoteur(label) {
     return assignPreplacementForScenario(label, units);
 }
 
+// v75.8.9 — Affiche la préconisation du moteur pour un scénario
+function renderMoteurBrief(label) {
+    const container = $(`cMoteurBrief${label}`);
+    if (!container) return;
+    const L = currentDisplay || currentBody8D || {};
+    if (!L || Object.keys(L).length === 0) {
+        container.innerHTML = `<div style="color:var(--text2);font-style:italic">Charge un lead pour voir la préconisation du moteur.</div>`;
+        return;
+    }
+    const role = L[`scenario_${label}_role`] || L[`${label}_role`] || "";
+    const layout = L[`${label}_layout_mode`] || L.layout_mode || "";
+    const configJustif = L[`${label}_config_justif`] || L.config_justification || "";
+    const typoDesc = L[`${label}_typology_desc`] || "";
+    const unitMix = L[`unit_mix_${label}`] || L[`${label}_unit_summary`] || "";
+    const pilotisDesc = L[`${label}_pilotis_desc`] || "";
+    const fp = L[`${label}_fp`] || L[`fp_${label}_m2`] || "";
+    const sdp = L[`${label}_sdp`] || L[`sdp_${label}`] || "";
+    const levels = L[`${label}_levels`] || L[`levels_${label}`] || "";
+    const cos = L[`${label}_cos_pct`] || "";
+    const parts = [];
+    if (role) parts.push(`<div><strong style="color:#A78BFA">Rôle :</strong> ${esc(role)}</div>`);
+    const configLine = [];
+    if (fp) configLine.push(`Emprise ${esc(fp)}m²`);
+    if (sdp) configLine.push(`SDP ${esc(sdp)}m²`);
+    if (levels !== "") configLine.push(`R+${esc(levels)}`);
+    if (cos) configLine.push(`COS ${esc(cos)}%`);
+    if (layout) configLine.push(`layout ${esc(layout)}`);
+    if (configLine.length) parts.push(`<div><strong style="color:#A78BFA">Config :</strong> ${configLine.join(" · ")}</div>`);
+    if (unitMix) parts.push(`<div><strong style="color:#A78BFA">Mix :</strong> ${esc(unitMix)}</div>`);
+    if (typoDesc) parts.push(`<div><strong style="color:#A78BFA">Typologies :</strong> ${esc(typoDesc)}</div>`);
+    if (pilotisDesc && pilotisDesc !== "pas de pilotis") parts.push(`<div><strong style="color:#A78BFA">Pilotis :</strong> ${esc(pilotisDesc)}</div>`);
+    if (configJustif) parts.push(`<div style="margin-top:.35rem;padding-top:.35rem;border-top:1px dashed rgba(139,92,246,0.3);color:var(--text2);font-style:italic">« ${esc(configJustif)} »</div>`);
+    container.innerHTML = parts.length ? parts.join("") : `<div style="color:var(--text2);font-style:italic">Le moteur n'a pas encore fourni de préconisation détaillée pour ce scénario.</div>`;
+}
+
 function populateCockpitFromLead(L, units) {
     // 1) Programme visé — en-tête
     cockpitState.target = {
@@ -2786,6 +2846,7 @@ function populateCockpitFromLead(L, units) {
         setInput(`cScnRat${label}`, s.rationale);
         renderUnitsTable(label);
         renderParcelSvg(label);
+        renderMoteurBrief(label);   // v75.8.9 : préconisation moteur affichée par scénario
     });
 
     // v75.3.1 : après renderParcelSvg (qui a init segments via ensureSegments), rend le tableau des retraits
