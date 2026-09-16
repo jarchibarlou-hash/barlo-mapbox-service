@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.6.2</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -915,6 +915,30 @@ function resetSegmentsToMoteur() {
     showToast("Retraits par segment réinitialisés aux valeurs moteur");
 }
 
+// v75.6.2 — Snap dimensions aux valeurs "architecte" (entier/demi-entier)
+// Ex : 50m² 1.2:1 → 8×6, 50m² 2:1 → 10×5, 36m² 1:1 → 6×6, 48m² 1.5:1 → 8×6
+function niceRoundDimensions(areaM2, targetAspect) {
+    if (!areaM2 || areaM2 <= 0) return { width_m: 4, height_m: 4 };
+    let best = null;
+    // Balaie width de 3 à 25 par pas de 0.5, préfère les entiers
+    for (let w = 3; w <= 25; w += 0.5) {
+        const hExact = areaM2 / w;
+        if (hExact < 2 || hExact > 30) continue;
+        // Arrondi height au demi-entier le plus proche
+        const h = Math.round(hExact * 2) / 2;
+        const actualArea = w * h;
+        const areaDelta = Math.abs(actualArea - areaM2) / areaM2;
+        const aspectDelta = Math.abs(w / h - targetAspect) / targetAspect;
+        // Bonus si dimensions entières
+        const roundBonus = (w === Math.floor(w) ? 0 : 0.03) + (h === Math.floor(h) ? 0 : 0.03);
+        const score = areaDelta * 2.0 + aspectDelta * 0.8 + roundBonus;
+        if (!best || score < best.score) {
+            best = { width_m: w, height_m: h, score };
+        }
+    }
+    return best ? { width_m: best.width_m, height_m: best.height_m } : { width_m: Math.sqrt(areaM2 * targetAspect), height_m: areaM2 / Math.sqrt(areaM2 * targetAspect) };
+}
+
 // v75.3.1 — Shrink polygone inward (bissectrice angulaire), utile pour tracer retraits + clipper unités
 function shrinkPolygonPx(pts, dPx) {
     if (pts.length < 3 || dPx <= 0) return pts.slice();
@@ -1159,17 +1183,18 @@ function renderParcelSvg(label) {
         const areaPx = areaM2 * pxPerM2;
         const cat = categorizeUnitType(u.unit_type);
         const aspectRatio = cat === "COMMERCE" ? 2.0 : cat === "BUREAU" ? 1.5 : 1.2;
-        let uW = Math.sqrt(areaPx * aspectRatio);
-        let uH = uW / aspectRatio;
-        // v75.5.2 — Proportions STRICTES : minimum absolu 8px pour visibilité, PAS de max cap
-        // (les caps 110/75 précédents cassaient la surface réelle — findSafeUnitDistance clip si déborde)
-        if (uW < 8) { const k = 8 / uW; uW *= k; uH *= k; }  // scale up proportionnel si trop petit
-        // v75.5.0 — dimensions custom (auto-shape stretch le long segment) via width_m/height_m
+        // v75.6.2 — Dimensions "architecte" arrondies (entier/demi-entier) : 5×10, 6×8, 8×6...
+        const dims = niceRoundDimensions(areaM2, aspectRatio);
+        let displayW_m = dims.width_m, displayH_m = dims.height_m;
+        // v75.5.0 — override si dimensions custom (auto-shape / snap magnet)
         if (u.width_m && u.height_m) {
-            uW = Number(u.width_m) * scale;
-            uH = Number(u.height_m) * scale;
-            if (uW < 8) { const k = 8 / uW; uW *= k; uH *= k; }
+            displayW_m = Number(u.width_m);
+            displayH_m = Number(u.height_m);
         }
+        let uW = displayW_m * scale;
+        let uH = displayH_m * scale;
+        // Minimum absolu pour visibilité (8px), proportionnel
+        if (uW < 8) { const k = 8 / uW; uW *= k; uH *= k; }
 
         let ux, uy, rotDeg;
         const globalIdx = allUnits.indexOf(u);
@@ -1233,8 +1258,7 @@ function renderParcelSvg(label) {
             uy = cySvg + Math.sin(rad) * safeDist;
         }
 
-        // v75.6.2 — Placement dans zone constructible avec priorité 1) rétracter position 2) shrink modéré
-        // (au lieu de shrink brutal 15% qui cassait l'échelle : Logt 150m² apparaissait plus petit qu'un 50m²)
+        // v75.6.2 — Fix débordement : distingue mode DRAG (respect position user) vs HEURISTIQUE (shrink OK)
         const checkCornersInPoly = (cx, cy, w, h, rd) => {
             const rot = rd * Math.PI / 180;
             return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx,ly]) => ({
@@ -1243,8 +1267,15 @@ function renderParcelSvg(label) {
             })).every(p => pointInPolygonPx(p, svgPtsBuildable));
         };
         let isOversized = false;
-        if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
-            // Étape 1 : essayer 10 positions rétractées vers centroïde (garde taille pleine)
+        const hasExplicitPosition = (u.offset_x_m !== undefined && u.offset_x_m !== null);
+
+        if (hasExplicitPosition) {
+            // MODE DRAG/EXPLICITE : RESPECTE la position user. Juste warning si déborde.
+            if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
+                isOversized = true;
+            }
+        } else if (!checkCornersInPoly(ux, uy, uW, uH, rotDeg)) {
+            // MODE HEURISTIQUE : shrink/rétractation OK
             let placedFullSize = false;
             for (let t = 0.9; t >= 0.05; t -= 0.05) {
                 const tx = cxSvg + (ux - cxSvg) * t;
@@ -1253,24 +1284,21 @@ function renderParcelSvg(label) {
                     ux = tx; uy = ty; placedFullSize = true; break;
                 }
             }
-            // Étape 2 : si toujours pas → shrink DOUX (max 40% de réduction, préserve ratio)
             if (!placedFullSize) {
                 let shrunkOK = false;
                 for (let shrink = 0.98; shrink >= 0.60; shrink -= 0.03) {
-                    // Combine shrink + rétractation position (petit t)
                     for (let t = 1.0; t >= 0.10; t -= 0.15) {
                         const tx = cxSvg + (ux - cxSvg) * t;
                         const ty = cySvg + (uy - cySvg) * t;
                         if (checkCornersInPoly(tx, ty, uW * shrink, uH * shrink, rotDeg)) {
                             uW *= shrink; uH *= shrink; ux = tx; uy = ty;
                             shrunkOK = true;
-                            if (shrink < 0.85) isOversized = true;  // > 15% shrink = signale
+                            if (shrink < 0.85) isOversized = true;
                             break;
                         }
                     }
                     if (shrunkOK) break;
                 }
-                // Étape 3 : ultime — accepte shrink jusqu'à 40% avec position au centre parcelle
                 if (!shrunkOK) {
                     uW *= 0.60; uH *= 0.60;
                     ux = cxSvg; uy = cySvg;
@@ -1290,11 +1318,13 @@ function renderParcelSvg(label) {
         if (isOversized) {
             unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ trop grand</text>`;
         }
-        // v75.5.2 : Nom au-dessus centre + surface m² sous le nom, TOUS DEUX DANS le rectangle
+        // v75.6.2 : Nom au-dessus + dimensions "W×H · area m²" sous, TOUS DEUX DANS le rectangle
         const fsName = Math.max(7, Math.min(13, uH * 0.24));
-        const fsArea = Math.max(6, Math.min(11, uH * 0.20));
-        unitsHtml += `<text x="0" y="${(-uH * 0.10).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
-        unitsHtml += `<text x="0" y="${(uH * 0.20).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.9">${areaM2} m²</text>`;
+        const fsArea = Math.max(6, Math.min(10, uH * 0.18));
+        const dimsLabel = `${displayW_m}×${displayH_m}m`;
+        const areaLabel = `${dimsLabel} · ${areaM2}m²`;
+        unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
+        unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         // v75.5.0 — trait vers poignée + poignée rotation (position "au-dessus" du rectangle en repère local)
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
         unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
