@@ -10956,7 +10956,7 @@ app.get("/api/moteur-feedback/insights", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`BARLO v75.10.1-feedback on port ${PORT}`);
+  console.log(`BARLO v7.1.0-cockpit-refonte on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);

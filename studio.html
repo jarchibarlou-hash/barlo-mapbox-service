@@ -182,7 +182,7 @@
 
         /* v75.1.1 — Preview parcelle SVG */
         .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.6rem;margin-top:.4rem;position:relative}
-        .c-parcel-preview svg{width:100%;height:auto;max-height:340px;display:block;touch-action:none;user-select:none}
+        .c-parcel-preview svg{width:100%;height:auto;max-height:680px;display:block;touch-action:none;user-select:none}
         /* v75.4.0 — Rectangles unités draggables */
         .draggable-unit{cursor:grab}
         .draggable-unit.dragging{cursor:grabbing;opacity:.9}
@@ -230,7 +230,7 @@
         .c-scn-unit-actions{display:flex;gap:.35rem;flex-wrap:wrap;align-items:center}
         .c-scn-unit-actions .grow{flex:1;min-width:0}
         .c-scn-col .c-parcel-preview{padding:.5rem;margin-top:0}
-        .c-scn-col .c-parcel-preview svg{max-height:210px}
+        .c-scn-col .c-parcel-preview svg{max-height:420px}
         .c-scn-col .c-units-table{font-size:.62rem}
         .c-scn-col .c-units-table th{font-size:.5rem;padding:.25rem .2rem}
         .c-scn-col .c-units-table td{padding:.2rem .18rem}
@@ -318,7 +318,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.4</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v7.1.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -777,8 +777,9 @@ function scenarioPanelTemplate(L) {
         </div>
       </div>
 
-      <!-- v75.8.9 — Préconisation du moteur BARLO pour ce scénario -->
-      <div class="c-section c-moteur-brief" id="cMoteurBriefSection${L}" style="background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.35);border-radius:7px;padding:.6rem .8rem">
+      <!-- v7.1.0 — Préconisation du moteur BARLO pour ce scénario (masquable) -->
+      <div class="c-section c-moteur-brief" id="cMoteurBriefSection${L}" style="background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.35);border-radius:7px;padding:.6rem .8rem;position:relative">
+        <button type="button" onclick="dismissMoteurBrief('${L}')" title="Masquer cette proposition (elle ne correspond pas à ton besoin)" style="position:absolute;top:.35rem;right:.35rem;background:transparent;border:none;color:#A78BFA;cursor:pointer;font-size:.75rem;padding:.15rem .35rem;line-height:1;opacity:.7">✕</button>
         <h4 style="color:#A78BFA;font-size:.6rem">🧭 Le moteur BARLO préconise pour le Scénario ${L}</h4>
         <div id="cMoteurBrief${L}" style="font-size:.68rem;color:var(--text);line-height:1.55">
           <div style="color:var(--text2);font-style:italic">Charge un lead pour voir la préconisation du moteur.</div>
@@ -2103,14 +2104,13 @@ function renderParcelSvg(label) {
         });
     });
 
-    // v75.6.3 / v75.7.1 — Résolution overlaps + re-clip (SAUF pour placements drag qui gardent leur position)
-    resolveOverlaps(placements, svgPtsBuildable, 15);
-    placements.forEach((p, idx) => {
+    // v7.1.0 — Chaque unité est INDÉPENDANTE : plus de push mutuel, plus d'auto-fit.
+    // Seul le clip à la parcelle est appliqué. Overlap = warning visuel (⚠) sans modification de forme.
+    placements.forEach((p) => {
         if (!p.isDragged) {
             const pos = pushRectInsidePolygon(p.ux, p.uy, p.uW, p.uH, p.rotDeg, svgPtsBuildable, 25);
             p.ux = pos.x; p.uy = pos.y;
         }
-        // v75.7.0 — Si overlap résiduel avec autres, tente auto-fit sous contrainte
         let hasOverlap = false;
         for (const q of placements) {
             if (q === p) continue;
@@ -2118,18 +2118,6 @@ function renderParcelSvg(label) {
             const rQ = circleFromRect(q.uW, q.uH) * 0.85;
             const d = Math.hypot(q.ux - p.ux, q.uy - p.uy);
             if (d < rP + rQ - 3) { hasOverlap = true; break; }
-        }
-        if (hasOverlap) {
-            const others = placements.filter(q => q !== p);
-            const fit = autoFitShape(p.areaM2, p.ux, p.uy, p.rotDeg, scale, svgPtsBuildable, others);
-            if (fit) {
-                p.uW = fit.w_m * scale;
-                p.uH = fit.h_m * scale;
-                p.rotDeg = fit.rot;
-                p.displayW_m = Math.round(fit.w_m * 2) / 2;
-                p.displayH_m = Math.round(fit.h_m * 2) / 2;
-                hasOverlap = false;   // auto-fit résolu
-            }
         }
         p.hasOverlap = hasOverlap;
     });
@@ -2172,33 +2160,8 @@ function renderParcelSvg(label) {
         }
         p.pxPolyClipped = clipped;
     });
-    // Clip mutuel entre placements — SKIP les paires impliquant une unité en mode "rect"
-    for (let iter = 0; iter < 3; iter++) {
-        let anyClip = false;
-        for (let i = 0; i < placements.length; i++) {
-            for (let j = i + 1; j < placements.length; j++) {
-                const A = placements[i], B = placements[j];
-                if (A.u.shape_mode === "rect" || B.u.shape_mode === "rect") continue;   // v75.8.10 : mode rect exempté du tetris
-                if (!A.pxPolyClipped || !B.pxPolyClipped) continue;
-                if (A.pxPolyClipped.length < 3 || B.pxPolyClipped.length < 3) continue;
-                const cxA = A.pxPolyClipped.reduce((s,pt)=>s+pt.x,0)/A.pxPolyClipped.length;
-                const cyA = A.pxPolyClipped.reduce((s,pt)=>s+pt.y,0)/A.pxPolyClipped.length;
-                const cxB = B.pxPolyClipped.reduce((s,pt)=>s+pt.x,0)/B.pxPolyClipped.length;
-                const cyB = B.pxPolyClipped.reduce((s,pt)=>s+pt.y,0)/B.pxPolyClipped.length;
-                const rA = Math.max(...A.pxPolyClipped.map(pt=>Math.hypot(pt.x-cxA,pt.y-cyA)));
-                const rB = Math.max(...B.pxPolyClipped.map(pt=>Math.hypot(pt.x-cxB,pt.y-cyB)));
-                const d = Math.hypot(cxB-cxA, cyB-cyA) || 0.01;
-                if (d < rA + rB - 2) {
-                    anyClip = true;
-                    const midX = (cxA + cxB) / 2, midY = (cyA + cyB) / 2;
-                    const nAx = (cxA - cxB) / d, nAy = (cyA - cyB) / d;
-                    A.pxPolyClipped = clipByHalfPlane(A.pxPolyClipped, midX, midY, nAx, nAy);
-                    B.pxPolyClipped = clipByHalfPlane(B.pxPolyClipped, midX, midY, -nAx, -nAy);
-                }
-            }
-        }
-        if (!anyClip) break;
-    }
+    // v7.1.0 — Clip mutuel entre placements SUPPRIMÉ : chaque unité garde sa forme.
+    // Seul le clip à la parcelle reste actif (unités ne débordent jamais, mais peuvent se chevaucher = warning visuel).
 
     // v75.6.3 — Rendu HTML depuis placements finaux
     let unitsHtml = "";
@@ -3109,7 +3072,7 @@ function selectEdge(label, uidx, edge, svgClientX, svgClientY) {
     const panel = $("revitPanel");
     if (panel) {
         panel.classList.add("active");
-        const w = panel.offsetWidth || 200, h = panel.offsetHeight || 180;
+        const w = panel.offsetWidth || 240, h = panel.offsetHeight || 240;
         const px = Math.min(window.innerWidth - w - 10, Math.max(10, svgClientX + 15));
         const py = Math.min(window.innerHeight - h - 10, Math.max(10, svgClientY - h / 2));
         panel.style.left = px + "px";
@@ -3117,6 +3080,13 @@ function selectEdge(label, uidx, edge, svgClientX, svgClientY) {
         const u = (cockpitState.scenarios[label].units || [])[uidx];
         const edgeName = { n: "Nord", s: "Sud", e: "Est", w: "Ouest" }[edge] || edge;
         $("revitPanelInfo").innerHTML = `<strong style="color:#06B6D4">${esc(u.unit_name||u.unit_type||"Unité")}</strong> · Arête <strong>${edgeName}</strong>`;
+        // v7.1.0 : reset UI offset directionnel
+        const inp = $("revitOffsetValue");
+        if (inp) {
+            inp.value = "";
+            inp.oninput = revitUpdateOffsetPreview;
+        }
+        revitSetOffsetDir(1);
     }
     renderParcelSvg(label);
 }
@@ -3132,22 +3102,43 @@ function revitCloseAll() {
 function revitStartAlign() {
     if (!_selectedEdge) return;
     _revitMode = "align";
-    $("revitPanelInfo").innerHTML = `<div class="waiting">🎯 Clique maintenant sur une arête CIBLE (segment de parcelle OU arête d'une autre unité)</div>`;
+    $("revitPanelInfo").innerHTML = `<div class="waiting">🎯 Clique maintenant sur l'arête CIBLE (segment parcelle OU arête d'une autre unité) — l'unité s'y collera automatiquement</div>`;
+    showToast("🎯 Clique sur l'arête cible pour aligner");
 }
 
-function revitStartTrim() {
-    if (!_selectedEdge) return;
-    _revitMode = "trim";
-    $("revitPanelInfo").innerHTML = `<div class="waiting">✂ Drag l'arête sélectionnée pour la déplacer (voir poignées vertes)</div>`;
+// v7.1.0 — Offset directionnel Revit-like : bouton direction (ext/int) + valeur inline
+let _revitOffsetDir = 1;   // 1 = extérieur (agrandit) | -1 = intérieur (rétrécit)
+
+function revitSetOffsetDir(sign) {
+    _revitOffsetDir = sign > 0 ? 1 : -1;
+    const bOut = $("revitOffsetDirOut"), bIn = $("revitOffsetDirIn");
+    if (bOut && bIn) {
+        bOut.style.background = _revitOffsetDir === 1 ? "#06B6D4" : "";
+        bOut.style.color = _revitOffsetDir === 1 ? "#0B1120" : "";
+        bIn.style.background = _revitOffsetDir === -1 ? "#06B6D4" : "";
+        bIn.style.color = _revitOffsetDir === -1 ? "#0B1120" : "";
+    }
+    revitUpdateOffsetPreview();
 }
 
-function revitStartOffset() {
+function revitUpdateOffsetPreview() {
+    const preview = $("revitOffsetPreview");
+    const input = $("revitOffsetValue");
+    if (!preview || !input || !_selectedEdge) return;
+    const v = parseFloat(input.value);
+    if (isNaN(v) || v <= 0) { preview.textContent = "Choisis une direction puis une valeur ↑"; return; }
+    const { edge } = _selectedEdge;
+    const dirTxt = _revitOffsetDir === 1 ? "agrandit vers l'extérieur" : "rétrécit vers l'intérieur";
+    preview.textContent = `Arête ${edge.toUpperCase()} • ${dirTxt} de ${v}m`;
+}
+
+function revitConfirmOffset() {
     if (!_selectedEdge) return;
-    const dist = prompt("Offset en mètres (positif = vers l'extérieur, négatif = vers l'intérieur) :", "3");
-    if (dist === null) return;
-    const dm = parseFloat(dist);
-    if (isNaN(dm)) { showToast("Distance invalide", true); return; }
-    revitApplyOffset(dm);
+    const input = $("revitOffsetValue");
+    if (!input) return;
+    const v = parseFloat(input.value);
+    if (isNaN(v) || v <= 0) { showToast("Saisis une valeur > 0", true); return; }
+    revitApplyOffset(_revitOffsetDir * v);
 }
 
 // Applique un offset à l'arête sélectionnée (déplace le côté de X mètres, l'opposé reste fixe)
@@ -3456,6 +3447,15 @@ function renderMoteurBrief(label) {
     if (pilotisDesc && pilotisDesc !== "pas de pilotis") parts.push(`<div><strong style="color:#A78BFA">Pilotis :</strong> ${esc(pilotisDesc)}</div>`);
     if (configJustif) parts.push(`<div style="margin-top:.35rem;padding-top:.35rem;border-top:1px dashed rgba(139,92,246,0.3);color:var(--text2);font-style:italic">« ${esc(configJustif)} »</div>`);
     container.innerHTML = parts.length ? parts.join("") : `<div style="color:var(--text2);font-style:italic">Le moteur n'a pas encore fourni de préconisation détaillée pour ce scénario.</div>`;
+}
+
+// v7.1.0 — Masque le bandeau moteur (Jeremy juge que la proposition ne correspond pas)
+function dismissMoteurBrief(label) {
+    const el = $(`cMoteurBriefSection${label}`);
+    if (el) {
+        el.style.display = "none";
+        showToast(`Proposition moteur masquée pour le scénario ${label}`);
+    }
 }
 
 function populateCockpitFromLead(L, units) {
@@ -3784,13 +3784,29 @@ function showGenLog(title,steps){$("genLogTitle").textContent=title;$("genSteps"
 function stepState(id,state){const el=document.querySelector(`[data-step="${id}"]`);if(!el)return;el.className=`gen-step ${state}`;el.querySelector(".icon").textContent=state==="done"?"✓":state==="active"?"◉":state==="error"?"✕":"○"}
 </script>
 
-<!-- v75.11.0 (Phase C) — Panneau flottant Revit-like edge editing -->
+<!-- v7.1.0 — Panneau flottant Revit-like edge editing (offset directionnel + align par clic) -->
 <div class="revit-panel" id="revitPanel">
   <h5 id="revitPanelTitle">✎ Édition d'arête</h5>
   <div id="revitPanelInfo" style="font-size:.62rem;color:var(--text2)">Aucune arête sélectionnée</div>
-  <button onclick="revitStartAlign()">🎯 Align (aligner à une arête)</button>
-  <button onclick="revitStartTrim()">✂ Trim / Extend (drag)</button>
-  <button onclick="revitStartOffset()">↔ Offset (décaler de X m)</button>
+
+  <!-- Bloc Align : sélectionner arête source → cliquer arête cible -->
+  <button onclick="revitStartAlign()" title="Aligne l'arête sélectionnée sur une arête cible (segment parcelle ou arête d'une autre unité). Après clic, tu cliques sur la cible.">🎯 Align → clic sur arête cible</button>
+
+  <!-- Bloc Offset : direction (int/ext) puis valeur en mètres, sans prompt bloquant -->
+  <div id="revitOffsetBlock" style="border-top:1px dashed rgba(6,182,212,0.3);padding-top:.4rem;margin-top:.2rem;display:flex;flex-direction:column;gap:.3rem">
+    <div style="font-size:.6rem;color:#06B6D4;text-transform:uppercase;letter-spacing:.5px;font-weight:700">↔ Offset direction</div>
+    <div style="display:flex;gap:.3rem">
+      <button type="button" id="revitOffsetDirOut" onclick="revitSetOffsetDir(1)" style="flex:1;text-align:center;padding:.35rem">➕ Vers extérieur</button>
+      <button type="button" id="revitOffsetDirIn" onclick="revitSetOffsetDir(-1)" style="flex:1;text-align:center;padding:.35rem">➖ Vers intérieur</button>
+    </div>
+    <div style="display:flex;gap:.3rem;align-items:center">
+      <input type="number" id="revitOffsetValue" step="0.5" min="0.5" placeholder="ex : 3" style="flex:1;padding:.35rem;background:var(--navy);border:1px solid var(--border);color:var(--text);border-radius:4px;font-family:inherit;font-size:.72rem" onkeydown="if(event.key==='Enter'){revitConfirmOffset();event.preventDefault()}">
+      <span style="font-size:.65rem;color:var(--text2)">m</span>
+      <button type="button" onclick="revitConfirmOffset()" style="padding:.35rem .55rem;background:#06B6D4;color:#0B1120;border:none;border-radius:4px;font-weight:700;cursor:pointer;font-size:.7rem">✓ OK</button>
+    </div>
+    <div id="revitOffsetPreview" style="font-size:.58rem;color:var(--text2);font-style:italic;min-height:.9rem"></div>
+  </div>
+
   <button class="close" onclick="revitCloseAll()">✕ Fermer</button>
 </div>
 
