@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.7.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -754,8 +754,9 @@ function scenarioPanelTemplate(L) {
             <button onclick="splitScenarioIntoN('${L}',4)">4</button>
             <button onclick="splitScenarioIntoN('${L}',5)">5</button>
           </div>
-          <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')">🎲 Générer placement auto</button>
-          <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')">🔄 Réinitialiser aux suggestions moteur</button>
+          <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')">🎲 Placement auto</button>
+          <button class="c-btn-auto-place" onclick="optimizeScenarioLayout('${L}')" style="color:#8B5CF6;border-color:#8B5CF6" title="Optimise l'implantation de toutes les unités selon le diagnostic (orientation solaire, types de segments, mitoyennetés)">🧠 Optimiser scénario</button>
+          <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')">🔄 Réinitialiser</button>
         </div>
       </div>
 
@@ -913,6 +914,258 @@ function resetSegmentsToMoteur() {
     renderSegmentsTable();
     ["A","B","C"].forEach(l => renderParcelSvg(l));
     showToast("Retraits par segment réinitialisés aux valeurs moteur");
+}
+
+// ═══ v75.8.0 — POLYGONES LIBRES : modèle + utilities + auto-shape L/T + optimisation ═══
+
+// Aire d'un polygone (shoelace) en m² depuis points {x_m, y_m}
+function polygonAreaM2(polygon) {
+    if (!polygon || polygon.length < 3) return 0;
+    let a = 0, n = polygon.length;
+    for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        a += polygon[i].x_m * polygon[j].y_m - polygon[j].x_m * polygon[i].y_m;
+    }
+    return Math.abs(a) / 2;
+}
+
+// Centroïde géométrique d'un polygone
+function polygonCentroidM(polygon) {
+    if (!polygon || polygon.length === 0) return { x_m: 0, y_m: 0 };
+    let sx = 0, sy = 0;
+    for (const p of polygon) { sx += p.x_m; sy += p.y_m; }
+    return { x_m: sx / polygon.length, y_m: sy / polygon.length };
+}
+
+// Recentre un polygone sur (0, 0) — utile après génération
+function centerPolygon(polygon) {
+    const c = polygonCentroidM(polygon);
+    return polygon.map(p => ({ x_m: p.x_m - c.x_m, y_m: p.y_m - c.y_m }));
+}
+
+// Scale un polygone pour atteindre area cible (préserve forme + centre)
+function scalePolygonToArea(polygon, targetAreaM2) {
+    const currentArea = polygonAreaM2(polygon);
+    if (currentArea <= 0 || targetAreaM2 <= 0) return polygon;
+    const k = Math.sqrt(targetAreaM2 / currentArea);
+    return polygon.map(p => ({ x_m: p.x_m * k, y_m: p.y_m * k }));
+}
+
+// Rotate polygon (radians)
+function rotatePolygonRad(polygon, angleRad) {
+    const c = Math.cos(angleRad), s = Math.sin(angleRad);
+    return polygon.map(p => ({
+        x_m: p.x_m * c - p.y_m * s,
+        y_m: p.x_m * s + p.y_m * c
+    }));
+}
+
+// Translate polygon (mètres) — retourne nouveau polygone shifté
+function translatePolygonM(polygon, dx_m, dy_m) {
+    return polygon.map(p => ({ x_m: p.x_m + dx_m, y_m: p.y_m + dy_m }));
+}
+
+// Rectangle standard en polygone (W, H depuis centre)
+function rectToPolygon(width_m, height_m) {
+    const w2 = width_m / 2, h2 = height_m / 2;
+    return [
+        { x_m: -w2, y_m: -h2 },
+        { x_m:  w2, y_m: -h2 },
+        { x_m:  w2, y_m:  h2 },
+        { x_m: -w2, y_m:  h2 }
+    ];
+}
+
+// v75.8.1 — Génère un polygone en L qui remplit un coin de parcelle
+// cornerAngleRad = orientation du coin (bissectrice interne)
+// cornerX_m, cornerY_m = position du coin de parcelle (mètres depuis centroïde parcelle)
+// Le L a un ratio approximatif 60/40 sur ses 2 branches, preserve area total
+function generateLShape(areaM2, cornerAngleRad, sideLengthRatio) {
+    if (areaM2 <= 0) return null;
+    sideLengthRatio = sideLengthRatio || 0.6;
+    // Un L = union de 2 rectangles perpendiculaires partageant un coin
+    // Branche 1 : W1 * H1, Branche 2 : W2 * H2 ; recouvrement 0
+    // Simplification : les 2 branches sont carrées, taille selon ratio
+    const armAreaA = areaM2 * sideLengthRatio;
+    const armAreaB = areaM2 * (1 - sideLengthRatio);
+    const wA = Math.sqrt(armAreaA * 2);   // aspect 2:1 par branche
+    const hA = armAreaA / wA;
+    const wB = Math.sqrt(armAreaB * 2);
+    const hB = armAreaB / wB;
+    // Construction du L dans repère aligné axe X (bras horizontal + bras vertical partant du coin bas-gauche)
+    // Points en sens horaire :
+    const local = [
+        { x_m: 0,       y_m: 0 },
+        { x_m: wA,      y_m: 0 },
+        { x_m: wA,      y_m: hA },
+        { x_m: hB,      y_m: hA },
+        { x_m: hB,      y_m: hA + wB },
+        { x_m: 0,       y_m: hA + wB }
+    ];
+    // Recentre + rotation selon angle
+    const centered = centerPolygon(local);
+    return rotatePolygonRad(centered, cornerAngleRad);
+}
+
+// v75.8.1 — Trouve le sommet de parcelle le plus proche d'une position (unit)
+// Retourne { index, cornerX_m, cornerY_m, angleInternalRad }
+function findClosestCornerToUnit(unitOffsetX_m, unitOffsetY_m, parcelSvgPts, cxSvg, cySvg, scale) {
+    if (!parcelSvgPts || parcelSvgPts.length < 3) return null;
+    // Convertir svgPts en mètres (relatifs centroïde)
+    const ptsM = parcelSvgPts.map(p => ({
+        x_m: (p.x - cxSvg) / scale,
+        y_m: -(p.y - cySvg) / scale
+    }));
+    let best = null, bestDist = Infinity;
+    for (let i = 0; i < ptsM.length; i++) {
+        const d = Math.hypot(ptsM[i].x_m - unitOffsetX_m, ptsM[i].y_m - unitOffsetY_m);
+        if (d < bestDist) {
+            bestDist = d;
+            // Calcul bissectrice interne (angle moyen des 2 arêtes)
+            const prev = ptsM[(i - 1 + ptsM.length) % ptsM.length];
+            const next = ptsM[(i + 1) % ptsM.length];
+            const a1 = Math.atan2(prev.y_m - ptsM[i].y_m, prev.x_m - ptsM[i].x_m);
+            const a2 = Math.atan2(next.y_m - ptsM[i].y_m, next.x_m - ptsM[i].x_m);
+            // Bissectrice = moyenne des directions vers voisins
+            const bx = Math.cos(a1) + Math.cos(a2);
+            const by = Math.sin(a1) + Math.sin(a2);
+            const bisecRad = Math.atan2(by, bx);
+            best = { index: i, cornerX_m: ptsM[i].x_m, cornerY_m: ptsM[i].y_m, angleInternalRad: bisecRad };
+        }
+    }
+    return best;
+}
+
+// v75.8.1 — Adapte forme d'une unité en L au coin de parcelle le plus proche
+function adaptUnitToCornerLShape(label, idx) {
+    const u = (cockpitState.scenarios[label].units || [])[idx];
+    if (!u) return;
+    const refs = _svgRefs[label];
+    if (!refs) { showToast("Preview non prête", true); return; }
+    const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
+    // Position actuelle en mètres
+    let ux_m = 0, uy_m = 0;
+    if (u.offset_x_m != null) { ux_m = Number(u.offset_x_m); uy_m = Number(u.offset_y_m); }
+    // Récupère les svgPts en mètres via refs (recompute rapide)
+    const poly = currentBody8D && currentBody8D.site_polygon;
+    if (!poly) { showToast("Polygone parcelle absent", true); return; }
+    const pts = poly.split(/[|;\n]/).map(p => {
+        const [lat, lon] = p.trim().split(",").map(Number);
+        return { lat, lon };
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+    if (pts.length < 3) { showToast("Polygone invalide", true); return; }
+    const cLat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+    const cLon = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
+    const R_E = 6371000;
+    const cosC = Math.cos(cLat * Math.PI / 180);
+    const parcelSvgPts = pts.map(p => ({
+        x: (p.lon - cLon) * Math.PI / 180 * R_E * cosC * refs.scale + refs.cxSvg,
+        y: -(p.lat - cLat) * Math.PI / 180 * R_E * refs.scale + refs.cySvg
+    }));
+    const corner = findClosestCornerToUnit(ux_m, uy_m, parcelSvgPts, refs.cxSvg, refs.cySvg, refs.scale);
+    if (!corner) { showToast("Aucun coin détecté", true); return; }
+    // Génère L polygone, angle vers l'intérieur du coin
+    const lShape = generateLShape(areaM2, corner.angleInternalRad, 0.6);
+    if (!lShape) return;
+    u.polygon = lShape;
+    // Positionne le centroïde du L à mi-chemin entre le coin et le centroïde parcelle
+    u.offset_x_m = corner.cornerX_m * 0.55;
+    u.offset_y_m = corner.cornerY_m * 0.55;
+    u.rotation_deg = 0;   // rotation embarquée dans le polygone
+    u.width_m = null;     // ignore width_m/height_m si polygon défini
+    u.height_m = null;
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`Unité adaptée en L au coin ${vertexLabel(corner.index)}`);
+}
+
+// v75.8.3 — Optimise l'implantation de TOUTES les unités d'un scénario selon diagnostic
+// Règles simples :
+// - COMMERCE : polygone allongé sur segment "rue" (ou nord si pas de rue), aspect 3:1
+// - BUREAU : sur segment est/ouest, aspect 2:1
+// - RESI : sur segment sud/sud-est/sud-ouest, aspect 1.2:1
+// - Respect mitoyennetés (segment type "mitoyen" : peut coller)
+function optimizeScenarioLayout(label) {
+    const units = cockpitState.scenarios[label].units || [];
+    if (units.length === 0) { showToast("Aucune unité à optimiser", true); return; }
+    const refs = _svgRefs[label];
+    if (!refs) { showToast("Preview non prête", true); return; }
+    const segs = cockpitState.segments || [];
+    // Classe les segments par type + orientation (angle depuis Nord)
+    const segsInfo = segs.map((s, i) => {
+        // Récupère l'angle du segment
+        const p1 = refs.segLinesForSnap[i].p1;
+        const p2 = refs.segLinesForSnap[i].p2;
+        const midX_m = (p1.x + p2.x) / 2 - refs.cxSvg;  // en px approx
+        const midY_m = (p1.y + p2.y) / 2 - refs.cySvg;
+        // Convertir en mètres
+        const midXm = midX_m / refs.scale;
+        const midYm = -midY_m / refs.scale;
+        // Direction cardinale du milieu du segment (depuis centroïde)
+        const angleFromN = Math.atan2(midXm, midYm) * 180 / Math.PI;  // 0 = N, 90 = E, -90 = W, 180 = S
+        return {
+            i, type: s.type, retrait_m: s.retrait_m, length_m: s.length_m,
+            midXm, midYm, angleFromN,
+            segMidPx: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+            segAngleDeg: refs.segLinesForSnap[i].angleDeg,
+            segP1: p1, segP2: p2
+        };
+    });
+    // Sort by desirability :
+    const isSouthish = a => Math.abs(a - 180) < 90 || Math.abs(a + 180) < 90;
+    const isEastWest = a => Math.abs(Math.abs(a) - 90) < 45;
+    // Fonction : trouve le meilleur segment pour un type d'unité
+    function pickSegmentForType(cat, usedSegIndices) {
+        const availableSegs = segsInfo.filter(s => !usedSegIndices.has(s.i));
+        if (availableSegs.length === 0) return segsInfo[0];  // fallback
+        if (cat === "COMMERCE") {
+            // Préfère type "rue" ou orientation Nord
+            const rue = availableSegs.find(s => s.type === "rue");
+            if (rue) return rue;
+            return availableSegs.sort((a, b) => Math.abs(a.angleFromN) - Math.abs(b.angleFromN))[0];
+        }
+        if (cat === "BUREAU") {
+            // Préfère est/ouest
+            const ew = availableSegs.filter(s => isEastWest(s.angleFromN));
+            if (ew.length > 0) return ew.sort((a, b) => b.length_m - a.length_m)[0];
+            return availableSegs[0];
+        }
+        // RESI : préfère sud/sud-est/sud-ouest
+        const south = availableSegs.filter(s => isSouthish(s.angleFromN));
+        if (south.length > 0) return south.sort((a, b) => b.length_m - a.length_m)[0];
+        return availableSegs.sort((a, b) => b.length_m - a.length_m)[0];
+    }
+    // Assigne chaque unité à un segment optimal
+    const usedSegs = new Set();
+    units.forEach((u, idx) => {
+        const cat = categorizeUnitType(u.unit_type);
+        const seg = pickSegmentForType(cat, usedSegs);
+        if (!seg) return;
+        usedSegs.add(seg.i);
+        const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
+        // Rectangle allongé le long du segment, préservant aire
+        const targetLength = Math.min(seg.length_m * 0.75, cat === "COMMERCE" ? 15 : cat === "BUREAU" ? 12 : 10);
+        const width_m = targetLength;
+        const height_m = areaM2 / width_m;
+        // Reset polygon (retour rectangle) — plus prédictible pour optim
+        u.polygon = null;
+        u.width_m = Number(width_m.toFixed(2));
+        u.height_m = Number(height_m.toFixed(2));
+        u.rotation_deg = seg.segAngleDeg;
+        // Position : centre du segment retrait (px → mètres)
+        u.offset_x_m = Number(((seg.segMidPx.x - refs.cxSvg) / refs.scale).toFixed(2));
+        u.offset_y_m = Number((-(seg.segMidPx.y - refs.cySvg) / refs.scale).toFixed(2));
+        // Placement sector recalcé
+        const dxSvg = seg.segMidPx.x - refs.cxSvg, dySvg = seg.segMidPx.y - refs.cySvg;
+        if (dxSvg*dxSvg + dySvg*dySvg > 25) {
+            u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
+        }
+    });
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`Scénario ${label} optimisé : ${units.length} unités implantées selon diagnostic`);
 }
 
 // v75.7.0 — Auto-adaptation intelligente : cherche la meilleure (W, H, rot) préservant l'aire m²
@@ -1479,7 +1732,14 @@ function renderParcelSvg(label) {
         const strokeColor = hasOverlap ? "#EF4444" : "#fff";
         const strokeDash = hasOverlap ? ' stroke-dasharray="4,2"' : "";
         unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
-        unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
+        // v75.8.0 — Si u.polygon défini, rendu polygone libre au lieu de rectangle
+        if (u.polygon && u.polygon.length >= 3) {
+            const scaleP = _svgRefs[label] ? _svgRefs[label].scale : 1;
+            const polyPtsStr = u.polygon.map(pt => `${(pt.x_m * scaleP).toFixed(1)},${(-pt.y_m * scaleP).toFixed(1)}`).join(" ");
+            unitsHtml += `<polygon class="body" points="${polyPtsStr}" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
+        } else {
+            unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
+        }
         if (hasOverlap) {
             unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ conflit</text>`;
         }
@@ -1857,7 +2117,8 @@ function renderUnitsTable(label) {
           <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
           <td style="white-space:nowrap">
             <button class="${gearClass}" onclick="toggleUnitDetails('${label}',${i})" title="Détails techniques (pilotis, sous-sols, étages, terrasse, balcon, notes)" style="color:${isOpen?'#FBBF24':'#c9a878'}">⚙</button>
-            <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Adapter la forme au segment de parcelle le plus proche" style="color:#22C55E">🪄</button>
+            <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Étirer le rectangle le long du segment de parcelle le plus proche" style="color:#22C55E">🪄</button>
+            <button class="c-btn-del" onclick="adaptUnitToCornerLShape('${label}',${i})" title="Adapter forme en L à l'angle de parcelle le plus proche" style="color:#8B5CF6">🧩</button>
             <button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button>
           </td>
         </tr>${detailsRow}`;
@@ -1888,13 +2149,14 @@ function updateUnit(label, idx, field, val) {
     const units = cockpitState.scenarios[label].units || [];
     if (!units[idx]) return;
     units[idx][field] = val;
-    // v75.4.0/v75.5.0 : changer secteur via dropdown = reset overrides drag+rotate+shape
+    // v75.4.0/v75.5.0/v75.8.0 : changer secteur via dropdown = reset overrides drag+rotate+shape+polygon
     if (field === "placement_sector") {
         units[idx].offset_x_m = null;
         units[idx].offset_y_m = null;
         units[idx].rotation_deg = null;
         units[idx].width_m = null;
         units[idx].height_m = null;
+        units[idx].polygon = null;
     }
     // v75.5.1 : si surface m² change ET unité a des dimensions custom (post auto-shape/snap),
     // recalcule width_m/height_m en préservant le ratio actuel → le rectangle change visuellement en direct
@@ -2259,6 +2521,7 @@ function collectAllConstraints() {
             rotation_deg: u.rotation_deg != null ? Number(u.rotation_deg) : null,
             width_m: u.width_m != null ? Number(u.width_m) : null,
             height_m: u.height_m != null ? Number(u.height_m) : null,
+            polygon: (u.polygon && Array.isArray(u.polygon)) ? u.polygon : null,
             etages_unit: u.etages_unit != null ? Number(u.etages_unit) : null,
             sous_sols: u.sous_sols != null ? Number(u.sous_sols) : null,
             pilotis: !!u.pilotis,
