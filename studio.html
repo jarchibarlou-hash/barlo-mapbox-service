@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.6</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.7</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1239,6 +1239,24 @@ function adaptUnitToCornerLShape(label, idx) {
     showToast(`Unité adaptée en L au coin ${vertexLabel(corner.index)}`);
 }
 
+// v75.8.10 — Toggle mode shape par unité (Rect strict ↔ Adaptatif tetris)
+function toggleShapeMode(label, idx) {
+    const u = (cockpitState.scenarios[label].units || [])[idx];
+    if (!u) return;
+    const wasRect = u.shape_mode === "rect";
+    u.shape_mode = wasRect ? "auto" : "rect";
+    // Si on force rect, reset le polygone custom (retour à W×H strict)
+    if (u.shape_mode === "rect") {
+        u.polygon = null;
+    }
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(u.shape_mode === "rect"
+        ? `"${u.unit_name || u.unit_type}" → Rectangle strict`
+        : `"${u.unit_name || u.unit_type}" → Forme adaptative`);
+}
+
 // v75.8.7 — Wrapper : demande confirmation avant d'écraser les ajustements manuels
 function proposeOptimizedLayout(label) {
     const units = cockpitState.scenarios[label].units || [];
@@ -1976,36 +1994,33 @@ function renderParcelSvg(label) {
         p.hasOverlap = hasOverlap;
     });
 
-    // v75.8.9 — CLIP AUTO ROBUSTE : d'abord par parcelle brute (JAMAIS de débordement),
-    // puis affine par zone constructible si le résultat garde ≥60% de surface
+    // v75.8.9/v75.8.10 — CLIP AUTO : clip parcelle brute toujours (jamais de débordement).
+    // Puis affine par constructible + tetris mutuel UNIQUEMENT si u.shape_mode !== "rect"
     placements.forEach(p => {
-        if (p.u.polygon && p.u.polygon.length >= 3) return;   // custom polygon, skip
+        if (p.u.polygon && p.u.polygon.length >= 3) return;   // custom polygon
+        const isRectMode = p.u.shape_mode === "rect";
         const rectPoly = rectToPolygonXY(p.ux, p.uy, p.uW, p.uH, p.rotDeg);
-        // Étape 1 : clip par parcelle brute (svgPts) — garantit no débordement
+        // Étape 1 : clip par parcelle brute — TOUJOURS appliqué (garantit no débordement)
         let clipped = sutherlandHodgmanClip(rectPoly, svgPts);
-        if (!clipped || clipped.length < 3) {
-            // Rect complètement hors parcelle : skip (rendu rect fallback qui pourrait déborder)
-            // Force au moins un clip minimal au centre parcelle
-            return;
-        }
-        // Étape 2 : essaye clip supplémentaire par zone constructible (retrait) si ça garde ≥60%
-        const areaAfterParcel = polygonAreaXY(clipped);
-        const clippedRetrait = sutherlandHodgmanClip(clipped, svgPtsBuildable);
-        if (clippedRetrait && clippedRetrait.length >= 3) {
-            const areaAfterRetrait = polygonAreaXY(clippedRetrait);
-            if (areaAfterRetrait >= areaAfterParcel * 0.6) {
-                clipped = clippedRetrait;   // respecte les retraits
+        if (!clipped || clipped.length < 3) return;
+        // Étape 2 : clip par constructible SEULEMENT en mode auto
+        if (!isRectMode) {
+            const areaAfterParcel = polygonAreaXY(clipped);
+            const clippedRetrait = sutherlandHodgmanClip(clipped, svgPtsBuildable);
+            if (clippedRetrait && clippedRetrait.length >= 3) {
+                const areaAfterRetrait = polygonAreaXY(clippedRetrait);
+                if (areaAfterRetrait >= areaAfterParcel * 0.6) clipped = clippedRetrait;
             }
-            // Sinon garde clip parcelle brute (mord sur retrait mais reste dans parcelle)
         }
         p.pxPolyClipped = clipped;
     });
-    // Clip mutuel entre placements clippés (max 3 itérations pour cascade)
+    // Clip mutuel entre placements — SKIP les paires impliquant une unité en mode "rect"
     for (let iter = 0; iter < 3; iter++) {
         let anyClip = false;
         for (let i = 0; i < placements.length; i++) {
             for (let j = i + 1; j < placements.length; j++) {
                 const A = placements[i], B = placements[j];
+                if (A.u.shape_mode === "rect" || B.u.shape_mode === "rect") continue;   // v75.8.10 : mode rect exempté du tetris
                 if (!A.pxPolyClipped || !B.pxPolyClipped) continue;
                 if (A.pxPolyClipped.length < 3 || B.pxPolyClipped.length < 3) continue;
                 const cxA = A.pxPolyClipped.reduce((s,pt)=>s+pt.x,0)/A.pxPolyClipped.length;
@@ -2455,6 +2470,7 @@ function renderUnitsTable(label) {
           <td><input type="text" value="${esc(u.notes||"")}" placeholder="Notes" oninput="updateUnit('${label}',${i},'notes',this.value)"></td>
           <td style="white-space:nowrap">
             <button class="${gearClass}" onclick="toggleUnitDetails('${label}',${i})" title="Détails techniques (pilotis, sous-sols, étages, terrasse, balcon, notes)" style="color:${isOpen?'#FBBF24':'#c9a878'}">⚙</button>
+            <button class="c-btn-del" onclick="toggleShapeMode('${label}',${i})" title="${(u.shape_mode==='rect')?'Mode RECTANGLE strict actif — clique pour repasser en Adaptatif':'Mode ADAPTATIF actif (défaut) — clique pour forcer Rectangle strict'}" style="color:${(u.shape_mode==='rect')?'#F59E0B':'#94A3B8'};font-weight:${(u.shape_mode==='rect')?'700':'400'}">${(u.shape_mode==='rect')?'▭':'▧'}</button>
             <button class="c-btn-del" onclick="adaptUnitToParcelSegment('${label}',${i})" title="Étirer le rectangle le long du segment de parcelle le plus proche" style="color:#22C55E">🪄</button>
             <button class="c-btn-del" onclick="adaptUnitToCornerLShape('${label}',${i})" title="Adapter forme en L à l'angle de parcelle le plus proche" style="color:#8B5CF6">🧩</button>
             <button class="c-btn-del" onclick="removeUnit('${label}',${i})" title="Supprimer">✕</button>
