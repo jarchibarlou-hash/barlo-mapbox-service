@@ -309,7 +309,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.1</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.2</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2999,6 +2999,139 @@ function defaultUnitsFromMoteur(label) {
     return assignPreplacementForScenario(label, units);
 }
 
+// ═══ v75.10.0 (Phase A.1) — Détection layout moteur → formes initiales fidèles ═══
+
+// Détecte le pattern d'implantation depuis les champs moteur
+function detectLayoutPattern(layoutMode, typologyDesc, configJustif) {
+    const layout = String(layoutMode || "").toUpperCase();
+    const typo = String(typologyDesc || "").toLowerCase();
+    const justif = String(configJustif || "").toLowerCase();
+    // Priorité 1 : layout_mode explicite
+    if (layout.includes("SPLIT")) return "SPLIT_AV_AR";
+    if (layout.includes("SUPERPOSE")) return "SUPERPOSE";
+    // Priorité 2 : mots-clefs dans typology_desc / config_justif
+    const bag = typo + " " + justif;
+    if (bag.match(/\bu\b/) && bag.match(/cour/)) return "U";
+    if (bag.match(/lamelle|barre|tres.long/)) return "LAMELLE";
+    if (bag.match(/plot|cube|compact/)) return "PLOT";
+    return null;
+}
+
+// Applique un pattern d'implantation aux unités d'un scénario
+function applyMoteurInitialLayout(label, L) {
+    const scenario = cockpitState.scenarios[label];
+    if (!scenario || !scenario.units || scenario.units.length === 0) return null;
+    const layoutMode = L[`${label}_layout_mode`] || L.layout_mode || "";
+    const typo = L[`${label}_typology_desc`] || L[`unit_mix_${label}`] || "";
+    const justif = L[`${label}_config_justif`] || L.config_justification || "";
+    const pattern = detectLayoutPattern(layoutMode, typo, justif);
+    if (!pattern) return null;
+    const units = scenario.units;
+    switch (pattern) {
+        case "SPLIT_AV_AR": _layoutSplit(units); break;
+        case "SUPERPOSE":   _layoutSuperpose(units); break;
+        case "U":           _layoutU(units); break;
+        case "LAMELLE":     _layoutLamelle(units); break;
+        case "PLOT":        _layoutPlot(units); break;
+    }
+    return pattern;
+}
+
+// Pattern SPLIT AV/AR : 2 volumes séparés Nord (avant) / Sud (arrière)
+function _layoutSplit(units) {
+    const half = Math.ceil(units.length / 2);
+    units.forEach((u, i) => {
+        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;  // respecte modif manuelle
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        u.width_m = Number(Math.sqrt(area * 1.5).toFixed(2));
+        u.height_m = Number((area / u.width_m).toFixed(2));
+        u.rotation_deg = 0;
+        if (i < half) {
+            u.placement_sector = "N";
+            u.offset_x_m = (i - (half - 1) / 2) * 3;
+            u.offset_y_m = 12;
+        } else {
+            u.placement_sector = "S";
+            u.offset_x_m = (i - half - (units.length - half - 1) / 2) * 3;
+            u.offset_y_m = -12;
+        }
+    });
+}
+
+// Pattern SUPERPOSE : 1 volume compact centré, orienté sud pour ensoleillement
+function _layoutSuperpose(units) {
+    units.forEach((u, i) => {
+        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        u.width_m = Number(Math.sqrt(area * 1.3).toFixed(2));
+        u.height_m = Number((area / u.width_m).toFixed(2));
+        u.rotation_deg = 0;
+        u.placement_sector = "S";
+        u.offset_x_m = (i - (units.length - 1) / 2) * 2;
+        u.offset_y_m = -3;
+    });
+}
+
+// Pattern U : 3 bras (nord + ouest + est) autour d'une cour sud
+function _layoutU(units) {
+    const N = units.length;
+    if (N < 3) { _layoutSuperpose(units); return; }
+    const perArm = Math.max(1, Math.floor(N / 3));
+    units.forEach((u, i) => {
+        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
+        const arm = Math.min(2, Math.floor(i / perArm));
+        const posInArm = i - arm * perArm;
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        u.width_m = Number(Math.sqrt(area * 1.2).toFixed(2));
+        u.height_m = Number((area / u.width_m).toFixed(2));
+        if (arm === 0) {
+            u.placement_sector = "N"; u.rotation_deg = 0;
+            u.offset_x_m = (posInArm - (perArm - 1) / 2) * 4;
+            u.offset_y_m = 12;
+        } else if (arm === 1) {
+            u.placement_sector = "W"; u.rotation_deg = 90;
+            u.offset_x_m = -10;
+            u.offset_y_m = 6 - posInArm * 4;
+        } else {
+            u.placement_sector = "E"; u.rotation_deg = 90;
+            u.offset_x_m = 10;
+            u.offset_y_m = 6 - posInArm * 4;
+        }
+    });
+}
+
+// Pattern LAMELLE : rectangles longs (aspect 3:1) alignés sur segment sud
+function _layoutLamelle(units) {
+    units.forEach((u, i) => {
+        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        u.width_m = Number(Math.sqrt(area * 3).toFixed(2));   // aspect 3:1
+        u.height_m = Number((area / u.width_m).toFixed(2));
+        u.rotation_deg = 0;
+        u.placement_sector = "S";
+        u.offset_x_m = 0;
+        u.offset_y_m = -12 + i * 6;
+    });
+}
+
+// Pattern PLOT : carré compact (aspect 1:1), placement en grille
+function _layoutPlot(units) {
+    const cols = Math.max(1, Math.ceil(Math.sqrt(units.length)));
+    units.forEach((u, i) => {
+        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const side = Number(Math.sqrt(area).toFixed(2));
+        u.width_m = side;
+        u.height_m = side;
+        u.rotation_deg = 0;
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        u.offset_x_m = (col - (cols - 1) / 2) * (side + 2);
+        u.offset_y_m = -(row - 0) * (side + 2);
+        u.placement_sector = "S";
+    });
+}
+
 // v75.8.9 — Affiche la préconisation du moteur pour un scénario
 function renderMoteurBrief(label) {
     const container = $(`cMoteurBrief${label}`);
@@ -3093,6 +3226,9 @@ function populateCockpitFromLead(L, units) {
         setInput(`cUnits${label}`, s.units_count);
         setInput(`cGap${label}`, s.gap_m);
         setInput(`cScnRat${label}`, s.rationale);
+        // v75.10.0 (Phase A.1) : applique le pattern moteur AVANT le rendu si détecté
+        const pattern = applyMoteurInitialLayout(label, L);
+        if (pattern) console.log(`[MOTEUR-INIT] Scénario ${label} : pattern ${pattern} appliqué`);
         renderUnitsTable(label);
         renderParcelSvg(label);
         renderMoteurBrief(label);   // v75.8.9 : préconisation moteur affichée par scénario
