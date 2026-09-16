@@ -304,7 +304,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.8.1</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -916,6 +916,99 @@ function resetSegmentsToMoteur() {
     showToast("Retraits par segment réinitialisés aux valeurs moteur");
 }
 
+// ═══ v75.8.1 — CLIP POLYGON (Sutherland-Hodgman) : intersection subject × clipper convexe ═══
+// Subject peut être n'importe quel polygone. Clipper doit être convexe.
+// Retourne le polygone d'intersection (peut être vide si aucune intersection).
+function sutherlandHodgmanClip(subject, clipper) {
+    if (!subject || subject.length < 3 || !clipper || clipper.length < 3) return [];
+    // Détecte orientation clipper (CCW). Points en {x, y}.
+    let signedA = 0;
+    for (let i = 0; i < clipper.length; i++) {
+        const j = (i + 1) % clipper.length;
+        signedA += clipper[i].x * clipper[j].y - clipper[j].x * clipper[i].y;
+    }
+    // Force orientation CCW (positive signedA en coord SVG y-down = CW en géométrie standard, on inverse pour la logique inside)
+    const clip = signedA < 0 ? clipper.slice().reverse() : clipper.slice();
+    let output = subject.slice();
+    for (let i = 0; i < clip.length; i++) {
+        if (output.length === 0) break;
+        const input = output;
+        output = [];
+        const A = clip[i], B = clip[(i + 1) % clip.length];
+        const inside = (p) => ((B.x - A.x) * (p.y - A.y) - (B.y - A.y) * (p.x - A.x)) >= 0;
+        const intersect = (P, Q) => {
+            const x1 = P.x, y1 = P.y, x2 = Q.x, y2 = Q.y;
+            const x3 = A.x, y3 = A.y, x4 = B.x, y4 = B.y;
+            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(denom) < 1e-9) return P;
+            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+            return { x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1) };
+        };
+        for (let k = 0; k < input.length; k++) {
+            const cur = input[k], prev = input[(k - 1 + input.length) % input.length];
+            const curIn = inside(cur), prevIn = inside(prev);
+            if (curIn) {
+                if (!prevIn) output.push(intersect(prev, cur));
+                output.push(cur);
+            } else if (prevIn) {
+                output.push(intersect(prev, cur));
+            }
+        }
+    }
+    return output;
+}
+
+// Aire d'un polygone {x, y} en pixels² (shoelace)
+function polygonAreaXY(pts) {
+    if (!pts || pts.length < 3) return 0;
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+        const j = (i + 1) % pts.length;
+        a += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    return Math.abs(a) / 2;
+}
+
+// Convertit un rect (cx, cy, w, h, rotDeg) en polygone {x, y}
+function rectToPolygonXY(cx, cy, w, h, rotDeg) {
+    const rot = rotDeg * Math.PI / 180;
+    const c = Math.cos(rot), s = Math.sin(rot);
+    return [[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([lx, ly]) => ({
+        x: cx + lx * c - ly * s,
+        y: cy + lx * s + ly * c
+    }));
+}
+
+// v75.8.1 — Clip un rect au polygone constructible avec expansion pour compenser la surface perdue
+// Retourne un polygone {x, y} d'unité qui rentre STRICTEMENT dans clipperPoly et fait ~areaTargetPx²
+function clipAndGrowRect(cx, cy, initialW, initialH, rotDeg, areaTargetPx, clipperPoly) {
+    let w = initialW, h = initialH;
+    let clipped = null;
+    // Boucle : clip → si surface trop petite, agrandir + reclip
+    for (let iter = 0; iter < 8; iter++) {
+        const rectPoly = rectToPolygonXY(cx, cy, w, h, rotDeg);
+        clipped = sutherlandHodgmanClip(rectPoly, clipperPoly);
+        if (clipped.length < 3) {
+            // rect complètement hors → pas d'intersection, reduce et retry
+            w *= 0.85; h *= 0.85;
+            continue;
+        }
+        const areaC = polygonAreaXY(clipped);
+        const ratio = areaC / areaTargetPx;
+        if (ratio >= 0.85 && ratio <= 1.15) return clipped;
+        if (ratio < 0.85) {
+            // Trop petit → agrandir rect (facteur inversement proportionnel)
+            const k = Math.min(1.4, Math.sqrt(1 / ratio));
+            w *= k; h *= k;
+        } else {
+            // Trop grand → réduire
+            const k = Math.sqrt(1 / ratio);
+            w *= k; h *= k;
+        }
+    }
+    return clipped || [];
+}
+
 // ═══ v75.8.0 — POLYGONES LIBRES : modèle + utilities + auto-shape L/T + optimisation ═══
 
 // Aire d'un polygone (shoelace) en m² depuis points {x_m, y_m}
@@ -1144,20 +1237,49 @@ function optimizeScenarioLayout(label) {
         if (!seg) return;
         usedSegs.add(seg.i);
         const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
-        // Rectangle allongé le long du segment, préservant aire
-        const targetLength = Math.min(seg.length_m * 0.75, cat === "COMMERCE" ? 15 : cat === "BUREAU" ? 12 : 10);
+        // Rectangle initial allongé le long du segment
+        const targetLength = Math.min(seg.length_m * 0.85, cat === "COMMERCE" ? 15 : cat === "BUREAU" ? 12 : 10);
         const width_m = targetLength;
         const height_m = areaM2 / width_m;
-        // Reset polygon (retour rectangle) — plus prédictible pour optim
-        u.polygon = null;
-        u.width_m = Number(width_m.toFixed(2));
-        u.height_m = Number(height_m.toFixed(2));
-        u.rotation_deg = seg.segAngleDeg;
-        // Position : centre du segment retrait (px → mètres)
-        u.offset_x_m = Number(((seg.segMidPx.x - refs.cxSvg) / refs.scale).toFixed(2));
-        u.offset_y_m = Number((-(seg.segMidPx.y - refs.cySvg) / refs.scale).toFixed(2));
+        const wPx = width_m * refs.scale;
+        const hPx = height_m * refs.scale;
+        // Position : centre du segment retrait légèrement DÉCALÉE vers l'intérieur (moitié de height pour rester dans polygone)
+        // Normale intérieure = perpendiculaire au segment, vers le centroïde parcelle
+        const dxNorm = refs.cxSvg - seg.segMidPx.x, dyNorm = refs.cySvg - seg.segMidPx.y;
+        const dNorm = Math.hypot(dxNorm, dyNorm) || 1;
+        const midShiftX = seg.segMidPx.x + (dxNorm / dNorm) * (hPx / 2 + 3);
+        const midShiftY = seg.segMidPx.y + (dyNorm / dNorm) * (hPx / 2 + 3);
+
+        // v75.8.1 — CLIP rect au polygone constructible (Sutherland-Hodgman) → forme épouse limites
+        const targetAreaPx = areaM2 * refs.scale * refs.scale;
+        const clipped = clipAndGrowRect(midShiftX, midShiftY, wPx, hPx, seg.segAngleDeg, targetAreaPx, refs.svgPtsBuildable);
+
+        if (clipped && clipped.length >= 3) {
+            // Convertit polygone clippé (px SVG) → coordonnées locales mètres depuis centroïde unit
+            const cxUnit = clipped.reduce((s, p) => s + p.x, 0) / clipped.length;
+            const cyUnit = clipped.reduce((s, p) => s + p.y, 0) / clipped.length;
+            // u.polygon en mètres relatifs au centroïde unit (unité)
+            u.polygon = clipped.map(p => ({
+                x_m: (p.x - cxUnit) / refs.scale,
+                y_m: -(p.y - cyUnit) / refs.scale
+            }));
+            // Position centroïde unit en mètres depuis centroïde parcelle
+            u.offset_x_m = Number(((cxUnit - refs.cxSvg) / refs.scale).toFixed(2));
+            u.offset_y_m = Number((-(cyUnit - refs.cySvg) / refs.scale).toFixed(2));
+            u.rotation_deg = 0;   // rotation embarquée dans le polygone
+            u.width_m = null;     // ignore rect dims si polygon
+            u.height_m = null;
+        } else {
+            // Fallback rectangle si clip échoue
+            u.polygon = null;
+            u.width_m = Number(width_m.toFixed(2));
+            u.height_m = Number(height_m.toFixed(2));
+            u.rotation_deg = seg.segAngleDeg;
+            u.offset_x_m = Number(((midShiftX - refs.cxSvg) / refs.scale).toFixed(2));
+            u.offset_y_m = Number((-(midShiftY - refs.cySvg) / refs.scale).toFixed(2));
+        }
         // Placement sector recalcé
-        const dxSvg = seg.segMidPx.x - refs.cxSvg, dySvg = seg.segMidPx.y - refs.cySvg;
+        const dxSvg = midShiftX - refs.cxSvg, dySvg = midShiftY - refs.cySvg;
         if (dxSvg*dxSvg + dySvg*dySvg > 25) {
             u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
         }
