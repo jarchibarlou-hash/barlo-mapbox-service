@@ -309,7 +309,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.2</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.3</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -720,11 +720,14 @@ function scenarioPanelTemplate(L) {
           <label>COS cible (0–3)
             <input type="text" id="cCos${L}" data-scn="${L}" data-field="cos" placeholder="Ex : 0.90">
           </label>
-          <label>Layout
-            <select id="cLayout${L}" data-scn="${L}" data-field="layout">
+          <label>Layout (change → réapplique)
+            <select id="cLayout${L}" data-scn="${L}" data-field="layout" onchange="reapplyPatternFromDropdown('${L}',this.value)">
               <option value="">Auto (moteur)</option>
               <option value="SPLIT_AV_AR">SPLIT_AV_AR (2 volumes)</option>
-              <option value="SUPERPOSE">SUPERPOSE (1 volume)</option>
+              <option value="SUPERPOSE">SUPERPOSE (1 volume compact)</option>
+              <option value="U">U (cour Sud)</option>
+              <option value="LAMELLE">LAMELLE (3:1 sur Sud)</option>
+              <option value="PLOT">PLOT (compact grille)</option>
             </select>
           </label>
           <label>SDP cible (m²)
@@ -2999,6 +3002,68 @@ function defaultUnitsFromMoteur(label) {
     return assignPreplacementForScenario(label, units);
 }
 
+// v75.10.1 (Phase A.2) — Feedback loop : capture baseline moteur → log deltas au save
+let _moteurBaseline = { A: null, B: null, C: null };
+
+function captureBaselineFromMoteur(label, L) {
+    _moteurBaseline[label] = {
+        cos:           L[`${label}_cos_pct`] || "",
+        layout_mode:   L[`${label}_layout_mode`] || "",
+        target_sdp:    L[`${label}_sdp`] || "",
+        fp:            L[`${label}_fp`] || "",
+        levels:        L[`${label}_levels`] || "",
+        units_count:   L[`${label}_units`] || "",
+        pilotis:       (L[`${label}_has_pilotis`] === "true" || L[`${label}_has_pilotis`] === true),
+        unit_mix:      L[`unit_mix_${label}`] || L[`${label}_unit_summary`] || ""
+    };
+}
+
+async function logMoteurFeedback(label) {
+    if (!selectedLead || !selectedLead.lead_id) return;
+    const baseline = _moteurBaseline[label];
+    if (!baseline) return;
+    const s = cockpitState.scenarios[label];
+    const deltas = [];
+    const cmp = (field, m, u) => {
+        m = String(m || "").trim(); u = String(u || "").trim();
+        if (u === "" || u === m) return;
+        const numM = parseFloat(m), numU = parseFloat(u);
+        const deltaP = (!isNaN(numM) && !isNaN(numU) && numM !== 0) ? ((numU - numM) / numM) * 100 : null;
+        deltas.push({ field, moteur_baseline: m, user_final: u, delta_pct: deltaP });
+    };
+    cmp("cos", baseline.cos, s.cos);
+    cmp("layout_mode", baseline.layout_mode, s.layout);
+    cmp("target_sdp", baseline.target_sdp, s.target_sdp);
+    cmp("fp", baseline.fp, s.fp);
+    cmp("levels", baseline.levels, s.levels);
+    cmp("units_count", baseline.units_count, s.units_count);
+    if (deltas.length === 0) return;
+    try {
+        await fetch(`${API}/api/lead-feedback/${selectedLead.lead_id}`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ scenario: label, deltas })
+        });
+    } catch(e) { console.warn("Feedback log failed:", e.message); }
+}
+
+// v75.10.2 (Phase B) — Panel params macro : ré-applique un pattern via dropdown Layout
+function reapplyPatternFromDropdown(label, patternValue) {
+    const units = cockpitState.scenarios[label].units || [];
+    if (units.length === 0) { showToast("Ajoute d'abord des unités", true); return; }
+    // Reset les offset/polygon custom pour laisser le pattern s'appliquer
+    units.forEach(u => { u.offset_x_m = null; u.offset_y_m = null; u.polygon = null; u.rotation_deg = null; });
+    if (patternValue === "SPLIT_AV_AR") _layoutSplit(units);
+    else if (patternValue === "SUPERPOSE") _layoutSuperpose(units);
+    else if (patternValue === "U") _layoutU(units);
+    else if (patternValue === "LAMELLE") _layoutLamelle(units);
+    else if (patternValue === "PLOT") _layoutPlot(units);
+    else return;
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`Pattern ${patternValue} appliqué sur scénario ${label}`);
+}
+
 // ═══ v75.10.0 (Phase A.1) — Détection layout moteur → formes initiales fidèles ═══
 
 // Détecte le pattern d'implantation depuis les champs moteur
@@ -3229,6 +3294,8 @@ function populateCockpitFromLead(L, units) {
         // v75.10.0 (Phase A.1) : applique le pattern moteur AVANT le rendu si détecté
         const pattern = applyMoteurInitialLayout(label, L);
         if (pattern) console.log(`[MOTEUR-INIT] Scénario ${label} : pattern ${pattern} appliqué`);
+        // v75.10.1 (Phase A.2) : capture baseline pour comparaison au save
+        captureBaselineFromMoteur(label, L);
         renderUnitsTable(label);
         renderParcelSvg(label);
         renderMoteurBrief(label);   // v75.8.9 : préconisation moteur affichée par scénario
@@ -3393,6 +3460,8 @@ async function saveConstraints() {
         console.log("[SAVE] Response:", d);
         if (!d.ok) throw new Error(d.error || `HTTP ${r.status}`);
         showToast(`✓ Enregistré (${d.inserted||0} unités sauvegardées Supabase)`);
+        // v75.10.1 (Phase A.2) : log deltas moteur vs user pour affiner le moteur
+        for (const label of ["A", "B", "C"]) { logMoteurFeedback(label); }
     } catch(e) {
         console.error("[SAVE] Error:", e);
         showToast(`Erreur : ${e.message}`, true);

@@ -10838,8 +10838,88 @@ app.post("/api/suggest-placement", (req, res) => {
   res.json({ ok: true, scenario, placement, method: "heuristic_v1" });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v75.10.1 (Phase A.2) — Feedback loop moteur ↔ user
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// POST /api/lead-feedback/:ref — logge les deltas moteur baseline vs user final
+// Body : { scenario: "A", deltas: [{ field, moteur_baseline, user_final, delta_pct }] }
+app.post("/api/lead-feedback/:ref", async (req, res) => {
+  const ref = String(req.params.ref || "").trim();
+  if (!ref) return res.status(400).json({ ok: false, error: "ref requis" });
+  const { scenario, deltas } = req.body || {};
+  if (!scenario || !Array.isArray(deltas) || deltas.length === 0) {
+    return res.status(400).json({ ok: false, error: "scenario + deltas requis" });
+  }
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  try {
+    const rows = deltas.map(d => ({
+      lead_ref: ref,
+      scenario: String(scenario).toUpperCase(),
+      field: String(d.field || "").trim(),
+      moteur_baseline: d.moteur_baseline !== undefined ? String(d.moteur_baseline) : null,
+      user_final: d.user_final !== undefined ? String(d.user_final) : null,
+      delta_pct: (d.delta_pct !== undefined && d.delta_pct !== null) ? Number(d.delta_pct) : null
+    })).filter(r => r.field);
+    const { error, count } = await sb.from("sb_lead_moteur_feedback").insert(rows, { count: "exact" });
+    if (error) {
+      if (String(error.message || "").includes("does not exist")) {
+        return res.status(503).json({ ok: false, error: "table sb_lead_moteur_feedback absente — appliquer migration v75.10" });
+      }
+      throw error;
+    }
+    console.log(`[FEEDBACK] ${ref} scén ${scenario} : ${count || rows.length} deltas logués`);
+    res.json({ ok: true, ref, scenario, logged: count || rows.length });
+  } catch(err) {
+    console.error(`[FEEDBACK POST] ${ref} : ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/moteur-feedback/insights — patterns aggregés (champs modifiés > 3 leads)
+app.get("/api/moteur-feedback/insights", async (req, res) => {
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  try {
+    const { data, error } = await sb
+      .from("sb_lead_moteur_feedback")
+      .select("field, delta_pct, scenario")
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    const rows = data || [];
+    // Aggrège par field
+    const agg = {};
+    for (const r of rows) {
+      const f = r.field;
+      if (!agg[f]) agg[f] = { field: f, count: 0, deltas: [], scenarios: {} };
+      agg[f].count++;
+      if (r.delta_pct !== null && r.delta_pct !== undefined) agg[f].deltas.push(Number(r.delta_pct));
+      agg[f].scenarios[r.scenario] = (agg[f].scenarios[r.scenario] || 0) + 1;
+    }
+    // Calcule moyenne delta
+    const insights = Object.values(agg)
+      .filter(a => a.count >= 3)
+      .map(a => ({
+        field: a.field,
+        count: a.count,
+        avg_delta_pct: a.deltas.length ? (a.deltas.reduce((s,x)=>s+x,0) / a.deltas.length).toFixed(2) : null,
+        scenarios: a.scenarios
+      }))
+      .sort((x, y) => y.count - x.count);
+    res.json({ ok: true, insights, total_deltas: rows.length });
+  } catch(err) {
+    console.error(`[FEEDBACK INSIGHTS] ${err.message}`);
+    if (String(err.message || "").includes("does not exist")) {
+      return res.status(503).json({ ok: false, error: "table sb_lead_moteur_feedback absente — appliquer migration v75.10", insights: [] });
+    }
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
-  console.log(`BARLO v75.2.0-plan-pptx on port ${PORT}`);
+  console.log(`BARLO v75.10.1-feedback on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
