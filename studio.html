@@ -309,7 +309,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v6.9.1</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1497,34 +1497,15 @@ function optimizeScenarioLayout(label) {
         const midShiftX = seg.segMidPx.x + (dxNorm / dNorm) * (hPx / 2 + 3);
         const midShiftY = seg.segMidPx.y + (dyNorm / dNorm) * (hPx / 2 + 3);
 
-        // v75.8.1 — CLIP rect au polygone constructible (Sutherland-Hodgman) → forme épouse limites
-        const targetAreaPx = areaM2 * refs.scale * refs.scale;
-        const clipped = clipAndGrowRect(midShiftX, midShiftY, wPx, hPx, seg.segAngleDeg, targetAreaPx, refs.svgPtsBuildable);
-
-        if (clipped && clipped.length >= 3) {
-            // Convertit polygone clippé (px SVG) → coordonnées locales mètres depuis centroïde unit
-            const cxUnit = clipped.reduce((s, p) => s + p.x, 0) / clipped.length;
-            const cyUnit = clipped.reduce((s, p) => s + p.y, 0) / clipped.length;
-            // u.polygon en mètres relatifs au centroïde unit (unité)
-            u.polygon = clipped.map(p => ({
-                x_m: (p.x - cxUnit) / refs.scale,
-                y_m: -(p.y - cyUnit) / refs.scale
-            }));
-            // Position centroïde unit en mètres depuis centroïde parcelle
-            u.offset_x_m = Number(((cxUnit - refs.cxSvg) / refs.scale).toFixed(2));
-            u.offset_y_m = Number((-(cyUnit - refs.cySvg) / refs.scale).toFixed(2));
-            u.rotation_deg = 0;   // rotation embarquée dans le polygone
-            u.width_m = null;     // ignore rect dims si polygon
-            u.height_m = null;
-        } else {
-            // Fallback rectangle si clip échoue
-            u.polygon = null;
-            u.width_m = Number(width_m.toFixed(2));
-            u.height_m = Number(height_m.toFixed(2));
-            u.rotation_deg = seg.segAngleDeg;
-            u.offset_x_m = Number(((midShiftX - refs.cxSvg) / refs.scale).toFixed(2));
-            u.offset_y_m = Number((-(midShiftY - refs.cySvg) / refs.scale).toFixed(2));
-        }
+        // v75.9.1 — Reste en RECTANGLES standards (pas de u.polygon custom) — le clip auto v6.8.3
+        // s'applique au rendu SEULEMENT si le rect déborde vraiment de la parcelle.
+        // Consequence : les unités bien placees restent des rectangles pleins (pas d'angles bizarres).
+        u.polygon = null;
+        u.width_m = Number(width_m.toFixed(2));
+        u.height_m = Number(height_m.toFixed(2));
+        u.rotation_deg = seg.segAngleDeg;
+        u.offset_x_m = Number(((midShiftX - refs.cxSvg) / refs.scale).toFixed(2));
+        u.offset_y_m = Number((-(midShiftY - refs.cySvg) / refs.scale).toFixed(2));
         // Placement sector recalcé
         const dxSvg = midShiftX - refs.cxSvg, dySvg = midShiftY - refs.cySvg;
         if (dxSvg*dxSvg + dySvg*dySvg > 25) {
@@ -2430,21 +2411,41 @@ function onUnitDragMove(e) {
         _dragState.lastRot = newRot;
         el.setAttribute("transform", `translate(${_dragState.curX.toFixed(1)},${_dragState.curY.toFixed(1)}) rotate(${newRot.toFixed(1)})`);
     } else if (mode.startsWith("resize-")) {
-        // v75.9.0 — Resize par arête : compute delta souris projeté sur axe local (avant rotation)
+        // v75.9.1 — Resize ASYMÉTRIQUE : seul le côté tiré bouge, l'opposé reste fixe.
+        // Le centre du rect suit d'un demi-delta dans la direction du côté tiré.
         const dxSvg = svgPt.x - _dragState.startSvgPt.x;
         const dySvg = svgPt.y - _dragState.startSvgPt.y;
-        const rotRad = -_dragState.curRot * Math.PI / 180;
+        const rotRad = -_dragState.curRot * Math.PI / 180;   // rotation inverse pour projeter en local
         const localDx = dxSvg * Math.cos(rotRad) - dySvg * Math.sin(rotRad);
         const localDy = dxSvg * Math.sin(rotRad) + dySvg * Math.cos(rotRad);
         let newW = _dragState.startW, newH = _dragState.startH;
-        // Centre reste fixe : W et H changent de 2*delta (les 2 côtés opposés bougent)
-        if (mode === "resize-e")      newW = Math.max(10, _dragState.startW + 2 * localDx);
-        else if (mode === "resize-w") newW = Math.max(10, _dragState.startW - 2 * localDx);
-        else if (mode === "resize-s") newH = Math.max(10, _dragState.startH + 2 * localDy);
-        else if (mode === "resize-n") newH = Math.max(10, _dragState.startH - 2 * localDy);
+        let centerShiftLocalX = 0, centerShiftLocalY = 0;
+        if (mode === "resize-e") {
+            newW = Math.max(10, _dragState.startW + localDx);
+            centerShiftLocalX = (newW - _dragState.startW) / 2;
+        } else if (mode === "resize-w") {
+            newW = Math.max(10, _dragState.startW - localDx);
+            centerShiftLocalX = -(newW - _dragState.startW) / 2;
+        } else if (mode === "resize-s") {
+            newH = Math.max(10, _dragState.startH + localDy);
+            centerShiftLocalY = (newH - _dragState.startH) / 2;
+        } else if (mode === "resize-n") {
+            newH = Math.max(10, _dragState.startH - localDy);
+            centerShiftLocalY = -(newH - _dragState.startH) / 2;
+        }
+        // Convertir shift local → global (rotate par curRot)
+        const rotF = _dragState.curRot * Math.PI / 180;
+        const shiftGlobalX = centerShiftLocalX * Math.cos(rotF) - centerShiftLocalY * Math.sin(rotF);
+        const shiftGlobalY = centerShiftLocalX * Math.sin(rotF) + centerShiftLocalY * Math.cos(rotF);
+        const newCX = _dragState.curX + shiftGlobalX;
+        const newCY = _dragState.curY + shiftGlobalY;
         _dragState.lastW = newW;
         _dragState.lastH = newH;
-        // Update visuel du rect body + poignées
+        _dragState.lastCX = newCX;
+        _dragState.lastCY = newCY;
+        // Update transform du groupe pour le nouveau centre
+        el.setAttribute("transform", `translate(${newCX.toFixed(1)},${newCY.toFixed(1)}) rotate(${_dragState.curRot.toFixed(1)})`);
+        // Update visuel du rect body
         const body = el.querySelector("rect.body");
         if (body) {
             body.setAttribute("x", (-newW/2).toFixed(1));
@@ -2533,7 +2534,7 @@ function onUnitDragMove(e) {
 
 function onUnitDragEnd(e) {
     if (!_dragState) return;
-    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl, lastW, lastH } = _dragState;
+    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl, lastW, lastH, lastCX, lastCY } = _dragState;
     _dragState = null;
     el.classList.remove("dragging");
     clearDragVisuals(svgEl);
@@ -2550,13 +2551,18 @@ function onUnitDragEnd(e) {
     }
 
     if (mode && mode.startsWith("resize-")) {
-        // v75.9.0 — Persiste W et H → recalcule m² automatiquement
+        // v75.9.1 — Persiste W, H et NOUVEAU CENTRE (car resize asymétrique déplace le centre)
         const newW_m = Number((lastW / refs.scale).toFixed(2));
         const newH_m = Number((lastH / refs.scale).toFixed(2));
         u.width_m = newW_m;
         u.height_m = newH_m;
         u.unit_size_m2 = Math.round(newW_m * newH_m);
-        u.polygon = null;   // reset polygone custom éventuel
+        u.polygon = null;
+        // Nouveau centre : convert (lastCX, lastCY) en offset mètres depuis centroïde parcelle
+        if (lastCX !== undefined && lastCY !== undefined) {
+            u.offset_x_m = Number(((lastCX - refs.cxSvg) / refs.scale).toFixed(2));
+            u.offset_y_m = Number((-(lastCY - refs.cySvg) / refs.scale).toFixed(2));
+        }
         renderUnitsTable(label);
         renderParcelSvg(label);
         updateConstraintsCount();
