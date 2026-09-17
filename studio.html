@@ -364,7 +364,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.5-SOLVE</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.6-MEAS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -864,6 +864,7 @@ function scenarioPanelTemplate(L) {
           <button type="button" class="cmd-btn" data-cmd="MI" onclick="cmdStart('MI','${L}')" title="Mirror — MI — Clique 2 points définissant l'axe (ESC)">◫ Mirror<small>MI</small></button>
           <span class="cmd-sep"></span>
           <button type="button" class="cmd-btn" data-cmd="ME" onclick="cmdStart('ME','${L}')" title="Measure — ME — Règle : clique 2 points pour mesurer une distance (ESC)">📏 Règle<small>ME</small></button>
+          <button type="button" class="cmd-btn" data-cmd="DA" onclick="cmdStart('DA','${L}')" title="Dim Aligned — DA — Cote alignée entre 2 arêtes (distance perpendiculaire) (ESC)">⇔ Cote<small>DA</small></button>
         </div>
 
         <div class="c-parcel-preview" id="cParcelPreview${L}">
@@ -2806,15 +2807,17 @@ function onUnitDragEnd(e) {
 
     historyPush(label);   // v8.2.0 : snapshot avant commit
 
-    // v9.1 — Modes vertex-drag / edge-drag : polygon déjà à jour, juste commit + rendu final
+    // v9.1 — Modes vertex-drag / edge-drag : polygon déjà à jour
+    // v9.6 — La surface CIBLE suit la nouvelle forme (édition volontaire = nouvelle cible)
     if (mode === "vertex-drag" || mode === "edge-drag") {
+        const realArea = Math.round(polygonAreaM2(u.polygon || []));
+        u.unit_size_m2 = realArea;   // v9.6 : surface transformée = nouvelle cible
         renderUnitsTable(label);
         renderParcelSvg(label);
         updateConstraintsCount();
-        const realArea = Math.round(polygonAreaM2(u.polygon || []));
         showToast(mode === "vertex-drag"
-            ? `Sommet déplacé · surface ${realArea} m² (cible ${u.unit_size_m2})`
-            : `Arête déplacée · surface ${realArea} m² (cible ${u.unit_size_m2})`);
+            ? `Sommet déplacé · nouvelle surface ${realArea} m²`
+            : `Arête déplacée · nouvelle surface ${realArea} m²`);
         return;
     }
 
@@ -3116,12 +3119,24 @@ function resolveGeoRef(label, svgPt) {
             }
         }
     }
-    // Priorité 5 : SEGMENTS parcelle (retraits)
+    // Priorité 5 : SEGMENTS parcelle (retraits) + ARÊTES BRUTES parcelle (v9.6)
     if (bestPriority > 5) {
         for (const s of (refs.segLinesForSnap || [])) {
             const { dist } = projectPointOnSegment(svgPt, s.p1, s.p2);
             if (dist < SNAP_PX + 4 && (dist < bestDist || 5 < bestPriority)) {
                 best = { kind: "segment", label, p1: s.p1, p2: s.p2, angleDeg: s.angleDeg, seg_idx: s.i };
+                bestDist = dist; bestPriority = 5;
+            }
+        }
+        // v9.6 — Arêtes brutes de la parcelle (svgPtsRaw) : cliquables pour Trim/Align/Snap
+        const raw = refs.svgPtsRaw || [];
+        for (let i = 0; i < raw.length; i++) {
+            const p1 = raw[i], p2 = raw[(i + 1) % raw.length];
+            const { dist } = projectPointOnSegment(svgPt, p1, p2);
+            if (dist < SNAP_PX + 4 && (dist < bestDist || 5 < bestPriority)) {
+                best = { kind: "segment", label, p1, p2,
+                    angleDeg: Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180 / Math.PI,
+                    seg_idx: "parcel_" + i, parcel_edge: true };
                 bestDist = dist; bestPriority = 5;
             }
         }
@@ -3632,27 +3647,29 @@ const COMMANDS = {
         }
     },
 
-    // ─────── MEASURE — ME — v8.3.0 outil règle (mesure distance entre 2 points/arêtes) ───────
+    // ─────── MEASURE — ME — v9.6 règle : preview live, commit persiste la ligne seule ───────
     ME: {
         label: "MEASURE",
         cursor: "crosshair",
         hint: "Clique le 1er point (endpoint, milieu, sommet, arête)",
+        onStart() { clearGhostPreview(); },
         onPick(ref, svgPt, label) {
             if (!ref) { showToast("Snap sur un point ou une arête", true); return; }
             const pt = _pickAsPoint(ref, svgPt);
             if (CMD.state === "WAIT_1") {
                 CMD.picks[0] = { pt, label };
                 CMD.state = "WAIT_2";
-                updateCmdHUD("Clique le 2ᵉ point pour mesurer la distance");
+                clearGhostPreview();
+                updateCmdHUD("Clique le 2ᵉ point pour figer la mesure (la distance s'affiche en temps réel)");
             } else if (CMD.state === "WAIT_2") {
                 const p1 = CMD.picks[0].pt;
                 const refs = _svgRefs[label];
                 const scale = refs ? refs.scale : 1;
-                const distPx = Math.hypot(pt.x - p1.x, pt.y - p1.y);
-                const distM = distPx / scale;
+                const distM = Math.hypot(pt.x - p1.x, pt.y - p1.y) / scale;
+                // Commit : la ligne + label restent affichés (unique) jusqu'au prochain clic 1
                 _cmdMeasureDraw(label, p1, pt, distM);
                 showToast(`Distance : ${distM.toFixed(2)} m`);
-                updateCmdHUD(`📏 ${distM.toFixed(2)} m · clique un nouveau 1er point (ESC pour quitter)`);
+                updateCmdHUD(`📏 ${distM.toFixed(2)} m · clique un nouveau 1er point pour recommencer (ESC pour quitter)`);
                 CMD.picks = [];
                 CMD.state = "WAIT_1";
             }
@@ -3665,11 +3682,43 @@ const COMMANDS = {
                 const scale = refs ? refs.scale : 1;
                 const distM = Math.hypot(pt.x - p1.x, pt.y - p1.y) / scale;
                 _cmdMeasurePreview(label, p1, pt, distM);
-                updateCmdHUD(`📏 ${distM.toFixed(2)} m · clique pour valider`);
+                updateCmdHUD(`📏 ${distM.toFixed(2)} m · clique pour figer`);
             }
         },
         onEscape() {
             if (CMD.state === "WAIT_2") { CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview(); return "Clique le 1er point"; }
+            return "EXIT";
+        }
+    },
+
+    // ─────── DIMENSION ALIGNÉE — DA — v9.6 mesure distance arête↔arête (côte Revit) ───────
+    DA: {
+        label: "DIM ALIGNED",
+        cursor: "crosshair",
+        hint: "Clique la 1ère ARÊTE (distance mesurée perpendiculairement)",
+        onStart() { clearGhostPreview(); },
+        onPick(ref, svgPt, label) {
+            if (!ref || !["edge","segment"].includes(ref.kind)) {
+                showToast("Clique une arête ou un segment parcelle", true); return;
+            }
+            if (CMD.state === "WAIT_1") {
+                CMD.picks[0] = ref;
+                CMD.state = "WAIT_2";
+                clearGhostPreview();
+                updateCmdHUD("1ère arête OK · clique la 2ᵉ arête pour mesurer");
+            } else if (CMD.state === "WAIT_2") {
+                _cmdDimAlignedDraw(label, CMD.picks[0], ref);
+                CMD.picks = []; CMD.state = "WAIT_1";
+                updateCmdHUD("Cote figée · clique une nouvelle 1ère arête (ESC pour quitter)");
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_2" && CMD.picks[0] && ref && ["edge","segment"].includes(ref.kind)) {
+                _cmdDimAlignedPreview(label, CMD.picks[0], ref);
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") { CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview(); return "Clique la 1ère arête"; }
             return "EXIT";
         }
     },
@@ -4146,6 +4195,33 @@ function _cmdMeasureDraw(label, p1, p2, distM) {
     // Persistent measure : reste affiché après clic (dans overlay)
     _cmdMeasurePreview(label, p1, p2, distM);
 }
+
+// ═════════════ v9.6 — DIM ALIGNED : cote entre 2 arêtes (distance perpendiculaire moyenne) ═════════════
+function _cmdDimAlignedGeom(edgeA, edgeB) {
+    // Distance = moyenne des projections perpendiculaires du milieu de chaque arête sur l'autre
+    const midA = { x: (edgeA.p1.x + edgeA.p2.x)/2, y: (edgeA.p1.y + edgeA.p2.y)/2 };
+    const midB = { x: (edgeB.p1.x + edgeB.p2.x)/2, y: (edgeB.p1.y + edgeB.p2.y)/2 };
+    const { proj: projAonB, dist: dAB } = projectPointOnSegment(midA, edgeB.p1, edgeB.p2);
+    const { proj: projBonA, dist: dBA } = projectPointOnSegment(midB, edgeA.p1, edgeA.p2);
+    // Utilise la ligne "moyenne" entre les 2 milieux comme cote
+    // Point de départ : midA, point d'arrivée : projAonB (perpendiculaire de midA sur edgeB)
+    return { midA, projAonB, midB, projBonA, dist: (dAB + dBA) / 2 };
+}
+function _cmdDimAlignedDraw(label, edgeA, edgeB) {
+    const g = _cmdDimAlignedGeom(edgeA, edgeB);
+    const refs = _svgRefs[label];
+    const scale = refs ? refs.scale : 1;
+    const distM = g.dist / scale;
+    const svg = `<line class="ghost-line" x1="${edgeA.p1.x.toFixed(1)}" y1="${edgeA.p1.y.toFixed(1)}" x2="${edgeA.p2.x.toFixed(1)}" y2="${edgeA.p2.y.toFixed(1)}" style="stroke:#FBBF24;stroke-width:1.5"/>
+<line class="ghost-line" x1="${edgeB.p1.x.toFixed(1)}" y1="${edgeB.p1.y.toFixed(1)}" x2="${edgeB.p2.x.toFixed(1)}" y2="${edgeB.p2.y.toFixed(1)}" style="stroke:#FBBF24;stroke-width:1.5"/>
+<line class="ghost-line" x1="${g.midA.x.toFixed(1)}" y1="${g.midA.y.toFixed(1)}" x2="${g.projAonB.x.toFixed(1)}" y2="${g.projAonB.y.toFixed(1)}" style="stroke:#FBBF24;stroke-width:2;stroke-dasharray:none"/>
+<circle cx="${g.midA.x.toFixed(1)}" cy="${g.midA.y.toFixed(1)}" r="3" fill="#FBBF24"/>
+<circle cx="${g.projAonB.x.toFixed(1)}" cy="${g.projAonB.y.toFixed(1)}" r="3" fill="#FBBF24"/>
+<rect x="${((g.midA.x+g.projAonB.x)/2 - 20).toFixed(1)}" y="${((g.midA.y+g.projAonB.y)/2 - 10).toFixed(1)}" width="40" height="14" rx="3" fill="#0B1120" stroke="#FBBF24" stroke-width="1"/>
+<text x="${((g.midA.x+g.projAonB.x)/2).toFixed(1)}" y="${((g.midA.y+g.projAonB.y)/2 + 0.5).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#FBBF24" font-size="9" font-weight="700" font-family="Inter">${distM.toFixed(2)}m</text>`;
+    drawGhostPreview(label, svg);
+}
+function _cmdDimAlignedPreview(label, edgeA, edgeB) { _cmdDimAlignedDraw(label, edgeA, edgeB); }
 
 // Attache les listeners drag une seule fois (délégation sur document)
 let _dragListenersAttached = false;
