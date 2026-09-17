@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.16-SOFT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.17-NOBLOCK</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2098,12 +2098,10 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
         totalCapacityWithLevels: Math.round(groundMaxArea * (maxLevels + 1))
     };
 
-    // v10.15 — Seuil relâché à 105% (permet égalité + petit dépassement) et message plus clair
-    if (totalDemande > preDiag.totalCapacityWithLevels * 1.05) {
-        const nivLabel = maxLevels === 0 ? "plein-pied (RDC uniquement)" : `R+${maxLevels} (${maxLevels + 1} niveaux)`;
-        return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM_FOR_LEVELS", preDiag,
-            message: `Programme ${Math.round(totalDemande)}m² > capacité max ${preDiag.totalCapacityWithLevels}m² (COS ${(cosMax*100).toFixed(0)}% × ${nivLabel}) · augmente les niveaux, réduis les surfaces, ou change la zone` };
-    }
+    // v10.17 — TOO_MUCH devient WARNING NON-BLOQUANT (info dans preDiag), plus jamais de rejet
+    // Le solver essaie toujours, la pénalité de score fait son travail dans le classement.
+    preDiag.exceedsCapacity = totalDemande > preDiag.totalCapacityWithLevels * 1.05;
+    preDiag.overshootAmount_m2 = Math.max(0, totalDemande - preDiag.totalCapacityWithLevels);
 
     // v10.11 — Fix fallback downgrade : half-plane clip inward par arête (repère m, y+ Nord)
     function _buildableWithUniformSetback(setback_m) {
@@ -2148,17 +2146,14 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
     const effectiveGroundLimit = Math.min(effectiveArea * 0.95, groundMaxArea);
     let programWithLevels = programUnits;
     let levelDistribution = null;
-    if (totalDemande > effectiveGroundLimit) {
+    // v10.17 — Toujours distribuer (jamais bloquer), même si dépassement COS
+    if (totalDemande > effectiveGroundLimit || maxLevels > 0) {
         levelDistribution = BARLO.solver.distributeByLevels(programUnits, effectiveGroundLimit, maxLevels);
-        if (!levelDistribution) {
-            return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM_FOR_LEVELS", preDiag,
-                message: `Programme ${Math.round(totalDemande)}m² ne rentre pas dans ${Math.round(effectiveGroundLimit)}m² sol × ${maxLevels + 1} niveaux (COS ${(cosMax*100).toFixed(0)}%)` };
-        }
         programWithLevels = levelDistribution.flatMap(l => l.units);
-        // Message informatif : combien d'unités par niveau
+        const overCOSCount = programWithLevels.filter(u => u._overCOS).length;
         const distStr = levelDistribution.map((l, i) => `R+${i}: ${l.units.length}u (${Math.round(l.areaUsed)}m²)`).join(" · ");
         downgradeReason = (downgradeReason ? downgradeReason + " · " : "")
-            + `Programme réparti sur niveaux : ${distStr}`;
+            + `Répartition : ${distStr}` + (overCOSCount > 0 ? ` · ⚠${overCOSCount} unité(s) hors COS 60%` : "");
     }
     // Convertit programWithLevels (schema Barlo + levels distribués) en format solver
     const program = programWithLevels.map((u, i) => ({
@@ -2731,22 +2726,22 @@ BARLO.site.detectUserLevelsPref = function(lead) {
     return { maxLevels, strict, source: sourceKey, raw: value };
 };
 
-// v10.11 — Distribue les unités sur niveaux 0..maxLevels selon groundMaxArea
-// Trie par surface décroissante puis first-fit sur chaque niveau
+// v10.17 — Distribution multi-niveaux : ne retourne JAMAIS null, marque overCOS si dépasse
+// Force la répartition même quand ça dépasse (pénalité au score, pas rejet)
 BARLO.solver.distributeByLevels = function(program, groundMaxArea, maxLevels) {
     const sorted = program.slice().sort((a, b) => (b.targetArea || 0) - (a.targetArea || 0));
     const levels = Array.from({ length: maxLevels + 1 }, () => ({ units: [], areaUsed: 0 }));
     for (const u of sorted) {
-        let placed = false;
+        // Cherche le niveau qui minimise le dépassement
+        let bestLevel = 0, bestAfter = Infinity;
         for (let l = 0; l <= maxLevels; l++) {
-            if (levels[l].areaUsed + u.targetArea <= groundMaxArea + 0.5) {
-                levels[l].units.push(Object.assign({}, u, { level: l }));
-                levels[l].areaUsed += u.targetArea;
-                placed = true;
-                break;
-            }
+            const after = levels[l].areaUsed + u.targetArea;
+            if (after < bestAfter) { bestAfter = after; bestLevel = l; }
+            if (after <= groundMaxArea + 0.5) { bestLevel = l; break; }   // premier qui rentre = optimal
         }
-        if (!placed) return null;
+        const willOverflow = levels[bestLevel].areaUsed + u.targetArea > groundMaxArea + 0.5;
+        levels[bestLevel].units.push(Object.assign({}, u, { level: bestLevel, _overCOS: willOverflow }));
+        levels[bestLevel].areaUsed += u.targetArea;
     }
     return levels;
 };
@@ -6232,9 +6227,10 @@ function renderSolverPanel(label, result) {
     const diagHtml = pd ? `<div style="font-size:.55rem;color:var(--text2);margin-bottom:.25rem;padding:.28rem .4rem;background:rgba(11,17,32,0.5);border-radius:3px;line-height:1.4">
         📐 ${pd.totalDemande}m² prog / ${pd.parcelArea}m² parcelle / ${pd.buildableArea}m² buildable · 🏙 ${pd.context} COS ${(pd.cosMax*100).toFixed(0)}% · <strong>${nivLbl}</strong> cap ${pd.totalCapacityWithLevels}m²
     </div>` : "";
+    // v10.17 — TOO_MUCH n'est plus une raison de refus. Bloc conservé au cas où (fallback ancien code).
     if (result.reason === "TOO_MUCH_PROGRAM" || result.reason === "TOO_MUCH_PROGRAM_FOR_LEVELS") {
-        title.textContent = "❌ Programme trop grand pour cette parcelle/niveaux";
-        grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#EF4444">${result.message}</div>`;
+        title.textContent = "⚠ Programme important — proposition avec pénalité";
+        grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#F59E0B">${result.message}</div>`;
         debug.style.display = "none";
         return;
     }
