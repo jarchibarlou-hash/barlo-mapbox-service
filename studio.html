@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.14-SYNC</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.15-SLIM</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2098,10 +2098,11 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
         totalCapacityWithLevels: Math.round(groundMaxArea * (maxLevels + 1))
     };
 
-    // Si surface demandée > capacité totale AVEC niveaux → physiquement impossible
-    if (totalDemande > preDiag.totalCapacityWithLevels * 0.98) {
+    // v10.15 — Seuil relâché à 105% (permet égalité + petit dépassement) et message plus clair
+    if (totalDemande > preDiag.totalCapacityWithLevels * 1.05) {
+        const nivLabel = maxLevels === 0 ? "plein-pied (RDC uniquement)" : `R+${maxLevels} (${maxLevels + 1} niveaux)`;
         return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM_FOR_LEVELS", preDiag,
-            message: `Programme ${Math.round(totalDemande)}m² > capacité max ${preDiag.totalCapacityWithLevels}m² (COS ${(cosMax*100).toFixed(0)}% × ${maxLevels + 1} niveaux) · augmente les niveaux, réduis les surfaces, ou change la zone` };
+            message: `Programme ${Math.round(totalDemande)}m² > capacité max ${preDiag.totalCapacityWithLevels}m² (COS ${(cosMax*100).toFixed(0)}% × ${nivLabel}) · augmente les niveaux, réduis les surfaces, ou change la zone` };
     }
 
     // v10.11 — Fix fallback downgrade : half-plane clip inward par arête (repère m, y+ Nord)
@@ -6164,11 +6165,11 @@ function renderSolverPanel(label, result) {
     const debug = $(`cSolverDebug${label}`);
     if (!panel || !grid) return;
     panel.classList.add("active");
-    // v10.9/v10.11 — Diagnostic pré-solve enrichi (COS + niveaux + contexte)
+    // v10.15 — Diagnostic pré-solve compact (1 ligne au lieu de 2)
     const pd = result.preDiag;
-    const diagHtml = pd ? `<div style="font-size:.58rem;color:var(--text2);margin-bottom:.3rem;padding:.35rem;background:rgba(11,17,32,0.5);border-radius:4px;line-height:1.6">
-        📐 <strong>Programme :</strong> ${pd.totalDemande}m² · <strong>Parcelle :</strong> ${pd.parcelArea}m² · <strong>Buildable strict :</strong> ${pd.buildableArea}m²<br>
-        🏙 <strong>Contexte :</strong> ${pd.context} → <strong>COS max ${(pd.cosMax*100).toFixed(0)}%</strong> = ${pd.groundMaxArea}m² au sol · <strong>Niveaux max :</strong> ${pd.maxLevels === 0 ? "plein-pied" : "R+" + pd.maxLevels} → capacité totale <strong>${pd.totalCapacityWithLevels}m²</strong>
+    const nivLbl = pd ? (pd.maxLevels === 0 ? "plein-pied" : "R+" + pd.maxLevels) : "";
+    const diagHtml = pd ? `<div style="font-size:.55rem;color:var(--text2);margin-bottom:.25rem;padding:.28rem .4rem;background:rgba(11,17,32,0.5);border-radius:3px;line-height:1.4">
+        📐 ${pd.totalDemande}m² prog / ${pd.parcelArea}m² parcelle / ${pd.buildableArea}m² buildable · 🏙 ${pd.context} COS ${(pd.cosMax*100).toFixed(0)}% · <strong>${nivLbl}</strong> cap ${pd.totalCapacityWithLevels}m²
     </div>` : "";
     if (result.reason === "TOO_MUCH_PROGRAM" || result.reason === "TOO_MUCH_PROGRAM_FOR_LEVELS") {
         title.textContent = "❌ Programme trop grand pour cette parcelle/niveaux";
@@ -6644,11 +6645,11 @@ function renderMoteurBrief(label) {
         const lvlSrc = userPref.maxLevels != null ? "formulaire" : (s.levels ? "cockpit" : (currentBody8D[`override_levels_${label}`] ? "backend" : "défaut"));
         const groundMax = parcelArea !== "?" ? Math.round(parcelArea * cosVal) : "?";
         const totalCap = groundMax !== "?" ? Math.round(groundMax * (maxLvl + 1)) : "?";
-        const okColor = (parcelArea !== "?" && totalProgramArea <= parcelArea * cosVal * (maxLvl + 1)) ? "#22C55E" : "#F59E0B";
-        const syncHtml = `<div style="margin-top:.4rem;padding:.4rem;background:rgba(11,17,32,0.5);border-left:2px solid #A78BFA;border-radius:3px;font-size:.58rem;line-height:1.6;color:var(--text)">
-            <div style="color:#A78BFA;font-weight:700;font-size:.53rem;text-transform:uppercase;letter-spacing:.4px;margin-bottom:.15rem">🔗 État synchro pipeline</div>
-            <div>📐 <strong>Programme :</strong> <span style="color:${okColor}">${Math.round(totalProgramArea)}m²</span> · Parcelle ${parcelArea}m² · Buildable strict ${buildableArea}m²</div>
-            <div>🏙 <strong>Contexte :</strong> ${ctx} · <strong>COS ${(cosVal*100).toFixed(0)}%</strong> = ${groundMax}m²/niveau · <strong>Niveaux :</strong> ${maxLvl === 0 ? "plein-pied" : "R+" + maxLvl} <span style="color:var(--text2);font-style:italic">(${lvlSrc})</span> → cap ${totalCap}m²</div>
+        const okColor = (parcelArea !== "?" && totalProgramArea <= parcelArea * cosVal * (maxLvl + 1) * 1.05) ? "#22C55E" : "#F59E0B";
+        const nivLbl2 = maxLvl === 0 ? "plein-pied" : "R+" + maxLvl;
+        // v10.15 — Widget synchro compact (1 ligne dense au lieu de 2 lignes verbeuses)
+        const syncHtml = `<div style="margin-top:.35rem;padding:.28rem .4rem;background:rgba(11,17,32,0.5);border-left:2px solid #A78BFA;border-radius:3px;font-size:.55rem;line-height:1.35;color:var(--text)">
+            <strong style="color:#A78BFA">🔗 SYNCHRO :</strong> <span style="color:${okColor};font-weight:700">${Math.round(totalProgramArea)}m²</span> prog / ${parcelArea}m² parc / ${buildableArea}m² build · <strong>${ctx}</strong> COS ${(cosVal*100).toFixed(0)}% · <strong>${nivLbl2}</strong> <span style="color:var(--text2);font-style:italic">(${lvlSrc})</span> cap ${totalCap}m²
         </div>`;
         parts.push(syncHtml);
     } catch (e) { console.warn("[MOTEUR-BRIEF] sync widget failed:", e); }
