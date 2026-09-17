@@ -367,7 +367,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.0-FOUND</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.1-CONST</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2019,6 +2019,189 @@ BARLO.geometry.polygonsIntersect = function(polyA, polyB, tolerancePx) {
     if (!clipped || clipped.length < 3) return 0;
     const a = polygonAreaXY(clipped);
     return a > tolerancePx ? a : 0;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.1 — BARLO.constraints : Hard & Soft Constraints, Validator, Scorer
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// AREA_TOLERANCE : marge sur la surface programmatique (±1% par défaut, aussi min 0.5m²)
+BARLO.constraints.AREA_TOLERANCE_PCT = 0.01;
+BARLO.constraints.AREA_TOLERANCE_ABS_M2 = 0.5;
+
+// ─── HARD CONSTRAINTS : violation = rejet total du candidat ───
+BARLO.constraints.hard = {
+    // Chaque unité doit être ENTIÈREMENT dans le buildable polygon
+    insideBuildable(candidate, siteAnalysis) {
+        if (!siteAnalysis || !siteAnalysis.buildablePolygon || siteAnalysis.buildablePolygon.length < 3) {
+            return { ok: true, violations: [] };  // pas de buildable → skip la contrainte
+        }
+        const violations = [];
+        for (const unit of candidate.units) {
+            const inside = BARLO.geometry.polygonInside(unit.polygonM || unit.polygon, siteAnalysis.buildablePolygon);
+            if (!inside) violations.push({ type: "UNIT_OUTSIDE_BUILDABLE", unitId: unit.id || unit.unit_index });
+        }
+        return { ok: violations.length === 0, violations };
+    },
+    // Chaque unité doit respecter sa surface cible avec la tolérance définie
+    areaTolerance(candidate) {
+        const violations = [];
+        for (const unit of candidate.units) {
+            const target = unit.targetArea || unit.unit_size_m2;
+            if (!target) continue;
+            const actual = BARLO.geometry.polygonArea(unit.polygonM || unit.polygon);
+            const errPct = Math.abs(actual - target) / target;
+            const errAbs = Math.abs(actual - target);
+            if (errPct > BARLO.constraints.AREA_TOLERANCE_PCT && errAbs > BARLO.constraints.AREA_TOLERANCE_ABS_M2) {
+                violations.push({ type: "AREA_ERROR", unitId: unit.id || unit.unit_index,
+                    target, actual, errPct: (errPct * 100).toFixed(1) + "%" });
+            }
+        }
+        return { ok: violations.length === 0, violations };
+    },
+    // Aucune paire d'unités au MÊME niveau ne doit se chevaucher (aire commune > tolérance)
+    noOverlapSameLevel(candidate) {
+        const violations = [];
+        const units = candidate.units;
+        for (let i = 0; i < units.length; i++) {
+            for (let j = i + 1; j < units.length; j++) {
+                const uA = units[i], uB = units[j];
+                // Comparaison uniquement si même niveau (default level 0 si non spécifié)
+                const lA = uA.level != null ? uA.level : 0;
+                const lB = uB.level != null ? uB.level : 0;
+                if (lA !== lB) continue;
+                const areaCommon = BARLO.geometry.polygonsIntersect(uA.polygonM || uA.polygon, uB.polygonM || uB.polygon, 0.5);
+                if (areaCommon > 0.5) {
+                    violations.push({ type: "UNIT_COLLISION", unitA: uA.id || uA.unit_index,
+                        unitB: uB.id || uB.unit_index, areaCommon: areaCommon.toFixed(2) });
+                }
+            }
+        }
+        return { ok: violations.length === 0, violations };
+    },
+    // Dimensions minimum (si spécifiées par unit.minWidth/minDepth)
+    minDimensions(candidate) {
+        const violations = [];
+        for (const unit of candidate.units) {
+            if (!unit.minWidth && !unit.minDepth) continue;
+            const poly = unit.polygonM || unit.polygon;
+            // Bounding box local pour approximation min W/H (unité rectangulaire hypothèse simple)
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            poly.forEach(p => {
+                if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+                if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+            });
+            const w = maxX - minX, h = maxY - minY;
+            if (unit.minWidth && w < unit.minWidth) violations.push({ type: "MIN_WIDTH", unitId: unit.id, w, min: unit.minWidth });
+            if (unit.minDepth && h < unit.minDepth) violations.push({ type: "MIN_DEPTH", unitId: unit.id, h, min: unit.minDepth });
+        }
+        return { ok: violations.length === 0, violations };
+    }
+};
+
+// ─── SOFT CONSTRAINTS : chacun retourne un score [0..1] utilisé pour classer ───
+BARLO.constraints.soft = {
+    // Orientation : dot product entre normale sortante moyenne des unités et vecteur de la direction préférée
+    orientation(candidate, preferredAxisDeg) {
+        if (preferredAxisDeg == null) return 0.5;   // neutre
+        const rad = preferredAxisDeg * Math.PI / 180;
+        const target = { x: Math.cos(rad), y: Math.sin(rad) };
+        let sum = 0, count = 0;
+        for (const unit of candidate.units) {
+            const poly = unit.polygonM || unit.polygon;
+            if (!poly || poly.length < 3) continue;
+            // Trouve l'arête la plus longue de l'unité et compare son angle
+            let longest = null;
+            for (let i = 0; i < poly.length; i++) {
+                const p1 = poly[i], p2 = poly[(i + 1) % poly.length];
+                const dx = p2.x - p1.x, dy = p2.y - p1.y;
+                const len = Math.hypot(dx, dy);
+                if (!longest || len > longest.len) longest = { dx, dy, len };
+            }
+            if (!longest) continue;
+            const nx = longest.dx / longest.len, ny = longest.dy / longest.len;
+            const align = Math.abs(nx * target.x + ny * target.y);
+            sum += align; count++;
+        }
+        return count > 0 ? sum / count : 0.5;
+    },
+    // Compactness : rapport aire / (périmètre^2) normalisé — cercle = 1, rectangle ~0.8, forme éclatée < 0.3
+    compactness(candidate) {
+        let sum = 0, count = 0;
+        for (const unit of candidate.units) {
+            const poly = unit.polygonM || unit.polygon;
+            if (!poly || poly.length < 3) continue;
+            const area = BARLO.geometry.polygonArea(poly);
+            let peri = 0;
+            for (let i = 0; i < poly.length; i++) {
+                const p1 = poly[i], p2 = poly[(i + 1) % poly.length];
+                peri += Math.hypot(p2.x - p1.x, p2.y - p1.y);
+            }
+            if (peri > 0) sum += (4 * Math.PI * area) / (peri * peri);
+            count++;
+        }
+        return count > 0 ? Math.min(1, sum / count) : 0.5;
+    },
+    // Site fit : combien du buildable est occupé (utilisation efficace du site)
+    siteFit(candidate, siteAnalysis) {
+        if (!siteAnalysis || !siteAnalysis.buildableArea) return 0.5;
+        let usedArea = 0;
+        for (const unit of candidate.units) {
+            usedArea += BARLO.geometry.polygonArea(unit.polygonM || unit.polygon);
+        }
+        const ratio = usedArea / siteAnalysis.buildableArea;
+        // Idéal : 40-70% d'occupation — pas trop dense, pas gaspillage
+        if (ratio < 0.2) return ratio / 0.2 * 0.5;   // pénalise sous-utilisation
+        if (ratio > 0.85) return Math.max(0, 1 - (ratio - 0.85) / 0.15);   // pénalise sur-utilisation
+        return 0.5 + Math.min(1, (ratio - 0.2) / 0.5) * 0.5;
+    },
+    // Complexity penalty : nombre moyen de sommets par unité (favorise 4-6 sommets)
+    complexityPenalty(candidate) {
+        if (!candidate.units.length) return 0;
+        const avgVerts = candidate.units.reduce((s, u) => s + ((u.polygonM || u.polygon || []).length), 0) / candidate.units.length;
+        if (avgVerts <= 6) return 0;
+        return Math.min(1, (avgVerts - 6) / 10);   // 6 = 0 pénalité, 16 = 1
+    }
+};
+
+// ─── VALIDATOR : valide un candidat contre toutes les hard constraints ───
+// Retourne { valid, violations: [{type, ...}] }
+BARLO.constraints.validate = function(candidate, siteAnalysis, opts) {
+    opts = opts || {};
+    const allViolations = [];
+    const rInside = BARLO.constraints.hard.insideBuildable(candidate, siteAnalysis);
+    const rArea = BARLO.constraints.hard.areaTolerance(candidate);
+    const rOverlap = BARLO.constraints.hard.noOverlapSameLevel(candidate);
+    const rMinDim = BARLO.constraints.hard.minDimensions(candidate);
+    allViolations.push(...rInside.violations, ...rArea.violations, ...rOverlap.violations, ...rMinDim.violations);
+    return { valid: allViolations.length === 0, violations: allViolations };
+};
+
+// ─── SCORER : score multi-critères d'un candidat VALIDE ───
+// Retourne { totalScore [0..1], breakdown: {orientation, compactness, siteFit, complexity} }
+BARLO.constraints.WEIGHTS = {
+    orientation: 0.30,
+    compactness: 0.15,
+    siteFit: 0.30,
+    complexity: 0.10,
+    typology: 0.15   // rempli par la Strategy elle-même
+};
+BARLO.constraints.score = function(candidate, siteAnalysis, opts) {
+    opts = opts || {};
+    const W = BARLO.constraints.WEIGHTS;
+    const bd = {
+        orientation: BARLO.constraints.soft.orientation(candidate, opts.preferredAxisDeg),
+        compactness: BARLO.constraints.soft.compactness(candidate),
+        siteFit: BARLO.constraints.soft.siteFit(candidate, siteAnalysis),
+        complexity: 1 - BARLO.constraints.soft.complexityPenalty(candidate),
+        typology: candidate.typologyScore != null ? candidate.typologyScore : 0.7
+    };
+    const total = W.orientation * bd.orientation
+        + W.compactness * bd.compactness
+        + W.siteFit * bd.siteFit
+        + W.complexity * bd.complexity
+        + W.typology * bd.typology;
+    return { totalScore: total, breakdown: bd };
 };
 
 // ─── BARLO.site : Site Analysis Model ───
