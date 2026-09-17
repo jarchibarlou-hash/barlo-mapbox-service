@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.12-FORM</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.13-UNIF</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -840,7 +840,8 @@ function scenarioPanelTemplate(L) {
             <button onclick="splitScenarioIntoN('${L}',5)">5</button>
           </div>
           <button class="c-btn-auto-place" onclick="generatePlacementAuto('${L}')" title="🤖 Utilise le moteur BARLO backend (/api/suggest-placement) pour proposer les secteurs cardinaux N/NE/E/... par unité selon les règles du diagnostic. Modifie ensuite librement.">🤖 Placement moteur</button>
-          <button class="c-btn-auto-place" onclick="proposeOptimizedLayout('${L}')" style="color:#8B5CF6;border-color:#8B5CF6" title="🧠 Propose une implantation optimisée (algorithme frontend) : assigne chaque unité à un segment de parcelle selon son type (COMMERCE=rue, BUREAU=est/ouest, RESI=sud), avec forme adaptée. Écrase les ajustements manuels — un confirm apparaît sinon.">🧠 Proposer implantation</button>
+          <!-- v10.13 — Bouton legacy 'Proposer implantation' retiré. Utilise 🧠 Générer propositions (BARLO solver) dans la toolbar preview. -->
+
           <button class="c-btn-reset-moteur" onclick="resetScenarioToMoteur('${L}')" title="Revient aux suggestions initiales du moteur (unit_mix_X du sheet)">🔄 Réinitialiser</button>
         </div>
       </div>
@@ -5947,28 +5948,59 @@ async function logMoteurFeedback(label) {
 }
 
 // v75.10.2 (Phase B) — Panel params macro : ré-applique un pattern via dropdown Layout
+// v10.13 — Chaque bouton pattern lance le VRAI solver BARLO avec la seule stratégie ciblée
+// puis applique automatiquement le meilleur candidat validé (fit, surface, buildable respectés).
 function reapplyPatternFromDropdown(label, patternValue) {
-    const units = cockpitState.scenarios[label].units || [];
-    if (units.length === 0) { showToast("Ajoute d'abord des unités", true); return; }
+    const s = cockpitState.scenarios[label];
+    if (!s || !s.units || s.units.length === 0) { showToast("Ajoute d'abord des unités", true); return; }
+    const refs = _svgRefs[label];
+    if (!refs || !refs.siteAnalysis) { showToast("Charge un lead avec parcelle avant", true); return; }
+    // Mapping pattern legacy → stratégie BARLO
+    const strategyMap = {
+        LAMELLE: "LAMELLA",
+        BORDURE: "PERIMETER",
+        U: "U_SHAPE",
+        T: "T_SHAPE",
+        SUPERPOSE: "STACKED",
+        DECALE: "STAGGERED",
+        SPLIT_AV_AR: "SPLIT",
+        PLOT: "STACKED"
+    };
+    const targetStrategy = strategyMap[patternValue];
+    if (!targetStrategy) return;
     historyPush(label);
-    // Reset les offset/polygon custom pour laisser le pattern s'appliquer
-    units.forEach(u => { u.offset_x_m = null; u.offset_y_m = null; u.polygon = null; u.rotation_deg = null; });
-    if (patternValue === "SPLIT_AV_AR") _layoutSplit(units);
-    else if (patternValue === "SUPERPOSE") _layoutSuperpose(units);
-    else if (patternValue === "U") _layoutU(units);
-    else if (patternValue === "LAMELLE") _layoutLamelle(units);
-    else if (patternValue === "BORDURE") _layoutBordure(units);
-    else if (patternValue === "T") _layoutT(units);
-    else if (patternValue === "DECALE") _layoutDecale(units);
-    else if (patternValue === "PLOT") _layoutPlot(units);
-    else return;
-    // v9.7 — Applique l'axe d'implantation choisi (rotation autour du centroïde parcelle)
-    _applyImplantationAxis(units, label);
-    // Marque le pattern actif pour cohérence UI
-    cockpitState.scenarios[label].activePattern = patternValue;
-    renderParcelSvg(label);
-    updateConstraintsCount();
-    showToast(`Pattern ${patternValue} appliqué (axe ${(cockpitState.scenarios[label].implantationAxis || "N")})`);
+    // Récupère options user (axe, niveaux, COS)
+    const axisMap = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
+    const preferredAxisDeg = axisMap[s.implantationAxis || "N"];
+    const userPref = BARLO.site.detectUserLevelsPref(currentBody8D || {});
+    let scenLevels = userPref.maxLevels != null ? userPref.maxLevels
+        : (s.levels != null && s.levels !== "" ? Number(s.levels)
+        : (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== ""
+            ? Number(currentBody8D[`override_levels_${label}`])
+            : (currentBody8D[`${label}_levels`] != null ? Number(currentBody8D[`${label}_levels`]) : 3)));
+    const maxLevels = Math.max(0, isNaN(scenLevels) ? 3 : scenLevels);
+    const cosUser = s.cos != null && s.cos !== "" ? Number(s.cos) : null;
+    const cosMaxOpt = (cosUser && cosUser > 0 && cosUser <= 5) ? (cosUser > 1 ? cosUser / 100 : cosUser) : null;
+    // Appelle solver avec la seule stratégie ciblée
+    const result = BARLO.solver.solve(s.units, refs.siteAnalysis, {
+        strategies: [targetStrategy],
+        preferredAxisDeg, maxLevels, cosMax: cosMaxOpt,
+        topN: 3
+    });
+    if (result.reason !== "OK" || !result.candidates.length) {
+        // Pas de candidat valide → affiche le panel avec le diagnostic (comme "Générer propositions")
+        _lastSolverResult = _lastSolverResult || {};
+        _lastSolverResult[label] = result;
+        renderSolverPanel(label, result);
+        showToast(`Pattern ${patternValue} : ${result.reason} · voir panel`, true);
+        return;
+    }
+    // Sinon applique automatiquement le meilleur candidat
+    _lastSolverResult = _lastSolverResult || {};
+    _lastSolverResult[label] = result;
+    s.activePattern = patternValue;
+    applyCandidate(label, 0);
+    // Note : applyCandidate affiche déjà un toast et fait renderParcelSvg
 }
 
 // v9.7 — Applique une rotation à tous les polygones selon l'axis d'implantation choisi
