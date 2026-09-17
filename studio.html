@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.13-UNIF</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.14-SYNC</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6308,7 +6308,9 @@ function detectLayoutPattern(layoutMode, typologyDesc, configJustif) {
     return null;
 }
 
-// Applique un pattern d'implantation aux unités d'un scénario
+// v10.14 — SYNCHRONISATION : applyMoteurInitialLayout ne fait QUE détecter le pattern.
+// Le vrai placement est fait ensuite par le BARLO.solver (via reapplyPatternFromDropdown)
+// une fois que siteAnalysis est prêt (post-renderParcelSvg).
 function applyMoteurInitialLayout(label, L) {
     const scenario = cockpitState.scenarios[label];
     if (!scenario || !scenario.units || scenario.units.length === 0) return null;
@@ -6316,20 +6318,13 @@ function applyMoteurInitialLayout(label, L) {
     const typo = L[`${label}_typology_desc`] || L[`unit_mix_${label}`] || "";
     const justif = L[`${label}_config_justif`] || L.config_justification || "";
     let pattern = detectLayoutPattern(layoutMode, typo, justif);
-    // v8.3.0 — Fallback pattern : Jeremy veut TOUJOURS voir un placement initial.
-    // Défaut selon nombre d'unités : 1 = LAMELLE, 2 = SPLIT, 3-4 = U, 5+ = PLOT/compact
     if (!pattern) {
         const n = scenario.units.length;
         pattern = n <= 1 ? "LAMELLE" : n === 2 ? "SPLIT_AV_AR" : n <= 4 ? "U" : "PLOT";
     }
-    const units = scenario.units;
-    switch (pattern) {
-        case "SPLIT_AV_AR": _layoutSplit(units); break;
-        case "SUPERPOSE":   _layoutSuperpose(units); break;
-        case "U":           _layoutU(units); break;
-        case "LAMELLE":     _layoutLamelle(units); break;
-        case "PLOT":        _layoutPlot(units); break;
-    }
+    // v10.14 : on détecte le pattern MAIS on ne place PAS ici (BARLO.solver le fera).
+    // On mémorise pour que renderParcelSvg → post-render puisse lancer reapplyPatternFromDropdown.
+    scenario._pendingInitialPattern = pattern;
     return pattern;
 }
 
@@ -6628,6 +6623,35 @@ function renderMoteurBrief(label) {
     if (typoDesc) parts.push(`<div><strong style="color:#A78BFA">Typologies :</strong> ${esc(typoDesc)}</div>`);
     if (pilotisDesc && pilotisDesc !== "pas de pilotis") parts.push(`<div><strong style="color:#A78BFA">Pilotis :</strong> ${esc(pilotisDesc)}</div>`);
     if (configJustif) parts.push(`<div style="margin-top:.35rem;padding-top:.35rem;border-top:1px dashed rgba(139,92,246,0.3);color:var(--text2);font-style:italic">« ${esc(configJustif)} »</div>`);
+    // v10.14 — Widget État synchro : montre COS/Niveaux/Buildable calculés MAINTENANT depuis les sources
+    try {
+        const s = cockpitState.scenarios[label] || {};
+        const units = s.units || [];
+        const totalProgramArea = units.reduce((sum, u) => sum + (Number(u.unit_size_m2) || 0), 0);
+        const refs = _svgRefs[label];
+        const parcelArea = refs && refs.siteAnalysis ? Math.round(refs.siteAnalysis.parcelArea) : "?";
+        const buildableArea = refs && refs.siteAnalysis ? Math.round(refs.siteAnalysis.buildableArea) : "?";
+        const ctx = BARLO.site.detectContext(currentBody8D || {});
+        const cosUser = s.cos != null && s.cos !== "" ? Number(s.cos) : null;
+        const cosVal = (cosUser && cosUser > 0 && cosUser <= 5) ? (cosUser > 1 ? cosUser / 100 : cosUser) : BARLO.constraints.getCOSMax(ctx);
+        const userPref = BARLO.site.detectUserLevelsPref(currentBody8D || {});
+        const scenLvl = userPref.maxLevels != null ? userPref.maxLevels
+            : (s.levels != null && s.levels !== "" ? Number(s.levels)
+            : (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== ""
+                ? Number(currentBody8D[`override_levels_${label}`])
+                : (currentBody8D[`${label}_levels`] != null ? Number(currentBody8D[`${label}_levels`]) : 3)));
+        const maxLvl = Math.max(0, isNaN(scenLvl) ? 3 : scenLvl);
+        const lvlSrc = userPref.maxLevels != null ? "formulaire" : (s.levels ? "cockpit" : (currentBody8D[`override_levels_${label}`] ? "backend" : "défaut"));
+        const groundMax = parcelArea !== "?" ? Math.round(parcelArea * cosVal) : "?";
+        const totalCap = groundMax !== "?" ? Math.round(groundMax * (maxLvl + 1)) : "?";
+        const okColor = (parcelArea !== "?" && totalProgramArea <= parcelArea * cosVal * (maxLvl + 1)) ? "#22C55E" : "#F59E0B";
+        const syncHtml = `<div style="margin-top:.4rem;padding:.4rem;background:rgba(11,17,32,0.5);border-left:2px solid #A78BFA;border-radius:3px;font-size:.58rem;line-height:1.6;color:var(--text)">
+            <div style="color:#A78BFA;font-weight:700;font-size:.53rem;text-transform:uppercase;letter-spacing:.4px;margin-bottom:.15rem">🔗 État synchro pipeline</div>
+            <div>📐 <strong>Programme :</strong> <span style="color:${okColor}">${Math.round(totalProgramArea)}m²</span> · Parcelle ${parcelArea}m² · Buildable strict ${buildableArea}m²</div>
+            <div>🏙 <strong>Contexte :</strong> ${ctx} · <strong>COS ${(cosVal*100).toFixed(0)}%</strong> = ${groundMax}m²/niveau · <strong>Niveaux :</strong> ${maxLvl === 0 ? "plein-pied" : "R+" + maxLvl} <span style="color:var(--text2);font-style:italic">(${lvlSrc})</span> → cap ${totalCap}m²</div>
+        </div>`;
+        parts.push(syncHtml);
+    } catch (e) { console.warn("[MOTEUR-BRIEF] sync widget failed:", e); }
     container.innerHTML = parts.length ? parts.join("") : `<div style="color:var(--text2);font-style:italic">Le moteur n'a pas encore fourni de préconisation détaillée pour ce scénario.</div>`;
 }
 
@@ -6699,15 +6723,21 @@ function populateCockpitFromLead(L, units) {
         setInput(`cUnits${label}`, s.units_count);
         setInput(`cGap${label}`, s.gap_m);
         setInput(`cScnRat${label}`, s.rationale);
-        // v75.10.0 (Phase A.1) : applique le pattern moteur AVANT le rendu si détecté
+        // v10.14 — Détecte pattern initial suggéré par le moteur, applique EN SECOND
+        // (après renderParcelSvg pour que siteAnalysis existe et que BARLO.solver puisse tourner)
         const pattern = applyMoteurInitialLayout(label, L);
-        if (pattern) console.log(`[MOTEUR-INIT] Scénario ${label} : pattern ${pattern} appliqué`);
-        // v75.10.1 (Phase A.2) : capture baseline pour comparaison au save
+        if (pattern) console.log(`[MOTEUR-INIT] Scénario ${label} : pattern ${pattern} détecté`);
         captureBaselineFromMoteur(label, L);
         renderUnitsTable(label);
-        renderParcelSvg(label);
-        renderMoteurBrief(label);   // v75.8.9 : préconisation moteur affichée par scénario
-        historyReset(label);   // v8.2.0 : snapshot initial pour undo/redo
+        renderParcelSvg(label);   // → popule _svgRefs[label].siteAnalysis
+        renderMoteurBrief(label);
+        // v10.14 — Applique le placement via le VRAI solver BARLO maintenant que siteAnalysis existe
+        if (pattern && cockpitState.scenarios[label]._pendingInitialPattern) {
+            delete cockpitState.scenarios[label]._pendingInitialPattern;
+            // Utilise le pipeline unifié (mapping pattern → BARLO strategy + solver + apply)
+            try { reapplyPatternFromDropdown(label, pattern); } catch(e) { console.warn("[MOTEUR-INIT] Solver failed:", e); }
+        }
+        historyReset(label);
     });
 
     // v75.3.1 : après renderParcelSvg (qui a init segments via ensureSegments), rend le tableau des retraits
