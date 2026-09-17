@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.3-CLIP</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.4-BACK</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2889,6 +2889,7 @@ BARLO.packer.markOccupied = function(grid, cx, cy, w, h, angleDeg, unitId) {
 
 // Trouve la meilleure position pour une unité dans le grid
 // Retourne { cx, cy, w, h, angleDeg } ou null
+// v11.4 : opts.aspects override + opts.stepMul (1 = toutes positions, N = 1/N échantillonné)
 BARLO.packer.findPositionForUnit = function(grid, unit, siteAnalysis, opts) {
     opts = opts || {};
     const area = unit.targetArea || 50;
@@ -2921,8 +2922,9 @@ BARLO.packer.findPositionForUnit = function(grid, unit, siteAnalysis, opts) {
         if (a.inBuild !== b.inBuild) return b.inBuild - a.inBuild;
         return a.distC - b.distC;
     });
-    // Sample : teste 1 position sur 2 pour perf
-    const step = Math.max(1, Math.floor(positions.length / 100));
+    // v11.4 : stepMul dense (1) pour last-chance packing, sinon échantillonné à 100
+    const dense = opts.stepMul === 1 || opts.dense === true;
+    const step = dense ? 1 : Math.max(1, Math.floor(positions.length / 100));
     for (const aspect of aspects) {
         const w = Math.sqrt(area * aspect);
         const h = area / w;
@@ -2938,21 +2940,25 @@ BARLO.packer.findPositionForUnit = function(grid, unit, siteAnalysis, opts) {
     return null;
 };
 
-// Pack toutes les unités : priorité typologie + surface, place l'une après l'autre
-BARLO.packer.packAll = function(programUnits, siteAnalysis, opts) {
-    opts = opts || {};
+// Helper interne : pack UN ordre donné, retourne { units, unplaced }
+BARLO.packer._packOne = function(order, siteAnalysis, opts) {
     const grid = BARLO.packer.buildGrid(siteAnalysis);
-    const priority = { COMMERCE: 4, BUREAU: 3, ATELIER: 2, LOGT: 1, AUTRE: 0 };
-    const sorted = programUnits.slice().sort((a, b) => {
-        const pa = priority[BARLO.strategies._h.typoGroup(a.unit_type)] || 0;
-        const pb = priority[BARLO.strategies._h.typoGroup(b.unit_type)] || 0;
-        if (pa !== pb) return pb - pa;
-        return (b.targetArea || b.unit_size_m2 || 0) - (a.targetArea || a.unit_size_m2 || 0);
-    });
     const placed = [];
     const unplaced = [];
-    for (const u of sorted) {
-        const pos = BARLO.packer.findPositionForUnit(grid, u, siteAnalysis, opts);
+    const total = order.length;
+    for (let idx = 0; idx < total; idx++) {
+        const u = order[idx];
+        // v11.4 : LAST unit ou unit >= 3e = aspects étendus + toutes positions (dense scan)
+        const isLastChance = idx >= total - 1 || idx >= 2;
+        const findOpts = Object.assign({}, opts);
+        if (isLastChance) {
+            findOpts.aspects = [
+                BARLO.strategies._h.preferredAspect(u.unit_type),
+                1.5, 2.0, 1.2, 2.5, 1.0, 0.8, 3.0, 3.5, 4.0, 5.0, 0.5, 0.67
+            ];
+            findOpts.dense = true;
+        }
+        const pos = BARLO.packer.findPositionForUnit(grid, u, siteAnalysis, findOpts);
         if (pos) {
             const rad = pos.angleDeg * Math.PI / 180;
             const cos = Math.cos(rad), sin = Math.sin(rad);
@@ -2967,6 +2973,44 @@ BARLO.packer.packAll = function(programUnits, siteAnalysis, opts) {
         }
     }
     return { units: placed, unplaced, success: unplaced.length === 0 };
+};
+
+// v11.4 — Pack toutes les unités avec BACKTRACKING : essaie plusieurs ordres,
+// garde le meilleur (max placed). Stoppe dès qu'on atteint 100%.
+BARLO.packer.packAll = function(programUnits, siteAnalysis, opts) {
+    opts = opts || {};
+    const priority = { COMMERCE: 4, BUREAU: 3, ATELIER: 2, LOGT: 1, AUTRE: 0 };
+    const bySurfaceDesc = (a, b) => (b.targetArea || b.unit_size_m2 || 0) - (a.targetArea || a.unit_size_m2 || 0);
+    const bySurfaceAsc = (a, b) => (a.targetArea || a.unit_size_m2 || 0) - (b.targetArea || b.unit_size_m2 || 0);
+    const byTypoDesc = (a, b) => {
+        const pa = priority[BARLO.strategies._h.typoGroup(a.unit_type)] || 0;
+        const pb = priority[BARLO.strategies._h.typoGroup(b.unit_type)] || 0;
+        return pb - pa;
+    };
+    // Ordres candidats : typo puis grand→petit (défaut), petit→grand, grand→petit pur, ordre original
+    const orders = [
+        programUnits.slice().sort((a, b) => byTypoDesc(a, b) || bySurfaceDesc(a, b)),
+        programUnits.slice().sort(bySurfaceDesc),
+        programUnits.slice().sort(bySurfaceAsc),
+        programUnits.slice()
+    ];
+    // Déduplique par signature
+    const seen = new Set();
+    const uniqueOrders = orders.filter(o => {
+        const sig = o.map(u => u.id || u.unit_index).join(",");
+        if (seen.has(sig)) return false;
+        seen.add(sig);
+        return true;
+    });
+    let best = null;
+    for (let oi = 0; oi < uniqueOrders.length; oi++) {
+        const order = uniqueOrders[oi];
+        const attempt = BARLO.packer._packOne(order, siteAnalysis, opts);
+        console.log("[PACKER] order#" + oi + " → " + attempt.units.length + "/" + programUnits.length + " placed");
+        if (!best || attempt.units.length > best.units.length) best = attempt;
+        if (best.units.length >= programUnits.length) break; // FULL success
+    }
+    return best || { units: [], unplaced: programUnits.slice(), success: false };
 };
 
 // ─── PACKED : nouvelle stratégie utilisant le vrai packer 2D ───
