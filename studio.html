@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.10-HEKT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.11-COS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2079,54 +2079,95 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
         return { candidates: [], rejected: [], reason: "NO_PARCEL" };
     }
 
-    // v10.9 — Diagnostic pré-solve : compare surface demandée vs disponible
+    // v10.9/v10.11 — Diagnostic pré-solve enrichi (COS + niveaux + contexte)
     const totalDemande = programUnits.reduce((s, u) => s + (Number(u.unit_size_m2) || 50), 0);
     const parcelArea = siteAnalysis.parcelArea || BARLO.geometry.polygonArea(siteAnalysis.parcelPolygon);
     const buildableArea = siteAnalysis.buildableArea || 0;
-    const preDiag = { totalDemande, parcelArea: Math.round(parcelArea), buildableArea: Math.round(buildableArea) };
 
-    // Si surface demandée > 90% de la parcelle brute → physiquement impossible
-    if (totalDemande > parcelArea * 0.9) {
-        return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM", preDiag,
-            message: `Surface demandée ${Math.round(totalDemande)}m² > 90% de la parcelle ${Math.round(parcelArea)}m² · réduis les surfaces ou augmente les niveaux` };
+    // v10.11 — COS max selon contexte BARLO
+    const context = opts.context || BARLO.site.detectContext(currentBody8D || {});
+    const cosMax = (opts.cosMax != null) ? Number(opts.cosMax) : BARLO.constraints.getCOSMax(context);
+    const groundMaxArea = parcelArea * cosMax;
+
+    // v10.11 — Niveaux max autorisés par l'utilisateur (0 = plein pied, 1 = R+1, ...)
+    const maxLevels = (opts.maxLevels != null) ? Math.max(0, Math.floor(opts.maxLevels)) : 3;
+    const preDiag = {
+        totalDemande, parcelArea: Math.round(parcelArea), buildableArea: Math.round(buildableArea),
+        context, cosMax, groundMaxArea: Math.round(groundMaxArea), maxLevels,
+        totalCapacityWithLevels: Math.round(groundMaxArea * (maxLevels + 1))
+    };
+
+    // Si surface demandée > capacité totale AVEC niveaux → physiquement impossible
+    if (totalDemande > preDiag.totalCapacityWithLevels * 0.98) {
+        return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM_FOR_LEVELS", preDiag,
+            message: `Programme ${Math.round(totalDemande)}m² > capacité max ${preDiag.totalCapacityWithLevels}m² (COS ${(cosMax*100).toFixed(0)}% × ${maxLevels + 1} niveaux) · augmente les niveaux, réduis les surfaces, ou change la zone` };
     }
 
-    // v10.9 — Buildable strict OU parcelle brute - retraits basiques 3m si buildable dégénéré
+    // v10.11 — Fix fallback downgrade : half-plane clip inward par arête (repère m, y+ Nord)
+    function _buildableWithUniformSetback(setback_m) {
+        let poly = siteAnalysis.parcelPolygon.slice();
+        for (const e of (siteAnalysis.edges || [])) {
+            if (poly.length < 3) return [];
+            const ex = e.p2.x - e.p1.x, ey = e.p2.y - e.p1.y;
+            const el = Math.hypot(ex, ey) || 1;
+            let nx = -ey / el, ny = ex / el;
+            const midx = (e.p1.x + e.p2.x) / 2, midy = (e.p1.y + e.p2.y) / 2;
+            const toC = { x: siteAnalysis.centroid.x - midx, y: siteAnalysis.centroid.y - midy };
+            if (nx * toC.x + ny * toC.y < 0) { nx = -nx; ny = -ny; }
+            const ox = midx + nx * setback_m, oy = midy + ny * setback_m;
+            poly = BARLO.geometry.clipHalfPlane(poly, ox, oy, nx, ny);
+            if (!poly || poly.length < 3) return [];
+        }
+        return poly;
+    }
+
     let effectiveBuildable = siteAnalysis.buildablePolygon;
     let downgradeReason = null;
-    if (!effectiveBuildable || effectiveBuildable.length < 3 || buildableArea < parcelArea * 0.3
-        || buildableArea < totalDemande * 1.1) {
-        // Fallback : parcelle brute avec retrait uniforme minimum 3m
-        const shrunkPx = shrinkPolygonPx(
-            siteAnalysis.parcelPolygon.map(p => ({ x: p.x, y: -p.y })),   // temp SVG-style
-            3 // 3m uniform
-        );
-        effectiveBuildable = shrunkPx.map(p => ({ x: p.x, y: -p.y }));
-        downgradeReason = `Retraits stricts non tenables (buildable ${Math.round(buildableArea)}m² < surfaces demandées ${Math.round(totalDemande)}m²) — génération sur parcelle avec recul minimum 3m`;
+    if (!effectiveBuildable || effectiveBuildable.length < 3 || buildableArea < groundMaxArea * 0.6) {
+        // Downgrade 1 : retrait uniforme minimum 2m au lieu des retraits stricts
+        effectiveBuildable = _buildableWithUniformSetback(2);
+        downgradeReason = `Retraits stricts non tenables (buildable ${Math.round(buildableArea)}m² < COS×parcelle) — génération sur parcelle avec recul 2m uniforme`;
     }
-    // Si l'effectiveBuildable est encore trop petit, prend juste la parcelle brute
-    const effectiveArea = BARLO.geometry.polygonArea(effectiveBuildable);
-    if (effectiveArea < totalDemande * 1.05) {
+    // Si encore trop petit → parcelle brute (dernier recours)
+    let effectiveArea = BARLO.geometry.polygonArea(effectiveBuildable);
+    if (effectiveArea < groundMaxArea * 0.8) {
         effectiveBuildable = siteAnalysis.parcelPolygon;
+        effectiveArea = BARLO.geometry.polygonArea(effectiveBuildable);
         downgradeReason = (downgradeReason ? downgradeReason + " · " : "")
-            + `Recul 3m non tenable — génération sur parcelle brute (attention aux limites)`;
+            + `Recul 2m non tenable — génération sur parcelle brute`;
     }
-    // SiteAnalysis effective : on remplace le buildable pour la validation, le reste inchangé
     const effectiveSA = Object.assign({}, siteAnalysis, {
         buildablePolygon: effectiveBuildable,
-        buildableArea: BARLO.geometry.polygonArea(effectiveBuildable)
+        buildableArea: effectiveArea
     });
-    // Convertit programUnits (schema Barlo) en format solver
-    const program = programUnits.map((u, i) => ({
+
+    // v10.11 — Distribution multi-niveaux si programme > capacité au sol
+    // La capacité au sol EFFECTIVE = min(effectiveArea, groundMaxArea)
+    const effectiveGroundLimit = Math.min(effectiveArea * 0.95, groundMaxArea);
+    let programWithLevels = programUnits;
+    let levelDistribution = null;
+    if (totalDemande > effectiveGroundLimit) {
+        levelDistribution = BARLO.solver.distributeByLevels(programUnits, effectiveGroundLimit, maxLevels);
+        if (!levelDistribution) {
+            return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM_FOR_LEVELS", preDiag,
+                message: `Programme ${Math.round(totalDemande)}m² ne rentre pas dans ${Math.round(effectiveGroundLimit)}m² sol × ${maxLevels + 1} niveaux (COS ${(cosMax*100).toFixed(0)}%)` };
+        }
+        programWithLevels = levelDistribution.flatMap(l => l.units);
+        // Message informatif : combien d'unités par niveau
+        const distStr = levelDistribution.map((l, i) => `R+${i}: ${l.units.length}u (${Math.round(l.areaUsed)}m²)`).join(" · ");
+        downgradeReason = (downgradeReason ? downgradeReason + " · " : "")
+            + `Programme réparti sur niveaux : ${distStr}`;
+    }
+    // Convertit programWithLevels (schema Barlo + levels distribués) en format solver
+    const program = programWithLevels.map((u, i) => ({
         id: u.unit_index || i + 1,
         unit_index: u.unit_index || i + 1,
         unit_type: u.unit_type,
         unit_name: u.unit_name,
-        targetArea: Number(u.unit_size_m2) || 50,
-        unit_size_m2: Number(u.unit_size_m2) || 50,
+        targetArea: Number(u.targetArea || u.unit_size_m2) || 50,
+        unit_size_m2: Number(u.unit_size_m2 || u.targetArea) || 50,
         placement_sector: u.placement_sector,
-        level: u.level || 0,
-        // Preserve all other unit fields
+        level: u.level || 0,   // v10.11 : level assigné par distributeByLevels
         pilotis: u.pilotis, sous_sols: u.sous_sols, etages_unit: u.etages_unit,
         terrasse: u.terrasse, balcon: u.balcon, notes: u.notes
     }));
@@ -2625,6 +2666,47 @@ BARLO.strategies.LIST = ["LAMELLA", "PERIMETER", "U_SHAPE", "T_SHAPE", "STACKED"
 // AREA_TOLERANCE : marge sur la surface programmatique (±1% par défaut, aussi min 0.5m²)
 BARLO.constraints.AREA_TOLERANCE_PCT = 0.01;
 BARLO.constraints.AREA_TOLERANCE_ABS_M2 = 0.5;
+
+// v10.11 — Règle BARLO COS par contexte :
+//   Ville   : 60%
+//   Campagne: 45%
+//   Nature  : 30%
+BARLO.constraints.getCOSMax = function(context) {
+    const map = { ville: 0.60, campagne: 0.45, nature: 0.30 };
+    return map[String(context || "").toLowerCase()] || 0.60;
+};
+BARLO.site.detectContext = function(lead) {
+    lead = lead || {};
+    const scan = [
+        lead.zone, lead.zone_urbaine, lead.environnement, lead.context,
+        lead.site_type, lead.milieu, lead.type_environment, lead.location_type,
+        lead.city, lead.commune
+    ].map(v => String(v || "").toLowerCase()).join(" ");
+    if (/ville|urban|centre[- ]?ville|dens|douala|yaound[eé]/.test(scan)) return "ville";
+    if (/nature|for[eê]t|parc|montag/.test(scan)) return "nature";
+    if (/campagne|rural|village/.test(scan)) return "campagne";
+    return "ville";   // default cameroun urbain
+};
+
+// v10.11 — Distribue les unités sur niveaux 0..maxLevels selon groundMaxArea
+// Trie par surface décroissante puis first-fit sur chaque niveau
+BARLO.solver.distributeByLevels = function(program, groundMaxArea, maxLevels) {
+    const sorted = program.slice().sort((a, b) => (b.targetArea || 0) - (a.targetArea || 0));
+    const levels = Array.from({ length: maxLevels + 1 }, () => ({ units: [], areaUsed: 0 }));
+    for (const u of sorted) {
+        let placed = false;
+        for (let l = 0; l <= maxLevels; l++) {
+            if (levels[l].areaUsed + u.targetArea <= groundMaxArea + 0.5) {
+                levels[l].units.push(Object.assign({}, u, { level: l }));
+                levels[l].areaUsed += u.targetArea;
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) return null;
+    }
+    return levels;
+};
 
 // ─── HARD CONSTRAINTS : violation = rejet total du candidat ───
 BARLO.constraints.hard = {
@@ -5968,8 +6050,20 @@ function runSolverForScenario(label) {
     // Convertit l'orientation choisie en angleDeg pour le scorer
     const axisMap = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
     const preferredAxisDeg = axisMap[s.implantationAxis || "N"];
+    // v10.11 — Respecte le nombre de niveaux user (0 = plein pied)
+    const scenLevels = s.levels != null && s.levels !== "" ? Number(s.levels)
+        : (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== "" ? Number(currentBody8D[`override_levels_${label}`])
+        : (currentBody8D[`${label}_levels`] != null ? Number(currentBody8D[`${label}_levels`]) : 3));
+    // Force nombre non-négatif
+    const maxLevels = Math.max(0, isNaN(scenLevels) ? 3 : scenLevels);
+    // v10.11 — COS user override si défini
+    const cosUser = s.cos != null && s.cos !== "" ? Number(s.cos) : null;
+    const cosMaxOpt = (cosUser && cosUser > 0 && cosUser <= 5) ? (cosUser > 1 ? cosUser / 100 : cosUser) : null;
     try {
-        const result = BARLO.solver.solve(s.units, refs.siteAnalysis, { preferredAxisDeg, topN: 6 });
+        const result = BARLO.solver.solve(s.units, refs.siteAnalysis, {
+            preferredAxisDeg, topN: 6, maxLevels,
+            cosMax: cosMaxOpt   // null → auto-détection contexte
+        });
         _lastSolverResult = _lastSolverResult || {};
         _lastSolverResult[label] = result;
         renderSolverPanel(label, result);
@@ -5993,13 +6087,14 @@ function renderSolverPanel(label, result) {
     const debug = $(`cSolverDebug${label}`);
     if (!panel || !grid) return;
     panel.classList.add("active");
-    // v10.9 — Diagnostic Pre-Solve (surface demandée vs disponible)
+    // v10.9/v10.11 — Diagnostic pré-solve enrichi (COS + niveaux + contexte)
     const pd = result.preDiag;
-    const diagHtml = pd ? `<div style="font-size:.6rem;color:var(--text2);margin-bottom:.3rem;padding:.3rem;background:rgba(11,17,32,0.5);border-radius:4px">
-        📐 <strong>Programme :</strong> ${pd.totalDemande}m² · <strong>Parcelle :</strong> ${pd.parcelArea}m² · <strong>Buildable strict :</strong> ${pd.buildableArea}m²
+    const diagHtml = pd ? `<div style="font-size:.58rem;color:var(--text2);margin-bottom:.3rem;padding:.35rem;background:rgba(11,17,32,0.5);border-radius:4px;line-height:1.6">
+        📐 <strong>Programme :</strong> ${pd.totalDemande}m² · <strong>Parcelle :</strong> ${pd.parcelArea}m² · <strong>Buildable strict :</strong> ${pd.buildableArea}m²<br>
+        🏙 <strong>Contexte :</strong> ${pd.context} → <strong>COS max ${(pd.cosMax*100).toFixed(0)}%</strong> = ${pd.groundMaxArea}m² au sol · <strong>Niveaux max :</strong> ${pd.maxLevels === 0 ? "plein-pied" : "R+" + pd.maxLevels} → capacité totale <strong>${pd.totalCapacityWithLevels}m²</strong>
     </div>` : "";
-    if (result.reason === "TOO_MUCH_PROGRAM") {
-        title.textContent = "❌ Programme trop grand pour la parcelle";
+    if (result.reason === "TOO_MUCH_PROGRAM" || result.reason === "TOO_MUCH_PROGRAM_FOR_LEVELS") {
+        title.textContent = "❌ Programme trop grand pour cette parcelle/niveaux";
         grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#EF4444">${result.message}</div>`;
         debug.style.display = "none";
         return;
@@ -6087,6 +6182,8 @@ function applyCandidate(label, idx) {
         target.polygon = cu.polygonM.map(p => ({ x: p.x, y: p.y }));
         target.width_m = null; target.height_m = null;
         target.rotation_deg = null;
+        // v10.11 — Propage level assigné par distributeByLevels
+        if (cu.level != null) target.etages_unit = cu.level;
         // Recalcule offset centroïde pour compat drag legacy
         const c = polygonCentroidM(target.polygon);
         target.offset_x_m = Number(c.x.toFixed(2));
