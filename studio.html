@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.7-UX</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.8-VALID</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -872,6 +872,7 @@ function scenarioPanelTemplate(L) {
           <div class="c-toolbar-group">
             <span class="c-toolbar-label" style="color:#A78BFA">Solver :</span>
             <button type="button" class="c-tb-btn c-tb-btn-cyan" style="border-color:#A78BFA;color:#A78BFA" onclick="runSolverForScenario('${L}')" title="🧠 Génère plusieurs implantations valides via BARLO Site Layout Solver (multi-candidats + scoring + diversity)">🧠 Générer propositions</button>
+            <button type="button" class="c-tb-btn" style="border-color:#22C55E;color:#22C55E" onclick="validateScenarioImplantation('${L}')" title="✅ Fige la géométrie finale : sauvegarde les u.polygon comme scénario BARLO officiel (envoyé au PPTX et exportable Mapbox)">✅ Valider implantation</button>
           </div>
           <div class="c-toolbar-group">
             <span class="c-toolbar-label">Axe :</span>
@@ -5759,6 +5760,85 @@ function _applyImplantationAxis(units, label) {
             return { x: b.cx + dx * cos - dy * sin, y: b.cy + dx * sin + dy * cos };
         });
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.8 — BARLO.mapbox : Adapter geometry → GeoJSON lat/lon
+// ═══════════════════════════════════════════════════════════════════════════════
+// Convertit u.polygon (mètres locaux, y+ = Nord, origine centroïde parcelle)
+// vers GeoJSON FeatureCollection (coordonnées lat/lon WGS84).
+BARLO.mapbox.metersToLatLon = function(polyM, cLat, cLon) {
+    const R = 6371000;
+    const cosC = Math.cos(cLat * Math.PI / 180);
+    return polyM.map(p => {
+        const dLon = p.x / (R * cosC) * 180 / Math.PI;
+        const dLat = p.y / R * 180 / Math.PI;   // y+ = Nord dans notre convention
+        return [cLon + dLon, cLat + dLat];   // [lon, lat] pour GeoJSON
+    });
+};
+
+BARLO.mapbox.buildScenarioGeoJSON = function(units, parcelCentroidLatLon, scenarioLabel) {
+    if (!parcelCentroidLatLon) return null;
+    const { lat: cLat, lon: cLon } = parcelCentroidLatLon;
+    const features = units.filter(u => u.polygon && u.polygon.length >= 3).map(u => {
+        const coords = BARLO.mapbox.metersToLatLon(u.polygon, cLat, cLon);
+        coords.push(coords[0]);   // Close ring (GeoJSON convention)
+        return {
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [coords] },
+            properties: {
+                unit_index: u.unit_index,
+                unit_type: u.unit_type,
+                unit_name: u.unit_name,
+                target_area_m2: Number(u.unit_size_m2) || 0,
+                actual_area_m2: Math.round(polygonAreaM2(u.polygon)),
+                level: u.level || 0,
+                pilotis: !!u.pilotis,
+                sous_sols: u.sous_sols || 0,
+                terrasse: !!u.terrasse,
+                balcon: !!u.balcon,
+                scenario: scenarioLabel
+            }
+        };
+    });
+    return { type: "FeatureCollection", features };
+};
+
+// v10.8 — Bouton VALIDER : fige la géométrie manuelle actuelle et la persiste
+function validateScenarioImplantation(label) {
+    const s = cockpitState.scenarios[label];
+    if (!s || !s.units || s.units.length === 0) { showToast("Aucune unité à valider", true); return; }
+    // Matérialise tous les polygons (si certains sont encore rect)
+    s.units.forEach(u => ensureUnitPolygon(u));
+    // Marque le scénario comme validé
+    s.validated = true;
+    s.validatedAt = new Date().toISOString();
+    s.validatedGeometry = s.units.map(u => ({
+        unit_index: u.unit_index,
+        unit_name: u.unit_name,
+        polygon: u.polygon.slice(),
+        target_area_m2: Number(u.unit_size_m2) || 0,
+        actual_area_m2: Math.round(polygonAreaM2(u.polygon))
+    }));
+    // GeoJSON pour Mapbox (à utiliser dans la Phase G ou export externe)
+    if (currentBody8D && currentBody8D.site_polygon) {
+        const pts = currentBody8D.site_polygon.split(/[|;\n]/).map(p => {
+            const [lat, lon] = p.trim().split(",").map(Number);
+            return { lat, lon };
+        }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+        if (pts.length >= 3) {
+            const cLat = pts.reduce((a, p) => a + p.lat, 0) / pts.length;
+            const cLon = pts.reduce((a, p) => a + p.lon, 0) / pts.length;
+            s.geoJSON = BARLO.mapbox.buildScenarioGeoJSON(s.units, { lat: cLat, lon: cLon }, label);
+        }
+    }
+    // Save baseline pour history + toast
+    const totalArea = s.units.reduce((a, u) => a + (Number(u.unit_size_m2) || 0), 0);
+    const actualArea = s.units.reduce((a, u) => a + polygonAreaM2(u.polygon || []), 0);
+    showToast(`✅ Scénario ${label} validé : ${s.units.length} unités · ${Math.round(actualArea)}m² (cible ${totalArea}m²)`);
+    // Note : la persistance BDD durable arrivera en v10.4+ (migration SQL sb_lead_units polygon_json).
+    // En attendant, geoJSON est stocké dans cockpitState et transmis via override_units_detail à /generate-pptx.
+    console.log(`[BARLO validate] Scénario ${label} :`, s.validatedGeometry, s.geoJSON);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
