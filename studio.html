@@ -367,7 +367,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.2-STRAT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.3-SOLVE</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2019,6 +2019,128 @@ BARLO.geometry.polygonsIntersect = function(polyA, polyB, tolerancePx) {
     if (!clipped || clipped.length < 3) return 0;
     const a = polygonAreaXY(clipped);
     return a > tolerancePx ? a : 0;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.3 — BARLO.solver / .diversity : Générateur + Scorer + Diversity Filter
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Génère TOUS les candidats internes pour toutes les stratégies activées
+// puis valide (hard constraints) → score → diversifie → retourne le top N.
+BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
+    opts = opts || {};
+    const enabledStrategies = opts.strategies || BARLO.strategies.LIST;
+    const preferredAxisDeg = opts.preferredAxisDeg;
+    const topN = opts.topN || 6;
+    const maxCandidates = opts.maxCandidates || 200;
+
+    if (!programUnits || !programUnits.length) return { candidates: [], rejected: [], reason: "NO_PROGRAM" };
+    if (!siteAnalysis || !siteAnalysis.buildablePolygon || siteAnalysis.buildablePolygon.length < 3) {
+        return { candidates: [], rejected: [], reason: "NO_BUILDABLE" };
+    }
+    // Convertit programUnits (schema Barlo) en format solver
+    const program = programUnits.map((u, i) => ({
+        id: u.unit_index || i + 1,
+        unit_index: u.unit_index || i + 1,
+        unit_type: u.unit_type,
+        unit_name: u.unit_name,
+        targetArea: Number(u.unit_size_m2) || 50,
+        unit_size_m2: Number(u.unit_size_m2) || 50,
+        placement_sector: u.placement_sector,
+        level: u.level || 0,
+        // Preserve all other unit fields
+        pilotis: u.pilotis, sous_sols: u.sous_sols, etages_unit: u.etages_unit,
+        terrasse: u.terrasse, balcon: u.balcon, notes: u.notes
+    }));
+    // Génération de tous les candidats internes
+    const allCandidates = [];
+    const rejected = [];
+    for (const stratKey of enabledStrategies) {
+        const strat = BARLO.strategies[stratKey];
+        if (!strat || typeof strat.generate !== "function") continue;
+        try {
+            const cands = strat.generate(program, siteAnalysis, opts);
+            for (const c of cands) {
+                if (allCandidates.length >= maxCandidates) break;
+                const validation = BARLO.constraints.validate(c, siteAnalysis, opts);
+                if (!validation.valid) {
+                    rejected.push({ strategy: c.strategy, axisDeg: c.axisDeg, anchor: c.anchor,
+                        violations: validation.violations });
+                    continue;
+                }
+                // Score
+                const scoreObj = BARLO.constraints.score(c, siteAnalysis, { preferredAxisDeg });
+                c.score = scoreObj.totalScore;
+                c.scoreBreakdown = scoreObj.breakdown;
+                c.diagnostics = {
+                    valid: true, strategy: c.strategy, axisDeg: Math.round(c.axisDeg),
+                    programArea: program.reduce((s, u) => s + u.targetArea, 0),
+                    generatedArea: c.units.reduce((s, u) => s + BARLO.geometry.polygonArea(u.polygonM), 0).toFixed(1),
+                    orientationScore: scoreObj.breakdown.orientation.toFixed(3),
+                    siteFit: scoreObj.breakdown.siteFit.toFixed(3),
+                    complexity: scoreObj.breakdown.complexity.toFixed(3)
+                };
+                allCandidates.push(c);
+            }
+        } catch (e) {
+            console.warn("Strategy", stratKey, "failed:", e);
+        }
+    }
+    if (!allCandidates.length) {
+        return { candidates: [], rejected, reason: "NO_VALID_SOLUTION", program, siteAnalysis };
+    }
+    // Trie par score décroissant
+    allCandidates.sort((a, b) => b.score - a.score);
+    // Diversity filter : garde topN candidats différents
+    const diverse = BARLO.diversity.filter(allCandidates, topN);
+    // Assigne un ID unique à chaque candidat gardé
+    diverse.forEach((c, i) => { c.id = `cand_${c.strategy}_${i}_${Math.round(c.axisDeg)}_${c.score.toFixed(3)}`; });
+    return { candidates: diverse, rejected, reason: "OK",
+        total_generated: allCandidates.length + rejected.length,
+        total_valid: allCandidates.length,
+        total_shown: diverse.length };
+};
+
+// ─── DIVERSITY FILTER : réduit à N candidats vraiment différents ───
+// Similarité basée sur : strategy + centroïde moyen + axis + surface totale
+BARLO.diversity.SIMILARITY_THRESHOLD = 0.75;
+
+BARLO.diversity.similarity = function(a, b) {
+    if (!a || !b) return 0;
+    let s = 0;
+    // Same strategy = +0.4
+    if (a.strategy === b.strategy) s += 0.4;
+    // Same axis (±10°) = +0.2
+    const axisDelta = Math.abs(((a.axisDeg - b.axisDeg + 180) % 360) - 180);
+    if (axisDelta < 10) s += 0.2;
+    // Centroids proches (moyenne des centroïdes des unités) = jusqu'à +0.3
+    if (a.units.length === b.units.length) {
+        let cxA = 0, cyA = 0, cxB = 0, cyB = 0;
+        for (const u of a.units) { const c = BARLO.geometry.polygonCentroid(u.polygonM); cxA += c.x; cyA += c.y; }
+        for (const u of b.units) { const c = BARLO.geometry.polygonCentroid(u.polygonM); cxB += c.x; cyB += c.y; }
+        cxA /= a.units.length; cyA /= a.units.length;
+        cxB /= b.units.length; cyB /= b.units.length;
+        const dist = Math.hypot(cxA - cxB, cyA - cyB);
+        if (dist < 2) s += 0.3; else if (dist < 5) s += 0.15;
+    }
+    // Score proche = +0.1
+    if (Math.abs(a.score - b.score) < 0.02) s += 0.1;
+    return s;
+};
+
+BARLO.diversity.filter = function(candidates, topN) {
+    const kept = [];
+    const threshold = BARLO.diversity.SIMILARITY_THRESHOLD;
+    for (const c of candidates) {
+        // Rejette si trop proche d'un déjà gardé
+        let dup = false;
+        for (const k of kept) {
+            if (BARLO.diversity.similarity(c, k) > threshold) { dup = true; break; }
+        }
+        if (!dup) kept.push(c);
+        if (kept.length >= topN) break;
+    }
+    return kept;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
