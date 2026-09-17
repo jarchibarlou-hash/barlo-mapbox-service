@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.11-COS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.12-FORM</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2686,6 +2686,41 @@ BARLO.site.detectContext = function(lead) {
     if (/nature|for[eê]t|parc|montag/.test(scan)) return "nature";
     if (/campagne|rural|village/.test(scan)) return "campagne";
     return "ville";   // default cameroun urbain
+};
+
+// v10.12 — Détection préférence utilisateur "nombre d'étages souhaité" depuis le formulaire
+// Reconnaissance floue : scanne toutes les clés du lead qui matchent "etage(s)" et parse la valeur
+BARLO.site.detectUserLevelsPref = function(lead) {
+    if (!lead) return { maxLevels: null, strict: false, source: null };
+    // 1) Trouve la clé la plus probable
+    let value = null, sourceKey = null;
+    for (const key of Object.keys(lead)) {
+        const k = key.toLowerCase();
+        if (/(etage|niveau|nombre.*etage|nombre.*niveau|floors|storeys)/.test(k)
+            && !/etage_.$/.test(k)   // évite override_levels_A etc.
+            && !k.includes("override_")) {
+            const v = String(lead[key] || "").trim();
+            if (v) { value = v; sourceKey = key; break; }
+        }
+    }
+    if (!value) return { maxLevels: null, strict: false, source: null };
+    // 2) Parse la valeur textuelle
+    const vLow = value.toLowerCase();
+    let maxLevels = null;
+    if (/rdc.*(uniquement|seul|plein[- ]?pied)|plein[- ]?pied|^0$/.test(vLow)) maxLevels = 0;
+    else if (/r\+ ?1|^1$/.test(vLow)) maxLevels = 1;
+    else if (/r\+ ?2|^2$/.test(vLow)) maxLevels = 2;
+    else if (/r\+ ?3|^3$/.test(vLow)) maxLevels = 3;
+    else if (/r\+ ?4|^4$|4 ou plus|4\+|plus/.test(vLow)) maxLevels = 6;   // 4 ou plus → cap à 6
+    else if (/sans preference|sans préférence|barlo optimise|libre|optim/.test(vLow)) maxLevels = null;   // no override
+    else {
+        // Extrait n'importe quel chiffre
+        const m = vLow.match(/\d+/);
+        if (m) maxLevels = Math.max(0, Math.min(10, parseInt(m[0], 10)));
+    }
+    // 3) Détermine si strict (par défaut : oui — le user a fait un choix)
+    const strict = maxLevels != null && !(/sans preference|optim/.test(vLow));
+    return { maxLevels, strict, source: sourceKey, raw: value };
 };
 
 // v10.11 — Distribue les unités sur niveaux 0..maxLevels selon groundMaxArea
@@ -6050,11 +6085,21 @@ function runSolverForScenario(label) {
     // Convertit l'orientation choisie en angleDeg pour le scorer
     const axisMap = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
     const preferredAxisDeg = axisMap[s.implantationAxis || "N"];
-    // v10.11 — Respecte le nombre de niveaux user (0 = plein pied)
-    const scenLevels = s.levels != null && s.levels !== "" ? Number(s.levels)
-        : (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== "" ? Number(currentBody8D[`override_levels_${label}`])
-        : (currentBody8D[`${label}_levels`] != null ? Number(currentBody8D[`${label}_levels`]) : 3));
-    // Force nombre non-négatif
+    // v10.12 — Priorité : (1) préférence user formulaire (2) override scénario (3) levels backend (4) default
+    const userPref = BARLO.site.detectUserLevelsPref(currentBody8D || {});
+    let scenLevels;
+    if (userPref.maxLevels != null) {
+        scenLevels = userPref.maxLevels;
+        console.log(`[BARLO solver] Préférence user formulaire : "${userPref.raw}" → maxLevels=${userPref.maxLevels} (strict=${userPref.strict})`);
+    } else if (s.levels != null && s.levels !== "") {
+        scenLevels = Number(s.levels);
+    } else if (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== "") {
+        scenLevels = Number(currentBody8D[`override_levels_${label}`]);
+    } else if (currentBody8D[`${label}_levels`] != null) {
+        scenLevels = Number(currentBody8D[`${label}_levels`]);
+    } else {
+        scenLevels = 3;
+    }
     const maxLevels = Math.max(0, isNaN(scenLevels) ? 3 : scenLevels);
     // v10.11 — COS user override si défini
     const cosUser = s.cos != null && s.cos !== "" ? Number(s.cos) : null;
