@@ -221,6 +221,9 @@
         .c-tb-btn-cyan:hover{background:#06B6D4;color:#0B1120;border-color:#06B6D4}
         .c-tb-btn-dim{background:transparent;color:var(--text2);border-color:transparent}
         .c-toolbar-edge{background:rgba(6,182,212,0.06);padding:.25rem .4rem;border-radius:4px}
+        /* v9.7 — Boutons orientation axe compass */
+        .axis-btn{min-width:26px;padding:.25rem .35rem;font-size:.6rem;font-weight:700;letter-spacing:.3px}
+        .axis-btn.active{background:#c9a878;color:#0B1120;border-color:#c9a878}
         /* v75.4.0 — Rectangles unités draggables */
         .draggable-unit{cursor:grab}
         .draggable-unit.dragging{cursor:grabbing;opacity:.9}
@@ -364,7 +367,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.6-MEAS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.7-AXIS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -552,7 +555,9 @@ function emptyScenarioState() {
     return {
         cos: "", layout: "", target_sdp: "", fp: "", levels: "", units_count: "", gap_m: "",
         rationale: "",
-        units: []   // [{ unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes }]
+        units: [],   // [{ unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes, polygon }]
+        implantationAxis: "N",   // v9.7 : axe d'implantation actuel (rotation des patterns)
+        activePattern: null      // v9.7 : dernier pattern appliqué (pour ré-appliquer sur changement d'axe)
     };
 }
 
@@ -835,15 +840,28 @@ function scenarioPanelTemplate(L) {
       <div class="c-section">
         <h4>🧭 Preview de l'implantation sur la parcelle <span class="c-hint">— sommets A, B, C… correspondent au tableau des segments</span></h4>
 
-        <!-- v8.0.0 — Toolbar patterns (générateurs) -->
+        <!-- v9.7 — Toolbar patterns validés + orientation 8 axes -->
         <div class="c-preview-toolbar" id="cPreviewToolbar${L}">
           <div class="c-toolbar-group">
             <span class="c-toolbar-label">Pattern :</span>
-            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SPLIT_AV_AR')" title="Split avant/arrière (2 blocs face-à-face)">⚌ Split</button>
-            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SUPERPOSE')" title="Blocs superposés / mitoyens">▤ Superposé</button>
-            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','U')" title="Implantation en U autour d'une cour">⊔ U</button>
-            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','LAMELLE')" title="Barre allongée (lamellé) le long d'un côté">▬ Lamellé</button>
-            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','PLOT')" title="Plots compacts en semis">▦ Compact</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','LAMELLE')" title="Lamellé — barre allongée E-W centrée">▬ Lamellé</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','BORDURE')" title="Bordure — unités contre le bord Nord de parcelle">╱ Bordure</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','U')" title="U — 3 bras autour d'une cour au Sud">⊔ U</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','T')" title="T — barre horizontale Nord + verticale Sud">╤ T</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SUPERPOSE')" title="Superposé — bandes empilées mitoyennes">▤ Superposé</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','DECALE')" title="Décalé — unités en zigzag alterné">↯ Décalé</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SPLIT_AV_AR')" title="Split — 2 groupes séparés Nord/Sud">⚌ Split</button>
+          </div>
+          <div class="c-toolbar-group">
+            <span class="c-toolbar-label">Axe :</span>
+            <button type="button" class="c-tb-btn axis-btn active" data-scn="${L}" data-axis="N"  onclick="setImplantationAxis('${L}','N')"  title="Orientation Nord">N</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="NE" onclick="setImplantationAxis('${L}','NE')" title="Orientation NE">NE</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="E"  onclick="setImplantationAxis('${L}','E')"  title="Orientation Est">E</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="SE" onclick="setImplantationAxis('${L}','SE')" title="Orientation SE">SE</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="S"  onclick="setImplantationAxis('${L}','S')"  title="Orientation Sud">S</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="SW" onclick="setImplantationAxis('${L}','SW')" title="Orientation SW">SW</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="W"  onclick="setImplantationAxis('${L}','W')"  title="Orientation Ouest">W</button>
+            <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="NW" onclick="setImplantationAxis('${L}','NW')" title="Orientation NW">NW</button>
           </div>
         </div>
 
@@ -4818,17 +4836,57 @@ async function logMoteurFeedback(label) {
 function reapplyPatternFromDropdown(label, patternValue) {
     const units = cockpitState.scenarios[label].units || [];
     if (units.length === 0) { showToast("Ajoute d'abord des unités", true); return; }
+    historyPush(label);
     // Reset les offset/polygon custom pour laisser le pattern s'appliquer
     units.forEach(u => { u.offset_x_m = null; u.offset_y_m = null; u.polygon = null; u.rotation_deg = null; });
     if (patternValue === "SPLIT_AV_AR") _layoutSplit(units);
     else if (patternValue === "SUPERPOSE") _layoutSuperpose(units);
     else if (patternValue === "U") _layoutU(units);
     else if (patternValue === "LAMELLE") _layoutLamelle(units);
+    else if (patternValue === "BORDURE") _layoutBordure(units);
+    else if (patternValue === "T") _layoutT(units);
+    else if (patternValue === "DECALE") _layoutDecale(units);
     else if (patternValue === "PLOT") _layoutPlot(units);
     else return;
+    // v9.7 — Applique l'axe d'implantation choisi (rotation autour du centroïde parcelle)
+    _applyImplantationAxis(units, label);
+    // Marque le pattern actif pour cohérence UI
+    cockpitState.scenarios[label].activePattern = patternValue;
     renderParcelSvg(label);
     updateConstraintsCount();
-    showToast(`Pattern ${patternValue} appliqué sur scénario ${label}`);
+    showToast(`Pattern ${patternValue} appliqué (axe ${(cockpitState.scenarios[label].implantationAxis || "N")})`);
+}
+
+// v9.7 — Applique une rotation à tous les polygones selon l'axis d'implantation choisi
+function _applyImplantationAxis(units, label) {
+    const s = cockpitState.scenarios[label];
+    const axis = s.implantationAxis || "N";
+    // N par défaut : rotation 0
+    const angleMap = { "N": 0, "NE": -45, "E": -90, "SE": -135, "S": 180, "SW": 135, "W": 90, "NW": 45 };
+    const angleDeg = angleMap[axis] || 0;
+    if (Math.abs(angleDeg) < 0.1) return;
+    const b = _getBuildableBoundsM(label);
+    const rad = angleDeg * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    units.forEach(u => {
+        if (!u.polygon || u.polygon.length < 3) return;
+        u.polygon = u.polygon.map(p => {
+            const dx = p.x - b.cx, dy = p.y - b.cy;
+            return { x: b.cx + dx * cos - dy * sin, y: b.cy + dx * sin + dy * cos };
+        });
+    });
+}
+
+// v9.7 — Change l'axe d'implantation d'un scénario et ré-applique le dernier pattern
+function setImplantationAxis(label, axis) {
+    const s = cockpitState.scenarios[label];
+    if (!s) return;
+    s.implantationAxis = axis;
+    // Met à jour l'UI (bouton actif)
+    document.querySelectorAll(`.axis-btn[data-scn="${label}"]`).forEach(b => b.classList.toggle("active", b.dataset.axis === axis));
+    // Ré-applique le pattern actif s'il existe
+    if (s.activePattern) reapplyPatternFromDropdown(label, s.activePattern);
+    else { renderParcelSvg(label); showToast(`Axe ${axis} · clique un pattern pour appliquer`); }
 }
 
 // ═══ v75.10.0 (Phase A.1) — Détection layout moteur → formes initiales fidèles ═══
@@ -5042,7 +5100,80 @@ function _layoutLamelle(units) {
     });
 }
 
-// ─────── COMPACT / PLOT : grille N×M centrée ───────
+// ─────── BORDURE : unités alignées le long de la limite Nord (bord de parcelle) ───────
+function _layoutBordure(units) {
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    // Bande contre le bord Nord de la parcelle
+    const yCenter = b.maxY - 2 - Math.sqrt(Math.max(...units.map(u => Number(u.unit_size_m2) || 50))) * 0.5;
+    const bandW = b.w * 0.94;
+    const gap = 1;
+    const perW = (bandW - (N - 1) * gap) / N;
+    units.forEach((u, i) => {
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const aspect = (perW * perW) / area;
+        const cx = b.minX + b.w * 0.03 + (i + 0.5) * (perW + gap);
+        const poly = _makeRectPolygonM(cx, yCenter, area, aspect);
+        _assignUnitPoly(u, poly, "N");
+    });
+}
+
+// ─────── T : 1 barre horizontale Nord + 1 barre verticale descendant vers Sud ───────
+function _layoutT(units) {
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    if (N < 2) { _layoutBordure(units); return; }
+    // Moitié pour barre horizontale, moitié pour barre verticale
+    const nHoriz = Math.ceil(N / 2);
+    const nVert = N - nHoriz;
+    // Barre horizontale au Nord
+    const yHoriz = b.maxY - 3;
+    const wBarH = b.w * 0.7;
+    const perW = (wBarH - (nHoriz - 1)) / nHoriz;
+    for (let i = 0; i < nHoriz; i++) {
+        const u = units[i];
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const cx = b.cx - wBarH/2 + (i + 0.5) * (perW + 1);
+        const poly = _makeRectPolygonM(cx, yHoriz, area, (perW * perW) / area);
+        _assignUnitPoly(u, poly, "N");
+    }
+    // Barre verticale centrée qui descend vers le Sud
+    const xVert = b.cx;
+    const totalHVert = b.h * 0.55;
+    for (let i = 0; i < nVert; i++) {
+        const u = units[nHoriz + i];
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const hPerVert = totalHVert / nVert;
+        const cy = yHoriz - 3 - (i + 0.5) * hPerVert;
+        const wVert = area / hPerVert;
+        const poly = _makeRectPolygonM(xVert, cy, area, (wVert * wVert) / area);
+        _assignUnitPoly(u, poly, "S");
+    }
+}
+
+// ─────── DÉCALÉ : unités en zigzag, chaque décalée par rapport à la précédente ───────
+function _layoutDecale(units) {
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    const totalH = b.h * 0.85;
+    const perH = totalH / N;
+    const dxStep = b.w * 0.15;   // décalage horizontal entre 2 unités successives
+    units.forEach((u, i) => {
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const w = Math.min(b.w * 0.5, Math.sqrt(area * 1.5));
+        const h = area / w;
+        const dir = (i % 2 === 0) ? -1 : 1;
+        const cx = b.cx + dir * dxStep;
+        const cy = b.maxY - b.h * 0.075 - (i + 0.5) * perH;
+        const poly = _makeRectPolygonM(cx, cy, area, (w * w) / area);
+        _assignUnitPoly(u, poly, dir < 0 ? "W" : "E");
+    });
+}
+
+// ─────── COMPACT / PLOT : grille N×M centrée (v9.6 : conservé mais non recommandé) ───────
 function _layoutPlot(units) {
     const label = cockpitState.activeTab || "A";
     const b = _getBuildableBoundsM(label);
