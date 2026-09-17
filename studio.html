@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.6-STRAT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.7-PERM</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -3007,35 +3007,57 @@ BARLO.packer.packAll = function(programUnits, siteAnalysis, opts) {
         const pb = priority[BARLO.strategies._h.typoGroup(b.unit_type)] || 0;
         return pb - pa;
     };
-    // Ordres candidats : typo puis grand→petit (défaut), petit→grand, grand→petit pur, ordre original
-    const orders = [
-        programUnits.slice().sort((a, b) => byTypoDesc(a, b) || bySurfaceDesc(a, b)),
-        programUnits.slice().sort(bySurfaceDesc),
-        programUnits.slice().sort(bySurfaceAsc),
-        programUnits.slice()
-    ];
-    // Déduplique par signature
+    // v11.7 — Ordres canoniques + PERMUTATIONS EXHAUSTIVES si N ≤ 4 (24 max)
+    // Quand toutes les unités sont identiques (3 × Logt 50m²), les tris canoniques donnent tous
+    // la même signature → 1 seul ordre effectif → le packer ne peut pas débloquer un blocage.
+    // Les permutations exhaustives couvrent tous les enchaînements possibles.
+    const orders = [];
+    if (programUnits.length <= 4) {
+        // Génère toutes les permutations
+        const permute = (arr) => {
+            if (arr.length <= 1) return [arr];
+            const result = [];
+            for (let i = 0; i < arr.length; i++) {
+                const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+                for (const p of permute(rest)) result.push([arr[i], ...p]);
+            }
+            return result;
+        };
+        orders.push(...permute(programUnits));
+    } else {
+        // N > 4 : reste sur les ordres canoniques (24 permutations = 24^5=trop pour N=5)
+        orders.push(
+            programUnits.slice().sort((a, b) => byTypoDesc(a, b) || bySurfaceDesc(a, b)),
+            programUnits.slice().sort(bySurfaceDesc),
+            programUnits.slice().sort(bySurfaceAsc),
+            programUnits.slice()
+        );
+    }
+    // Déduplique par signature (position-based pour permutations)
     const seen = new Set();
     const uniqueOrders = orders.filter(o => {
-        const sig = o.map(u => u.id || u.unit_index).join(",");
+        const sig = o.map((u, i) => (u.id != null ? u.id : u.unit_index != null ? u.unit_index : i) + "@" + i).join(",");
         if (seen.has(sig)) return false;
         seen.add(sig);
         return true;
     });
-    // v11.6 — Halos décroissants : 1.5m (aéré) → 0.5m (moyen) → 0 (serré)
-    // Le halo crée un espace entre unités pour aérer l'implantation, meilleur pour la qualité perçue.
-    // On tente d'abord aéré ; si tout ne rentre pas, on serre progressivement.
-    const halos = [1.5, 0.5, 0];
+    // v11.7 — Halos décroissants : 0.8m (léger) → 0.3m (mini) → 0 (serré).
+    // v11.6 avait 1.5m au début, trop grand pour petites parcelles → régression 3/3 → 2/3.
+    // v11.7 démarre à 0.8m pour maximiser les 3/3 tout en gardant un peu d'air.
+    const halos = [0.8, 0.3, 0];
     let best = null;
+    let attemptsCount = 0;
     outer: for (const halo of halos) {
         for (let oi = 0; oi < uniqueOrders.length; oi++) {
             const order = uniqueOrders[oi];
             const attempt = BARLO.packer._packOne(order, siteAnalysis, Object.assign({}, opts, { halo }));
-            console.log("[PACKER] halo=" + halo + "m order#" + oi + " → " + attempt.units.length + "/" + programUnits.length + " placed");
+            attemptsCount++;
             if (!best || attempt.units.length > best.units.length) best = attempt;
             if (best.units.length >= programUnits.length) break outer; // FULL success
         }
     }
+    // v11.7 : log récapitulatif compact (au lieu de N logs par tentative)
+    console.log("[PACKER] " + attemptsCount + " tentatives (" + uniqueOrders.length + " ordres × halos) → best " + best.units.length + "/" + programUnits.length + " placed" + (best.units.length >= programUnits.length ? " ✅" : " ⚠"));
     return best || { units: [], unplaced: programUnits.slice(), success: false };
 };
 
