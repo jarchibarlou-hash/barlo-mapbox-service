@@ -364,7 +364,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.2-CMD</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.5-SOLVE</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -4798,98 +4798,193 @@ function applyMoteurInitialLayout(label, L) {
     return pattern;
 }
 
-// Pattern SPLIT AV/AR : 2 volumes séparés Nord (avant) / Sud (arrière)
+// ═══════════════════════════════════════════════════════════════════════════════
+// v9.5 — LAYOUT SOLVER : les patterns produisent de vrais polygones respectant :
+//   - la surface CIBLE de chaque unité (aire polygonale exacte)
+//   - les bounds du buildable polygon (parcelle - retraits)
+//   - l'orientation (Nord en haut = y+ en mètres)
+// Chaque unité reçoit u.polygon = [{x_m, y_m}, ...] avec aire = unit_size_m2.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Retourne les bounds du buildable polygon en mètres (repère parcelle centré)
+function _getBuildableBoundsM(label) {
+    const refs = _svgRefs[label];
+    if (!refs) {
+        // Fallback conservateur si render pas encore fait
+        return { minX: -18, maxX: 18, minY: -18, maxY: 18, cx: 0, cy: 0, w: 36, h: 36 };
+    }
+    const buildable = refs.svgPtsBuildable || [];
+    if (buildable.length < 3) return { minX: -18, maxX: 18, minY: -18, maxY: 18, cx: 0, cy: 0, w: 36, h: 36 };
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    buildable.forEach(p => {
+        const xm = (p.x - refs.cxSvg) / refs.scale;
+        const ym = -(p.y - refs.cySvg) / refs.scale;
+        if (xm < minX) minX = xm;
+        if (xm > maxX) maxX = xm;
+        if (ym < minY) minY = ym;
+        if (ym > maxY) maxY = ym;
+    });
+    return {
+        minX, maxX, minY, maxY,
+        cx: (minX + maxX) / 2, cy: (minY + maxY) / 2,
+        w: maxX - minX, h: maxY - minY
+    };
+}
+
+// Fabrique un polygon rectangle (4 vertices en m) de surface cible EXACTE
+function _makeRectPolygonM(cx, cy, targetAreaM2, aspectRatio) {
+    const w = Math.sqrt(targetAreaM2 * aspectRatio);
+    const h = targetAreaM2 / w;
+    return [
+        { x: cx - w/2, y: cy + h/2 },  // NW
+        { x: cx + w/2, y: cy + h/2 },  // NE
+        { x: cx + w/2, y: cy - h/2 },  // SE
+        { x: cx - w/2, y: cy - h/2 }   // SW
+    ];
+}
+
+// Assigne polygon + placement_sector à une unité (helper commun)
+function _assignUnitPoly(u, polyM, sector) {
+    u.polygon = polyM;
+    u.placement_sector = sector;
+    // Reset legacy pour cohérence (le polygon est la vérité)
+    u.width_m = null;
+    u.height_m = null;
+    u.offset_x_m = null;
+    u.offset_y_m = null;
+    u.rotation_deg = null;
+}
+
+// ─────── SPLIT AV/AR : moitié N (avant), moitié S (arrière), respect bounds ───────
 function _layoutSplit(units) {
-    const half = Math.ceil(units.length / 2);
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    const half = Math.ceil(N / 2);
+    const nNorth = half, nSouth = N - half;
+    const bandH = Math.min(b.h * 0.4, 12);
+    const yNorth = b.cy + b.h * 0.25;
+    const ySouth = b.cy - b.h * 0.25;
     units.forEach((u, i) => {
-        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;  // respecte modif manuelle
         const area = Math.max(4, Number(u.unit_size_m2) || 50);
-        u.width_m = Number(Math.sqrt(area * 1.5).toFixed(2));
-        u.height_m = Number((area / u.width_m).toFixed(2));
-        u.rotation_deg = 0;
-        if (i < half) {
-            u.placement_sector = "N";
-            u.offset_x_m = (i - (half - 1) / 2) * 3;
-            u.offset_y_m = 12;
-        } else {
-            u.placement_sector = "S";
-            u.offset_x_m = (i - half - (units.length - half - 1) / 2) * 3;
-            u.offset_y_m = -12;
-        }
+        const isNorth = i < half;
+        const nInBand = isNorth ? nNorth : nSouth;
+        const idxInBand = isNorth ? i : (i - half);
+        const y = isNorth ? yNorth : ySouth;
+        // Répartis horizontalement centrés dans les bounds
+        const gap = 2;
+        const bandW = b.w * 0.9;
+        const wPer = bandW / nInBand - gap;
+        const aspectPer = Math.max(0.5, wPer * wPer / area);
+        const poly = _makeRectPolygonM(
+            b.cx - bandW/2 + (idxInBand + 0.5) * (bandW / nInBand),
+            y,
+            area,
+            aspectPer
+        );
+        _assignUnitPoly(u, poly, isNorth ? "N" : "S");
     });
 }
 
-// Pattern SUPERPOSE : 1 volume compact centré, orienté sud pour ensoleillement
+// ─────── SUPERPOSE : bandes horizontales EMPILÉES verticalement ───────
 function _layoutSuperpose(units) {
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    // Pile du Sud vers le Nord (mitoyen vertical)
+    const totalArea = units.reduce((s, u) => s + (Number(u.unit_size_m2) || 50), 0);
+    const w = Math.min(b.w * 0.85, Math.sqrt(totalArea * 1.2));
+    let yCursor = b.minY + 2;
     units.forEach((u, i) => {
-        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
         const area = Math.max(4, Number(u.unit_size_m2) || 50);
-        u.width_m = Number(Math.sqrt(area * 1.3).toFixed(2));
-        u.height_m = Number((area / u.width_m).toFixed(2));
-        u.rotation_deg = 0;
-        u.placement_sector = "S";
-        u.offset_x_m = (i - (units.length - 1) / 2) * 2;
-        u.offset_y_m = -3;
+        const h = area / w;
+        const poly = _makeRectPolygonM(b.cx, yCursor + h/2, area, (w * w) / area);
+        _assignUnitPoly(u, poly, i === 0 ? "S" : (i < N/2 ? "S" : "N"));
+        yCursor += h + 0.5;
     });
 }
 
-// Pattern U : 3 bras (nord + ouest + est) autour d'une cour sud
+// ─────── U : 3 bras (Nord, Ouest, Est) autour d'une cour au Sud ───────
 function _layoutU(units) {
-    const N = units.length;
+    const N = units.length; if (N === 0) return;
     if (N < 3) { _layoutSuperpose(units); return; }
-    const perArm = Math.max(1, Math.floor(N / 3));
-    units.forEach((u, i) => {
-        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
-        const arm = Math.min(2, Math.floor(i / perArm));
-        const posInArm = i - arm * perArm;
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    // Répartis : 1 unité N + reste en W et E
+    // Simplification : 1/3 par bras si N%3==0, sinon extras au Nord
+    const nNorth = Math.ceil(N / 3);
+    const nWestEast = N - nNorth;
+    const nWest = Math.ceil(nWestEast / 2);
+    const nEast = nWestEast - nWest;
+    // Bras nord : bande horizontale en haut
+    for (let i = 0; i < nNorth; i++) {
+        const u = units[i];
         const area = Math.max(4, Number(u.unit_size_m2) || 50);
-        u.width_m = Number(Math.sqrt(area * 1.2).toFixed(2));
-        u.height_m = Number((area / u.width_m).toFixed(2));
-        if (arm === 0) {
-            u.placement_sector = "N"; u.rotation_deg = 0;
-            u.offset_x_m = (posInArm - (perArm - 1) / 2) * 4;
-            u.offset_y_m = 12;
-        } else if (arm === 1) {
-            u.placement_sector = "W"; u.rotation_deg = 90;
-            u.offset_x_m = -10;
-            u.offset_y_m = 6 - posInArm * 4;
-        } else {
-            u.placement_sector = "E"; u.rotation_deg = 90;
-            u.offset_x_m = 10;
-            u.offset_y_m = 6 - posInArm * 4;
-        }
-    });
+        const armW = b.w * 0.9 / nNorth - 1;
+        const cx = b.minX + b.w * 0.05 + (i + 0.5) * (b.w * 0.9 / nNorth);
+        const cy = b.maxY - Math.sqrt(area) * 0.6;
+        const poly = _makeRectPolygonM(cx, cy, area, (armW * armW) / area);
+        _assignUnitPoly(u, poly, "N");
+    }
+    // Bras Ouest : colonne verticale à gauche
+    for (let i = 0; i < nWest; i++) {
+        const u = units[nNorth + i];
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const cx = b.minX + Math.sqrt(area) * 0.6;
+        const cy = b.cy - i * (Math.sqrt(area) + 1);
+        const armH = area / (b.w * 0.15);
+        const poly = _makeRectPolygonM(cx, cy, area, (b.w * 0.15) * (b.w * 0.15) / area);
+        _assignUnitPoly(u, poly, "W");
+    }
+    // Bras Est : colonne verticale à droite
+    for (let i = 0; i < nEast; i++) {
+        const u = units[nNorth + nWest + i];
+        const area = Math.max(4, Number(u.unit_size_m2) || 50);
+        const cx = b.maxX - Math.sqrt(area) * 0.6;
+        const cy = b.cy - i * (Math.sqrt(area) + 1);
+        const poly = _makeRectPolygonM(cx, cy, area, (b.w * 0.15) * (b.w * 0.15) / area);
+        _assignUnitPoly(u, poly, "E");
+    }
 }
 
-// Pattern LAMELLE : rectangles longs (aspect 3:1) alignés sur segment sud
+// ─────── LAMELLÉ : rangée horizontale (barre allongée E-W) ───────
 function _layoutLamelle(units) {
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    const y = b.cy;
+    const bandW = b.w * 0.92;
+    const gap = 1;
+    const perW = (bandW - (N - 1) * gap) / N;
     units.forEach((u, i) => {
-        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
         const area = Math.max(4, Number(u.unit_size_m2) || 50);
-        u.width_m = Number(Math.sqrt(area * 3).toFixed(2));   // aspect 3:1
-        u.height_m = Number((area / u.width_m).toFixed(2));
-        u.rotation_deg = 0;
-        u.placement_sector = "S";
-        u.offset_x_m = 0;
-        u.offset_y_m = -12 + i * 6;
+        // Aspect 3:1 → longueur = 3× hauteur, mais compressé si N unités partagent la bande
+        const aspect = (perW * perW) / area;
+        const cx = b.minX + b.w * 0.04 + (i + 0.5) * (perW + gap);
+        const poly = _makeRectPolygonM(cx, y, area, aspect);
+        _assignUnitPoly(u, poly, "S");
     });
 }
 
-// Pattern PLOT : carré compact (aspect 1:1), placement en grille
+// ─────── COMPACT / PLOT : grille N×M centrée ───────
 function _layoutPlot(units) {
-    const cols = Math.max(1, Math.ceil(Math.sqrt(units.length)));
+    const label = cockpitState.activeTab || "A";
+    const b = _getBuildableBoundsM(label);
+    const N = units.length; if (N === 0) return;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(N)));
+    const rows = Math.ceil(N / cols);
+    const gap = 1.5;
+    const cellW = (b.w * 0.9 - (cols - 1) * gap) / cols;
+    const cellH = (b.h * 0.9 - (rows - 1) * gap) / rows;
     units.forEach((u, i) => {
-        if (u.polygon || (u.offset_x_m != null && u.offset_y_m != null)) return;
         const area = Math.max(4, Number(u.unit_size_m2) || 50);
-        const side = Number(Math.sqrt(area).toFixed(2));
-        u.width_m = side;
-        u.height_m = side;
-        u.rotation_deg = 0;
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        u.offset_x_m = (col - (cols - 1) / 2) * (side + 2);
-        u.offset_y_m = -(row - 0) * (side + 2);
-        u.placement_sector = "S";
+        const col = i % cols, row = Math.floor(i / cols);
+        const cx = b.minX + b.w * 0.05 + (col + 0.5) * (cellW + gap);
+        const cy = b.maxY - b.h * 0.05 - (row + 0.5) * (cellH + gap);
+        // Aspect adapté à la cellule tout en gardant l'aire cible
+        const aspect = Math.max(0.5, Math.min(2, (cellW * cellW) / area));
+        const poly = _makeRectPolygonM(cx, cy, area, aspect);
+        _assignUnitPoly(u, poly, "S");
     });
 }
 
