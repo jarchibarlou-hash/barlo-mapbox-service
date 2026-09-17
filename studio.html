@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.1-COIN</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.2-DIAG</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2192,9 +2192,17 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
                 }
                 const validation = BARLO.constraints.validate(c, effectiveSA, opts);
                 if (!validation.valid) {
+                    // v11.2 — log détaillé pour debug (surtout PACKED)
+                    if (c.strategy === "PACKED") {
+                        console.warn("[SOLVER] PACKED rejet axe " + Math.round(c.axisDeg) + "° :",
+                            validation.violations.map(v => v.type + (v.unitId ? "#" + v.unitId : "") + (v.errPct ? " " + v.errPct : "") + (v.areaCommon ? " overlap=" + v.areaCommon : "")).join(", "));
+                    }
                     rejected.push({ strategy: c.strategy, axisDeg: c.axisDeg, anchor: c.anchor,
                         violations: validation.violations });
                     continue;
+                }
+                if (c.strategy === "PACKED") {
+                    console.log("[SOLVER] PACKED accepté axe " + Math.round(c.axisDeg) + "° | " + c.units.length + " units");
                 }
                 // Score
                 const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
@@ -2219,6 +2227,47 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
             }
         } catch (e) {
             console.warn("Strategy", stratKey, "failed:", e);
+        }
+    }
+    // v11.2 — Fallback "best-effort" : si RIEN passe, on ne bloque pas.
+    // On accepte les candidats PACKED partiels (avec _unplaced) même s'ils échouent au validator
+    // pour cause d'AREA_ERROR / MIN_DIMENSIONS. Seul UNIT_OUTSIDE_PARCEL reste bloquant.
+    if (!allCandidates.length && rejected.length) {
+        console.warn("[SOLVER] NO_VALID → fallback best-effort (aucun candidat valide, on repêche le moins pire)");
+        const salvageable = rejected
+            .map((r, i) => ({ r, i }))
+            .filter(({ r }) => {
+                const violTypes = new Set((r.violations || []).map(v => v.type));
+                // Rejet acceptable si SEULEMENT AREA_ERROR ou MIN_DIMENSIONS (retraits soft déjà géré)
+                return !violTypes.has("UNIT_OUTSIDE_PARCEL");
+            });
+        if (salvageable.length) {
+            // Regénère les candidats "salvage" en les reprenant chez les strategies
+            for (const stratKey of enabledStrategies) {
+                const strat = BARLO.strategies[stratKey];
+                if (!strat || typeof strat.generate !== "function") continue;
+                try {
+                    const cands = strat.generate(program, effectiveSA, opts);
+                    for (const c of cands) {
+                        // v11.2 — même les candidats PARTIELS/imprécis sont acceptés en fallback
+                        const validation = BARLO.constraints.validate(c, effectiveSA, opts);
+                        const violTypes = new Set((validation.violations || []).map(v => v.type));
+                        if (violTypes.has("UNIT_OUTSIDE_PARCEL")) continue; // bloquant hard
+                        // Score dégradé (best-effort)
+                        try {
+                            const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
+                            c.score = scoreObj.totalScore * 0.5; // pénalité fallback
+                            c.scoreBreakdown = scoreObj.breakdown;
+                        } catch (_) { c.score = 0.1; c.scoreBreakdown = {}; }
+                        c.diagnostics = { valid: false, warning: "BEST_EFFORT", strategy: c.strategy,
+                            axisDeg: Math.round(c.axisDeg || 0), violations: validation.violations };
+                        c._bestEffort = true;
+                        allCandidates.push(c);
+                        if (allCandidates.length >= maxCandidates) break;
+                    }
+                } catch (_) {}
+                if (allCandidates.length >= maxCandidates) break;
+            }
         }
     }
     if (!allCandidates.length) {
