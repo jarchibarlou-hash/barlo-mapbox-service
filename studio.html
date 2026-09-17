@@ -356,7 +356,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.1.0-CMD</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.2.0-CMD</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -839,14 +839,17 @@ function scenarioPanelTemplate(L) {
           </div>
         </div>
 
-        <!-- v8.0.0 — Toolbar Revit-like commandes CAD (curseur = interface, ESC = quit) -->
+        <!-- v8.2.0 — Toolbar Revit-like commandes CAD (curseur = interface, ESC = quit) -->
         <div class="cmd-toolbar" data-scn="${L}">
-          <button type="button" class="cmd-btn" data-cmd="AL" onclick="cmdStart('AL','${L}')" title="Align — AL — Clique arête cible puis arête à déplacer (ESC pour quitter)">🎯 Align<small>AL</small></button>
-          <button type="button" class="cmd-btn" data-cmd="OF" onclick="cmdStart('OF','${L}')" title="Offset — OF — Saisis distance, hover unité, clique côté (ESC)">↔ Offset<small>OF</small></button>
-          <button type="button" class="cmd-btn" data-cmd="TR" onclick="cmdStart('TR','${L}')" title="Trim/Extend — TR — Clique limite puis élément à ajuster (ESC)">✂ Trim<small>TR</small></button>
-          <button type="button" class="cmd-btn" data-cmd="TC" onclick="cmdStart('TC','${L}')" title="Trim/Extend en angle — TC — Clique élément A puis élément B (ESC)">└ Corner<small>TC</small></button>
+          <button type="button" class="cmd-btn" onclick="historyUndo()" title="Annuler — Ctrl+Z">↶ Undo<small>Ctrl+Z</small></button>
+          <button type="button" class="cmd-btn" onclick="historyRedo()" title="Refaire — Ctrl+Y">↷ Redo<small>Ctrl+Y</small></button>
           <span class="cmd-sep"></span>
-          <button type="button" class="cmd-btn" data-cmd="MV" onclick="cmdStart('MV','${L}')" title="Move — MV — Clique point base puis destination (ESC)">↔ Move<small>MV</small></button>
+          <button type="button" class="cmd-btn" data-cmd="AL" onclick="cmdStart('AL','${L}')" title="Align — AL — Clique arête SOURCE (à aligner) puis arête CIBLE (ESC)">🎯 Align<small>AL</small></button>
+          <button type="button" class="cmd-btn" data-cmd="OF" onclick="cmdStart('OF','${L}')" title="Offset — OF — Saisis distance, hover arête, clique côté (ESC)">↔ Offset<small>OF</small></button>
+          <button type="button" class="cmd-btn" data-cmd="TR" onclick="cmdStart('TR','${L}')" title="Trim — TR — Clique la limite coupante puis les arêtes à couper (côté cliqué = supprimé) (ESC)">✂ Trim<small>TR</small></button>
+          <button type="button" class="cmd-btn" data-cmd="TC" onclick="cmdStart('TC','${L}')" title="Trim en angle — TC — Clique 2 arêtes à joindre à leur intersection (ESC)">└ Corner<small>TC</small></button>
+          <span class="cmd-sep"></span>
+          <button type="button" class="cmd-btn" data-cmd="MV" onclick="cmdStart('MV','${L}')" title="Move — MV — Clique point/arête base puis destination point/arête (ESC)">↔ Move<small>MV</small></button>
           <button type="button" class="cmd-btn" data-cmd="CO" onclick="cmdStart('CO','${L}')" title="Copy — CO — Duplique l'unité vers un point (ESC)">⧉ Copy<small>CO</small></button>
           <button type="button" class="cmd-btn" data-cmd="RO" onclick="cmdStart('RO','${L}')" title="Rotate — RO — Clique centre puis angle (ESC)">⟳ Rotate<small>RO</small></button>
           <button type="button" class="cmd-btn" data-cmd="MI" onclick="cmdStart('MI','${L}')" title="Mirror — MI — Clique 2 points définissant l'axe (ESC)">◫ Mirror<small>MI</small></button>
@@ -2384,64 +2387,9 @@ function onUnitDragStart(e) {
     const curY = mT ? parseFloat(mT[2]) : refs.cySvg;
     const curRot = mR ? parseFloat(mR[1]) : 0;
 
-    // v75.11.0 (Phase C) — Mode Revit : gérer clic sur arête ou cible d'alignement
-    if (_revitMode === "align" && _selectedEdge) {
-        // Le user vient de cliquer sur une CIBLE pour l'alignement
-        // Détecte : segment retrait le plus proche OU arête d'une autre unité
-        const svgPtRev = svgPt;
-        // Priorité 1 : segment retrait (les segLinesForSnap contiennent {p1, p2, angleDeg})
-        let bestSeg = null, bestDist = 15;
-        for (const s of (refs.segLinesForSnap || [])) {
-            const { dist } = projectPointOnSegment(svgPtRev, s.p1, s.p2);
-            if (dist < bestDist) { bestDist = dist; bestSeg = s; }
-        }
-        // Priorité 2 : arête d'une autre unité (l'unité cliquée si différente de la source)
-        if (!bestSeg && uidx !== _selectedEdge.uidx) {
-            // Détection arête de l'unité cible
-            const rotInvT = -curRot * Math.PI / 180;
-            const localXt = (svgPt.x - curX) * Math.cos(rotInvT) - (svgPt.y - curY) * Math.sin(rotInvT);
-            const localYt = (svgPt.x - curX) * Math.sin(rotInvT) + (svgPt.y - curY) * Math.cos(rotInvT);
-            const bodyT = el.querySelector("rect.body");
-            const targetW = bodyT ? parseFloat(bodyT.getAttribute("width")) : 40;
-            const targetH = bodyT ? parseFloat(bodyT.getAttribute("height")) : 40;
-            const targetEdge = detectEdgeAtLocalPoint(localXt, localYt, targetW, targetH, 12);
-            if (targetEdge) {
-                // Convertit l'arête cible en ligne globale (2 points)
-                let p1L, p2L;
-                if (targetEdge === "e") { p1L = { x: targetW/2, y: -targetH/2 }; p2L = { x: targetW/2, y: targetH/2 }; }
-                else if (targetEdge === "w") { p1L = { x: -targetW/2, y: -targetH/2 }; p2L = { x: -targetW/2, y: targetH/2 }; }
-                else if (targetEdge === "n") { p1L = { x: -targetW/2, y: -targetH/2 }; p2L = { x: targetW/2, y: -targetH/2 }; }
-                else { p1L = { x: -targetW/2, y: targetH/2 }; p2L = { x: targetW/2, y: targetH/2 }; }
-                const rotT = curRot * Math.PI / 180;
-                const t1 = { x: curX + p1L.x * Math.cos(rotT) - p1L.y * Math.sin(rotT), y: curY + p1L.x * Math.sin(rotT) + p1L.y * Math.cos(rotT) };
-                const t2 = { x: curX + p2L.x * Math.cos(rotT) - p2L.y * Math.sin(rotT), y: curY + p2L.x * Math.sin(rotT) + p2L.y * Math.cos(rotT) };
-                bestSeg = { p1: t1, p2: t2, angleDeg: Math.atan2(t2.y - t1.y, t2.x - t1.x) * 180 / Math.PI };
-            }
-        }
-        if (bestSeg) {
-            revitApplyAlign(bestSeg);
-            e.preventDefault();
-            return;
-        }
-    }
-    // Détection clic sur arête (avant de démarrer un drag body)
-    if (!role) {
-        const rotInv = -curRot * Math.PI / 180;
-        const localX = (svgPt.x - curX) * Math.cos(rotInv) - (svgPt.y - curY) * Math.sin(rotInv);
-        const localY = (svgPt.x - curX) * Math.sin(rotInv) + (svgPt.y - curY) * Math.cos(rotInv);
-        const bodyR = el.querySelector("rect.body");
-        const bodyW = bodyR ? parseFloat(bodyR.getAttribute("width")) : 40;
-        const bodyH = bodyR ? parseFloat(bodyR.getAttribute("height")) : 40;
-        // Zone "arête" = frange de 8px de chaque côté du rect
-        const nearEdge = detectEdgeAtLocalPoint(localX, localY, bodyW, bodyH, 8);
-        // On ne sélectionne que si on est dans la frange bord ET pas à l'intérieur du rect
-        const insideRect = Math.abs(localX) < bodyW/2 - 8 && Math.abs(localY) < bodyH/2 - 8;
-        if (nearEdge && !insideRect) {
-            selectEdge(label, uidx, nearEdge, e.clientX, e.clientY);
-            e.preventDefault();
-            return;
-        }
-    }
+    // v8.2.0 — Comportement legacy d'édition d'arête inline SUPPRIMÉ.
+    // Sans commande active, clic dans unité = drag pur (translation), rotation ou resize par les poignées.
+    // Toute édition d'arête passe désormais par les commandes CAD (AL/OF/TR/TC/MV/CO/RO/MI).
 
     if (role === "rotate") {
         const initAngle = Math.atan2(svgPt.y - curY, svgPt.x - curX) * 180 / Math.PI;
@@ -2649,6 +2597,8 @@ function onUnitDragEnd(e) {
     clearDragVisuals(svgEl);
     const u = (cockpitState.scenarios[label].units || [])[uidx];
     if (!u) return;
+
+    historyPush(label);   // v8.2.0 : snapshot avant commit legacy drag/resize/rotate
 
     if (mode === "rotate") {
         u.rotation_deg = Number(((lastRot % 360) + 360) % 360);
@@ -3037,18 +2987,24 @@ function cmdOnMove(e) {
     return true;
 }
 
-// ─────── Clavier : ESC + raccourcis 2 lettres ───────
+// ─────── Clavier : ESC + Ctrl+Z / Ctrl+Y + raccourcis 2 lettres ───────
 let _cmdShortcutBuf = "", _cmdShortcutTs = 0;
 document.addEventListener("keydown", (e) => {
+    // v8.2.0 — Undo / Redo
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const k = (e.key || "").toLowerCase();
+        if (k === "z" && !e.shiftKey) { e.preventDefault(); historyUndo(); return; }
+        if ((k === "y") || (k === "z" && e.shiftKey)) { e.preventDefault(); historyRedo(); return; }
+    }
     if (e.key === "Escape") {
         if (!CMD.active) return;
         const c = COMMANDS[CMD.active];
         const r = c && c.onEscape ? c.onEscape() : "EXIT";
         if (r === "EXIT") { cmdExit(); showToast("Commande annulée"); }
-        else updateCmdHUD(r);   // hint mis à jour
+        else updateCmdHUD(r);
         return;
     }
-    // 2-letter shortcuts (ignorer si focus dans un input/textarea)
+    // Raccourcis 2 lettres (ignorer si focus input)
     const ae = document.activeElement;
     if (ae && ["INPUT","TEXTAREA","SELECT"].includes(ae.tagName)) return;
     const k = (e.key || "").toLowerCase();
@@ -3069,6 +3025,7 @@ document.addEventListener("keydown", (e) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // COMMITTER : synchro bidirectionnelle géométrie → paramètres (m², W, H, offset, rot)
 // Chaque commande passe par ici. Recalcule surface réelle et rafraîchit la table.
+// Snapshot AVANT chaque mutation dans l'historique undo/redo.
 // ═══════════════════════════════════════════════════════════════════════════════
 function polygonAreaPx(pts) {
     if (!pts || pts.length < 3) return 0;
@@ -3082,11 +3039,10 @@ function polygonAreaPx(pts) {
 function commitUnitGeometry(label, uidx, patch) {
     const u = (cockpitState.scenarios[label].units || [])[uidx];
     if (!u) return;
-    const refs = _svgRefs[label];
+    historyPush(label);   // v8.2.0 — snapshot avant mutation pour undo/redo
     if (patch.polygon) {
         u.polygon = patch.polygon;
-        // Recalc surface réelle m² depuis polygone (assumé en local repère unit m)
-        const area = polygonAreaPx(patch.polygon);   // ici polygon est stocké en m directement
+        const area = polygonAreaPx(patch.polygon);
         if (area > 0) u.unit_size_m2 = Math.round(area);
         u.width_m = null; u.height_m = null;
     } else {
@@ -3103,45 +3059,97 @@ function commitUnitGeometry(label, uidx, patch) {
     updateConstraintsCount();
 }
 
+// ═════════════ v8.2.0 — UNDO / REDO (Ctrl+Z / Ctrl+Y) ═════════════
+const HISTORY_MAX = 60;
+let _history = [];       // [{ label, snapshot: JSON }]
+let _historyIdx = -1;    // pointeur dans _history (dernier état appliqué)
+
+function historyPush(label) {
+    if (!label || !cockpitState.scenarios[label]) return;
+    const snap = JSON.stringify(cockpitState.scenarios[label]);
+    // Purge le "futur" si on avait fait des undo puis on modifie
+    if (_historyIdx < _history.length - 1) _history = _history.slice(0, _historyIdx + 1);
+    _history.push({ label, snapshot: snap });
+    if (_history.length > HISTORY_MAX) _history.shift();
+    _historyIdx = _history.length - 1;
+}
+function historyUndo() {
+    if (_historyIdx <= 0) { showToast("Rien à annuler", true); return; }
+    _historyIdx--;
+    const h = _history[_historyIdx];
+    cockpitState.scenarios[h.label] = JSON.parse(h.snapshot);
+    renderUnitsTable(h.label);
+    renderParcelSvg(h.label);
+    updateConstraintsCount();
+    showToast(`↶ Annulé (${_historyIdx+1}/${_history.length})`);
+}
+function historyRedo() {
+    if (_historyIdx >= _history.length - 1) { showToast("Rien à refaire", true); return; }
+    _historyIdx++;
+    const h = _history[_historyIdx];
+    cockpitState.scenarios[h.label] = JSON.parse(h.snapshot);
+    renderUnitsTable(h.label);
+    renderParcelSvg(h.label);
+    updateConstraintsCount();
+    showToast(`↷ Refait (${_historyIdx+1}/${_history.length})`);
+}
+function historyReset(label) {
+    // Snapshot initial d'un scénario au chargement d'un lead
+    if (!label) { _history = []; _historyIdx = -1; return; }
+    _history = _history.filter(h => h.label !== label);
+    _history.push({ label, snapshot: JSON.stringify(cockpitState.scenarios[label]) });
+    _historyIdx = _history.length - 1;
+}
+
+// ═════════════ v8.2.0 — Snap point : projette svgPt sur une arête si ref est line ═════════════
+function _pickAsPoint(ref, svgPt) {
+    if (!ref) return svgPt;
+    if (ref.p) return ref.p;   // endpoint / midpoint / vertex / intersection
+    if (ref.p1 && ref.p2) {
+        // Projection perpendiculaire du curseur sur l'arête
+        const { proj } = projectPointOnSegment(svgPt, ref.p1, ref.p2);
+        return proj;
+    }
+    return svgPt;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // COMMANDES — chaque commande = state machine plugged dans le CommandManager
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const COMMANDS = {
-    // ─────── ALIGN — AL — target ref → source edge → source unit se déplace ───────
+    // ─────── ALIGN — AL — source edge → target ref → source unit se déplace ───────
+    // v8.2.0 : ordre inversé (source puis cible), comme demandé par Jeremy
     AL: {
         label: "ALIGN",
         cursor: "crosshair",
-        hint: "Clique l'arête CIBLE (segment parcelle, arête unité, sommet)",
+        hint: "Clique l'arête SOURCE (arête d'unité à aligner)",
         onPick(ref, svgPt, label) {
-            if (!ref) return;
+            if (!ref) { showToast("Clique une arête ou un point", true); return; }
             if (CMD.state === "WAIT_1") {
-                if (!["edge","segment","midpoint"].includes(ref.kind)) {
-                    showToast("Cible : arête d'unité ou segment parcelle", true);
-                    return;
-                }
-                CMD.picks[0] = ref;
-                CMD.state = "WAIT_2";
-                updateCmdHUD("Cible acquise · clique l'arête à DÉPLACER (ESC = re-choisir cible)");
-            } else if (CMD.state === "WAIT_2") {
                 if (ref.kind !== "edge") {
-                    showToast("Source : clique une arête d'unité", true);
-                    return;
+                    showToast("Source : clique une arête d'unité", true); return;
                 }
-                if (ref.unit_idx === CMD.picks[0].unit_idx && CMD.picks[0].kind === "edge") {
-                    showToast("Choisis une arête d'une AUTRE unité", true);
-                    return;
+                CMD.picks[0] = ref;   // SOURCE
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Source OK · clique l'arête CIBLE (parcelle, unité, sommet)");
+            } else if (CMD.state === "WAIT_2") {
+                if (!["edge","segment","midpoint"].includes(ref.kind)) {
+                    showToast("Cible : arête, segment parcelle ou milieu", true); return;
                 }
-                _cmdAlignExecute(CMD.picks[0], ref);
+                if (ref.kind === "edge" && ref.unit_idx === CMD.picks[0].unit_idx) {
+                    showToast("Cible = arête d'une AUTRE unité", true); return;
+                }
+                _cmdAlignExecute(ref, CMD.picks[0]);   // (target, source)
                 CMD.picks = [];
                 CMD.state = "WAIT_1";
                 clearGhostPreview();
-                updateCmdHUD("Aligné ✓ · clique une nouvelle CIBLE (ESC pour quitter)");
+                updateCmdHUD("Aligné ✓ · clique une nouvelle arête SOURCE (ESC pour quitter)");
             }
         },
         onHover(ref, svgPt, label) {
-            if (CMD.state === "WAIT_2" && ref && ref.kind === "edge" && CMD.picks[0]) {
-                const ghost = _cmdAlignGhost(CMD.picks[0], ref);
+            if (CMD.state === "WAIT_2" && ref && ["edge","segment"].includes(ref.kind) && CMD.picks[0]) {
+                const ghost = _cmdAlignGhost(ref, CMD.picks[0]);
                 if (ghost) drawGhostPreview(label, ghost);
             } else {
                 clearGhostPreview();
@@ -3151,7 +3159,7 @@ const COMMANDS = {
             if (CMD.state === "WAIT_2") {
                 CMD.picks = []; CMD.state = "WAIT_1";
                 clearGhostPreview();
-                return "Clique l'arête CIBLE";
+                return "Clique l'arête SOURCE";
             }
             return "EXIT";
         }
@@ -3186,26 +3194,28 @@ const COMMANDS = {
         onEscape() { return "EXIT"; }
     },
 
-    // ─────── TRIM/EXTEND — TR — boundary → hover element → auto trim/extend ───────
+    // ─────── TRIM — TR — boundary reste ACTIVE, clique arêtes à couper (côté cliqué = supprimé) ───────
+    // v8.2.0 : boundary persistante après commit, comme Revit Trim/Extend Multiple
     TR: {
-        label: "TRIM / EXTEND",
+        label: "TRIM",
         cursor: "crosshair",
-        hint: "Clique la LIMITE (arête d'unité ou segment parcelle)",
+        hint: "Clique la LIMITE COUPANTE (arête d'unité ou segment parcelle)",
         onPick(ref, svgPt, label) {
-            if (!ref) return;
+            if (!ref) { showToast("Clique une arête ou un segment", true); return; }
             if (CMD.state === "WAIT_1") {
                 if (!["edge","segment"].includes(ref.kind)) {
-                    showToast("Limite : arête ou segment parcelle", true); return;
+                    showToast("Limite : arête d'unité ou segment parcelle", true); return;
                 }
                 CMD.picks[0] = ref;
                 CMD.state = "WAIT_2";
-                updateCmdHUD("Limite OK · clique la portion à conserver de l'ARÊTE à ajuster");
+                updateCmdHUD("Limite OK · clique une arête · la partie cliquée sera SUPPRIMÉE (ESC = re-choisir limite)");
             } else if (CMD.state === "WAIT_2") {
                 if (ref.kind !== "edge") {
-                    showToast("Clique une arête d'unité à ajuster", true); return;
+                    showToast("Clique une arête d'unité à trimer", true); return;
                 }
                 _cmdTrimExtendExecute(CMD.picks[0], ref, svgPt);
-                updateCmdHUD("Trim/Extend ✓ · clique une nouvelle arête à ajuster (ESC pour quitter)");
+                // Boundary reste active pour trimer plusieurs arêtes de suite
+                updateCmdHUD("Trim ✓ · clique une nouvelle arête (même limite) — ESC pour re-choisir limite");
             }
         },
         onHover(ref, svgPt, label) {
@@ -3218,7 +3228,7 @@ const COMMANDS = {
             if (CMD.state === "WAIT_2") {
                 CMD.picks = []; CMD.state = "WAIT_1";
                 clearGhostPreview();
-                return "Clique la LIMITE";
+                return "Clique la LIMITE COUPANTE";
             }
             return "EXIT";
         }
@@ -3253,20 +3263,21 @@ const COMMANDS = {
         }
     },
 
-    // ─────── MOVE — MV — unité + point base → destination ───────
+    // ─────── MOVE — MV — v8.2.0 base = arête OU point, snap sur arête OU point ───────
     MV: {
         label: "MOVE",
         cursor: "move",
         hint: "Clique dans l'unité à déplacer (arête, coin ou milieu)",
         onPick(ref, svgPt, label) {
-            if (!ref) return;
+            if (!ref) { showToast("Clique sur une arête ou un point d'unité", true); return; }
             if (CMD.state === "WAIT_1") {
-                if (ref.unit_idx === undefined) { showToast("Clique sur une unité", true); return; }
-                CMD.picks[0] = { unit_idx: ref.unit_idx, basePt: { x: svgPt.x, y: svgPt.y }, label };
+                if (ref.unit_idx === undefined) { showToast("Clique une arête/coin/milieu d'unité", true); return; }
+                const basePt = _pickAsPoint(ref, svgPt);
+                CMD.picks[0] = { unit_idx: ref.unit_idx, basePt, label };
                 CMD.state = "WAIT_2";
-                updateCmdHUD("Clique le point DESTINATION");
+                updateCmdHUD("Clique le point DESTINATION (arête, coin, milieu, sommet)");
             } else if (CMD.state === "WAIT_2") {
-                const destPt = ref && ref.p ? ref.p : svgPt;
+                const destPt = _pickAsPoint(ref, svgPt);
                 _cmdMoveExecute(CMD.picks[0], destPt);
                 updateCmdHUD("Déplacé ✓ · clique une nouvelle unité (ESC pour quitter)");
                 CMD.picks = []; CMD.state = "WAIT_1";
@@ -3275,7 +3286,7 @@ const COMMANDS = {
         },
         onHover(ref, svgPt, label) {
             if (CMD.state === "WAIT_2" && CMD.picks[0]) {
-                const destPt = ref && ref.p ? ref.p : svgPt;
+                const destPt = _pickAsPoint(ref, svgPt);
                 const ghost = _cmdMoveGhost(CMD.picks[0], destPt);
                 if (ghost) drawGhostPreview(label, ghost);
             }
@@ -3289,28 +3300,29 @@ const COMMANDS = {
         }
     },
 
-    // ─────── COPY — CO — unité + point base → destination (duplique) ───────
+    // ─────── COPY — CO — v8.2.0 snap arête + points ───────
     CO: {
         label: "COPY",
         cursor: "copy",
         hint: "Clique dans l'unité à dupliquer",
         onPick(ref, svgPt, label) {
-            if (!ref) return;
+            if (!ref) { showToast("Clique sur une arête ou un point d'unité", true); return; }
             if (CMD.state === "WAIT_1") {
-                if (ref.unit_idx === undefined) { showToast("Clique sur une unité", true); return; }
-                CMD.picks[0] = { unit_idx: ref.unit_idx, basePt: { x: svgPt.x, y: svgPt.y }, label };
+                if (ref.unit_idx === undefined) { showToast("Clique une arête/coin/milieu d'unité", true); return; }
+                const basePt = _pickAsPoint(ref, svgPt);
+                CMD.picks[0] = { unit_idx: ref.unit_idx, basePt, label };
                 CMD.state = "WAIT_2";
                 updateCmdHUD("Clique la DESTINATION de la copie");
             } else if (CMD.state === "WAIT_2") {
-                const destPt = ref && ref.p ? ref.p : svgPt;
+                const destPt = _pickAsPoint(ref, svgPt);
                 _cmdCopyExecute(CMD.picks[0], destPt);
                 updateCmdHUD("Copié ✓ · clique la destination suivante (ESC pour quitter)");
-                // Reste actif avec MÊME source pour copier plusieurs fois
+                // Reste actif avec MÊME source
             }
         },
         onHover(ref, svgPt, label) {
             if (CMD.state === "WAIT_2" && CMD.picks[0]) {
-                const destPt = ref && ref.p ? ref.p : svgPt;
+                const destPt = _pickAsPoint(ref, svgPt);
                 const ghost = _cmdMoveGhost(CMD.picks[0], destPt);
                 if (ghost) drawGhostPreview(label, ghost);
             }
@@ -3572,60 +3584,98 @@ function _cmdOffsetGhost(edgeRef, dm) {
     return `<polygon class="ghost-preview" points="${pts}"/>`;
 }
 
-// ═════════════ TRIM / EXTEND ═════════════
-// Boundary = ligne infinie. Target = arête d'unité. Le côté cliqué = conservé.
-function _cmdTrimExtendExecute(boundary, targetEdgeRef, clickPt) {
-    const refs = _svgRefs[targetEdgeRef.label];
-    if (!refs) return;
-    const u = (cockpitState.scenarios[targetEdgeRef.label].units || [])[targetEdgeRef.unit_idx];
-    if (!u) return;
-    // Trim/Extend = ajuste la dimension perpendiculaire à l'arête cible pour que son milieu coïncide
-    // avec la projection sur la boundary. Le côté cliqué (par rapport au milieu de l'arête) = conservé.
-    const proj = _lineLineIntersection(boundary.p1, boundary.p2, targetEdgeRef.p1, targetEdgeRef.p2);
-    if (!proj) { showToast("Pas d'intersection possible", true); return; }
-    // Détermine quelle dimension modifier
-    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+// ═════════════ TRIM / EXTEND — v8.2.0 côté cliqué = CONSERVÉ (convention Revit) ═════════════
+// Convertit clickPt et boundary en repère LOCAL de l'unité (rectangle axis-aligned),
+// intersecte boundary avec la ligne infinie de l'arête ciblée → point I sur l'arête.
+// Le côté du clic par rapport à I = partie CONSERVÉE. L'autre côté = supprimé.
+function _cmdTrimResult(boundary, edgeRef, clickPt) {
+    const refs = _svgRefs[edgeRef.label];
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (!refs || !u) return null;
     const scale = refs.scale;
-    const cur = _unitEdgesGlobal(u, refs);
-    if (!cur) return;
-    const oppEdge = { n: "s", s: "n", e: "w", w: "e" }[targetEdgeRef.edge];
-    // Distance signée de proj à l'arête opposée dans le repère local perpendiculaire à l'arête
-    const oppMid = { x: (cur.edges[oppEdge].p1.x + cur.edges[oppEdge].p2.x)/2, y: (cur.edges[oppEdge].p1.y + cur.edges[oppEdge].p2.y)/2 };
-    const newDistPx = Math.hypot(proj.x - oppMid.x, proj.y - oppMid.y);
-    const newDistM = newDistPx / scale;
-    if (newDistM < 1) { showToast("Ajustement trop court", true); return; }
-    // Nouveau centre = milieu entre oppMid et proj
-    const newCx = (oppMid.x + proj.x) / 2;
-    const newCy = (oppMid.y + proj.y) / 2;
-    if (targetEdgeRef.edge === "e" || targetEdgeRef.edge === "w") w_m = newDistM;
-    else h_m = newDistM;
-    commitUnitGeometry(targetEdgeRef.label, targetEdgeRef.unit_idx, {
-        width_m: w_m, height_m: h_m,
-        offset_x_m: (newCx - refs.cxSvg) / scale,
-        offset_y_m: -(newCy - refs.cySvg) / scale,
+    const cx = refs.cxSvg + (u.offset_x_m || 0) * scale;
+    const cy = refs.cySvg - (u.offset_y_m || 0) * scale;
+    const rotDeg = u.rotation_deg || 0;
+    const rot = rotDeg * Math.PI / 180;
+    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const w = w_m * scale, h = h_m * scale;
+    const toLocal = (p) => {
+        const dx = p.x - cx, dy = p.y - cy;
+        return {
+            x: dx * Math.cos(-rot) - dy * Math.sin(-rot),
+            y: dx * Math.sin(-rot) + dy * Math.cos(-rot)
+        };
+    };
+    const bL1 = toLocal(boundary.p1), bL2 = toLocal(boundary.p2);
+    const clickL = toLocal(clickPt);
+    const edge = edgeRef.edge;
+    // Intersection en local avec la ligne infinie de l'arête
+    let interL = null;
+    if (edge === "n" || edge === "s") {
+        const yE = (edge === "n" ? -h/2 : h/2);
+        const dy = bL2.y - bL1.y;
+        if (Math.abs(dy) < 1e-6) return null;
+        const t = (yE - bL1.y) / dy;
+        interL = { x: bL1.x + t * (bL2.x - bL1.x), y: yE };
+    } else {
+        const xE = (edge === "e" ? w/2 : -w/2);
+        const dx = bL2.x - bL1.x;
+        if (Math.abs(dx) < 1e-6) return null;
+        const t = (xE - bL1.x) / dx;
+        interL = { x: xE, y: bL1.y + t * (bL2.y - bL1.y) };
+    }
+    // Détermine côté conservé selon le clic par rapport à l'intersection (dans la direction de l'arête)
+    let newW = w, newH = h, newCxLocal = 0, newCyLocal = 0;
+    if (edge === "n" || edge === "s") {
+        // Arête horizontale, dimension le long de X → ajuste W
+        const xI = interL.x;
+        if (clickL.x < xI) {
+            // Clic à gauche → garde partie gauche : x ∈ [-w/2, xI]
+            newW = xI - (-w/2);
+            newCxLocal = (-w/2 + xI) / 2;
+        } else {
+            newW = (w/2) - xI;
+            newCxLocal = (xI + w/2) / 2;
+        }
+        newH = h;
+    } else {
+        const yI = interL.y;
+        if (clickL.y < yI) {
+            newH = yI - (-h/2);
+            newCyLocal = (-h/2 + yI) / 2;
+        } else {
+            newH = (h/2) - yI;
+            newCyLocal = (yI + h/2) / 2;
+        }
+        newW = w;
+    }
+    if (newW < 6 || newH < 6) return null;   // trim trop agressif
+    // Shift du centre en global (rot appliquée)
+    const shiftGX = newCxLocal * Math.cos(rot) - newCyLocal * Math.sin(rot);
+    const shiftGY = newCxLocal * Math.sin(rot) + newCyLocal * Math.cos(rot);
+    const newCxG = cx + shiftGX, newCyG = cy + shiftGY;
+    return {
+        label: edgeRef.label, uidx: edgeRef.unit_idx,
+        width_m: newW / scale, height_m: newH / scale,
+        offset_x_m: (newCxG - refs.cxSvg) / scale,
+        offset_y_m: -(newCyG - refs.cySvg) / scale,
+        newCxG, newCyG, newW, newH, rotDeg
+    };
+}
+function _cmdTrimExtendExecute(boundary, edgeRef, clickPt) {
+    const r = _cmdTrimResult(boundary, edgeRef, clickPt);
+    if (!r) { showToast("Trim impossible (côté trop petit ou boundary parallèle)", true); return; }
+    commitUnitGeometry(r.label, r.uidx, {
+        width_m: r.width_m, height_m: r.height_m,
+        offset_x_m: r.offset_x_m, offset_y_m: r.offset_y_m,
         polygon: null
     });
 }
-function _cmdTrimExtendGhost(boundary, targetEdgeRef, clickPt) {
-    const refs = _svgRefs[targetEdgeRef.label];
-    if (!refs) return null;
-    const u = (cockpitState.scenarios[targetEdgeRef.label].units || [])[targetEdgeRef.unit_idx];
-    if (!u) return null;
-    const proj = _lineLineIntersection(boundary.p1, boundary.p2, targetEdgeRef.p1, targetEdgeRef.p2);
-    if (!proj) return null;
-    const cur = _unitEdgesGlobal(u, refs);
-    const oppEdge = { n: "s", s: "n", e: "w", w: "e" }[targetEdgeRef.edge];
-    const oppMid = { x: (cur.edges[oppEdge].p1.x + cur.edges[oppEdge].p2.x)/2, y: (cur.edges[oppEdge].p1.y + cur.edges[oppEdge].p2.y)/2 };
-    const newDistPx = Math.hypot(proj.x - oppMid.x, proj.y - oppMid.y);
-    const newDistM = newDistPx / refs.scale;
-    if (newDistM < 0.5) return null;
-    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
-    if (targetEdgeRef.edge === "e" || targetEdgeRef.edge === "w") w_m = newDistM;
-    else h_m = newDistM;
-    const newCx = (oppMid.x + proj.x) / 2, newCy = (oppMid.y + proj.y) / 2;
-    const corners = _rectCornersFromCenter(newCx, newCy, w_m * refs.scale, h_m * refs.scale, u.rotation_deg || 0);
+function _cmdTrimExtendGhost(boundary, edgeRef, clickPt) {
+    const r = _cmdTrimResult(boundary, edgeRef, clickPt);
+    if (!r) return null;
+    const corners = _rectCornersFromCenter(r.newCxG, r.newCyG, r.newW, r.newH, r.rotDeg);
     const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
     return `<polygon class="ghost-preview" points="${pts}"/>`;
 }
@@ -4618,6 +4668,7 @@ function populateCockpitFromLead(L, units) {
         renderUnitsTable(label);
         renderParcelSvg(label);
         renderMoteurBrief(label);   // v75.8.9 : préconisation moteur affichée par scénario
+        historyReset(label);   // v8.2.0 : snapshot initial pour undo/redo
     });
 
     // v75.3.1 : après renderParcelSvg (qui a init segments via ensureSegments), rend le tableau des retraits
