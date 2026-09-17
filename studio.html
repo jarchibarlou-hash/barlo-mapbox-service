@@ -224,6 +224,23 @@
         /* v9.7 — Boutons orientation axe compass */
         .axis-btn{min-width:26px;padding:.25rem .35rem;font-size:.6rem;font-weight:700;letter-spacing:.3px}
         .axis-btn.active{background:#c9a878;color:#0B1120;border-color:#c9a878}
+        /* v10.5 — Panel candidats du solver */
+        .c-solver-panel{background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.4);border-radius:8px;padding:.6rem;margin-top:.4rem;display:none}
+        .c-solver-panel.active{display:block}
+        .c-solver-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
+        .c-solver-title{color:#A78BFA;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+        .c-solver-close{background:transparent;border:none;color:#A78BFA;cursor:pointer;font-size:.9rem;padding:.15rem .35rem}
+        .c-solver-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.5rem}
+        .c-cand-card{background:#0f1a30;border:1.5px solid var(--border);border-radius:6px;padding:.35rem;cursor:pointer;transition:all .15s}
+        .c-cand-card:hover{border-color:#A78BFA;transform:translateY(-1px)}
+        .c-cand-card.selected{border-color:#22C55E;background:rgba(34,197,94,0.1)}
+        .c-cand-card svg{width:100%;height:120px;display:block;background:#0B1120;border-radius:3px;margin-bottom:.3rem}
+        .c-cand-card .cc-title{font-size:.65rem;font-weight:700;color:#fff;display:flex;justify-content:space-between}
+        .c-cand-card .cc-strategy{color:#A78BFA}
+        .c-cand-card .cc-score{color:#22C55E;font-weight:700}
+        .c-cand-card .cc-meta{font-size:.55rem;color:var(--text2);margin-top:.15rem;display:flex;justify-content:space-between}
+        .c-solver-empty{text-align:center;color:var(--text2);font-size:.7rem;font-style:italic;padding:1rem}
+        .c-solver-debug{margin-top:.5rem;padding:.4rem;background:rgba(11,17,32,0.5);border-radius:4px;font-size:.55rem;color:var(--text2);font-family:monospace;max-height:80px;overflow-y:auto}
         /* v75.4.0 — Rectangles unités draggables */
         .draggable-unit{cursor:grab}
         .draggable-unit.dragging{cursor:grabbing;opacity:.9}
@@ -367,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.3-SOLVE</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.5-CAND</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -853,6 +870,10 @@ function scenarioPanelTemplate(L) {
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SPLIT_AV_AR')" title="Split — 2 groupes séparés Nord/Sud">⚌ Split</button>
           </div>
           <div class="c-toolbar-group">
+            <span class="c-toolbar-label" style="color:#A78BFA">Solver :</span>
+            <button type="button" class="c-tb-btn c-tb-btn-cyan" style="border-color:#A78BFA;color:#A78BFA" onclick="runSolverForScenario('${L}')" title="🧠 Génère plusieurs implantations valides via BARLO Site Layout Solver (multi-candidats + scoring + diversity)">🧠 Générer propositions</button>
+          </div>
+          <div class="c-toolbar-group">
             <span class="c-toolbar-label">Axe :</span>
             <button type="button" class="c-tb-btn axis-btn active" data-scn="${L}" data-axis="N"  onclick="setImplantationAxis('${L}','N')"  title="Orientation Nord">N</button>
             <button type="button" class="c-tb-btn axis-btn" data-scn="${L}" data-axis="NE" onclick="setImplantationAxis('${L}','NE')" title="Orientation NE">NE</button>
@@ -883,6 +904,18 @@ function scenarioPanelTemplate(L) {
           <span class="cmd-sep"></span>
           <button type="button" class="cmd-btn" data-cmd="ME" onclick="cmdStart('ME','${L}')" title="Measure — ME — Règle : clique 2 points pour mesurer une distance (ESC)">📏 Règle<small>ME</small></button>
           <button type="button" class="cmd-btn" data-cmd="DA" onclick="cmdStart('DA','${L}')" title="Dim Aligned — DA — Cote alignée entre 2 arêtes (distance perpendiculaire) (ESC)">⇔ Cote<small>DA</small></button>
+        </div>
+
+        <!-- v10.5 — Panel candidats du solver BARLO (généré à la demande via 🧠 Générer propositions) -->
+        <div class="c-solver-panel" id="cSolverPanel${L}">
+          <div class="c-solver-header">
+            <span class="c-solver-title" id="cSolverTitle${L}">🧠 Propositions BARLO Solver</span>
+            <button type="button" class="c-solver-close" onclick="closeSolverPanel('${L}')" title="Fermer le panel candidats">✕</button>
+          </div>
+          <div class="c-solver-grid" id="cSolverGrid${L}">
+            <div class="c-solver-empty">Clique <strong>🧠 Générer propositions</strong> pour lancer le solver</div>
+          </div>
+          <div class="c-solver-debug" id="cSolverDebug${L}" style="display:none"></div>
         </div>
 
         <div class="c-parcel-preview" id="cParcelPreview${L}">
@@ -5668,6 +5701,142 @@ function _applyImplantationAxis(units, label) {
             return { x: b.cx + dx * cos - dy * sin, y: b.cy + dx * sin + dy * cos };
         });
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.5 — UI Solver : run le moteur BARLO + panel candidats
+// ═══════════════════════════════════════════════════════════════════════════════
+function runSolverForScenario(label) {
+    const s = cockpitState.scenarios[label];
+    if (!s || !s.units || s.units.length === 0) { showToast("Ajoute d'abord des unités", true); return; }
+    const refs = _svgRefs[label];
+    if (!refs || !refs.siteAnalysis) {
+        showToast("Charge un lead avec parcelle avant de lancer le solver", true);
+        return;
+    }
+    showToast("🧠 Solver en cours…");
+    // Convertit l'orientation choisie en angleDeg pour le scorer
+    const axisMap = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
+    const preferredAxisDeg = axisMap[s.implantationAxis || "N"];
+    try {
+        const result = BARLO.solver.solve(s.units, refs.siteAnalysis, { preferredAxisDeg, topN: 6 });
+        _lastSolverResult = _lastSolverResult || {};
+        _lastSolverResult[label] = result;
+        renderSolverPanel(label, result);
+    } catch (e) {
+        console.error("Solver error:", e);
+        showToast("Erreur solver : " + e.message, true);
+    }
+}
+
+let _lastSolverResult = {};
+
+function closeSolverPanel(label) {
+    const panel = $(`cSolverPanel${label}`);
+    if (panel) panel.classList.remove("active");
+}
+
+function renderSolverPanel(label, result) {
+    const panel = $(`cSolverPanel${label}`);
+    const grid = $(`cSolverGrid${label}`);
+    const title = $(`cSolverTitle${label}`);
+    const debug = $(`cSolverDebug${label}`);
+    if (!panel || !grid) return;
+    panel.classList.add("active");
+    if (result.reason === "NO_VALID_SOLUTION") {
+        title.textContent = "❌ Aucune implantation valide trouvée";
+        grid.innerHTML = `<div class="c-solver-empty" style="color:#EF4444">
+            ${result.rejected.length} candidats rejetés · aucun ne passe les contraintes.<br>
+            Vérifie surfaces cibles vs buildable disponible.
+        </div>`;
+        debug.style.display = "block";
+        debug.textContent = "REJETS (top 5) :\n" + result.rejected.slice(0, 5).map(r =>
+            `${r.strategy}@${Math.round(r.axisDeg)}° → ${r.violations.map(v => v.type).join(", ")}`
+        ).join("\n");
+        return;
+    }
+    if (result.reason === "NO_BUILDABLE" || result.reason === "NO_PROGRAM") {
+        title.textContent = "⚠ " + result.reason;
+        grid.innerHTML = `<div class="c-solver-empty" style="color:#F59E0B">${result.reason}</div>`;
+        debug.style.display = "none";
+        return;
+    }
+    title.textContent = `🧠 ${result.total_shown}/${result.total_valid} propositions (${result.total_generated} candidats explorés)`;
+    grid.innerHTML = result.candidates.map((c, i) => {
+        const thumb = renderCandidateThumbnailSvg(c, _svgRefs[label].siteAnalysis);
+        const meta = `${c.units.length}u · axe ${Math.round(c.axisDeg)}°`;
+        return `
+            <div class="c-cand-card" onclick="applyCandidate('${label}', ${i})">
+                ${thumb}
+                <div class="cc-title"><span class="cc-strategy">${c.strategy}</span><span class="cc-score">${(c.score * 100).toFixed(0)}</span></div>
+                <div class="cc-meta"><span>${meta}</span><span title="Aire cumulée générée">${c.diagnostics.generatedArea}m²</span></div>
+            </div>
+        `;
+    }).join("");
+    debug.style.display = "block";
+    debug.textContent = `${result.total_generated} candidats générés · ${result.total_valid} valides · ${result.total_shown} après diversity filter · ${result.rejected.length} rejetés`;
+}
+
+// Rendu SVG miniature d'un candidat (thumbnail 140x120)
+function renderCandidateThumbnailSvg(cand, siteAnalysis) {
+    const W = 140, H = 120, pad = 6;
+    const b = siteAnalysis.bounds;
+    const sx = (W - 2 * pad) / b.w;
+    const sy = (H - 2 * pad) / b.h;
+    const s = Math.min(sx, sy);
+    const cx = (W - b.w * s) / 2, cy = (H - b.h * s) / 2;
+    // Convertit m → px thumb (y inversé)
+    const toPx = (p) => ({ x: cx + (p.x - b.minX) * s, y: cy + (b.maxY - p.y) * s });
+    // Parcelle
+    const parcelPts = siteAnalysis.parcelPolygon.map(toPx).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    // Buildable
+    const buildPts = (siteAnalysis.buildablePolygon || []).map(toPx).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    // Unités
+    const UNIT_C = window.UNIT_COLORS || { AUTRE: "#8B5CF6" };
+    const unitsSvg = cand.units.map(u => {
+        const color = UNIT_C[u.unit_type] || UNIT_C.AUTRE;
+        const pts = (u.polygonM || []).map(toPx).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+        return `<polygon points="${pts}" fill="${color}" fill-opacity="0.85" stroke="#fff" stroke-width="0.7"/>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+        <rect width="${W}" height="${H}" fill="#0B1120"/>
+        <polygon points="${parcelPts}" fill="rgba(212,133,14,0.13)" stroke="#c9a878" stroke-width="1"/>
+        ${buildPts ? `<polygon points="${buildPts}" fill="rgba(30,132,73,0.06)" stroke="rgba(30,132,73,0.5)" stroke-width="0.6" stroke-dasharray="2,2"/>` : ""}
+        ${unitsSvg}
+    </svg>`;
+}
+
+// Applique un candidat sélectionné aux u.polygon des unités
+function applyCandidate(label, idx) {
+    const result = (_lastSolverResult || {})[label];
+    if (!result || !result.candidates[idx]) return;
+    const cand = result.candidates[idx];
+    historyPush(label);
+    const units = cockpitState.scenarios[label].units;
+    // Map candidat.units (avec id) sur units[] par (id / unit_index / name / index)
+    cand.units.forEach((cu, i) => {
+        let target = units.find(u => u.unit_index === cu.unit_index)
+                  || units.find(u => u.unit_name === cu.unit_name && u.unit_type === cu.unit_type)
+                  || units[i];
+        if (!target) return;
+        target.polygon = cu.polygonM.map(p => ({ x: p.x, y: p.y }));
+        target.width_m = null; target.height_m = null;
+        target.rotation_deg = null;
+        // Recalcule offset centroïde pour compat drag legacy
+        const c = polygonCentroidM(target.polygon);
+        target.offset_x_m = Number(c.x.toFixed(2));
+        target.offset_y_m = Number(c.y.toFixed(2));
+        // Surface cible respectée (déjà exacte par le solver, on la conserve)
+    });
+    cockpitState.scenarios[label].activePattern = cand.strategy;
+    // Highlight visuel dans le panel
+    document.querySelectorAll(`#cSolverGrid${label} .c-cand-card`).forEach((el, i) => {
+        el.classList.toggle("selected", i === idx);
+    });
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+    showToast(`✓ Candidat "${cand.strategy}" (score ${(cand.score * 100).toFixed(0)}) appliqué`);
 }
 
 // v9.7 — Change l'axe d'implantation d'un scénario et ré-applique le dernier pattern
