@@ -356,7 +356,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.3.0-CMD</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.0-POLY</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1873,6 +1873,70 @@ function findSafeUnitDistance(cxSvg, cySvg, sectorRadDeg, maxDist, uW, uH, rotDe
     return 10;  // fallback : très proche du centre (moins de risque de déborder)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v9.0 — MODÈLE POLYGONAL UNIVERSEL (source unique de vérité)
+// Chaque unité a un polygon[] en mètres (repère parcelle centré, y+ = Nord).
+// Si u.polygon absent, on le CONSTRUIT depuis rect (W/H/rot/offset) : fallback.
+// Toute édition => écrit u.polygon.
+// ═══════════════════════════════════════════════════════════════════════════════
+function unitPolygonM(u) {
+    if (u.polygon && u.polygon.length >= 3) {
+        return u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) }));
+    }
+    const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
+    const cat = (typeof categorizeUnitType === "function") ? categorizeUnitType(u.unit_type) : "AUTRE";
+    const aspect = cat === "COMMERCE" ? 2.0 : cat === "BUREAU" ? 1.5 : 1.2;
+    const dims = (typeof niceRoundDimensions === "function") ? niceRoundDimensions(areaM2, aspect) : { width_m: Math.sqrt(areaM2 * aspect), height_m: Math.sqrt(areaM2 / aspect) };
+    const w_m = u.width_m ? Number(u.width_m) : dims.width_m;
+    const h_m = u.height_m ? Number(u.height_m) : dims.height_m;
+    const cx_m = u.offset_x_m != null ? Number(u.offset_x_m) : 0;
+    const cy_m = u.offset_y_m != null ? Number(u.offset_y_m) : 0;
+    const rot = (u.rotation_deg || 0) * Math.PI / 180;
+    return [
+        { x: -w_m/2, y:  h_m/2 }, { x:  w_m/2, y:  h_m/2 },
+        { x:  w_m/2, y: -h_m/2 }, { x: -w_m/2, y: -h_m/2 }
+    ].map(p => ({
+        x: cx_m + p.x * Math.cos(rot) - p.y * Math.sin(rot),
+        y: cy_m + p.x * Math.sin(rot) + p.y * Math.cos(rot)
+    }));
+}
+function polygonAreaM2(polyM) {
+    if (!polyM || polyM.length < 3) return 0;
+    let a = 0;
+    for (let i = 0; i < polyM.length; i++) {
+        const j = (i+1) % polyM.length;
+        a += polyM[i].x * polyM[j].y - polyM[j].x * polyM[i].y;
+    }
+    return Math.abs(a) / 2;
+}
+function polygonCentroidM(polyM) {
+    if (!polyM || polyM.length === 0) return { x: 0, y: 0 };
+    let cx = 0, cy = 0;
+    polyM.forEach(p => { cx += p.x; cy += p.y; });
+    return { x: cx / polyM.length, y: cy / polyM.length };
+}
+function polygonMToSvgPx(polyM, cxSvg, cySvg, scale) {
+    return polyM.map(p => ({ x: cxSvg + p.x * scale, y: cySvg - p.y * scale }));
+}
+function svgPxToPolygonM(polyPx, cxSvg, cySvg, scale) {
+    return polyPx.map(p => ({ x: (p.x - cxSvg) / scale, y: -(p.y - cySvg) / scale }));
+}
+function translatePolygonM(polyM, dxM, dyM) {
+    return polyM.map(p => ({ x: p.x + dxM, y: p.y + dyM }));
+}
+// Convertit un delta pixel en delta mètre (pour drag)
+function pxDeltaToM(dxPx, dyPx, scale) {
+    return { dxM: dxPx / scale, dyM: -dyPx / scale };
+}
+// Garantit qu'une unité a u.polygon défini : matérialise depuis rect si besoin
+function ensureUnitPolygon(u) {
+    if (!u.polygon || u.polygon.length < 3) {
+        u.polygon = unitPolygonM(u);
+        // On garde W/H/rot/offset comme reliques pour compat, mais polygon est now la vérité
+    }
+    return u.polygon;
+}
+
 function renderParcelSvg(label) {
     const svg = $(`cParcelSvg${label}`);
     const legend = $(`cParcelLegend${label}`);
@@ -2036,30 +2100,71 @@ function renderParcelSvg(label) {
         }
     });
     const units = allUnits.filter(u => u.placement_sector);
-    const placements = [];   // v75.6.3 : collecte des placements avant resolve overlaps
-    const sectorCount = {};
+    // v9.0 — Model polygonal universel : chaque unité a u.polygon en mètres.
+    // Aucun auto-shape / push / retract / autoFit. Le user est maître.
+    const placements = [];
     units.forEach((u, i) => {
-        const s = u.placement_sector;
-        if (!sectorAngles[s]) return;
-        sectorCount[s] = (sectorCount[s] || 0) + 1;
-        const idxInSector = sectorCount[s] - 1;
-        const nInSector = sectorTotal[s];
-        const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
-        const areaPx = areaM2 * pxPerM2;
-        const cat = categorizeUnitType(u.unit_type);
-        const aspectRatio = cat === "COMMERCE" ? 2.0 : cat === "BUREAU" ? 1.5 : 1.2;
-        // v75.6.2 — Dimensions "architecte" arrondies (entier/demi-entier) : 5×10, 6×8, 8×6...
-        const dims = niceRoundDimensions(areaM2, aspectRatio);
-        let displayW_m = dims.width_m, displayH_m = dims.height_m;
-        // v75.5.0 — override si dimensions custom (auto-shape / snap magnet)
-        if (u.width_m && u.height_m) {
-            displayW_m = Number(u.width_m);
-            displayH_m = Number(u.height_m);
-        }
-        let uW = displayW_m * scale;
-        let uH = displayH_m * scale;
-        // Minimum absolu pour visibilité (8px), proportionnel
-        if (uW < 8) { const k = 8 / uW; uW *= k; uH *= k; }
+        // Force la matérialisation en polygon (fallback rect→polygon si polygon absent)
+        ensureUnitPolygon(u);
+        const polyM = unitPolygonM(u);
+        const polyPx = polygonMToSvgPx(polyM, cxSvg, cySvg, scale);
+        const centroidM = polygonCentroidM(polyM);
+        const cxAbs = cxSvg + centroidM.x * scale;
+        const cyAbs = cySvg - centroidM.y * scale;
+        const areaM2 = Math.max(4, Number(u.unit_size_m2) || Math.round(polygonAreaM2(polyM)));
+        const realArea = polygonAreaM2(polyM);
+        // Test si le polygon déborde de la PARCELLE (pas du buildable — c'est un signal, pas une correction)
+        const clippedByParcel = sutherlandHodgmanClip(polyPx, svgPts);
+        const areaClippedPx = clippedByParcel ? polygonAreaXY(clippedByParcel) : 0;
+        const areaOriginalPx = polygonAreaXY(polyPx);
+        const outsideParcel = areaOriginalPx > 0 && areaClippedPx < areaOriginalPx * 0.99;
+        placements.push({
+            u, i, globalIdx: allUnits.indexOf(u),
+            polyM, polyPx, cxAbs, cyAbs,
+            areaM2: Math.round(areaM2),
+            realArea: Math.round(realArea),
+            color: UNIT_COLORS[u.unit_type] || UNIT_COLORS.AUTRE,
+            label2: (u.unit_name || u.unit_type || "?").substring(0, 12),
+            outsideParcel
+        });
+    });
+
+    // v9.0 — TOUT le code d'auto-shape / auto-push / auto-fit / clip mutuel / clip auto est SUPPRIMÉ.
+    // Le polygon du user est rendu tel quel. Un débordement est signalé (bordure orange), jamais corrigé.
+    // Le bloc mort suivant reste juste pour ne pas casser les identifiants exportés vers _svgRefs.
+    // Rendu depuis placements polygonaux
+    let unitsHtml = "";
+    placements.forEach(p => {
+        const { u, globalIdx, polyPx, cxAbs, cyAbs, areaM2, realArea, color, label2, outsideParcel } = p;
+        const strokeColor = outsideParcel ? "#F59E0B" : "#fff";
+        const strokeW = outsideParcel ? 1.6 : 1.2;
+        const strokeDash = outsideParcel ? ' stroke-dasharray="5,3"' : "";
+        // Polygon rendu en coord ABSOLUES (aucune rotation/scale wrapper — le polygon est déjà transformé)
+        const pointsStr = polyPx.map(pt => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ");
+        unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}">`;
+        unitsHtml += `<polygon class="body" points="${pointsStr}" fill="${color}" fill-opacity="0.85" stroke="${strokeColor}" stroke-width="${strokeW}"${strokeDash}/>`;
+        // Labels au centroïde (repère absolu, pas de rotation)
+        // Hauteur "typique" pour dimensionner la font ≈ sqrt(aire_px)
+        const areaPxReal = Math.max(200, polygonAreaXY(polyPx));
+        const charSize = Math.sqrt(areaPxReal) * 0.14;
+        const fsName = Math.max(6, Math.min(11, charSize));
+        const fsArea = Math.max(5, Math.min(8, charSize * 0.75));
+        const divergence = Math.abs(realArea - areaM2) / Math.max(1, areaM2);
+        const areaLabel = (divergence > 0.02) ? `${areaM2} m² · ${realArea} eff.` : `${areaM2} m²`;
+        unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs - fsName * 0.4).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" pointer-events="none">${esc(label2)}</text>`;
+        unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs + fsName * 0.7).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
+        // v9.0 — Petits cercles vertices (discrets, r=2.5) → interactifs en v9.1 pour édition point par point
+        polyPx.forEach((v, vi) => {
+            unitsHtml += `<circle class="unit-vertex" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="2.5" fill="#c9a878" fill-opacity="0.7" stroke="#fff" stroke-width="0.5"/>`;
+        });
+        unitsHtml += `</g>`;
+    });
+
+    // v9.0 : legacy auto-shape / auto-push / clip mutuel / rendu rect+rotation retiré ci-dessous.
+    /* === LEGACY DEAD CODE — désactivé (block-commented pour éviter tout parse orphelin) ===
+    if (false) {
+        const dummyForEachStart = () => {
+        const areaM2 = 0; const uW = 0; const uH = 0;
 
         let ux, uy, rotDeg;
         const globalIdx = allUnits.indexOf(u);
@@ -2288,9 +2393,14 @@ function renderParcelSvg(label) {
         unitsHtml += `</g>`;
     });
 
+        };
+    }
+    === END LEGACY DEAD CODE === */
+
     // v75.6.1 — Réutilise segLinesForSnapPre calculé avant boucle (évite recompute)
     // v8.0.0 — svgPtsRaw ajouté pour le CommandManager (vertices parcelle A/B/C…)
-    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, svgPtsRaw: svgPts, sectorAngles, segLinesForSnap: segLinesForSnapPre };
+    // v9.0 — placements ajoutés pour l'édition polygonale directe (vertex/edge)
+    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, svgPtsRaw: svgPts, sectorAngles, segLinesForSnap: segLinesForSnapPre, placements };
 
     // Boussole en haut à droite (plus compact)
     const compass = `
@@ -2410,7 +2520,17 @@ function onUnitDragStart(e) {
             lastW: startW, lastH: startH
         };
     } else {
-        _dragState = { mode: "move", label, uidx, el, svgEl, refs, deltaX: svgPt.x - curX, deltaY: svgPt.y - curY, curRot, lastX: curX, lastY: curY, lastRot: curRot, snappedSegmentIdx: null };
+        // v9.0 — MODE MOVE : snapshot polygon initial pour translation pure (aucune déformation)
+        ensureUnitPolygon(u);
+        const startPolyM = u.polygon.map(p => ({ x: p.x, y: p.y }));
+        const startCentroid = polygonCentroidM(startPolyM);
+        _dragState = {
+            mode: "move", label, uidx, el, svgEl, refs,
+            basePt: { x: svgPt.x, y: svgPt.y },
+            startPolyM, startCentroid,
+            deltaX: 0, deltaY: 0, curRot: 0,   // legacy fields (unused mais accessed ailleurs)
+            lastX: curX, lastY: curY, lastRot: curRot, snappedSegmentIdx: null
+        };
     }
     el.classList.add("dragging");
     e.preventDefault();
@@ -2433,23 +2553,27 @@ function clearDragVisuals(svgEl) {
     svgEl.querySelectorAll(".snap-hint, .align-guide").forEach(n => n.remove());
 }
 
-// v75.8.8 — Live re-render throttled à 50ms pendant le drag pour clip parcelle + tetris en direct
+// v9.0 — Live re-render throttled : translation PURE du polygon initial (aucune déformation)
 let _dragLastRenderTs = 0;
-function throttledRenderParcelDuringDrag(label, uidx, newX, newY, newRot) {
+function throttledRenderParcelDuringDrag(label, uidx, newX, newY /*, newRot ignored — pure translation */) {
     const now = Date.now();
     if (now - _dragLastRenderTs < 50) return;
     _dragLastRenderTs = now;
-    // Sync u.offset_x_m/y_m et rotation avant render pour que le clip soit correct
     const refs = _svgRefs[label];
-    if (!refs) return;
+    if (!refs || !_dragState || !_dragState.startPolyM) return;
     const u = (cockpitState.scenarios[label].units || [])[uidx];
     if (!u) return;
-    u.offset_x_m = Number(((newX - refs.cxSvg) / refs.scale).toFixed(2));
-    u.offset_y_m = Number((-(newY - refs.cySvg) / refs.scale).toFixed(2));
-    if (newRot !== undefined && newRot !== null) u.rotation_deg = Number(newRot);
-    // Re-render : clip parcelle + tetris s'appliqueront
+    // newX/newY = centroïde souhaité en px SVG. Convertit en mètres.
+    const newCxM = (newX - refs.cxSvg) / refs.scale;
+    const newCyM = -(newY - refs.cySvg) / refs.scale;
+    const dxM = newCxM - _dragState.startCentroid.x;
+    const dyM = newCyM - _dragState.startCentroid.y;
+    // Translation pure du polygon initial — aucune modification de forme
+    u.polygon = translatePolygonM(_dragState.startPolyM, dxM, dyM);
+    // Sync legacy offset (compat rendu fallback si polygon perdu)
+    u.offset_x_m = Number(newCxM.toFixed(2));
+    u.offset_y_m = Number(newCyM.toFixed(2));
     renderParcelSvg(label);
-    // Restaure le classe dragging sur le nouvel élément (car innerHTML remplace tout)
     const newEl = document.querySelector(`#cParcelSvg${label} .draggable-unit[data-uidx="${uidx}"]`);
     if (newEl && _dragState) {
         newEl.classList.add("dragging");
@@ -2592,14 +2716,35 @@ function onUnitDragMove(e) {
 
 function onUnitDragEnd(e) {
     if (!_dragState) return;
-    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl, lastW, lastH, lastCX, lastCY } = _dragState;
+    const { mode, label, uidx, el, refs, lastX, lastY, lastRot, snappedSegmentIdx, svgEl, lastW, lastH, lastCX, lastCY, startPolyM, startCentroid } = _dragState;
     _dragState = null;
     el.classList.remove("dragging");
     clearDragVisuals(svgEl);
     const u = (cockpitState.scenarios[label].units || [])[uidx];
     if (!u) return;
 
-    historyPush(label);   // v8.2.0 : snapshot avant commit legacy drag/resize/rotate
+    historyPush(label);   // v8.2.0 : snapshot avant commit
+
+    // v9.0 — Mode "move" = TRANSLATION PURE du polygon initial (aucun snap rotation, aucune déformation)
+    if (mode === "move" && startPolyM && lastX !== undefined && refs) {
+        const newCxM = (lastX - refs.cxSvg) / refs.scale;
+        const newCyM = -(lastY - refs.cySvg) / refs.scale;
+        const dxM = newCxM - startCentroid.x;
+        const dyM = newCyM - startCentroid.y;
+        u.polygon = translatePolygonM(startPolyM, dxM, dyM);
+        u.offset_x_m = Number(newCxM.toFixed(2));
+        u.offset_y_m = Number(newCyM.toFixed(2));
+        // Recalc secteur pour cohérence avec dropdown Placement
+        const dxSvg = lastX - refs.cxSvg, dySvg = lastY - refs.cySvg;
+        if (dxSvg * dxSvg + dySvg * dySvg > 25) {
+            u.placement_sector = angleToSector(Math.atan2(dySvg, dxSvg));
+        }
+        renderUnitsTable(label);
+        renderParcelSvg(label);
+        updateConstraintsCount();
+        showToast(`Unité "${u.unit_name || u.unit_type}" déplacée`);
+        return;
+    }
 
     if (mode === "rotate") {
         u.rotation_deg = Number(((lastRot % 360) + 360) % 360);
