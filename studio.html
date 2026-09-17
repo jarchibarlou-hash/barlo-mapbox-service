@@ -367,7 +367,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.1-CONST</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.2-STRAT</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2020,6 +2020,334 @@ BARLO.geometry.polygonsIntersect = function(polyA, polyB, tolerancePx) {
     const a = polygonAreaXY(clipped);
     return a > tolerancePx ? a : 0;
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.2 — BARLO.strategies : rulesets génératifs (chaque stratégie explore N variantes)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helpers pour toutes les stratégies
+BARLO.strategies._h = {
+    // Rectangle de surface cible EXACTE avec aspect donné, centré en (cx, cy)
+    makeRectAt(cx, cy, targetArea, aspect) {
+        const w = Math.sqrt(targetArea * aspect);
+        const h = targetArea / w;
+        return [
+            { x: cx - w/2, y: cy + h/2 },   // NW
+            { x: cx + w/2, y: cy + h/2 },   // NE
+            { x: cx + w/2, y: cy - h/2 },   // SE
+            { x: cx - w/2, y: cy - h/2 }    // SW
+        ];
+    },
+    // Rotate polygon autour d'un centre
+    rotate(polyM, cx, cy, angleDeg) {
+        return BARLO.geometry.rotate(polyM, cx, cy, angleDeg);
+    },
+    // Points anchors dans le buildable
+    anchors(siteAnalysis) {
+        const b = siteAnalysis.bounds;
+        return {
+            center: { x: b.cx, y: b.cy },
+            north:  { x: b.cx, y: b.maxY - b.h * 0.15 },
+            south:  { x: b.cx, y: b.minY + b.h * 0.15 },
+            east:   { x: b.maxX - b.w * 0.15, y: b.cy },
+            west:   { x: b.minX + b.w * 0.15, y: b.cy }
+        };
+    }
+};
+
+// ─── LAMELLA : barre allongée dans un seul axe ───
+BARLO.strategies.LAMELLA = {
+    id: "LAMELLA", label: "Lamellé",
+    generate(programUnits, siteAnalysis, opts) {
+        opts = opts || {};
+        const candidates = [];
+        const N = programUnits.length;
+        if (!N || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        // Axes candidats : arêtes parcelle + orientation user
+        const axes = siteAnalysis.candidateAxes || [{ angleDeg: 0 }];
+        const yPositions = [b.cy, b.cy + b.h * 0.15, b.cy - b.h * 0.15];
+        for (const axis of axes.slice(0, 4)) {
+            for (const yPos of yPositions) {
+                const units = [];
+                const bandW = b.w * 0.92;
+                const gap = 1.0;
+                const perW = (bandW - (N - 1) * gap) / N;
+                for (let i = 0; i < N; i++) {
+                    const pu = programUnits[i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const aspect = (perW * perW) / area;
+                    const cx = b.minX + b.w * 0.04 + (i + 0.5) * (perW + gap);
+                    let poly = BARLO.strategies._h.makeRectAt(cx, yPos, area, aspect);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                candidates.push({ strategy: "LAMELLA", axisDeg: axis.angleDeg,
+                    anchor: yPos > b.cy ? "N" : (yPos < b.cy ? "S" : "center"),
+                    units, typologyScore: 0.9 });
+            }
+        }
+        return candidates;
+    }
+};
+
+// ─── PERIMETER : le long d'une arête parcelle choisie ───
+BARLO.strategies.PERIMETER = {
+    id: "PERIMETER", label: "Bordure",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (!N || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        // Utilise chaque arête parcelle comme référence
+        const edges = (siteAnalysis.edges || []).slice(0, 8);
+        for (const edge of edges) {
+            const ex = edge.p2.x - edge.p1.x, ey = edge.p2.y - edge.p1.y;
+            const len = edge.len;
+            let nx = -ey / len, ny = ex / len;
+            const midx = (edge.p1.x + edge.p2.x) / 2, midy = (edge.p1.y + edge.p2.y) / 2;
+            const toC = { x: b.cx - midx, y: b.cy - midy };
+            if (nx * toC.x + ny * toC.y < 0) { nx = -nx; ny = -ny; }
+            const depthMax = Math.min(len * 0.4, b.w * 0.4, b.h * 0.4);
+            const units = [];
+            const totalArea = programUnits.reduce((s, u) => s + (u.targetArea || u.unit_size_m2 || 50), 0);
+            const depth = Math.max(4, Math.min(depthMax, totalArea / len));
+            for (let i = 0; i < N; i++) {
+                const pu = programUnits[i];
+                const area = pu.targetArea || pu.unit_size_m2 || 50;
+                const w = area / depth;
+                const cumStart = programUnits.slice(0, i).reduce((s, u) => s + ((u.targetArea || u.unit_size_m2 || 50) / depth), 0);
+                const t = (cumStart + w / 2) / len;
+                if (t > 1) continue;
+                const cx = edge.p1.x + ex * t + nx * (depth / 2 + (edge.retraitM || 3));
+                const cy = edge.p1.y + ey * t + ny * (depth / 2 + (edge.retraitM || 3));
+                const angle = edge.angleDeg;
+                let poly = BARLO.strategies._h.makeRectAt(0, 0, area, (w * w) / area);
+                poly = BARLO.strategies._h.rotate(poly, 0, 0, angle);
+                poly = poly.map(p => ({ x: p.x + cx, y: p.y + cy }));
+                units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+            }
+            if (units.length === N) candidates.push({ strategy: "PERIMETER", axisDeg: edge.angleDeg,
+                anchor: `edge_${edge.index}`, units, typologyScore: 0.85 });
+        }
+        return candidates;
+    }
+};
+
+// ─── U : 3 bras (N + W + E) autour d'une cour ───
+BARLO.strategies.U_SHAPE = {
+    id: "U", label: "U",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (N < 3 || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        const axes = (siteAnalysis.candidateAxes || []).slice(0, 3);
+        // Répartitions : {N: nNorth, W: nWest, E: nEast}
+        const distribs = [
+            { N: Math.ceil(N / 3), W: Math.floor((N - Math.ceil(N/3)) / 2), E: 0 },
+            { N: 1, W: Math.floor((N - 1) / 2), E: 0 }
+        ];
+        distribs.forEach(d => { d.E = N - d.N - d.W; });
+        for (const axis of axes) {
+            for (const d of distribs) {
+                if (d.E < 1 || d.W < 1) continue;
+                const units = [];
+                const armDepth = Math.min(b.w, b.h) * 0.18;
+                // Bras Nord
+                for (let i = 0; i < d.N; i++) {
+                    const pu = programUnits[i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const perW = (b.w * 0.85) / d.N;
+                    const cx = b.minX + b.w * 0.075 + (i + 0.5) * perW;
+                    const cy = b.maxY - armDepth / 2;
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (perW * perW) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                // Bras Ouest
+                for (let i = 0; i < d.W; i++) {
+                    const pu = programUnits[d.N + i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const cx = b.minX + armDepth / 2;
+                    const cy = b.maxY - armDepth - (i + 0.5) * (b.h * 0.65 / d.W);
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (armDepth * armDepth) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                // Bras Est
+                for (let i = 0; i < d.E; i++) {
+                    const pu = programUnits[d.N + d.W + i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const cx = b.maxX - armDepth / 2;
+                    const cy = b.maxY - armDepth - (i + 0.5) * (b.h * 0.65 / d.E);
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (armDepth * armDepth) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                if (units.length === N) candidates.push({ strategy: "U", axisDeg: axis.angleDeg,
+                    anchor: `nord=${d.N}/W=${d.W}/E=${d.E}`, units, typologyScore: 0.88 });
+            }
+        }
+        return candidates;
+    }
+};
+
+// ─── T : barre H (Nord) + barre V (descend Sud) ───
+BARLO.strategies.T_SHAPE = {
+    id: "T", label: "T",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (N < 2 || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        const axes = (siteAnalysis.candidateAxes || []).slice(0, 3);
+        const splits = [Math.ceil(N / 2), Math.floor(N / 2) || 1];
+        for (const axis of axes) {
+            for (const nH of splits) {
+                const nV = N - nH;
+                if (nV < 1 || nH < 1) continue;
+                const units = [];
+                const wBarH = b.w * 0.7;
+                const perW = wBarH / nH;
+                for (let i = 0; i < nH; i++) {
+                    const pu = programUnits[i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const cx = b.cx - wBarH / 2 + (i + 0.5) * perW;
+                    const cy = b.maxY - 3;
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (perW * perW) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                const totalHVert = b.h * 0.55;
+                for (let i = 0; i < nV; i++) {
+                    const pu = programUnits[nH + i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const hPer = totalHVert / nV;
+                    const cx = b.cx;
+                    const cy = b.maxY - 6 - (i + 0.5) * hPer;
+                    const wPer = area / hPer;
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (wPer * wPer) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                candidates.push({ strategy: "T", axisDeg: axis.angleDeg, anchor: `H=${nH}/V=${nV}`,
+                    units, typologyScore: 0.82 });
+            }
+        }
+        return candidates;
+    }
+};
+
+// ─── STACKED : bandes empilées mitoyennes ───
+BARLO.strategies.STACKED = {
+    id: "STACKED", label: "Superposé",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (!N || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        const axes = (siteAnalysis.candidateAxes || []).slice(0, 3);
+        const widthOptions = [b.w * 0.85, b.w * 0.6, b.w * 0.45];
+        for (const axis of axes) {
+            for (const w of widthOptions) {
+                const units = [];
+                let yCursor = b.minY + 2;
+                let overflow = false;
+                for (let i = 0; i < N; i++) {
+                    const pu = programUnits[i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const h = area / w;
+                    if (yCursor + h > b.maxY - 1) { overflow = true; break; }
+                    let poly = BARLO.strategies._h.makeRectAt(b.cx, yCursor + h/2, area, (w * w) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                    yCursor += h + 0.5;
+                }
+                if (!overflow && units.length === N) {
+                    candidates.push({ strategy: "STACKED", axisDeg: axis.angleDeg, anchor: `w${w.toFixed(0)}m`,
+                        units, typologyScore: 0.86 });
+                }
+            }
+        }
+        return candidates;
+    }
+};
+
+// ─── STAGGERED : zigzag alterné ───
+BARLO.strategies.STAGGERED = {
+    id: "STAGGERED", label: "Décalé",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (!N || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        const axes = (siteAnalysis.candidateAxes || []).slice(0, 3);
+        const dxSteps = [b.w * 0.10, b.w * 0.18, b.w * 0.25];
+        for (const axis of axes) {
+            for (const dxStep of dxSteps) {
+                const units = [];
+                const totalH = b.h * 0.85;
+                const perH = totalH / N;
+                for (let i = 0; i < N; i++) {
+                    const pu = programUnits[i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const w = Math.min(b.w * 0.5, Math.sqrt(area * 1.5));
+                    const dir = (i % 2 === 0) ? -1 : 1;
+                    const cx = b.cx + dir * dxStep;
+                    const cy = b.maxY - b.h * 0.075 - (i + 0.5) * perH;
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (w * w) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                candidates.push({ strategy: "STAGGERED", axisDeg: axis.angleDeg, anchor: `dx${dxStep.toFixed(1)}`,
+                    units, typologyScore: 0.78 });
+            }
+        }
+        return candidates;
+    }
+};
+
+// ─── SPLIT : 2 groupes séparés Nord/Sud ───
+BARLO.strategies.SPLIT = {
+    id: "SPLIT", label: "Split",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (!N || !siteAnalysis) return candidates;
+        const b = siteAnalysis.bounds;
+        const axes = (siteAnalysis.candidateAxes || []).slice(0, 3);
+        const splits = [Math.ceil(N / 2), Math.floor(N / 3) || 1];
+        for (const axis of axes) {
+            for (const nNorth of splits) {
+                const nSouth = N - nNorth;
+                if (nSouth < 1 || nNorth < 1) continue;
+                const units = [];
+                const yN = b.cy + b.h * 0.25;
+                const yS = b.cy - b.h * 0.25;
+                const bandW = b.w * 0.9;
+                for (let i = 0; i < N; i++) {
+                    const pu = programUnits[i];
+                    const area = pu.targetArea || pu.unit_size_m2 || 50;
+                    const isN = i < nNorth;
+                    const nInBand = isN ? nNorth : nSouth;
+                    const idxInBand = isN ? i : (i - nNorth);
+                    const perW = bandW / nInBand;
+                    const cx = b.cx - bandW / 2 + (idxInBand + 0.5) * perW;
+                    const cy = isN ? yN : yS;
+                    let poly = BARLO.strategies._h.makeRectAt(cx, cy, area, (perW * perW) / area);
+                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
+                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                }
+                candidates.push({ strategy: "SPLIT", axisDeg: axis.angleDeg,
+                    anchor: `N=${nNorth}/S=${nSouth}`, units, typologyScore: 0.83 });
+            }
+        }
+        return candidates;
+    }
+};
+
+BARLO.strategies.LIST = ["LAMELLA", "PERIMETER", "U_SHAPE", "T_SHAPE", "STACKED", "STAGGERED", "SPLIT"];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // v10.1 — BARLO.constraints : Hard & Soft Constraints, Validator, Scorer
