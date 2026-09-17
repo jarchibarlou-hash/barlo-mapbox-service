@@ -658,10 +658,21 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
             rot_deg = float(u.get('rotation_deg') or 0)
             rot_rad = math.radians(rot_deg)
             cos_r, sin_r = math.cos(rot_rad), math.sin(rot_rad)
+            # v11.8-P0.1 — bug fix cross-language JS↔Python schéma polygone.
+            # Le frontend v9.0+ (2020+) écrit `{x, y}` (studio.html:1949).
+            # Le frontend legacy pre-v9 écrit `{x_m, y_m}` (shapeCircle/L/T/U/...).
+            # Ce Python lisait UNIQUEMENT `x_m`/`y_m` → tous les polygones édités en Revit-mode
+            # (drag vertex, offset, trim, corner, ...) arrivaient effondrés sur (0,0) → polygone dégénéré
+            # → dessin invisible ou fallback rectangle heuristique dans le PPTX client.
+            # Bug silencieux depuis 6+ mois. Fix : accepte les 2 schémas.
             poly_pts = []
             for pt in custom_polygon:
-                lx = float(pt.get('x_m') or 0)
-                ly = float(pt.get('y_m') or 0)
+                xm = pt.get('x_m')
+                if xm is None: xm = pt.get('x')
+                ym = pt.get('y_m')
+                if ym is None: ym = pt.get('y')
+                lx = float(xm if xm is not None else 0)
+                ly = float(ym if ym is not None else 0)
                 px = cx + offset_x + lx * cos_r - ly * sin_r
                 py = cy + offset_y + lx * sin_r + ly * cos_r
                 poly_pts.append((px, py))
@@ -966,6 +977,11 @@ def assemble_pptx(data, template_path, output_path):
 
     prs = Presentation(template_path)
     texts = data.get('texts', {})
+    # v11.8-P0.2 — bug fix `flat_data` undefined. Ce nom était référencé lignes 1239-1243 et
+    # 1319-1323 sans jamais être défini → NameError → try/except silencieux → les 2 tables budget
+    # A/B/C sur slides 17 et 18 étaient TOUJOURS absentes des PPTX client (warning stderr uniquement).
+    # server.js:10340 fait `...flat` qui aplatit à la racine de `data` → `data` EST déjà le flat_data.
+    flat_data = data
     client_name = data.get('client_name', '')
 
     # -- Prepare composite text keys --

@@ -10336,6 +10336,20 @@ app.post("/generate-pptx", async (req, res) => {
     const totalCustomShapes = ["A","B","C"].reduce((s, k) => s + (unitsByScenario[k]||[]).filter(u => u.polygon || u.width_m).length, 0);
     console.log(`[GENERATE-PPTX] v75.11.1 : leadRef="${leadRefForUnits}", units total=${totalUnitsPptx}, custom shapes=${totalCustomShapes}, polygon pts=${parcelPolygon.length}`);
 
+    // v11.8-P0.4 — Alerte explicite si la géométrie riche est absente du body ET absente de Supabase.
+    // C'est le signal que le frontend n'a pas envoyé override_units_detail_X, OU que la migration
+    // footprint_json n'est pas appliquée. Sans géométrie, le PPTX tombe sur le fallback rectangle
+    // heuristique de generate_pptx.py:691-720 — le client reçoit un plan 2D non représentatif.
+    const missingOverrides = ["A","B","C"].filter(scen => {
+      const overrideRaw = p[`override_units_detail_${scen}`];
+      return !overrideRaw || (typeof overrideRaw === "string" && overrideRaw.trim() === "");
+    });
+    if (missingOverrides.length > 0 && totalCustomShapes === 0 && totalUnitsPptx > 0) {
+      console.warn(`[GENERATE-PPTX] ⚠ AUCUNE GÉOMÉTRIE riche disponible (override_units_detail manquant pour scénarios ${missingOverrides.join(",")}, aucune footprint_json en DB). Le PPTX utilisera le fallback rectangle heuristique — plan 2D non représentatif. Vérifie que le frontend envoie override_units_detail_X OU que la migration_v11_8_footprint_json.sql est appliquée.`);
+    } else if (missingOverrides.length > 0 && totalCustomShapes > 0) {
+      console.log(`[GENERATE-PPTX] ℹ override_units_detail manquant pour ${missingOverrides.join(",")} mais géométrie restaurée depuis footprint_json DB (${totalCustomShapes} shapes)`);
+    }
+
     const pptxData = {
       ...flat,
       client_name: p.client_name || "",
@@ -10621,36 +10635,75 @@ function getLeadUnitsSupabase() {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 }
 
-// v75.2 — Lit sb_lead_units et retourne { A:[], B:[], C:[] } pour injection dans le body Python
-// leadRef : ex "BARLO-FMM4". Retourne {A:[],B:[],C:[]} vide si Supabase absent, table manquante, ou lead sans unités.
+// v75.2 / v11.8-P0.3 — Lit sb_lead_units + footprint_json et retourne { A:[], B:[], C:[] }
+// pour injection dans le body Python. Fusionne les colonnes plates + JSONB.
+// leadRef : ex "BARLO-FMM4". Retourne {A:[],B:[],C:[]} vide si Supabase absent/table manquante.
 async function fetchLeadUnitsForPptx(leadRef) {
   const empty = { A: [], B: [], C: [] };
   if (!leadRef) return empty;
   const sb = getLeadUnitsSupabase();
   if (!sb) return empty;
-  try {
-    const { data, error } = await sb
+
+  // v11.8-P0.3 — Essai avec footprint_json d'abord (post-migration), fallback sans (pré-migration).
+  const runQuery = async (withFootprint) => {
+    const cols = withFootprint
+      ? "scenario, unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes, footprint_json"
+      : "scenario, unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes";
+    return await sb
       .from("sb_lead_units")
-      .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes")
+      .select(cols)
       .eq("lead_ref", String(leadRef).trim())
       .order("scenario", { ascending: true })
       .order("unit_index", { ascending: true });
+  };
+
+  try {
+    let { data, error } = await runQuery(true);
+    // Retry sans footprint_json si colonne absente (migration pas encore appliquée)
+    if (error && String(error.message || "").includes("footprint_json")) {
+      console.warn(`[FETCH-LEAD-UNITS-PPTX] colonne footprint_json absente pour ${leadRef} — fallback (appliquer migration_v11_8_footprint_json.sql)`);
+      const retry = await runQuery(false);
+      data = retry.data; error = retry.error;
+    }
     if (error) {
       console.warn(`[FETCH-LEAD-UNITS-PPTX] ${leadRef} : ${error.message}`);
       return empty;
     }
     const grouped = { A: [], B: [], C: [] };
+    let geomCount = 0;
     for (const row of data || []) {
-      if (grouped[row.scenario]) {
-        grouped[row.scenario].push({
-          index: row.unit_index,
-          type: row.unit_type,
-          name: row.unit_name || "",
-          size_m2: Number(row.unit_size_m2) || 0,
-          sector: row.placement_sector || null,
-          notes: row.notes || ""
-        });
-      }
+      if (!grouped[row.scenario]) continue;
+      const fp = row.footprint_json && typeof row.footprint_json === "object" ? row.footprint_json : {};
+      if (Object.keys(fp).length > 0) geomCount++;
+      // Format attendu par override_units_detail_X côté frontend / Python
+      // (voir server.js:10300-10334 pour le merge et generate_pptx.py:645-720 pour la consommation)
+      grouped[row.scenario].push({
+        index: row.unit_index,
+        type: row.unit_type,
+        name: row.unit_name || "",
+        size_m2: Number(row.unit_size_m2) || 0,
+        sector: row.placement_sector || null,
+        notes: row.notes || "",
+        // Champs géométriques restaurés depuis footprint_json (si présents)
+        polygon: fp.polygon || null,
+        offset_x_m: fp.offset_x_m != null ? Number(fp.offset_x_m) : null,
+        offset_y_m: fp.offset_y_m != null ? Number(fp.offset_y_m) : null,
+        rotation_deg: fp.rotation_deg != null ? Number(fp.rotation_deg) : null,
+        width_m: fp.width_m != null ? Number(fp.width_m) : null,
+        height_m: fp.height_m != null ? Number(fp.height_m) : null,
+        shape_mode: fp.shape_mode || null,
+        shape_type: fp.shape_type || null,
+        pilotis: fp.pilotis || false,
+        sous_sols: fp.sous_sols != null ? Number(fp.sous_sols) : 0,
+        etages_unit: fp.etages_unit != null ? Number(fp.etages_unit) : 0,
+        terrasse: fp.terrasse || false,
+        balcon: fp.balcon || false,
+        parking_ss: fp.parking_ss || false,
+        notes_tech: fp.notes_tech || ""
+      });
+    }
+    if (geomCount > 0) {
+      console.log(`[FETCH-LEAD-UNITS-PPTX] ${leadRef} : ${geomCount} unités avec géométrie footprint_json restaurée depuis DB`);
     }
     return grouped;
   } catch (err) {
@@ -10706,10 +10759,18 @@ app.get("/api/lead-units/:ref", async (req, res) => {
       .order("unit_index", { ascending: true });
     if (error) throw error;
     const grouped = { A: [], B: [], C: [] };
+    let geomRestored = 0;
     for (const row of data || []) {
-      if (grouped[row.scenario]) grouped[row.scenario].push(row);
+      if (!grouped[row.scenario]) continue;
+      // v11.8-P0.3 — fusionne footprint_json dans l'objet unité pour restauration transparente
+      // côté frontend. Le footprint_json a priorité sur les colonnes plates (source géométrique).
+      const fp = row.footprint_json && typeof row.footprint_json === "object" ? row.footprint_json : {};
+      if (fp && Object.keys(fp).length > 0) geomRestored++;
+      // eslint-disable-next-line no-unused-vars
+      const { footprint_json, ...base } = row;
+      grouped[row.scenario].push({ ...base, ...fp });
     }
-    res.json({ ok: true, ref, units: grouped, total: (data || []).length });
+    res.json({ ok: true, ref, units: grouped, total: (data || []).length, geometryRestored: geomRestored });
   } catch (err) {
     console.error(`[LEAD-UNITS GET] ${ref} : ${err.message}`);
     // Table peut ne pas exister encore — dégradation gracieuse
@@ -10722,7 +10783,12 @@ app.get("/api/lead-units/:ref", async (req, res) => {
 
 // ─── POST /api/lead-units/:ref — Upsert les unités d'un lead ─────────────────
 // Body : { units: { A: [...], B: [...], C: [...] } }
-// Chaque unité : { unit_index, unit_type, unit_name, unit_size_m2, placement_sector, notes }
+// Chaque unité (v11.8-P0.3+) : { unit_index, unit_type, unit_name, unit_size_m2,
+//   placement_sector, notes, + géométrie riche : polygon, offset_x_m, offset_y_m,
+//   rotation_deg, width_m, height_m, shape_mode, pilotis, sous_sols, etages_unit,
+//   terrasse, balcon, parking_ss, notes_tech }
+// La géométrie riche est persistée dans la colonne JSONB footprint_json
+// (voir migration_v11_8_footprint_json.sql — doit être appliquée AVANT ce code).
 // Stratégie : delete-then-insert par (lead_ref, scenario) pour garantir cohérence.
 app.post("/api/lead-units/:ref", async (req, res) => {
   const ref = String(req.params.ref || "").trim();
@@ -10732,8 +10798,51 @@ app.post("/api/lead-units/:ref", async (req, res) => {
   const { units } = req.body || {};
   if (!units || typeof units !== "object") return res.status(400).json({ ok: false, error: "body.units requis" });
   const t0 = Date.now();
+
+  // v11.8-P0.3 — extrait la géométrie riche vers un JSONB dédié.
+  // Champs "de base" restent dans les colonnes plates (rétro-compat lecture existante).
+  // Champs géométriques sont regroupés dans footprint_json (nouveau).
+  const buildFootprintJson = (u) => {
+    const fp = {};
+    const geomKeys = [
+      "polygon", "offset_x_m", "offset_y_m", "rotation_deg",
+      "width_m", "height_m", "shape_mode", "shape_type",
+      "pilotis", "sous_sols", "etages_unit", "terrasse", "balcon",
+      "parking_ss", "notes_tech", "level"
+    ];
+    let hasAny = false;
+    for (const k of geomKeys) {
+      if (u[k] !== undefined && u[k] !== null && u[k] !== "") {
+        fp[k] = u[k];
+        hasAny = true;
+      }
+    }
+    return hasAny ? fp : null;
+  };
+
+  // Insert avec ou sans colonne footprint_json (fallback si migration pas appliquée)
+  const insertRowsWithFootprint = async (rows, scenario) => {
+    const { error, count } = await sb
+      .from("sb_lead_units")
+      .insert(rows, { count: "exact" });
+    if (!error) return count || rows.length;
+    // Détection erreur colonne absente → retry sans footprint_json (rétro-compat)
+    const msg = String(error.message || "");
+    if (msg.includes("footprint_json") && (msg.includes("does not exist") || msg.includes("column"))) {
+      console.warn(`[LEAD-UNITS POST] colonne footprint_json absente — retry sans (appliquer migration_v11_8_footprint_json.sql)`);
+      const rowsLegacy = rows.map(r => {
+        const { footprint_json, ...rest } = r;
+        return rest;
+      });
+      const retry = await sb.from("sb_lead_units").insert(rowsLegacy, { count: "exact" });
+      if (retry.error) throw new Error(`insert ${scenario} (legacy): ${retry.error.message}`);
+      return retry.count || rowsLegacy.length;
+    }
+    throw new Error(`insert ${scenario}: ${error.message}`);
+  };
+
   try {
-    let inserted = 0, deleted = 0;
+    let inserted = 0, deleted = 0, geomPersisted = 0;
     for (const scenario of ["A", "B", "C"]) {
       const list = Array.isArray(units[scenario]) ? units[scenario] : [];
       // Delete existants pour ce (lead_ref, scenario) — remplacement atomique
@@ -10745,28 +10854,29 @@ app.post("/api/lead-units/:ref", async (req, res) => {
       if (delErr) throw new Error(`delete ${scenario}: ${delErr.message}`);
       deleted += (delCount || 0);
       if (list.length === 0) continue;
-      // Prépare insert
-      const rows = list.map((u, i) => ({
-        lead_ref: ref,
-        scenario,
-        unit_index: Number(u.unit_index) > 0 ? Number(u.unit_index) : (i + 1),
-        unit_type: String(u.unit_type || "AUTRE").toUpperCase(),
-        unit_name: u.unit_name || null,
-        unit_size_m2: Number(u.unit_size_m2) > 0 ? Number(u.unit_size_m2) : null,
-        placement_sector: u.placement_sector || null,
-        notes: u.notes || null
-      }));
-      const { error: insErr, count: insCount } = await sb
-        .from("sb_lead_units")
-        .insert(rows, { count: "exact" });
-      if (insErr) throw new Error(`insert ${scenario}: ${insErr.message}`);
-      inserted += (insCount || rows.length);
+      // Prépare insert — base + JSONB géométrie
+      const rows = list.map((u, i) => {
+        const fp = buildFootprintJson(u);
+        if (fp) geomPersisted++;
+        return {
+          lead_ref: ref,
+          scenario,
+          unit_index: Number(u.unit_index) > 0 ? Number(u.unit_index) : (i + 1),
+          unit_type: String(u.unit_type || "AUTRE").toUpperCase(),
+          unit_name: u.unit_name || null,
+          unit_size_m2: Number(u.unit_size_m2) > 0 ? Number(u.unit_size_m2) : null,
+          placement_sector: u.placement_sector || null,
+          notes: u.notes || null,
+          footprint_json: fp
+        };
+      });
+      inserted += await insertRowsWithFootprint(rows, scenario);
     }
-    console.log(`[LEAD-UNITS POST] ${ref} : ${inserted} inserted, ${deleted} deleted, ${Date.now() - t0}ms`);
-    res.json({ ok: true, ref, inserted, deleted, duration_ms: Date.now() - t0 });
+    console.log(`[LEAD-UNITS POST] ${ref} : ${inserted} inserted (${geomPersisted} avec géométrie), ${deleted} deleted, ${Date.now() - t0}ms`);
+    res.json({ ok: true, ref, inserted, deleted, geometryPersisted: geomPersisted, duration_ms: Date.now() - t0 });
   } catch (err) {
     console.error(`[LEAD-UNITS POST] ${ref} : ${err.message}`);
-    if (String(err.message || "").includes("does not exist")) {
+    if (String(err.message || "").includes("does not exist") && !String(err.message).includes("footprint_json")) {
       return res.status(503).json({ ok: false, error: "table sb_lead_units absente — appliquer la migration v75.1 sur Supabase" });
     }
     res.status(500).json({ ok: false, error: err.message });

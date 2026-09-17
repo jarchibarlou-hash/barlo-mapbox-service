@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.7-PERM</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.8-P0-FIXES</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -7237,6 +7237,10 @@ function populateCockpitFromLead(L, units) {
         s.gap_m = L[`override_gap_m_${label}`] || "";
         s.rationale = L[`scenario_rationale_${label}`] || "";
         // Unités : priorité à Supabase, sinon défaut moteur
+        // v11.8-P0.3 — le GET /api/lead-units/:ref restitue maintenant footprint_json fusionné
+        // dans chaque unité (polygon, offset_x_m, offset_y_m, rotation_deg, width_m, height_m,
+        // shape_mode, pilotis, sous_sols, etages_unit, terrasse, balcon, parking_ss, notes_tech).
+        // On les propage dans cockpitState pour restauration exacte du drag/edit après reload.
         const subaseUnits = (units && Array.isArray(units[label])) ? units[label] : [];
         if (subaseUnits.length > 0) {
             s.units = subaseUnits.map((u, i) => ({
@@ -7245,7 +7249,23 @@ function populateCockpitFromLead(L, units) {
                 unit_name: u.unit_name || "",
                 unit_size_m2: u.unit_size_m2 || "",
                 placement_sector: u.placement_sector || "",
-                notes: u.notes || ""
+                notes: u.notes || "",
+                // v11.8-P0.3 — géométrie riche restaurée depuis footprint_json
+                polygon: u.polygon || null,
+                offset_x_m: u.offset_x_m != null ? Number(u.offset_x_m) : null,
+                offset_y_m: u.offset_y_m != null ? Number(u.offset_y_m) : null,
+                rotation_deg: u.rotation_deg != null ? Number(u.rotation_deg) : null,
+                width_m: u.width_m != null ? Number(u.width_m) : null,
+                height_m: u.height_m != null ? Number(u.height_m) : null,
+                shape_mode: u.shape_mode || null,
+                shape_type: u.shape_type || null,
+                pilotis: !!u.pilotis,
+                sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
+                etages_unit: u.etages_unit != null ? Number(u.etages_unit) : 0,
+                terrasse: !!u.terrasse,
+                balcon: !!u.balcon,
+                parking_ss: !!u.parking_ss,
+                notes_tech: u.notes_tech || ""
             }));
         } else {
             s.units = defaultUnitsFromMoteur(label);
