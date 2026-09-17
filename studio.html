@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.9-DOWN</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.10-HEKT</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2242,6 +2242,37 @@ BARLO.strategies._h = {
             { x: cx - w/2, y: cy - h/2 }    // SW
         ];
     },
+    // v10.10 — Rect adaptatif qui rentre dans le buildable : essaie N aspects + N positions
+    // Retourne { polygon, aspect, cxAdjusted, cyAdjusted, fitScore [0..1] }
+    fitRectInBuildable(cx, cy, targetArea, initialAspect, buildable, angleDeg) {
+        angleDeg = angleDeg || 0;
+        // 7 aspects candidats : de très allongé à carré
+        const aspects = [initialAspect, 1.5, 2.0, 1.0, 2.5, 0.7, 3.0, 4.0];
+        // 5 positions candidates autour du (cx, cy) initial
+        const dxOptions = [0, -targetArea * 0.03, targetArea * 0.03];
+        const dyOptions = [0, -targetArea * 0.03, targetArea * 0.03];
+        let best = null, bestFit = 0;
+        for (const aspect of aspects) {
+            for (const dx of dxOptions) {
+                for (const dy of dyOptions) {
+                    const rect = BARLO.strategies._h.makeRectAt(cx + dx, cy + dy, targetArea, aspect);
+                    const rectRot = angleDeg ? BARLO.geometry.rotate(rect, cx + dx, cy + dy, angleDeg) : rect;
+                    // Test aire d'intersection avec buildable
+                    const clipped = BARLO.geometry.clipSutherlandHodgman(rectRot, buildable);
+                    if (!clipped || clipped.length < 3) continue;
+                    const areaClip = polygonAreaXY(clipped);
+                    const areaOrig = polygonAreaXY(rectRot);
+                    const fit = areaOrig > 0 ? areaClip / areaOrig : 0;
+                    if (fit > bestFit) {
+                        best = { polygon: rectRot, aspect, cxAdjusted: cx + dx, cyAdjusted: cy + dy, fitScore: fit };
+                        bestFit = fit;
+                        if (fit >= 0.995) return best;   // parfait, on retourne direct
+                    }
+                }
+            }
+        }
+        return best;   // même partiel, meilleur candidat trouvé
+    },
     // Rotate polygon autour d'un centre
     rotate(polyM, cx, cy, angleDeg) {
         return BARLO.geometry.rotate(polyM, cx, cy, angleDeg);
@@ -2256,10 +2287,29 @@ BARLO.strategies._h = {
             east:   { x: b.maxX - b.w * 0.15, y: b.cy },
             west:   { x: b.minX + b.w * 0.15, y: b.cy }
         };
+    },
+    // v10.10 — Typology-aware : catégorise le type d'unité en groupe fonctionnel
+    typoGroup(unitType) {
+        const t = String(unitType || "").toUpperCase();
+        if (t === "COMMERCE" || t.includes("COMMERC")) return "COMMERCE";
+        if (t === "BUREAU" || t.includes("BUREAU")) return "BUREAU";
+        if (t === "ATELIER") return "ATELIER";
+        if (t.startsWith("T") || t === "LOGT" || t.includes("LOGEMENT")) return "LOGT";
+        return "AUTRE";
+    },
+    // v10.10 — Aspect préféré par groupe fonctionnel
+    preferredAspect(unitType) {
+        const g = BARLO.strategies._h.typoGroup(unitType);
+        return { COMMERCE: 2.0, BUREAU: 1.5, ATELIER: 1.3, LOGT: 1.3, AUTRE: 1.4 }[g] || 1.5;
+    },
+    // v10.10 — Cherche l'arête parcelle correspondant à un type de segment (rue/mitoyen/fond/libre)
+    findEdgeByType(siteAnalysis, segType) {
+        if (!siteAnalysis.edges) return null;
+        return siteAnalysis.edges.find(e => e.segType === segType);
     }
 };
 
-// ─── LAMELLA : barre allongée dans un seul axe ───
+// ─── LAMELLA : v10.10 barre allongée avec fit adaptatif dans le buildable réel ───
 BARLO.strategies.LAMELLA = {
     id: "LAMELLA", label: "Lamellé",
     generate(programUnits, siteAnalysis, opts) {
@@ -2268,34 +2318,37 @@ BARLO.strategies.LAMELLA = {
         const N = programUnits.length;
         if (!N || !siteAnalysis) return candidates;
         const b = siteAnalysis.bounds;
-        // Axes candidats : arêtes parcelle + orientation user
+        const buildable = siteAnalysis.buildablePolygon || siteAnalysis.parcelPolygon;
         const axes = siteAnalysis.candidateAxes || [{ angleDeg: 0 }];
-        const yPositions = [b.cy, b.cy + b.h * 0.15, b.cy - b.h * 0.15];
+        const yPositions = [b.cy, b.cy + b.h * 0.15, b.cy - b.h * 0.15, b.cy + b.h * 0.3, b.cy - b.h * 0.3];
         for (const axis of axes.slice(0, 4)) {
             for (const yPos of yPositions) {
                 const units = [];
                 const bandW = b.w * 0.92;
                 const gap = 1.0;
                 const perW = (bandW - (N - 1) * gap) / N;
+                let allFit = true;
                 for (let i = 0; i < N; i++) {
                     const pu = programUnits[i];
                     const area = pu.targetArea || pu.unit_size_m2 || 50;
-                    const aspect = (perW * perW) / area;
+                    const aspectPref = BARLO.strategies._h.preferredAspect(pu.unit_type);
                     const cx = b.minX + b.w * 0.04 + (i + 0.5) * (perW + gap);
-                    let poly = BARLO.strategies._h.makeRectAt(cx, yPos, area, aspect);
-                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
-                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                    const fit = BARLO.strategies._h.fitRectInBuildable(cx, yPos, area, aspectPref, buildable, axis.angleDeg);
+                    if (!fit || fit.fitScore < 0.85) { allFit = false; break; }
+                    units.push({ ...pu, polygonM: fit.polygon, id: pu.id || pu.unit_index, targetArea: area, fitScore: fit.fitScore });
                 }
-                candidates.push({ strategy: "LAMELLA", axisDeg: axis.angleDeg,
-                    anchor: yPos > b.cy ? "N" : (yPos < b.cy ? "S" : "center"),
-                    units, typologyScore: 0.9 });
+                if (allFit && units.length === N) {
+                    candidates.push({ strategy: "LAMELLA", axisDeg: axis.angleDeg,
+                        anchor: yPos > b.cy ? "N" : (yPos < b.cy ? "S" : "center"),
+                        units, typologyScore: 0.9 });
+                }
             }
         }
         return candidates;
     }
 };
 
-// ─── PERIMETER : le long d'une arête parcelle choisie ───
+// ─── PERIMETER : v10.10 typology-aware — COMMERCE priorité aux segments rue ───
 BARLO.strategies.PERIMETER = {
     id: "PERIMETER", label: "Bordure",
     generate(programUnits, siteAnalysis, opts) {
@@ -2303,8 +2356,19 @@ BARLO.strategies.PERIMETER = {
         const N = programUnits.length;
         if (!N || !siteAnalysis) return candidates;
         const b = siteAnalysis.bounds;
-        // Utilise chaque arête parcelle comme référence
-        const edges = (siteAnalysis.edges || []).slice(0, 8);
+        // v10.10 : trier arêtes par priorité selon segType (rue > libre > mitoyen > fond)
+        // Sert à privilégier les segments accessibles au public pour COMMERCE
+        const edgePriority = { rue: 4, libre: 3, mitoyen: 2, fond: 1 };
+        const edges = (siteAnalysis.edges || []).slice()
+            .sort((a, b) => (edgePriority[b.segType] || 0) - (edgePriority[a.segType] || 0))
+            .slice(0, 8);
+        // v10.10 : réordonne les unités — COMMERCE d'abord (occupera les meilleures arêtes)
+        const program = programUnits.slice().sort((a, b) => {
+            const ga = BARLO.strategies._h.typoGroup(a.unit_type);
+            const gb = BARLO.strategies._h.typoGroup(b.unit_type);
+            const prio = { COMMERCE: 4, BUREAU: 3, ATELIER: 2, LOGT: 1, AUTRE: 0 };
+            return (prio[gb] || 0) - (prio[ga] || 0);
+        });
         for (const edge of edges) {
             const ex = edge.p2.x - edge.p1.x, ey = edge.p2.y - edge.p1.y;
             const len = edge.len;
@@ -2314,13 +2378,13 @@ BARLO.strategies.PERIMETER = {
             if (nx * toC.x + ny * toC.y < 0) { nx = -nx; ny = -ny; }
             const depthMax = Math.min(len * 0.4, b.w * 0.4, b.h * 0.4);
             const units = [];
-            const totalArea = programUnits.reduce((s, u) => s + (u.targetArea || u.unit_size_m2 || 50), 0);
+            const totalArea = program.reduce((s, u) => s + (u.targetArea || u.unit_size_m2 || 50), 0);
             const depth = Math.max(4, Math.min(depthMax, totalArea / len));
             for (let i = 0; i < N; i++) {
-                const pu = programUnits[i];
+                const pu = program[i];
                 const area = pu.targetArea || pu.unit_size_m2 || 50;
                 const w = area / depth;
-                const cumStart = programUnits.slice(0, i).reduce((s, u) => s + ((u.targetArea || u.unit_size_m2 || 50) / depth), 0);
+                const cumStart = program.slice(0, i).reduce((s, u) => s + ((u.targetArea || u.unit_size_m2 || 50) / depth), 0);
                 const t = (cumStart + w / 2) / len;
                 if (t > 1) continue;
                 const cx = edge.p1.x + ex * t + nx * (depth / 2 + (edge.retraitM || 3));
@@ -2443,7 +2507,7 @@ BARLO.strategies.T_SHAPE = {
     }
 };
 
-// ─── STACKED : bandes empilées mitoyennes ───
+// ─── STACKED : v10.10 bandes empilées avec fit adaptatif ───
 BARLO.strategies.STACKED = {
     id: "STACKED", label: "Superposé",
     generate(programUnits, siteAnalysis, opts) {
@@ -2451,24 +2515,25 @@ BARLO.strategies.STACKED = {
         const N = programUnits.length;
         if (!N || !siteAnalysis) return candidates;
         const b = siteAnalysis.bounds;
+        const buildable = siteAnalysis.buildablePolygon || siteAnalysis.parcelPolygon;
         const axes = (siteAnalysis.candidateAxes || []).slice(0, 3);
         const widthOptions = [b.w * 0.85, b.w * 0.6, b.w * 0.45];
         for (const axis of axes) {
             for (const w of widthOptions) {
                 const units = [];
                 let yCursor = b.minY + 2;
-                let overflow = false;
+                let allFit = true;
                 for (let i = 0; i < N; i++) {
                     const pu = programUnits[i];
                     const area = pu.targetArea || pu.unit_size_m2 || 50;
                     const h = area / w;
-                    if (yCursor + h > b.maxY - 1) { overflow = true; break; }
-                    let poly = BARLO.strategies._h.makeRectAt(b.cx, yCursor + h/2, area, (w * w) / area);
-                    poly = BARLO.strategies._h.rotate(poly, b.cx, b.cy, axis.angleDeg);
-                    units.push({ ...pu, polygonM: poly, id: pu.id || pu.unit_index, targetArea: area });
+                    if (yCursor + h > b.maxY - 1) { allFit = false; break; }
+                    const fit = BARLO.strategies._h.fitRectInBuildable(b.cx, yCursor + h/2, area, (w * w) / area, buildable, axis.angleDeg);
+                    if (!fit || fit.fitScore < 0.85) { allFit = false; break; }
+                    units.push({ ...pu, polygonM: fit.polygon, id: pu.id || pu.unit_index, targetArea: area, fitScore: fit.fitScore });
                     yCursor += h + 0.5;
                 }
-                if (!overflow && units.length === N) {
+                if (allFit && units.length === N) {
                     candidates.push({ strategy: "STACKED", axisDeg: axis.angleDeg, anchor: `w${w.toFixed(0)}m`,
                         units, typologyScore: 0.86 });
                 }
