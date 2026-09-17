@@ -183,6 +183,17 @@
         /* v75.1.1 — Preview parcelle SVG */
         .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.6rem;margin-top:.4rem;position:relative}
         .c-parcel-preview svg{width:100%;height:auto;max-height:680px;display:block;touch-action:none;user-select:none}
+        /* v7.2.0 — Toolbar Revit-like inline au-dessus de la preview */
+        .c-preview-toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;background:rgba(11,17,32,0.6);border:1px solid var(--border);border-radius:6px;padding:.4rem .55rem;margin-top:.35rem}
+        .c-toolbar-group{display:flex;flex-wrap:wrap;gap:.3rem;align-items:center}
+        .c-toolbar-group+.c-toolbar-group{border-left:1px dashed rgba(201,168,120,0.25);padding-left:.55rem;margin-left:.15rem}
+        .c-toolbar-label{font-size:.58rem;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);font-weight:700}
+        .c-tb-btn{padding:.28rem .52rem;font-size:.66rem;font-weight:600;border:1px solid var(--border);background:var(--navy);color:var(--text);border-radius:4px;cursor:pointer;font-family:inherit;white-space:nowrap}
+        .c-tb-btn:hover{background:var(--card2);border-color:#c9a878;color:#c9a878}
+        .c-tb-btn-cyan{border-color:#06B6D4;color:#06B6D4}
+        .c-tb-btn-cyan:hover{background:#06B6D4;color:#0B1120;border-color:#06B6D4}
+        .c-tb-btn-dim{background:transparent;color:var(--text2);border-color:transparent}
+        .c-toolbar-edge{background:rgba(6,182,212,0.06);padding:.25rem .4rem;border-radius:4px}
         /* v75.4.0 — Rectangles unités draggables */
         .draggable-unit{cursor:grab}
         .draggable-unit.dragging{cursor:grabbing;opacity:.9}
@@ -318,7 +329,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v7.1.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v7.2.0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -788,6 +799,28 @@ function scenarioPanelTemplate(L) {
 
       <div class="c-section">
         <h4>🧭 Preview de l'implantation sur la parcelle <span class="c-hint">— sommets A, B, C… correspondent au tableau des segments</span></h4>
+
+        <!-- v7.2.0 — Toolbar Revit-like : patterns + outils arête inline (fluide, pas de popup) -->
+        <div class="c-preview-toolbar" id="cPreviewToolbar${L}">
+          <div class="c-toolbar-group">
+            <span class="c-toolbar-label">Pattern :</span>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SPLIT_AV_AR')" title="Split avant/arrière (2 blocs face-à-face)">⚌ Split</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SUPERPOSE')" title="Blocs superposés / mitoyens">▤ Superposé</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','U')" title="Implantation en U autour d'une cour">⊔ U</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','LAMELLE')" title="Barre allongée (lamellé) le long d'un côté">▬ Lamellé</button>
+            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','PLOT')" title="Plots compacts en semis">▦ Compact</button>
+          </div>
+          <div class="c-toolbar-group c-toolbar-edge" id="cToolbarEdge${L}" style="display:none">
+            <span class="c-toolbar-label" id="cToolbarEdgeInfo${L}" style="color:#06B6D4">Arête —</span>
+            <button type="button" class="c-tb-btn c-tb-btn-cyan" onclick="revitStartAlign()" title="Aligner sur une arête cible (clic sur l'arête cible ensuite)">🎯 Align</button>
+            <button type="button" class="c-tb-btn" onclick="revitApplyOffset(-1)" title="Rétrécit de 1m vers l'intérieur">➖ 1m</button>
+            <button type="button" class="c-tb-btn" onclick="revitApplyOffset(1)" title="Agrandit de 1m vers l'extérieur">➕ 1m</button>
+            <input type="number" step="0.5" placeholder="m" id="cToolbarEdgeOffset${L}" style="width:50px;padding:.25rem;background:var(--navy);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:.68rem" onkeydown="if(event.key==='Enter'){toolbarApplyOffsetCustom(this);event.preventDefault()}">
+            <button type="button" class="c-tb-btn c-tb-btn-cyan" onclick="toolbarApplyOffsetCustom(document.getElementById('cToolbarEdgeOffset${L}'))" title="Applique l'offset saisi (+ vers ext / − vers int)">Offset ↔</button>
+            <button type="button" class="c-tb-btn c-tb-btn-dim" onclick="revitCloseAll()" title="Désélectionner l'arête">✕</button>
+          </div>
+        </div>
+
         <div class="c-parcel-preview" id="cParcelPreview${L}">
           <svg id="cParcelSvg${L}" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
           <div class="c-parcel-legend" id="cParcelLegend${L}"></div>
@@ -2185,9 +2218,9 @@ function renderParcelSvg(label) {
         if (hasOverlap) {
             unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ conflit</text>`;
         }
-        // v75.8.12 — label affiche la surface RÉELLE rendue (post clip parcelle), avec warning si divergence
-        const fsName = Math.max(7, Math.min(13, uH * 0.24));
-        const fsArea = Math.max(6, Math.min(10, uH * 0.18));
+        // v7.2.0 — labels plus discrets (Jeremy : textes trop gros écrasaient la figure)
+        const fsName = Math.max(5, Math.min(8, uH * 0.14));
+        const fsArea = Math.max(4, Math.min(6.5, uH * 0.10));
         let realAreaM2 = areaM2;
         if (pxPolyClipped && pxPolyClipped.length >= 3) {
             realAreaM2 = Math.round(polygonAreaXY(pxPolyClipped) / (scale * scale));
@@ -2789,21 +2822,13 @@ function updateUnit(label, idx, field, val) {
         units[idx].height_m = null;
         units[idx].polygon = null;
     }
-    // v75.5.1 / v75.8.8 : si surface m² change ET unité a dimensions custom OU polygon custom,
-    // re-scale pour préserver la forme mais atteindre la nouvelle surface
+    // v7.2.0 — Changer m² : reset toutes les overrides pour repartir d'un rectangle propre
+    // dimensionné à la nouvelle surface (les patterns custom foisaient chuter la surface après clip)
     if (field === "unit_size_m2") {
         const u = units[idx];
-        const newArea = Number(val) || 0;
-        if (newArea > 0 && u.width_m && u.height_m) {
-            const ratio = Number(u.width_m) / Number(u.height_m);
-            const newWidth = Math.sqrt(newArea * ratio);
-            u.width_m = Number(newWidth.toFixed(2));
-            u.height_m = Number((newWidth / ratio).toFixed(2));
-        }
-        // v75.8.8 : re-scale du polygone si custom (post 🧠 Proposer ou 🧩 L-shape)
-        if (newArea > 0 && u.polygon && u.polygon.length >= 3) {
-            u.polygon = scalePolygonToArea(u.polygon, newArea);
-        }
+        u.width_m = null;
+        u.height_m = null;
+        u.polygon = null;
     }
     // v75.5.1 : si type change ET width/height custom, recalcule aussi selon nouveau aspect stretch
     if (field === "unit_type") {
@@ -3066,28 +3091,17 @@ function detectEdgeAtLocalPoint(localX, localY, W, H, threshold) {
     return null;
 }
 
-function selectEdge(label, uidx, edge, svgClientX, svgClientY) {
+// v7.2.0 — Sélection arête = simple toolbar inline (plus de popup flottant)
+function selectEdge(label, uidx, edge /*, svgClientX, svgClientY */) {
     _selectedEdge = { label, uidx, edge };
-    // Positionne le panel près du curseur
-    const panel = $("revitPanel");
-    if (panel) {
-        panel.classList.add("active");
-        const w = panel.offsetWidth || 240, h = panel.offsetHeight || 240;
-        const px = Math.min(window.innerWidth - w - 10, Math.max(10, svgClientX + 15));
-        const py = Math.min(window.innerHeight - h - 10, Math.max(10, svgClientY - h / 2));
-        panel.style.left = px + "px";
-        panel.style.top = py + "px";
-        const u = (cockpitState.scenarios[label].units || [])[uidx];
-        const edgeName = { n: "Nord", s: "Sud", e: "Est", w: "Ouest" }[edge] || edge;
-        $("revitPanelInfo").innerHTML = `<strong style="color:#06B6D4">${esc(u.unit_name||u.unit_type||"Unité")}</strong> · Arête <strong>${edgeName}</strong>`;
-        // v7.1.0 : reset UI offset directionnel
-        const inp = $("revitOffsetValue");
-        if (inp) {
-            inp.value = "";
-            inp.oninput = revitUpdateOffsetPreview;
-        }
-        revitSetOffsetDir(1);
-    }
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    const edgeName = { n: "Nord", s: "Sud", e: "Est", w: "Ouest" }[edge] || edge;
+    const tb = $(`cToolbarEdge${label}`);
+    const info = $(`cToolbarEdgeInfo${label}`);
+    if (tb) tb.style.display = "flex";
+    if (info) info.textContent = `${u.unit_name||u.unit_type||"Unité"} · Arête ${edgeName}`;
+    const inp = $(`cToolbarEdgeOffset${label}`);
+    if (inp) { inp.value = ""; inp.focus(); }
     renderParcelSvg(label);
 }
 
@@ -3095,50 +3109,25 @@ function revitCloseAll() {
     const label = _selectedEdge && _selectedEdge.label;
     _selectedEdge = null;
     _revitMode = null;
-    $("revitPanel").classList.remove("active");
-    if (label) renderParcelSvg(label);
+    if (label) {
+        const tb = $(`cToolbarEdge${label}`);
+        if (tb) tb.style.display = "none";
+        renderParcelSvg(label);
+    }
+}
+
+// v7.2.0 — Applique l'offset saisi dans la toolbar (+= vers ext, − = vers int)
+function toolbarApplyOffsetCustom(inputEl) {
+    if (!_selectedEdge || !inputEl) return;
+    const v = parseFloat(inputEl.value);
+    if (isNaN(v) || v === 0) { showToast("Saisis une valeur (m)", true); return; }
+    revitApplyOffset(v);
 }
 
 function revitStartAlign() {
     if (!_selectedEdge) return;
     _revitMode = "align";
-    $("revitPanelInfo").innerHTML = `<div class="waiting">🎯 Clique maintenant sur l'arête CIBLE (segment parcelle OU arête d'une autre unité) — l'unité s'y collera automatiquement</div>`;
-    showToast("🎯 Clique sur l'arête cible pour aligner");
-}
-
-// v7.1.0 — Offset directionnel Revit-like : bouton direction (ext/int) + valeur inline
-let _revitOffsetDir = 1;   // 1 = extérieur (agrandit) | -1 = intérieur (rétrécit)
-
-function revitSetOffsetDir(sign) {
-    _revitOffsetDir = sign > 0 ? 1 : -1;
-    const bOut = $("revitOffsetDirOut"), bIn = $("revitOffsetDirIn");
-    if (bOut && bIn) {
-        bOut.style.background = _revitOffsetDir === 1 ? "#06B6D4" : "";
-        bOut.style.color = _revitOffsetDir === 1 ? "#0B1120" : "";
-        bIn.style.background = _revitOffsetDir === -1 ? "#06B6D4" : "";
-        bIn.style.color = _revitOffsetDir === -1 ? "#0B1120" : "";
-    }
-    revitUpdateOffsetPreview();
-}
-
-function revitUpdateOffsetPreview() {
-    const preview = $("revitOffsetPreview");
-    const input = $("revitOffsetValue");
-    if (!preview || !input || !_selectedEdge) return;
-    const v = parseFloat(input.value);
-    if (isNaN(v) || v <= 0) { preview.textContent = "Choisis une direction puis une valeur ↑"; return; }
-    const { edge } = _selectedEdge;
-    const dirTxt = _revitOffsetDir === 1 ? "agrandit vers l'extérieur" : "rétrécit vers l'intérieur";
-    preview.textContent = `Arête ${edge.toUpperCase()} • ${dirTxt} de ${v}m`;
-}
-
-function revitConfirmOffset() {
-    if (!_selectedEdge) return;
-    const input = $("revitOffsetValue");
-    if (!input) return;
-    const v = parseFloat(input.value);
-    if (isNaN(v) || v <= 0) { showToast("Saisis une valeur > 0", true); return; }
-    revitApplyOffset(_revitOffsetDir * v);
+    showToast("🎯 Clique sur l'arête cible (segment parcelle ou arête d'une autre unité)");
 }
 
 // Applique un offset à l'arête sélectionnée (déplace le côté de X mètres, l'opposé reste fixe)
@@ -3784,31 +3773,8 @@ function showGenLog(title,steps){$("genLogTitle").textContent=title;$("genSteps"
 function stepState(id,state){const el=document.querySelector(`[data-step="${id}"]`);if(!el)return;el.className=`gen-step ${state}`;el.querySelector(".icon").textContent=state==="done"?"✓":state==="active"?"◉":state==="error"?"✕":"○"}
 </script>
 
-<!-- v7.1.0 — Panneau flottant Revit-like edge editing (offset directionnel + align par clic) -->
-<div class="revit-panel" id="revitPanel">
-  <h5 id="revitPanelTitle">✎ Édition d'arête</h5>
-  <div id="revitPanelInfo" style="font-size:.62rem;color:var(--text2)">Aucune arête sélectionnée</div>
+<!-- v7.2.0 — Ancien panel flottant Revit remplacé par toolbar inline dans chaque scénario -->
 
-  <!-- Bloc Align : sélectionner arête source → cliquer arête cible -->
-  <button onclick="revitStartAlign()" title="Aligne l'arête sélectionnée sur une arête cible (segment parcelle ou arête d'une autre unité). Après clic, tu cliques sur la cible.">🎯 Align → clic sur arête cible</button>
-
-  <!-- Bloc Offset : direction (int/ext) puis valeur en mètres, sans prompt bloquant -->
-  <div id="revitOffsetBlock" style="border-top:1px dashed rgba(6,182,212,0.3);padding-top:.4rem;margin-top:.2rem;display:flex;flex-direction:column;gap:.3rem">
-    <div style="font-size:.6rem;color:#06B6D4;text-transform:uppercase;letter-spacing:.5px;font-weight:700">↔ Offset direction</div>
-    <div style="display:flex;gap:.3rem">
-      <button type="button" id="revitOffsetDirOut" onclick="revitSetOffsetDir(1)" style="flex:1;text-align:center;padding:.35rem">➕ Vers extérieur</button>
-      <button type="button" id="revitOffsetDirIn" onclick="revitSetOffsetDir(-1)" style="flex:1;text-align:center;padding:.35rem">➖ Vers intérieur</button>
-    </div>
-    <div style="display:flex;gap:.3rem;align-items:center">
-      <input type="number" id="revitOffsetValue" step="0.5" min="0.5" placeholder="ex : 3" style="flex:1;padding:.35rem;background:var(--navy);border:1px solid var(--border);color:var(--text);border-radius:4px;font-family:inherit;font-size:.72rem" onkeydown="if(event.key==='Enter'){revitConfirmOffset();event.preventDefault()}">
-      <span style="font-size:.65rem;color:var(--text2)">m</span>
-      <button type="button" onclick="revitConfirmOffset()" style="padding:.35rem .55rem;background:#06B6D4;color:#0B1120;border:none;border-radius:4px;font-weight:700;cursor:pointer;font-size:.7rem">✓ OK</button>
-    </div>
-    <div id="revitOffsetPreview" style="font-size:.58rem;color:var(--text2);font-style:italic;min-height:.9rem"></div>
-  </div>
-
-  <button class="close" onclick="revitCloseAll()">✕ Fermer</button>
-</div>
 
 <!-- v75.5.2 — Modal détails techniques par unité (pilotis, sous-sols, étages, terrasse, balcon…) -->
 <div class="c-modal-overlay" id="unitDetailsOverlay" onclick="if(event.target===this)closeUnitDetailsModal()">
