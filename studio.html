@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.4-BACK</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.5-UX</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2268,46 +2268,61 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
             console.warn("Strategy", stratKey, "failed:", e);
         }
     }
-    // v11.2 — Fallback "best-effort" : si RIEN passe, on ne bloque pas.
-    // On accepte les candidats PACKED partiels (avec _unplaced) même s'ils échouent au validator
-    // pour cause d'AREA_ERROR / MIN_DIMENSIONS. Seul UNIT_OUTSIDE_PARCEL reste bloquant.
+    // v11.5 — Fallback "best-effort" : si RIEN passe, on ne bloque pas.
+    // Silencieux (pas de warn) pour ne pas polluer la console avec spam sur re-render.
     if (!allCandidates.length && rejected.length) {
-        console.warn("[SOLVER] NO_VALID → fallback best-effort (aucun candidat valide, on repêche le moins pire)");
-        const salvageable = rejected
-            .map((r, i) => ({ r, i }))
-            .filter(({ r }) => {
-                const violTypes = new Set((r.violations || []).map(v => v.type));
-                // Rejet acceptable si SEULEMENT AREA_ERROR ou MIN_DIMENSIONS (retraits soft déjà géré)
-                return !violTypes.has("UNIT_OUTSIDE_PARCEL");
-            });
-        if (salvageable.length) {
-            // Regénère les candidats "salvage" en les reprenant chez les strategies
-            for (const stratKey of enabledStrategies) {
-                const strat = BARLO.strategies[stratKey];
-                if (!strat || typeof strat.generate !== "function") continue;
+        for (const stratKey of enabledStrategies) {
+            const strat = BARLO.strategies[stratKey];
+            if (!strat || typeof strat.generate !== "function") continue;
+            try {
+                const cands = strat.generate(program, effectiveSA, opts);
+                for (const c of cands) {
+                    const validation = BARLO.constraints.validate(c, effectiveSA, opts);
+                    const violTypes = new Set((validation.violations || []).map(v => v.type));
+                    if (violTypes.has("UNIT_OUTSIDE_PARCEL")) continue;
+                    try {
+                        const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
+                        c.score = scoreObj.totalScore * 0.5;
+                        c.scoreBreakdown = scoreObj.breakdown;
+                    } catch (_) { c.score = 0.1; c.scoreBreakdown = {}; }
+                    c.diagnostics = { valid: false, warning: "BEST_EFFORT", strategy: c.strategy,
+                        axisDeg: Math.round(c.axisDeg || 0),
+                        programArea: program.reduce((s,u)=>s+u.targetArea,0),
+                        generatedArea: c.units.reduce((s,u)=>s+BARLO.geometry.polygonArea(u.polygonM||u.polygon||[]),0).toFixed(1),
+                        violations: validation.violations };
+                    c._bestEffort = true;
+                    allCandidates.push(c);
+                    if (allCandidates.length >= maxCandidates) break;
+                }
+            } catch (_) {}
+            if (allCandidates.length >= maxCandidates) break;
+        }
+    }
+    // v11.5 — ULTIMATE PACKED FALLBACK : quand strategy user (U/T/Lamellé) échoue TOTALEMENT,
+    // on force PACKED (qui, lui, garantit inParcel via grid). Jamais de NO_VALID_SOLUTION affiché
+    // à l'utilisateur tant que PACKED peut proposer quelque chose.
+    if (!allCandidates.length && BARLO.strategies.PACKED) {
+        try {
+            const packedFB = BARLO.strategies.PACKED.generate(program, effectiveSA, opts);
+            for (const c of packedFB) {
+                const validation = BARLO.constraints.validate(c, effectiveSA, opts);
+                const violTypes = new Set((validation.violations || []).map(v => v.type));
+                if (violTypes.has("UNIT_OUTSIDE_PARCEL")) continue;
                 try {
-                    const cands = strat.generate(program, effectiveSA, opts);
-                    for (const c of cands) {
-                        // v11.2 — même les candidats PARTIELS/imprécis sont acceptés en fallback
-                        const validation = BARLO.constraints.validate(c, effectiveSA, opts);
-                        const violTypes = new Set((validation.violations || []).map(v => v.type));
-                        if (violTypes.has("UNIT_OUTSIDE_PARCEL")) continue; // bloquant hard
-                        // Score dégradé (best-effort)
-                        try {
-                            const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
-                            c.score = scoreObj.totalScore * 0.5; // pénalité fallback
-                            c.scoreBreakdown = scoreObj.breakdown;
-                        } catch (_) { c.score = 0.1; c.scoreBreakdown = {}; }
-                        c.diagnostics = { valid: false, warning: "BEST_EFFORT", strategy: c.strategy,
-                            axisDeg: Math.round(c.axisDeg || 0), violations: validation.violations };
-                        c._bestEffort = true;
-                        allCandidates.push(c);
-                        if (allCandidates.length >= maxCandidates) break;
-                    }
-                } catch (_) {}
+                    const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
+                    c.score = scoreObj.totalScore * 0.4;
+                    c.scoreBreakdown = scoreObj.breakdown;
+                } catch (_) { c.score = 0.1; c.scoreBreakdown = {}; }
+                c.diagnostics = { valid: false, warning: "PACKED_FALLBACK", strategy: "PACKED",
+                    axisDeg: Math.round(c.axisDeg || 0),
+                    programArea: program.reduce((s,u)=>s+u.targetArea,0),
+                    generatedArea: c.units.reduce((s,u)=>s+BARLO.geometry.polygonArea(u.polygonM||u.polygon||[]),0).toFixed(1),
+                    violations: validation.violations };
+                c._packedFallback = true;
+                allCandidates.push(c);
                 if (allCandidates.length >= maxCandidates) break;
             }
-        }
+        } catch (_) {}
     }
     if (!allCandidates.length) {
         return { candidates: [], rejected, reason: "NO_VALID_SOLUTION", program, siteAnalysis: effectiveSA,
@@ -6436,7 +6451,12 @@ function reapplyPatternFromDropdown(label, patternValue) {
         // Pas de candidat valide → affiche le panel avec le diagnostic (comme "Générer propositions")
         _lastSolverResult = _lastSolverResult || {};
         _lastSolverResult[label] = result;
+        // v11.5 — Stocke le résultat dans _svgRefs pour que le widget SYNCHRO puisse relire
+        // le programme réellement testé (fallback lecture)
+        if (_svgRefs[label]) _svgRefs[label].solverResult = result;
         renderSolverPanel(label, result);
+        // v11.5 — refresh widget SYNCHRO avec les nouvelles données
+        try { renderMoteurBrief(label); } catch (_) {}
         showToast(`Pattern ${patternValue} : ${result.reason} · voir panel`, true);
         return;
     }
@@ -6588,7 +6608,12 @@ function runSolverForScenario(label) {
         });
         _lastSolverResult = _lastSolverResult || {};
         _lastSolverResult[label] = result;
+        // v11.5 — Stocke le résultat dans _svgRefs pour que le widget SYNCHRO puisse relire
+        // le programme réellement testé (fallback lecture)
+        if (_svgRefs[label]) _svgRefs[label].solverResult = result;
         renderSolverPanel(label, result);
+        // v11.5 — refresh widget SYNCHRO avec les nouvelles données
+        try { renderMoteurBrief(label); } catch (_) {}
     } catch (e) {
         console.error("Solver error:", e);
         showToast("Erreur solver : " + e.message, true);
@@ -6629,15 +6654,16 @@ function renderSolverPanel(label, result) {
         return;
     }
     if (result.reason === "NO_VALID_SOLUTION") {
-        title.textContent = "❌ Aucune implantation valide même en downgrade";
-        grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#EF4444">
-            ${result.rejected.length} candidats rejetés · même sans respect strict des reculs, rien ne rentre.<br>
-            Réduis les surfaces cibles ou repense les typologies.
+        // v11.5 — Message constructif : la parcelle est vraiment trop petite ou géométrie hostile
+        title.textContent = "⚠ Programme trop dense pour la parcelle";
+        const totalProg = (result.program || []).reduce((s, u) => s + (u.targetArea || u.unit_size_m2 || 0), 0);
+        const parcelA = result.siteAnalysis ? Math.round(result.siteAnalysis.parcelArea) : "?";
+        grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#F59E0B;line-height:1.5">
+            Aucun rect ne rentre dans la parcelle brute (${parcelA}m²) pour placer les ${totalProg}m² demandés.<br>
+            <span style="color:var(--text2);font-size:.55rem">Pistes : réduis 1 unité, baisse les surfaces, ou augmente les niveaux (R+2, R+3).</span>
         </div>`;
         debug.style.display = "block";
-        debug.textContent = "REJETS (top 5) :\n" + result.rejected.slice(0, 5).map(r =>
-            `${r.strategy}@${Math.round(r.axisDeg)}° → ${(r.violations || []).slice(0, 3).map(v => v.type).join(", ")}`
-        ).join("\n");
+        debug.textContent = `${result.rejected.length} candidats testés, aucun ne passe insideParcel.`;
         return;
     }
     // OK : affiche les candidats
@@ -6656,6 +6682,12 @@ function renderSolverPanel(label, result) {
         }
         if (d.blindFacadeCount > 0) {
             badges.push(`<span title="${d.blindFacadeCount} arêtes collent aux limites parcelle (façades aveugles)" style="color:#94A3B8;font-size:.5rem">▨${d.blindFacadeCount} aveugles</span>`);
+        }
+        // v11.5 — badge "meilleur effort" quand PACKED est un fallback (autres strategies ont échoué)
+        if (d.warning === "PACKED_FALLBACK" || c._packedFallback) {
+            badges.push(`<span title="Le pattern demandé ne rentre pas ; PACKED a été utilisé en fallback pour proposer quelque chose" style="color:#8B5CF6;font-size:.5rem">↩ fallback packer</span>`);
+        } else if (d.warning === "BEST_EFFORT" || c._bestEffort) {
+            badges.push(`<span title="Score dégradé : ce candidat ne respecte pas toutes les contraintes soft (retraits, dimensions)" style="color:#F59E0B;font-size:.5rem">↩ meilleur effort</span>`);
         }
         const badgesHtml = badges.length ? `<div style="margin-top:.15rem;font-size:.5rem;display:flex;gap:.35rem;flex-wrap:wrap">${badges.join("")}</div>` : "";
         return `
@@ -7080,11 +7112,24 @@ function renderMoteurBrief(label) {
     if (typoDesc) parts.push(`<div><strong style="color:#A78BFA">Typologies :</strong> ${esc(typoDesc)}</div>`);
     if (pilotisDesc && pilotisDesc !== "pas de pilotis") parts.push(`<div><strong style="color:#A78BFA">Pilotis :</strong> ${esc(pilotisDesc)}</div>`);
     if (configJustif) parts.push(`<div style="margin-top:.35rem;padding-top:.35rem;border-top:1px dashed rgba(139,92,246,0.3);color:var(--text2);font-style:italic">« ${esc(configJustif)} »</div>`);
-    // v10.14 — Widget État synchro : montre COS/Niveaux/Buildable calculés MAINTENANT depuis les sources
+    // v10.14 / v11.5 — Widget État synchro : lit unités avec fallback multi-source
     try {
         const s = cockpitState.scenarios[label] || {};
         const units = s.units || [];
-        const totalProgramArea = units.reduce((sum, u) => sum + (Number(u.unit_size_m2) || 0), 0);
+        let totalProgramArea = units.reduce((sum, u) => sum + (Number(u.unit_size_m2) || 0), 0);
+        // v11.5 — Si units cockpit vides ou surface 0, tenter fallback :
+        // 1) solver a produit un candidat → prendre son programme
+        // 2) lead brut → target_surface_m2
+        if (totalProgramArea === 0) {
+            const refs2 = _svgRefs[label];
+            const solverProgram = refs2 && refs2.solverResult && refs2.solverResult.program;
+            if (solverProgram && solverProgram.length) {
+                totalProgramArea = solverProgram.reduce((sum, u) => sum + (Number(u.targetArea || u.unit_size_m2) || 0), 0);
+            } else {
+                const tSDP = Number(L[`${label}_target_sdp`] || L[`${label}_sdp`] || L.target_surface_m2) || 0;
+                if (tSDP > 0) totalProgramArea = tSDP;
+            }
+        }
         const refs = _svgRefs[label];
         const parcelArea = refs && refs.siteAnalysis ? Math.round(refs.siteAnalysis.parcelArea) : "?";
         const buildableArea = refs && refs.siteAnalysis ? Math.round(refs.siteAnalysis.buildableArea) : "?";
