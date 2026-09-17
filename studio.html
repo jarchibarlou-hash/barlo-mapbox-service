@@ -224,7 +224,15 @@
         /* v75.4.0 — Rectangles unités draggables */
         .draggable-unit{cursor:grab}
         .draggable-unit.dragging{cursor:grabbing;opacity:.9}
-        .draggable-unit:hover rect.body{stroke-width:2px}
+        .draggable-unit:hover polygon.body{stroke-width:2px}
+        /* v9.1 — Vertices individuels manipulables (petit cercle discret, hover cyan agrandi) */
+        .unit-vertex{fill:#c9a878;fill-opacity:0.85;stroke:#fff;stroke-width:0.7;cursor:crosshair;pointer-events:all}
+        .unit-vertex:hover{fill:#06B6D4;stroke:#0B1120;stroke-width:1;r:5}
+        .unit-vertex.dragging{fill:#06B6D4;r:5}
+        /* v9.1 — Arêtes draggables : ligne invisible épaisse pour hitTest, cyan au hover */
+        .unit-edge{stroke:transparent;stroke-width:10;fill:none;cursor:move;pointer-events:stroke}
+        .unit-edge:hover{stroke:#06B6D4;stroke-opacity:0.35;stroke-width:6}
+        .unit-edge.dragging{stroke:#06B6D4;stroke-opacity:0.6;stroke-width:6}
         /* v75.5.0 — Poignée rotation + auto-shape */
         .rot-handle{cursor:crosshair;fill:#FBBF24;stroke:#0B1120;stroke-width:1.2}
         .rot-handle:hover{fill:#F59E0B;r:5}
@@ -356,7 +364,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.0-POLY</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.1-EDIT</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2153,9 +2161,15 @@ function renderParcelSvg(label) {
         const areaLabel = (divergence > 0.02) ? `${areaM2} m² · ${realArea} eff.` : `${areaM2} m²`;
         unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs - fsName * 0.4).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" pointer-events="none">${esc(label2)}</text>`;
         unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs + fsName * 0.7).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
-        // v9.0 — Petits cercles vertices (discrets, r=2.5) → interactifs en v9.1 pour édition point par point
+        // v9.1 — Arêtes cliquables : ligne épaisse transparente sous chaque edge (hitTest facile)
+        // data-role="edge" + data-vi = index du 1er vertex de l'arête (l'arête va de vi à vi+1 mod N)
         polyPx.forEach((v, vi) => {
-            unitsHtml += `<circle class="unit-vertex" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="2.5" fill="#c9a878" fill-opacity="0.7" stroke="#fff" stroke-width="0.5"/>`;
+            const next = polyPx[(vi + 1) % polyPx.length];
+            unitsHtml += `<line class="unit-edge" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" data-role="edge" x1="${v.x.toFixed(1)}" y1="${v.y.toFixed(1)}" x2="${next.x.toFixed(1)}" y2="${next.y.toFixed(1)}"/>`;
+        });
+        // v9.1 — Vertices draggables individuellement : cercle visible + zone hit augmentée
+        polyPx.forEach((v, vi) => {
+            unitsHtml += `<circle class="unit-vertex" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" data-role="vertex" cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="3"/>`;
         });
         unitsHtml += `</g>`;
     });
@@ -2499,8 +2513,36 @@ function onUnitDragStart(e) {
     const curRot = mR ? parseFloat(mR[1]) : 0;
 
     // v8.2.0 — Comportement legacy d'édition d'arête inline SUPPRIMÉ.
-    // Sans commande active, clic dans unité = drag pur (translation), rotation ou resize par les poignées.
-    // Toute édition d'arête passe désormais par les commandes CAD (AL/OF/TR/TC/MV/CO/RO/MI).
+    // v9.1 — Édition polygonale directe : role="vertex" ou role="edge" → drag point/arête
+
+    if (role === "vertex") {
+        // Drag d'un sommet individuel : bouge ce vertex seul, edges adjacentes suivent
+        const vi = parseInt(roleAnyEl.dataset.vi);
+        ensureUnitPolygon(u);
+        _dragState = {
+            mode: "vertex-drag", label, uidx, el, svgEl, refs,
+            vi,
+            startPolyM: u.polygon.map(p => ({ x: p.x, y: p.y })),
+            basePt: { x: svgPt.x, y: svgPt.y }
+        };
+        roleAnyEl.classList.add("dragging");
+        e.preventDefault();
+        return;
+    }
+    if (role === "edge") {
+        // Drag d'une arête : translation parallèle des 2 endpoints
+        const vi = parseInt(roleAnyEl.dataset.vi);
+        ensureUnitPolygon(u);
+        _dragState = {
+            mode: "edge-drag", label, uidx, el, svgEl, refs,
+            vi,   // arête va de polygon[vi] à polygon[(vi+1) % N]
+            startPolyM: u.polygon.map(p => ({ x: p.x, y: p.y })),
+            basePt: { x: svgPt.x, y: svgPt.y }
+        };
+        roleAnyEl.classList.add("dragging");
+        e.preventDefault();
+        return;
+    }
 
     if (role === "rotate") {
         const initAngle = Math.atan2(svgPt.y - curY, svgPt.x - curX) * 180 / Math.PI;
@@ -2585,6 +2627,44 @@ function onUnitDragMove(e) {
     if (!_dragState) return;
     const { mode, svgEl, refs, el, label, uidx } = _dragState;
     const svgPt = clientToSvg(svgEl, e.clientX, e.clientY);
+
+    // v9.1 — Drag vertex individuel : seul ce point bouge
+    if (mode === "vertex-drag") {
+        const dxPx = svgPt.x - _dragState.basePt.x;
+        const dyPx = svgPt.y - _dragState.basePt.y;
+        const { dxM, dyM } = pxDeltaToM(dxPx, dyPx, refs.scale);
+        const u = (cockpitState.scenarios[label].units || [])[uidx];
+        if (!u) return;
+        const newPoly = _dragState.startPolyM.map((p, idx) =>
+            idx === _dragState.vi ? { x: p.x + dxM, y: p.y + dyM } : { x: p.x, y: p.y }
+        );
+        u.polygon = newPoly;
+        renderParcelSvg(label);
+        // Re-attach dragging class on the vertex (innerHTML replaces DOM)
+        const newV = document.querySelector(`#cParcelSvg${label} .unit-vertex[data-uidx="${uidx}"][data-vi="${_dragState.vi}"]`);
+        if (newV) newV.classList.add("dragging");
+        e.preventDefault();
+        return;
+    }
+    // v9.1 — Drag arête : translation parallèle des 2 vertices adjacents (vi et vi+1)
+    if (mode === "edge-drag") {
+        const dxPx = svgPt.x - _dragState.basePt.x;
+        const dyPx = svgPt.y - _dragState.basePt.y;
+        const { dxM, dyM } = pxDeltaToM(dxPx, dyPx, refs.scale);
+        const u = (cockpitState.scenarios[label].units || [])[uidx];
+        if (!u) return;
+        const N = _dragState.startPolyM.length;
+        const viA = _dragState.vi, viB = (viA + 1) % N;
+        const newPoly = _dragState.startPolyM.map((p, idx) =>
+            (idx === viA || idx === viB) ? { x: p.x + dxM, y: p.y + dyM } : { x: p.x, y: p.y }
+        );
+        u.polygon = newPoly;
+        renderParcelSvg(label);
+        const newE = document.querySelector(`#cParcelSvg${label} .unit-edge[data-uidx="${uidx}"][data-vi="${_dragState.vi}"]`);
+        if (newE) newE.classList.add("dragging");
+        e.preventDefault();
+        return;
+    }
 
     if (mode === "rotate") {
         // Rotation libre : angle souris → centre unit + delta initial
@@ -2724,6 +2804,18 @@ function onUnitDragEnd(e) {
     if (!u) return;
 
     historyPush(label);   // v8.2.0 : snapshot avant commit
+
+    // v9.1 — Modes vertex-drag / edge-drag : polygon déjà à jour, juste commit + rendu final
+    if (mode === "vertex-drag" || mode === "edge-drag") {
+        renderUnitsTable(label);
+        renderParcelSvg(label);
+        updateConstraintsCount();
+        const realArea = Math.round(polygonAreaM2(u.polygon || []));
+        showToast(mode === "vertex-drag"
+            ? `Sommet déplacé · surface ${realArea} m² (cible ${u.unit_size_m2})`
+            : `Arête déplacée · surface ${realArea} m² (cible ${u.unit_size_m2})`);
+        return;
+    }
 
     // v9.0 — Mode "move" = TRANSLATION PURE du polygon initial (aucun snap rotation, aucune déformation)
     if (mode === "move" && startPolyM && lastX !== undefined && refs) {
