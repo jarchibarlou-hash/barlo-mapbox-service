@@ -367,7 +367,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.7-AXIS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.0-FOUND</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1141,8 +1141,11 @@ function unitPolygonToPx(u, cxSvg, cySvg, scale) {
     const rot = (u.rotation_deg || 0) * Math.PI / 180;
     const c = Math.cos(rot), s = Math.sin(rot);
     return u.polygon.map(pt => {
-        const lx = pt.x_m * scale;
-        const ly = -pt.y_m * scale;   // y_m nord+ → y SVG down
+        // v10.0 : supporte les 2 schémas {x_m, y_m} (legacy) et {x, y} (v9.0+)
+        const xm = (pt.x_m !== undefined) ? pt.x_m : pt.x;
+        const ym = (pt.y_m !== undefined) ? pt.y_m : pt.y;
+        const lx = xm * scale;
+        const ly = -ym * scale;   // y+ (Nord) → y SVG down
         return {
             x: cxSvg + offsetX + lx * c - ly * s,
             y: cySvg + offsetY + lx * s + ly * c
@@ -1190,10 +1193,12 @@ function clipAndGrowRect(cx, cy, initialW, initialH, rotDeg, areaTargetPx, clipp
     return clipped || [];
 }
 
-// ═══ v75.8.0 — POLYGONES LIBRES : modèle + utilities + auto-shape L/T + optimisation ═══
+// ═══ v75.8.0 — POLYGONES LIBRES legacy (schéma {x_m, y_m}) ═══
+// v10.0 : renommés _legacyXxx pour éviter shadowing avec les nouvelles versions {x, y} (~1930).
+// Ces helpers restent utilisés par optimizeScenarioLayout et les shape* prédéfinies (rectangle, L, T…).
+// Convention interne : y+ = Nord, origine = centre parcelle.
 
-// Aire d'un polygone (shoelace) en m² depuis points {x_m, y_m}
-function polygonAreaM2(polygon) {
+function _legacyPolygonAreaM2(polygon) {
     if (!polygon || polygon.length < 3) return 0;
     let a = 0, n = polygon.length;
     for (let i = 0; i < n; i++) {
@@ -1203,29 +1208,25 @@ function polygonAreaM2(polygon) {
     return Math.abs(a) / 2;
 }
 
-// Centroïde géométrique d'un polygone
-function polygonCentroidM(polygon) {
+function _legacyPolygonCentroidM(polygon) {
     if (!polygon || polygon.length === 0) return { x_m: 0, y_m: 0 };
     let sx = 0, sy = 0;
     for (const p of polygon) { sx += p.x_m; sy += p.y_m; }
     return { x_m: sx / polygon.length, y_m: sy / polygon.length };
 }
 
-// Recentre un polygone sur (0, 0) — utile après génération
 function centerPolygon(polygon) {
-    const c = polygonCentroidM(polygon);
+    const c = _legacyPolygonCentroidM(polygon);
     return polygon.map(p => ({ x_m: p.x_m - c.x_m, y_m: p.y_m - c.y_m }));
 }
 
-// Scale un polygone pour atteindre area cible (préserve forme + centre)
 function scalePolygonToArea(polygon, targetAreaM2) {
-    const currentArea = polygonAreaM2(polygon);
+    const currentArea = _legacyPolygonAreaM2(polygon);
     if (currentArea <= 0 || targetAreaM2 <= 0) return polygon;
     const k = Math.sqrt(targetAreaM2 / currentArea);
     return polygon.map(p => ({ x_m: p.x_m * k, y_m: p.y_m * k }));
 }
 
-// Rotate polygon (radians)
 function rotatePolygonRad(polygon, angleRad) {
     const c = Math.cos(angleRad), s = Math.sin(angleRad);
     return polygon.map(p => ({
@@ -1234,8 +1235,7 @@ function rotatePolygonRad(polygon, angleRad) {
     }));
 }
 
-// Translate polygon (mètres) — retourne nouveau polygone shifté
-function translatePolygonM(polygon, dx_m, dy_m) {
+function _legacyTranslatePolygonM(polygon, dx_m, dy_m) {
     return polygon.map(p => ({ x_m: p.x_m + dx_m, y_m: p.y_m + dy_m }));
 }
 
@@ -1965,6 +1965,153 @@ function ensureUnitPolygon(u) {
     return u.polygon;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.0 — NAMESPACE BARLO : Site Layout Solver (fondations)
+// Sépare Model / Solver / Editor / Adapter dans un objet global unique.
+// Chaque phase suivante (v10.1 → v10.7) enrichit un sous-namespace.
+// ═══════════════════════════════════════════════════════════════════════════════
+window.BARLO = window.BARLO || {};
+BARLO.geometry = BARLO.geometry || {};
+BARLO.site = BARLO.site || {};
+BARLO.constraints = BARLO.constraints || {};
+BARLO.strategies = BARLO.strategies || {};
+BARLO.solver = BARLO.solver || {};
+BARLO.scorer = BARLO.scorer || {};
+BARLO.diversity = BARLO.diversity || {};
+BARLO.editor = BARLO.editor || {};
+BARLO.persistence = BARLO.persistence || {};
+BARLO.mapbox = BARLO.mapbox || {};
+
+// ─── BARLO.geometry : primitives (façade vers helpers existants inline) ───
+BARLO.geometry.polygonArea = polygonAreaM2;                 // {x, y} en mètres
+BARLO.geometry.polygonCentroid = polygonCentroidM;
+BARLO.geometry.translate = translatePolygonM;
+BARLO.geometry.clipHalfPlane = clipByHalfPlane;              // {x, y} générique
+BARLO.geometry.clipSutherlandHodgman = sutherlandHodgmanClip;
+BARLO.geometry.pointInPolygon = pointInPolygonPx;
+BARLO.geometry.projectPointOnSegment = projectPointOnSegment;
+
+// Rotation d'un polygon {x, y} en m autour d'un point centre
+BARLO.geometry.rotate = function(polyM, cx, cy, angleDeg) {
+    const rad = angleDeg * Math.PI / 180;
+    const c = Math.cos(rad), s = Math.sin(rad);
+    return polyM.map(p => {
+        const dx = p.x - cx, dy = p.y - cy;
+        return { x: cx + dx * c - dy * s, y: cy + dx * s + dy * c };
+    });
+};
+
+// Test unité ⊆ polygone (aire d'intersection ≥ 99.5% de l'aire originale)
+BARLO.geometry.polygonInside = function(polyPx, containerPx) {
+    if (!polyPx || polyPx.length < 3 || !containerPx || containerPx.length < 3) return false;
+    const clipped = sutherlandHodgmanClip(polyPx, containerPx);
+    if (!clipped || clipped.length < 3) return false;
+    const aClip = polygonAreaXY(clipped);
+    const aOrig = polygonAreaXY(polyPx);
+    return aOrig > 0 && aClip / aOrig >= 0.995;
+};
+
+// Test intersection de 2 polygones (aire commune > seuil)
+BARLO.geometry.polygonsIntersect = function(polyA, polyB, tolerancePx) {
+    tolerancePx = tolerancePx || 1;
+    if (!polyA || !polyB || polyA.length < 3 || polyB.length < 3) return 0;
+    const clipped = sutherlandHodgmanClip(polyA, polyB);
+    if (!clipped || clipped.length < 3) return 0;
+    const a = polygonAreaXY(clipped);
+    return a > tolerancePx ? a : 0;
+};
+
+// ─── BARLO.site : Site Analysis Model ───
+// Analyse une parcelle : buildable réel avec retraits différenciés par arête,
+// axes candidats, centroïde, bounds, arêtes indexées, orientations.
+// Appelée UNE FOIS au chargement / redraw parcelle. Cachée dans _svgRefs[label].siteAnalysis
+BARLO.site.analyzeParcel = function(parcelPtsM, segments) {
+    // parcelPtsM : [{x, y}] en mètres. segments : cockpitState.segments avec retrait_m par arête.
+    if (!parcelPtsM || parcelPtsM.length < 3) return null;
+    const N = parcelPtsM.length;
+    // Bounds axis-aligned
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    parcelPtsM.forEach(p => {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    });
+    // Centroïde
+    const centroid = polygonCentroidM(parcelPtsM);
+    // Aire signée pour détection orientation CW/CCW
+    let signedArea = 0;
+    for (let i = 0; i < N; i++) {
+        const j = (i + 1) % N;
+        signedArea += parcelPtsM[i].x * parcelPtsM[j].y - parcelPtsM[j].x * parcelPtsM[i].y;
+    }
+    const isCCW = signedArea > 0;   // en repère y+ = Nord
+    // Arêtes indexées avec longueur, angle et retrait
+    const edges = [];
+    for (let i = 0; i < N; i++) {
+        const p1 = parcelPtsM[i], p2 = parcelPtsM[(i + 1) % N];
+        const dx = p2.x - p1.x, dy = p2.y - p1.y;
+        const len = Math.hypot(dx, dy);
+        const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+        // Retrait pour cette arête (depuis segments)
+        const seg = (segments || []).find(s => s.index === i);
+        const retraitM = seg ? Number(seg.retrait_m) || 0 : 0;
+        const segType = seg ? seg.type : "libre";
+        edges.push({ index: i, p1, p2, len, angleDeg, retraitM, segType });
+    }
+    // Arête la plus longue = axe dominant potentiel
+    const longestEdge = edges.reduce((a, b) => b.len > a.len ? b : a, edges[0]);
+    const dominantAxisDeg = longestEdge.angleDeg;
+    // Buildable polygonal réel : intersection des half-planes offsettés vers l'intérieur
+    // pour CHAQUE arête selon son retrait individuel.
+    let buildable = parcelPtsM.slice();
+    edges.forEach(e => {
+        if (e.retraitM <= 0) return;
+        // Normale sortante brute (rot 90° CCW du vecteur AB)
+        const ex = e.p2.x - e.p1.x, ey = e.p2.y - e.p1.y;
+        let nx = -ey, ny = ex;
+        const nlen = Math.hypot(nx, ny) || 1;
+        nx /= nlen; ny /= nlen;
+        // Force normale VERS L'INTÉRIEUR (opposée sortante) : dot avec (centroid - mid) doit être > 0
+        const midx = (e.p1.x + e.p2.x) / 2, midy = (e.p1.y + e.p2.y) / 2;
+        const toC = { x: centroid.x - midx, y: centroid.y - midy };
+        if (nx * toC.x + ny * toC.y < 0) { nx = -nx; ny = -ny; }
+        // Origine du half-plane = mid + retrait * normale intérieure
+        const ox = midx + nx * e.retraitM, oy = midy + ny * e.retraitM;
+        // Clip : garde le côté où pointe la normale intérieure
+        buildable = clipByHalfPlane(buildable, ox, oy, nx, ny);
+        if (!buildable || buildable.length < 3) { buildable = []; return; }
+    });
+    // Axes candidats pour la génération : arêtes uniques (dédupliquées par angle mod 180°)
+    const angleSet = new Set();
+    const candidateAxes = [];
+    edges.forEach(e => {
+        let a = e.angleDeg;
+        while (a < 0) a += 180;
+        while (a >= 180) a -= 180;
+        const key = Math.round(a * 2) / 2;   // regroupe par 0.5°
+        if (!angleSet.has(key)) {
+            angleSet.add(key);
+            candidateAxes.push({ angleDeg: key, sourceEdge: e.index, source: "parcel_edge" });
+        }
+    });
+    // Ajoute axe Nord si pas déjà présent
+    if (!angleSet.has(0) && !angleSet.has(90)) {
+        candidateAxes.push({ angleDeg: 0, source: "north" });
+    }
+    return {
+        parcelPolygon: parcelPtsM,
+        buildablePolygon: buildable,
+        buildableArea: polygonAreaM2(buildable),
+        parcelArea: polygonAreaM2(parcelPtsM),
+        bounds: { minX, maxX, minY, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 },
+        centroid,
+        isCCW,
+        edges,
+        longestEdge,
+        dominantAxisDeg,
+        candidateAxes
+    };
+};
+
 function renderParcelSvg(label) {
     const svg = $(`cParcelSvg${label}`);
     const legend = $(`cParcelLegend${label}`);
@@ -2045,8 +2192,19 @@ function renderParcelSvg(label) {
         const my = (q1.y + q2.y) / 2 + ny * 6;
         segRetraitsHtml += `<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${color}" font-size="8" font-weight="600" font-family="Inter">${seg.retrait_m}m</text>`;
     }
-    // Zone constructible approximative (shrink uniforme du retrait max) pour clip des unités
-    const svgPtsBuildable = shrinkPolygonPx(svgPts, maxRetraitM * scale);
+    // v10.0 — SiteAnalysis : vrai buildable polygonal avec retraits DIFFÉRENCIÉS par arête.
+    // Calculé en mètres puis converti en px pour le rendu.
+    // Convention Model : y+ = Nord. Convention SVG : y+ = down. On convertit ici.
+    const parcelPtsM = svgPts.map(p => ({ x: (p.x - cxSvg) / scale, y: -(p.y - cySvg) / scale }));
+    const siteAnalysis = BARLO.site.analyzeParcel(parcelPtsM, cockpitState.segments || []);
+    // Buildable réel en px (chaque arête a son retrait individuel)
+    let svgPtsBuildable;
+    if (siteAnalysis && siteAnalysis.buildablePolygon && siteAnalysis.buildablePolygon.length >= 3) {
+        svgPtsBuildable = siteAnalysis.buildablePolygon.map(p => ({ x: cxSvg + p.x * scale, y: cySvg - p.y * scale }));
+    } else {
+        // Fallback rétro-compat : shrink uniforme (v9.x)
+        svgPtsBuildable = shrinkPolygonPx(svgPts, maxRetraitM * scale);
+    }
     const polyStrBuildable = svgPtsBuildable.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
 
     // v75.3.1 — Labels sommets A, B, C, ... (position légèrement à l'extérieur du polygone)
@@ -2194,8 +2352,9 @@ function renderParcelSvg(label) {
         unitsHtml += `</g>`;
     });
 
-    // v9.0 : legacy auto-shape / auto-push / clip mutuel / rendu rect+rotation retiré ci-dessous.
-    /* === LEGACY DEAD CODE — désactivé (block-commented pour éviter tout parse orphelin) ===
+    // v10.0 : le legacy auto-shape / clip mutuel / rendu rect+rotation était block-commenté ici.
+    // Il a été retiré. Voir historique git pour l'archive.
+    /* v10.0 stub :
     if (false) {
         const dummyForEachStart = () => {
         const areaM2 = 0; const uW = 0; const uH = 0;
@@ -2434,7 +2593,8 @@ function renderParcelSvg(label) {
     // v75.6.1 — Réutilise segLinesForSnapPre calculé avant boucle (évite recompute)
     // v8.0.0 — svgPtsRaw ajouté pour le CommandManager (vertices parcelle A/B/C…)
     // v9.0 — placements ajoutés pour l'édition polygonale directe (vertex/edge)
-    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, svgPtsRaw: svgPts, sectorAngles, segLinesForSnap: segLinesForSnapPre, placements };
+    // v10.0 — siteAnalysis (buildable réel + axes candidats + edges + centroïde) exposé pour le solver
+    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, svgPtsRaw: svgPts, sectorAngles, segLinesForSnap: segLinesForSnapPre, placements, siteAnalysis };
 
     // Boussole en haut à droite (plus compact)
     const compass = `
