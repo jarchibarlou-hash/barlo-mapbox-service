@@ -184,6 +184,33 @@
         .c-parcel-preview{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.6rem;margin-top:.4rem;position:relative}
         .c-parcel-preview svg{width:100%;height:auto;max-height:680px;display:block;touch-action:none;user-select:none}
         /* v7.2.0 — Toolbar Revit-like inline au-dessus de la preview */
+        /* v8.0.0 — Command Manager Revit-like */
+        body.cmd-active{cursor:crosshair !important}
+        body.cmd-active .c-parcel-preview{outline:2px solid #06B6D4;outline-offset:2px}
+        .cmd-hud{position:fixed;z-index:10000;background:rgba(11,17,32,0.96);border:1.5px solid #06B6D4;color:#fff;padding:.55rem .85rem;border-radius:6px;font-size:.72rem;box-shadow:0 8px 24px rgba(6,182,212,.35);display:none;flex-direction:column;gap:.35rem;pointer-events:none;font-family:Inter,sans-serif;min-width:220px}
+        .cmd-hud.active{display:flex}
+        .cmd-hud .cmd-title{font-size:.6rem;text-transform:uppercase;letter-spacing:.8px;color:#06B6D4;font-weight:700}
+        .cmd-hud .cmd-hint{font-size:.72rem;color:#fff}
+        .cmd-hud .cmd-esc{font-size:.55rem;color:#94A3B8;margin-top:.15rem}
+        .cmd-hud input{background:#0B1120;border:1px solid #06B6D4;color:#06B6D4;padding:.3rem .5rem;border-radius:4px;font-size:.8rem;font-weight:700;font-family:inherit;width:100px;pointer-events:auto}
+        /* Toolbar commandes CAD */
+        .cmd-toolbar{display:flex;flex-wrap:wrap;gap:.28rem;align-items:center;background:linear-gradient(90deg,#0B1120,#0f1a30);border:1px solid #06B6D4;border-radius:6px;padding:.35rem .5rem;margin-top:.35rem}
+        .cmd-toolbar .cmd-btn{padding:.32rem .5rem;font-size:.66rem;font-weight:700;border:1px solid var(--border);background:var(--navy);color:var(--text);border-radius:4px;cursor:pointer;font-family:inherit;display:inline-flex;flex-direction:column;align-items:center;line-height:1.1;gap:.05rem;min-width:52px}
+        .cmd-toolbar .cmd-btn:hover{border-color:#06B6D4;color:#06B6D4;background:rgba(6,182,212,0.08)}
+        .cmd-toolbar .cmd-btn.active{background:#06B6D4;color:#0B1120;border-color:#06B6D4}
+        .cmd-toolbar .cmd-btn small{font-size:.5rem;opacity:.7;letter-spacing:.5px}
+        .cmd-toolbar .cmd-sep{width:1px;height:22px;background:rgba(201,168,120,0.25);margin:0 .1rem}
+        /* Snap markers dans SVG */
+        .snap-marker{fill:#22C55E;stroke:#fff;stroke-width:1.5;pointer-events:none}
+        .snap-marker.endpoint{fill:none;stroke:#22C55E;stroke-width:2}
+        .snap-marker.midpoint{fill:#F59E0B;stroke:#fff;stroke-width:1.2}
+        .snap-marker.edge{stroke:#22C55E;stroke-width:2.5;fill:none;pointer-events:none;stroke-dasharray:none}
+        .snap-marker.segment{stroke:#EC4899;stroke-width:2.5;fill:none;pointer-events:none}
+        .snap-marker.intersection{fill:none;stroke:#22C55E;stroke-width:1.5}
+        /* Ghost preview layer */
+        .ghost-preview{fill:#06B6D4;fill-opacity:0.20;stroke:#06B6D4;stroke-width:1.5;stroke-dasharray:4,3;pointer-events:none}
+        .ghost-line{stroke:#06B6D4;stroke-width:1.5;stroke-dasharray:5,3;fill:none;pointer-events:none;opacity:0.85}
+        .picked-ref{stroke:#06B6D4;stroke-width:3;fill:none;pointer-events:none}
         .c-preview-toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;background:rgba(11,17,32,0.6);border:1px solid var(--border);border-radius:6px;padding:.4rem .55rem;margin-top:.35rem}
         .c-toolbar-group{display:flex;flex-wrap:wrap;gap:.3rem;align-items:center}
         .c-toolbar-group+.c-toolbar-group{border-left:1px dashed rgba(201,168,120,0.25);padding-left:.55rem;margin-left:.15rem}
@@ -329,7 +356,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v7.2.0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.0.0-CMD</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -800,7 +827,7 @@ function scenarioPanelTemplate(L) {
       <div class="c-section">
         <h4>🧭 Preview de l'implantation sur la parcelle <span class="c-hint">— sommets A, B, C… correspondent au tableau des segments</span></h4>
 
-        <!-- v7.2.0 — Toolbar Revit-like : patterns + outils arête inline (fluide, pas de popup) -->
+        <!-- v8.0.0 — Toolbar patterns (générateurs) -->
         <div class="c-preview-toolbar" id="cPreviewToolbar${L}">
           <div class="c-toolbar-group">
             <span class="c-toolbar-label">Pattern :</span>
@@ -810,15 +837,19 @@ function scenarioPanelTemplate(L) {
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','LAMELLE')" title="Barre allongée (lamellé) le long d'un côté">▬ Lamellé</button>
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','PLOT')" title="Plots compacts en semis">▦ Compact</button>
           </div>
-          <div class="c-toolbar-group c-toolbar-edge" id="cToolbarEdge${L}" style="display:none">
-            <span class="c-toolbar-label" id="cToolbarEdgeInfo${L}" style="color:#06B6D4">Arête —</span>
-            <button type="button" class="c-tb-btn c-tb-btn-cyan" onclick="revitStartAlign()" title="Aligner sur une arête cible (clic sur l'arête cible ensuite)">🎯 Align</button>
-            <button type="button" class="c-tb-btn" onclick="revitApplyOffset(-1)" title="Rétrécit de 1m vers l'intérieur">➖ 1m</button>
-            <button type="button" class="c-tb-btn" onclick="revitApplyOffset(1)" title="Agrandit de 1m vers l'extérieur">➕ 1m</button>
-            <input type="number" step="0.5" placeholder="m" id="cToolbarEdgeOffset${L}" style="width:50px;padding:.25rem;background:var(--navy);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:.68rem" onkeydown="if(event.key==='Enter'){toolbarApplyOffsetCustom(this);event.preventDefault()}">
-            <button type="button" class="c-tb-btn c-tb-btn-cyan" onclick="toolbarApplyOffsetCustom(document.getElementById('cToolbarEdgeOffset${L}'))" title="Applique l'offset saisi (+ vers ext / − vers int)">Offset ↔</button>
-            <button type="button" class="c-tb-btn c-tb-btn-dim" onclick="revitCloseAll()" title="Désélectionner l'arête">✕</button>
-          </div>
+        </div>
+
+        <!-- v8.0.0 — Toolbar Revit-like commandes CAD (curseur = interface, ESC = quit) -->
+        <div class="cmd-toolbar" data-scn="${L}">
+          <button type="button" class="cmd-btn" data-cmd="AL" onclick="cmdStart('AL','${L}')" title="Align — AL — Clique arête cible puis arête à déplacer (ESC pour quitter)">🎯 Align<small>AL</small></button>
+          <button type="button" class="cmd-btn" data-cmd="OF" onclick="cmdStart('OF','${L}')" title="Offset — OF — Saisis distance, hover unité, clique côté (ESC)">↔ Offset<small>OF</small></button>
+          <button type="button" class="cmd-btn" data-cmd="TR" onclick="cmdStart('TR','${L}')" title="Trim/Extend — TR — Clique limite puis élément à ajuster (ESC)">✂ Trim<small>TR</small></button>
+          <button type="button" class="cmd-btn" data-cmd="TC" onclick="cmdStart('TC','${L}')" title="Trim/Extend en angle — TC — Clique élément A puis élément B (ESC)">└ Corner<small>TC</small></button>
+          <span class="cmd-sep"></span>
+          <button type="button" class="cmd-btn" data-cmd="MV" onclick="cmdStart('MV','${L}')" title="Move — MV — Clique point base puis destination (ESC)">↔ Move<small>MV</small></button>
+          <button type="button" class="cmd-btn" data-cmd="CO" onclick="cmdStart('CO','${L}')" title="Copy — CO — Duplique l'unité vers un point (ESC)">⧉ Copy<small>CO</small></button>
+          <button type="button" class="cmd-btn" data-cmd="RO" onclick="cmdStart('RO','${L}')" title="Rotate — RO — Clique centre puis angle (ESC)">⟳ Rotate<small>RO</small></button>
+          <button type="button" class="cmd-btn" data-cmd="MI" onclick="cmdStart('MI','${L}')" title="Mirror — MI — Clique 2 points définissant l'axe (ESC)">◫ Mirror<small>MI</small></button>
         </div>
 
         <div class="c-parcel-preview" id="cParcelPreview${L}">
@@ -2254,7 +2285,8 @@ function renderParcelSvg(label) {
     });
 
     // v75.6.1 — Réutilise segLinesForSnapPre calculé avant boucle (évite recompute)
-    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, sectorAngles, segLinesForSnap: segLinesForSnapPre };
+    // v8.0.0 — svgPtsRaw ajouté pour le CommandManager (vertices parcelle A/B/C…)
+    _svgRefs[label] = { scale, cxSvg, cySvg, svgPtsBuildable, svgPtsRaw: svgPts, sectorAngles, segLinesForSnap: segLinesForSnapPre };
 
     // Boussole en haut à droite (plus compact)
     const compass = `
@@ -2671,6 +2703,549 @@ function onUnitDragEnd(e) {
     showToast(`Unité "${u.unit_name || u.unit_type}" → secteur ${u.placement_sector}${suffix}`);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v8.0.0 — COMMAND MANAGER Revit-like
+// Canvas = interface principale. Aucun modal. State machine explicite.
+// IDLE → WAIT_1 → WAIT_2 → PREVIEW → COMMIT → (reste actif si utile)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CMD = {
+    active: null,          // 'AL' | 'OF' | 'TR' | 'TC' | 'MV' | 'CO' | 'RO' | 'MI'
+    state: "IDLE",         // 'IDLE' | 'WAIT_1' | 'WAIT_2' | 'WAIT_N' | 'PREVIEW'
+    picks: [],             // références validées (chaque pick = { kind, unit_idx?, edge?, p1, p2, mid, label })
+    hover: null,           // dernière référence sous le curseur
+    labelCtx: null,        // scénario actif (A/B/C)
+    hudDistance: null      // pour OFFSET (mètres)
+};
+
+// Marker snap + ghost preview vivent dans un <g> dédié par SVG scénario
+function _cmdOverlayGroup(label) {
+    const svg = $("cParcelSvg" + label);
+    if (!svg) return null;
+    let g = svg.querySelector(".cmd-overlay");
+    if (!g) {
+        g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("class", "cmd-overlay");
+        svg.appendChild(g);
+    }
+    return g;
+}
+
+function clearCmdOverlay(label) {
+    const targets = label ? [label] : ["A", "B", "C"];
+    targets.forEach(l => {
+        const g = _cmdOverlayGroup(l);
+        if (g) g.innerHTML = "";
+    });
+}
+
+// ─────── HUD flottant qui suit le curseur ───────
+function showCmdHUD(cmdKey, hint) {
+    const hud = $("cmdHUD");
+    if (!hud) return;
+    const c = COMMANDS[cmdKey];
+    hud.querySelector(".cmd-title").textContent = c.label + "  ·  " + cmdKey;
+    hud.querySelector(".cmd-hint").textContent = hint || c.hint || "";
+    hud.classList.add("active");
+    // Bloc distance (OFFSET) affiché conditionnellement
+    const distBlock = hud.querySelector(".cmd-dist-block");
+    if (distBlock) distBlock.style.display = (cmdKey === "OF") ? "flex" : "none";
+    if (cmdKey === "OF") {
+        const inp = hud.querySelector(".cmd-dist-input");
+        if (inp) { inp.value = CMD.hudDistance || ""; inp.focus(); }
+    }
+}
+function updateCmdHUD(hint) {
+    const hud = $("cmdHUD");
+    if (!hud) return;
+    const h = hud.querySelector(".cmd-hint");
+    if (h) h.textContent = hint;
+}
+function hideCmdHUD() {
+    const hud = $("cmdHUD");
+    if (hud) hud.classList.remove("active");
+}
+function moveCmdHUD(clientX, clientY) {
+    const hud = $("cmdHUD");
+    if (!hud || !hud.classList.contains("active")) return;
+    const w = hud.offsetWidth || 240, h = hud.offsetHeight || 90;
+    const x = Math.min(window.innerWidth - w - 8, clientX + 18);
+    const y = Math.min(window.innerHeight - h - 8, clientY + 18);
+    hud.style.left = x + "px";
+    hud.style.top = y + "px";
+}
+
+// ─────── Snap markers dans le SVG ───────
+function drawSnapMarker(label, ref) {
+    const g = _cmdOverlayGroup(label);
+    if (!g) return;
+    // Vide le marker précédent (mais garde ghost preview qui a sa propre balise)
+    g.querySelectorAll(".snap-marker").forEach(n => n.remove());
+    if (!ref) return;
+    if (ref.kind === "endpoint" || ref.kind === "vertex") {
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("class", "snap-marker endpoint");
+        c.setAttribute("cx", ref.p.x); c.setAttribute("cy", ref.p.y); c.setAttribute("r", "5");
+        g.appendChild(c);
+        const sq = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        sq.setAttribute("class", "snap-marker endpoint");
+        sq.setAttribute("x", ref.p.x - 4); sq.setAttribute("y", ref.p.y - 4);
+        sq.setAttribute("width", "8"); sq.setAttribute("height", "8");
+        g.appendChild(sq);
+    } else if (ref.kind === "midpoint") {
+        const t = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+        t.setAttribute("class", "snap-marker midpoint");
+        const s = 5;
+        t.setAttribute("points", `${ref.p.x},${ref.p.y-s} ${ref.p.x+s},${ref.p.y+s} ${ref.p.x-s},${ref.p.y+s}`);
+        g.appendChild(t);
+    } else if (ref.kind === "edge") {
+        const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        ln.setAttribute("class", "snap-marker edge");
+        ln.setAttribute("x1", ref.p1.x); ln.setAttribute("y1", ref.p1.y);
+        ln.setAttribute("x2", ref.p2.x); ln.setAttribute("y2", ref.p2.y);
+        g.appendChild(ln);
+    } else if (ref.kind === "segment") {
+        const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        ln.setAttribute("class", "snap-marker segment");
+        ln.setAttribute("x1", ref.p1.x); ln.setAttribute("y1", ref.p1.y);
+        ln.setAttribute("x2", ref.p2.x); ln.setAttribute("y2", ref.p2.y);
+        g.appendChild(ln);
+    } else if (ref.kind === "intersection") {
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        c.setAttribute("class", "snap-marker intersection");
+        c.setAttribute("cx", ref.p.x); c.setAttribute("cy", ref.p.y); c.setAttribute("r", "6");
+        g.appendChild(c);
+        // Croix
+        const l1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        l1.setAttribute("class", "snap-marker intersection");
+        l1.setAttribute("x1", ref.p.x - 4); l1.setAttribute("y1", ref.p.y - 4);
+        l1.setAttribute("x2", ref.p.x + 4); l1.setAttribute("y2", ref.p.y + 4);
+        g.appendChild(l1);
+        const l2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        l2.setAttribute("class", "snap-marker intersection");
+        l2.setAttribute("x1", ref.p.x - 4); l2.setAttribute("y1", ref.p.y + 4);
+        l2.setAttribute("x2", ref.p.x + 4); l2.setAttribute("y2", ref.p.y - 4);
+        g.appendChild(l2);
+    }
+}
+function clearSnapMarker(label) {
+    const targets = label ? [label] : ["A", "B", "C"];
+    targets.forEach(l => {
+        const g = _cmdOverlayGroup(l);
+        if (g) g.querySelectorAll(".snap-marker").forEach(n => n.remove());
+    });
+}
+
+// ─────── Ghost preview (résultat prévisible avant clic) ───────
+function drawGhostPreview(label, svgMarkup) {
+    const g = _cmdOverlayGroup(label);
+    if (!g) return;
+    g.querySelectorAll(".ghost-preview,.ghost-line,.picked-ref").forEach(n => n.remove());
+    if (!svgMarkup) return;
+    const wrap = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    wrap.innerHTML = svgMarkup;
+    g.appendChild(wrap);
+}
+function clearGhostPreview(label) {
+    const targets = label ? [label] : ["A", "B", "C"];
+    targets.forEach(l => {
+        const g = _cmdOverlayGroup(l);
+        if (g) g.querySelectorAll(".ghost-preview,.ghost-line").forEach(n => n.remove());
+    });
+}
+
+// ─────── Reference resolver : que survole le curseur ? ───────
+// Renvoie { kind, p?, p1?, p2?, mid?, unit_idx?, edge?, label, angleDeg? }
+function resolveGeoRef(label, svgPt) {
+    const refs = _svgRefs[label];
+    if (!refs) return null;
+    const scenario = cockpitState.scenarios[label];
+    if (!scenario) return null;
+    const units = scenario.units || [];
+    const SNAP_PX = 8;
+
+    let best = null, bestDist = Infinity, bestPriority = 99;
+
+    // Priorité 1 : ENDPOINTS des arêtes unités (coins)
+    for (let idx = 0; idx < units.length; idx++) {
+        const u = units[idx];
+        if (!u.placement_sector) continue;
+        const geom = _unitEdgesGlobal(u, refs);
+        if (!geom) continue;
+        for (const c of geom.corners) {
+            const d = Math.hypot(svgPt.x - c.x, svgPt.y - c.y);
+            if (d < SNAP_PX && (d < bestDist || 1 < bestPriority)) {
+                best = { kind: "endpoint", label, unit_idx: idx, p: c };
+                bestDist = d; bestPriority = 1;
+            }
+        }
+    }
+    // Priorité 2 : MIDPOINTS des arêtes unités
+    if (bestPriority > 2) {
+        for (let idx = 0; idx < units.length; idx++) {
+            const u = units[idx];
+            if (!u.placement_sector) continue;
+            const geom = _unitEdgesGlobal(u, refs);
+            if (!geom) continue;
+            for (const eKey of ["n","s","e","w"]) {
+                const e = geom.edges[eKey];
+                const mx = (e.p1.x + e.p2.x)/2, my = (e.p1.y + e.p2.y)/2;
+                const d = Math.hypot(svgPt.x - mx, svgPt.y - my);
+                if (d < SNAP_PX && (d < bestDist || 2 < bestPriority)) {
+                    best = { kind: "midpoint", label, unit_idx: idx, edge: eKey, p: { x: mx, y: my }, p1: e.p1, p2: e.p2, angleDeg: e.angleDeg };
+                    bestDist = d; bestPriority = 2;
+                }
+            }
+        }
+    }
+    // Priorité 3 : VERTICES parcelle (A, B, C…)
+    if (bestPriority > 3) {
+        (cockpitState.segments || []).forEach((seg, i) => {
+            const sPt = refs.svgPtsRaw ? refs.svgPtsRaw[i] : null;
+            if (!sPt) return;
+            const d = Math.hypot(svgPt.x - sPt.x, svgPt.y - sPt.y);
+            if (d < SNAP_PX + 2 && (d < bestDist || 3 < bestPriority)) {
+                best = { kind: "vertex", label, p: sPt, seg_from: seg.from };
+                bestDist = d; bestPriority = 3;
+            }
+        });
+    }
+    // Priorité 4 : ARÊTES unités (edges/faces)
+    if (bestPriority > 4) {
+        for (let idx = 0; idx < units.length; idx++) {
+            const u = units[idx];
+            if (!u.placement_sector) continue;
+            const geom = _unitEdgesGlobal(u, refs);
+            if (!geom) continue;
+            for (const eKey of ["n","s","e","w"]) {
+                const e = geom.edges[eKey];
+                const { dist } = projectPointOnSegment(svgPt, e.p1, e.p2);
+                if (dist < SNAP_PX && (dist < bestDist || 4 < bestPriority)) {
+                    best = { kind: "edge", label, unit_idx: idx, edge: eKey, p1: e.p1, p2: e.p2, angleDeg: e.angleDeg };
+                    bestDist = dist; bestPriority = 4;
+                }
+            }
+        }
+    }
+    // Priorité 5 : SEGMENTS parcelle (retraits)
+    if (bestPriority > 5) {
+        for (const s of (refs.segLinesForSnap || [])) {
+            const { dist } = projectPointOnSegment(svgPt, s.p1, s.p2);
+            if (dist < SNAP_PX + 4 && (dist < bestDist || 5 < bestPriority)) {
+                best = { kind: "segment", label, p1: s.p1, p2: s.p2, angleDeg: s.angleDeg, seg_idx: s.i };
+                bestDist = dist; bestPriority = 5;
+            }
+        }
+    }
+    return best;
+}
+
+// Renvoie les 4 arêtes globales + 4 coins d'une unité (rect en repère local rotaté)
+function _unitEdgesGlobal(u, refs) {
+    if (!refs) return null;
+    const scale = refs.scale;
+    // Position centre en px SVG
+    const cx = refs.cxSvg + (u.offset_x_m || 0) * scale;
+    const cy = refs.cySvg - (u.offset_y_m || 0) * scale;
+    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const w = w_m * scale, h = h_m * scale;
+    const rot = (u.rotation_deg || 0) * Math.PI / 180;
+    const local = [
+        { x: -w/2, y: -h/2 }, { x:  w/2, y: -h/2 },
+        { x:  w/2, y:  h/2 }, { x: -w/2, y:  h/2 }
+    ];
+    const rotate = (p) => ({
+        x: cx + p.x * Math.cos(rot) - p.y * Math.sin(rot),
+        y: cy + p.x * Math.sin(rot) + p.y * Math.cos(rot)
+    });
+    const corners = local.map(rotate);
+    const edges = {
+        n: { p1: corners[0], p2: corners[1], angleDeg: Math.atan2(corners[1].y-corners[0].y, corners[1].x-corners[0].x) * 180/Math.PI },
+        e: { p1: corners[1], p2: corners[2], angleDeg: Math.atan2(corners[2].y-corners[1].y, corners[2].x-corners[1].x) * 180/Math.PI },
+        s: { p1: corners[3], p2: corners[2], angleDeg: Math.atan2(corners[2].y-corners[3].y, corners[2].x-corners[3].x) * 180/Math.PI },
+        w: { p1: corners[0], p2: corners[3], angleDeg: Math.atan2(corners[3].y-corners[0].y, corners[3].x-corners[0].x) * 180/Math.PI }
+    };
+    return { center: {x:cx,y:cy}, corners, edges, w, h, rot };
+}
+
+// ─────── Détection du scénario sous la souris ───────
+function detectLabelFromEvent(e) {
+    const t = e.target && e.target.closest ? e.target.closest("[id^='cParcelSvg']") : null;
+    if (t && t.id) return t.id.replace("cParcelSvg", "");
+    // Fallback : dernier scénario actif
+    return CMD.labelCtx || cockpitState.activeTab || "A";
+}
+
+// ─────── Cycle de vie commande ───────
+function cmdStart(key, label) {
+    if (CMD.active) cmdExit(true);
+    const c = COMMANDS[key];
+    if (!c) return;
+    CMD.active = key;
+    CMD.state = "WAIT_1";
+    CMD.picks = [];
+    CMD.hover = null;
+    CMD.labelCtx = label || cockpitState.activeTab || "A";
+    document.body.classList.add("cmd-active");
+    document.body.style.cursor = c.cursor || "crosshair";
+    // Highlight bouton actif
+    document.querySelectorAll(".cmd-toolbar .cmd-btn").forEach(b => b.classList.toggle("active", b.dataset.cmd === key));
+    showCmdHUD(key, c.hint);
+    if (c.onStart) c.onStart();
+}
+
+function cmdExit(silent) {
+    const wasLabel = CMD.labelCtx;
+    clearCmdOverlay();
+    CMD.active = null;
+    CMD.state = "IDLE";
+    CMD.picks = [];
+    CMD.hover = null;
+    document.body.classList.remove("cmd-active");
+    document.body.style.cursor = "";
+    document.querySelectorAll(".cmd-toolbar .cmd-btn").forEach(b => b.classList.remove("active"));
+    hideCmdHUD();
+    if (!silent && wasLabel) renderParcelSvg(wasLabel);
+}
+
+// ─────── Intercept mouse : appelé depuis onUnitDragStart / mousemove ───────
+function cmdOnClick(e) {
+    if (!CMD.active) return false;
+    const label = detectLabelFromEvent(e);
+    const svgEl = $("cParcelSvg" + label);
+    if (!svgEl) return false;
+    const svgPt = clientToSvg(svgEl, e.clientX, e.clientY);
+    const ref = resolveGeoRef(label, svgPt);
+    const c = COMMANDS[CMD.active];
+    if (c && c.onPick) c.onPick(ref, svgPt, label);
+    e.preventDefault();
+    return true;
+}
+function cmdOnMove(e) {
+    if (!CMD.active) return false;
+    moveCmdHUD(e.clientX, e.clientY);
+    const label = detectLabelFromEvent(e);
+    const svgEl = $("cParcelSvg" + label);
+    if (!svgEl) return true;
+    const svgPt = clientToSvg(svgEl, e.clientX, e.clientY);
+    const ref = resolveGeoRef(label, svgPt);
+    CMD.hover = ref;
+    drawSnapMarker(label, ref);
+    const c = COMMANDS[CMD.active];
+    if (c && c.onHover) c.onHover(ref, svgPt, label);
+    return true;
+}
+
+// ─────── Clavier : ESC + raccourcis 2 lettres ───────
+let _cmdShortcutBuf = "", _cmdShortcutTs = 0;
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+        if (!CMD.active) return;
+        const c = COMMANDS[CMD.active];
+        const r = c && c.onEscape ? c.onEscape() : "EXIT";
+        if (r === "EXIT") { cmdExit(); showToast("Commande annulée"); }
+        else updateCmdHUD(r);   // hint mis à jour
+        return;
+    }
+    // 2-letter shortcuts (ignorer si focus dans un input/textarea)
+    const ae = document.activeElement;
+    if (ae && ["INPUT","TEXTAREA","SELECT"].includes(ae.tagName)) return;
+    const k = (e.key || "").toLowerCase();
+    if (!/^[a-z]$/.test(k)) return;
+    const now = Date.now();
+    if (now - _cmdShortcutTs > 700) _cmdShortcutBuf = "";
+    _cmdShortcutBuf += k;
+    _cmdShortcutTs = now;
+    if (_cmdShortcutBuf.length >= 2) {
+        const key = _cmdShortcutBuf.slice(-2).toUpperCase();
+        if (COMMANDS[key]) {
+            cmdStart(key, cockpitState.activeTab);
+            _cmdShortcutBuf = "";
+        }
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMMITTER : synchro bidirectionnelle géométrie → paramètres (m², W, H, offset, rot)
+// Chaque commande passe par ici. Recalcule surface réelle et rafraîchit la table.
+// ═══════════════════════════════════════════════════════════════════════════════
+function polygonAreaPx(pts) {
+    if (!pts || pts.length < 3) return 0;
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+        const j = (i+1) % pts.length;
+        a += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    return Math.abs(a) / 2;
+}
+function commitUnitGeometry(label, uidx, patch) {
+    const u = (cockpitState.scenarios[label].units || [])[uidx];
+    if (!u) return;
+    const refs = _svgRefs[label];
+    if (patch.polygon) {
+        u.polygon = patch.polygon;
+        // Recalc surface réelle m² depuis polygone (assumé en local repère unit m)
+        const area = polygonAreaPx(patch.polygon);   // ici polygon est stocké en m directement
+        if (area > 0) u.unit_size_m2 = Math.round(area);
+        u.width_m = null; u.height_m = null;
+    } else {
+        if (patch.width_m != null) u.width_m = Number(patch.width_m.toFixed(2));
+        if (patch.height_m != null) u.height_m = Number(patch.height_m.toFixed(2));
+        if (u.width_m && u.height_m) u.unit_size_m2 = Math.round(u.width_m * u.height_m);
+        if (patch.polygon === null) u.polygon = null;
+    }
+    if (patch.offset_x_m != null) u.offset_x_m = Number(patch.offset_x_m.toFixed(2));
+    if (patch.offset_y_m != null) u.offset_y_m = Number(patch.offset_y_m.toFixed(2));
+    if (patch.rotation_deg != null) u.rotation_deg = Number(patch.rotation_deg);
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    updateConstraintsCount();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMMANDES — chaque commande = state machine plugged dans le CommandManager
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const COMMANDS = {
+    // ─────── ALIGN — AL — target ref → source edge → source unit se déplace ───────
+    AL: {
+        label: "ALIGN",
+        cursor: "crosshair",
+        hint: "Clique l'arête CIBLE (segment parcelle, arête unité, sommet)",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (!["edge","segment","midpoint"].includes(ref.kind)) {
+                    showToast("Cible : arête d'unité ou segment parcelle", true);
+                    return;
+                }
+                CMD.picks[0] = ref;
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Cible acquise · clique l'arête à DÉPLACER (ESC = re-choisir cible)");
+            } else if (CMD.state === "WAIT_2") {
+                if (ref.kind !== "edge") {
+                    showToast("Source : clique une arête d'unité", true);
+                    return;
+                }
+                if (ref.unit_idx === CMD.picks[0].unit_idx && CMD.picks[0].kind === "edge") {
+                    showToast("Choisis une arête d'une AUTRE unité", true);
+                    return;
+                }
+                _cmdAlignExecute(CMD.picks[0], ref);
+                // Reste actif — repart en WAIT_1 pour enchaîner
+                CMD.picks = [];
+                CMD.state = "WAIT_1";
+                clearGhostPreview();
+                updateCmdHUD("Aligné ✓ · clique une nouvelle CIBLE (ESC pour quitter)");
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_2" && ref && ref.kind === "edge" && CMD.picks[0]) {
+                // Ghost : montre la future position de l'unité source alignée sur la cible
+                const ghost = _cmdAlignGhost(CMD.picks[0], ref);
+                if (ghost) drawGhostPreview(label, ghost);
+            } else {
+                clearGhostPreview();
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") {
+                CMD.picks = []; CMD.state = "WAIT_1";
+                clearGhostPreview();
+                return "Clique l'arête CIBLE";
+            }
+            return "EXIT";
+        }
+    }
+};
+
+// Exécution ALIGN : déplace u_source pour que son arête source coïncide avec target
+function _cmdAlignExecute(targetRef, sourceRef) {
+    const label = sourceRef.label;
+    const refs = _svgRefs[label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[label].units || [])[sourceRef.unit_idx];
+    if (!u) return;
+    // Angle cible : celui de la ligne cible (edge ou segment)
+    const targetAngleDeg = targetRef.angleDeg;
+    // Nouvelle rotation : aligne l'arête source (n/s = horiz ; e/w = vert) avec la cible
+    // Une arête n/s est horizontale (angle 0) → rot = targetAngleDeg
+    // Une arête e/w est verticale (angle 90) → rot = targetAngleDeg - 90 (pour que e/w devienne parallèle à target)
+    let newRotDeg = targetAngleDeg;
+    if (sourceRef.edge === "e" || sourceRef.edge === "w") newRotDeg -= 90;
+    // Normalise
+    while (newRotDeg > 180) newRotDeg -= 360;
+    while (newRotDeg < -180) newRotDeg += 360;
+
+    // Position à trouver : centre du rect tel que le milieu de son arête source
+    // se projette sur la ligne cible.
+    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const w = w_m * refs.scale, h = h_m * refs.scale;
+    // Offset du milieu d'arête depuis le centre (en local)
+    let localMid = { x: 0, y: 0 };
+    if (sourceRef.edge === "e") localMid = { x:  w/2, y: 0 };
+    else if (sourceRef.edge === "w") localMid = { x: -w/2, y: 0 };
+    else if (sourceRef.edge === "n") localMid = { x: 0, y: -h/2 };
+    else if (sourceRef.edge === "s") localMid = { x: 0, y:  h/2 };
+    const rot = newRotDeg * Math.PI / 180;
+    const midOffsetGlobal = {
+        x: localMid.x * Math.cos(rot) - localMid.y * Math.sin(rot),
+        y: localMid.x * Math.sin(rot) + localMid.y * Math.cos(rot)
+    };
+    // Projette le milieu actuel sur la ligne cible pour trouver où doit être le nouveau milieu
+    const curCenter = { x: refs.cxSvg + (u.offset_x_m||0)*refs.scale, y: refs.cySvg - (u.offset_y_m||0)*refs.scale };
+    const curMid = { x: curCenter.x + midOffsetGlobal.x, y: curCenter.y + midOffsetGlobal.y };
+    const { proj } = projectPointOnSegment(curMid, targetRef.p1, targetRef.p2);
+    // Nouveau centre = proj - midOffsetGlobal
+    const newCenter = { x: proj.x - midOffsetGlobal.x, y: proj.y - midOffsetGlobal.y };
+    const new_offset_x_m = (newCenter.x - refs.cxSvg) / refs.scale;
+    const new_offset_y_m = -(newCenter.y - refs.cySvg) / refs.scale;
+    commitUnitGeometry(label, sourceRef.unit_idx, {
+        offset_x_m: new_offset_x_m,
+        offset_y_m: new_offset_y_m,
+        rotation_deg: newRotDeg,
+        polygon: null   // reset polygon custom pour un rectangle propre
+    });
+    showToast(`Align → arête ${sourceRef.edge.toUpperCase()} de "${u.unit_name||u.unit_type}" collée`);
+}
+// Ghost preview pour ALIGN : polygone SVG à la future position
+function _cmdAlignGhost(targetRef, sourceRef) {
+    const refs = _svgRefs[sourceRef.label];
+    if (!refs) return null;
+    const u = (cockpitState.scenarios[sourceRef.label].units || [])[sourceRef.unit_idx];
+    if (!u) return null;
+    let newRotDeg = targetRef.angleDeg;
+    if (sourceRef.edge === "e" || sourceRef.edge === "w") newRotDeg -= 90;
+    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const w = w_m * refs.scale, h = h_m * refs.scale;
+    let localMid = { x: 0, y: 0 };
+    if (sourceRef.edge === "e") localMid = { x:  w/2, y: 0 };
+    else if (sourceRef.edge === "w") localMid = { x: -w/2, y: 0 };
+    else if (sourceRef.edge === "n") localMid = { x: 0, y: -h/2 };
+    else if (sourceRef.edge === "s") localMid = { x: 0, y:  h/2 };
+    const rot = newRotDeg * Math.PI / 180;
+    const midOffsetGlobal = {
+        x: localMid.x * Math.cos(rot) - localMid.y * Math.sin(rot),
+        y: localMid.x * Math.sin(rot) + localMid.y * Math.cos(rot)
+    };
+    const curCenter = { x: refs.cxSvg + (u.offset_x_m||0)*refs.scale, y: refs.cySvg - (u.offset_y_m||0)*refs.scale };
+    const curMid = { x: curCenter.x + midOffsetGlobal.x, y: curCenter.y + midOffsetGlobal.y };
+    const { proj } = projectPointOnSegment(curMid, targetRef.p1, targetRef.p2);
+    const newCenter = { x: proj.x - midOffsetGlobal.x, y: proj.y - midOffsetGlobal.y };
+    const corners = [
+        { x: -w/2, y: -h/2 }, { x:  w/2, y: -h/2 },
+        { x:  w/2, y:  h/2 }, { x: -w/2, y:  h/2 }
+    ].map(p => ({
+        x: newCenter.x + p.x * Math.cos(rot) - p.y * Math.sin(rot),
+        y: newCenter.y + p.x * Math.sin(rot) + p.y * Math.cos(rot)
+    }));
+    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return `<polygon class="ghost-preview" points="${pts}"/>`;
+}
+
 // Attache les listeners drag une seule fois (délégation sur document)
 let _dragListenersAttached = false;
 function attachDragListeners() {
@@ -2679,10 +3254,19 @@ function attachDragListeners() {
     document.addEventListener("mousedown", (e) => {
         // Ne trigger que dans un c-parcel-preview SVG
         if (e.target && e.target.closest && e.target.closest(".c-parcel-preview")) {
+            // v8.0.0 : si une commande est active, intercepte AVANT le drag legacy
+            if (CMD.active) { cmdOnClick(e); return; }
             onUnitDragStart(e);
         }
     });
-    document.addEventListener("mousemove", onUnitDragMove);
+    document.addEventListener("mousemove", (e) => {
+        // v8.0.0 : si commande active, gère hover + preview au lieu de drag
+        if (CMD.active) {
+            if (e.target && e.target.closest && e.target.closest(".c-parcel-preview")) cmdOnMove(e);
+            return;
+        }
+        onUnitDragMove(e);
+    });
     document.addEventListener("mouseup", onUnitDragEnd);
     // Touch support (mobile)
     const touchToMouse = (type) => (e) => {
@@ -3773,7 +4357,17 @@ function showGenLog(title,steps){$("genLogTitle").textContent=title;$("genSteps"
 function stepState(id,state){const el=document.querySelector(`[data-step="${id}"]`);if(!el)return;el.className=`gen-step ${state}`;el.querySelector(".icon").textContent=state==="done"?"✓":state==="active"?"◉":state==="error"?"✕":"○"}
 </script>
 
-<!-- v7.2.0 — Ancien panel flottant Revit remplacé par toolbar inline dans chaque scénario -->
+<!-- v8.0.0 — HUD flottant du CommandManager (suit le curseur, jamais bloquant) -->
+<div class="cmd-hud" id="cmdHUD">
+  <div class="cmd-title">—</div>
+  <div class="cmd-hint">—</div>
+  <div class="cmd-dist-block" style="display:none;flex-direction:row;gap:.35rem;align-items:center;pointer-events:auto">
+    <span style="font-size:.62rem;color:#94A3B8">Distance :</span>
+    <input class="cmd-dist-input" type="number" step="0.5" placeholder="m" onkeydown="if(event.key==='Enter'){CMD.hudDistance=parseFloat(this.value)||null;event.preventDefault();this.blur();}">
+    <span style="font-size:.6rem;color:#94A3B8">m</span>
+  </div>
+  <div class="cmd-esc">ESC = étape précédente · ESC×2 = quitter · Clic droit = annuler</div>
+</div>
 
 
 <!-- v75.5.2 — Modal détails techniques par unité (pilotis, sous-sols, étages, terrasse, balcon…) -->
