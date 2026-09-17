@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.5-UX</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.6-STRAT</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2879,11 +2879,14 @@ BARLO.packer.canPlaceRect = function(grid, cx, cy, w, h, angleDeg, siteAnalysis)
     return true;
 };
 
-// Marque les cellules d'un rect comme occupées
-BARLO.packer.markOccupied = function(grid, cx, cy, w, h, angleDeg, unitId) {
+// Marque les cellules d'un rect comme occupées (+ halo optionnel = zone tampon entre unités)
+// v11.6 : halo par défaut 1m pour aérer les implantations
+BARLO.packer.markOccupied = function(grid, cx, cy, w, h, angleDeg, unitId, halo) {
+    halo = halo != null ? halo : 1.0;
+    const wE = w + halo * 2, hE = h + halo * 2;
     const rad = angleDeg * Math.PI / 180;
     const cos = Math.cos(rad), sin = Math.sin(rad);
-    const halfDiag = Math.hypot(w, h) / 2;
+    const halfDiag = Math.hypot(wE, hE) / 2;
     const ixMin = Math.max(0, Math.floor((cx - halfDiag - grid.minX) / grid.cellSize));
     const ixMax = Math.min(grid.nx - 1, Math.ceil((cx + halfDiag - grid.minX) / grid.cellSize));
     const iyMin = Math.max(0, Math.floor((cy - halfDiag - grid.minY) / grid.cellSize));
@@ -2895,8 +2898,8 @@ BARLO.packer.markOccupied = function(grid, cx, cy, w, h, angleDeg, unitId) {
             const dx = cellCx - cx, dy = cellCy - cy;
             const localX = dx * cos + dy * sin;
             const localY = -dx * sin + dy * cos;
-            if (Math.abs(localX) <= w / 2 + 0.01 && Math.abs(localY) <= h / 2 + 0.01) {
-                grid.cells[iy][ix].occupied = unitId;
+            if (Math.abs(localX) <= wE / 2 + 0.01 && Math.abs(localY) <= hE / 2 + 0.01) {
+                if (!grid.cells[iy][ix].occupied) grid.cells[iy][ix].occupied = unitId;
             }
         }
     }
@@ -2956,14 +2959,16 @@ BARLO.packer.findPositionForUnit = function(grid, unit, siteAnalysis, opts) {
 };
 
 // Helper interne : pack UN ordre donné, retourne { units, unplaced }
+// v11.6 : opts.halo = zone tampon entre unités (défaut 1m, 0 pour placement serré)
 BARLO.packer._packOne = function(order, siteAnalysis, opts) {
+    opts = opts || {};
+    const halo = opts.halo != null ? opts.halo : 1.0;
     const grid = BARLO.packer.buildGrid(siteAnalysis);
     const placed = [];
     const unplaced = [];
     const total = order.length;
     for (let idx = 0; idx < total; idx++) {
         const u = order[idx];
-        // v11.4 : LAST unit ou unit >= 3e = aspects étendus + toutes positions (dense scan)
         const isLastChance = idx >= total - 1 || idx >= 2;
         const findOpts = Object.assign({}, opts);
         if (isLastChance) {
@@ -2982,7 +2987,7 @@ BARLO.packer._packOne = function(order, siteAnalysis, opts) {
                 { x:  pos.w/2, y: -pos.h/2 }, { x: -pos.w/2, y: -pos.h/2 }
             ].map(p => ({ x: pos.cx + p.x * cos - p.y * sin, y: pos.cy + p.x * sin + p.y * cos }));
             placed.push(Object.assign({}, u, { polygonM, level: u.level || 0 }));
-            BARLO.packer.markOccupied(grid, pos.cx, pos.cy, pos.w, pos.h, pos.angleDeg, u.id || u.unit_index);
+            BARLO.packer.markOccupied(grid, pos.cx, pos.cy, pos.w, pos.h, pos.angleDeg, u.id || u.unit_index, halo);
         } else {
             unplaced.push(u);
         }
@@ -3017,13 +3022,19 @@ BARLO.packer.packAll = function(programUnits, siteAnalysis, opts) {
         seen.add(sig);
         return true;
     });
+    // v11.6 — Halos décroissants : 1.5m (aéré) → 0.5m (moyen) → 0 (serré)
+    // Le halo crée un espace entre unités pour aérer l'implantation, meilleur pour la qualité perçue.
+    // On tente d'abord aéré ; si tout ne rentre pas, on serre progressivement.
+    const halos = [1.5, 0.5, 0];
     let best = null;
-    for (let oi = 0; oi < uniqueOrders.length; oi++) {
-        const order = uniqueOrders[oi];
-        const attempt = BARLO.packer._packOne(order, siteAnalysis, opts);
-        console.log("[PACKER] order#" + oi + " → " + attempt.units.length + "/" + programUnits.length + " placed");
-        if (!best || attempt.units.length > best.units.length) best = attempt;
-        if (best.units.length >= programUnits.length) break; // FULL success
+    outer: for (const halo of halos) {
+        for (let oi = 0; oi < uniqueOrders.length; oi++) {
+            const order = uniqueOrders[oi];
+            const attempt = BARLO.packer._packOne(order, siteAnalysis, Object.assign({}, opts, { halo }));
+            console.log("[PACKER] halo=" + halo + "m order#" + oi + " → " + attempt.units.length + "/" + programUnits.length + " placed");
+            if (!best || attempt.units.length > best.units.length) best = attempt;
+            if (best.units.length >= programUnits.length) break outer; // FULL success
+        }
     }
     return best || { units: [], unplaced: programUnits.slice(), success: false };
 };
