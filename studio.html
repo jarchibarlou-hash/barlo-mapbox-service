@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.5-CAND</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.7-UX</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -896,6 +896,7 @@ function scenarioPanelTemplate(L) {
           <button type="button" class="cmd-btn" data-cmd="TR" onclick="cmdStart('TR','${L}')" title="Trim — TR — Clique la limite coupante puis les arêtes à couper (côté cliqué = supprimé) (ESC)">✂ Trim<small>TR</small></button>
           <button type="button" class="cmd-btn" data-cmd="TC" onclick="cmdStart('TC','${L}')" title="Trim en angle — TC — Clique 2 arêtes à joindre à leur intersection (ESC)">└ Corner<small>TC</small></button>
           <button type="button" class="cmd-btn" data-cmd="PA" onclick="cmdStart('PA','${L}')" title="Parallel — PA — Rend une arête parallèle à une référence (ESC)">∥ Parallel<small>PA</small></button>
+          <button type="button" class="cmd-btn" data-cmd="IN" onclick="cmdStart('IN','${L}')" title="Insert Vertex — IN — Clique une arête pour y ajouter un sommet (permet de créer des formes complexes)">✚ Sommet<small>IN</small></button>
           <span class="cmd-sep"></span>
           <button type="button" class="cmd-btn" data-cmd="MV" onclick="cmdStart('MV','${L}')" title="Move — MV — Clique point/arête base puis destination point/arête (ESC)">↔ Move<small>MV</small></button>
           <button type="button" class="cmd-btn" data-cmd="CO" onclick="cmdStart('CO','${L}')" title="Copy — CO — Duplique l'unité vers un point (ESC)">⧉ Copy<small>CO</small></button>
@@ -4073,6 +4074,28 @@ function cmdOnMove(e) {
     const ref = resolveGeoRef(label, svgPt);
     CMD.hover = ref;
     drawSnapMarker(label, ref);
+    // v10.7 — Snap type dans le HUD (endpoint / midpoint / edge / vertex parcelle / segment)
+    const hud = $("cmdHUD");
+    if (hud && ref) {
+        let snapTxt = "";
+        if (ref.kind === "endpoint") snapTxt = "◇ Coin";
+        else if (ref.kind === "midpoint") snapTxt = "△ Milieu";
+        else if (ref.kind === "vertex") snapTxt = "◈ Sommet parcelle";
+        else if (ref.kind === "edge") snapTxt = "─ Arête unité";
+        else if (ref.kind === "segment") snapTxt = ref.parcel_edge ? "─ Limite parcelle" : "─ Segment retrait";
+        else if (ref.kind === "intersection") snapTxt = "✕ Intersection";
+        let snapEl = hud.querySelector(".cmd-snap");
+        if (!snapEl) {
+            snapEl = document.createElement("div");
+            snapEl.className = "cmd-snap";
+            snapEl.style.cssText = "font-size:.58rem;color:#22C55E;margin-top:.15rem;font-weight:600";
+            hud.insertBefore(snapEl, hud.querySelector(".cmd-esc"));
+        }
+        snapEl.textContent = "SNAP → " + snapTxt;
+    } else if (hud) {
+        const snapEl = hud.querySelector(".cmd-snap");
+        if (snapEl) snapEl.textContent = "";
+    }
     const c = COMMANDS[CMD.active];
     if (c && c.onHover) c.onHover(ref, svgPt, label);
     return true;
@@ -4355,11 +4378,11 @@ const COMMANDS = {
         }
     },
 
-    // ─────── MOVE — MV — v8.2.0 base = arête OU point, snap sur arête OU point ───────
+    // ─────── MOVE — MV — v10.7 Revit-click : clic1 = sélectionne + point base, clic2 = fige ───────
     MV: {
         label: "MOVE",
         cursor: "move",
-        hint: "Clique dans l'unité à déplacer (arête, coin ou milieu)",
+        hint: "Clique un point de l'unité à déplacer (arête, coin ou milieu)",
         onPick(ref, svgPt, label) {
             if (!ref) { showToast("Clique sur une arête ou un point d'unité", true); return; }
             if (CMD.state === "WAIT_1") {
@@ -4367,7 +4390,7 @@ const COMMANDS = {
                 const basePt = _pickAsPoint(ref, svgPt);
                 CMD.picks[0] = { unit_idx: ref.unit_idx, basePt, label };
                 CMD.state = "WAIT_2";
-                updateCmdHUD("Clique le point DESTINATION (arête, coin, milieu, sommet)");
+                updateCmdHUD("Bouge la souris (ghost temps réel) puis CLIQUE pour figer");
             } else if (CMD.state === "WAIT_2") {
                 const destPt = _pickAsPoint(ref, svgPt);
                 _cmdMoveExecute(CMD.picks[0], destPt);
@@ -4390,6 +4413,21 @@ const COMMANDS = {
             }
             return "EXIT";
         }
+    },
+
+    // ─────── INSERT VERTEX — IN — v10.7 : ajoute un sommet sur une arête ───────
+    IN: {
+        label: "INSERT VERTEX",
+        cursor: "cell",
+        hint: "Clique sur une ARÊTE d'unité pour y insérer un nouveau sommet",
+        onPick(ref, svgPt, label) {
+            if (!ref || ref.kind !== "edge" || ref.unit_idx === undefined) {
+                showToast("Clique sur une arête d'unité", true); return;
+            }
+            _cmdInsertVertexExecute(ref, svgPt);
+            updateCmdHUD("Sommet inséré ✓ · clique une nouvelle arête (ESC pour quitter)");
+        },
+        onEscape() { return "EXIT"; }
     },
 
     // ─────── COPY — CO — v8.2.0 snap arête + points ───────
@@ -4996,6 +5034,26 @@ function _reflectPointAcrossLine(p, a, b) {
     const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
     const proj = { x: a.x + t * dx, y: a.y + t * dy };
     return { x: 2 * proj.x - p.x, y: 2 * proj.y - p.y };
+}
+
+// ═════════════ v10.7 — INSERT VERTEX : ajoute un sommet sur une arête du polygon ═════════════
+function _cmdInsertVertexExecute(edgeRef, svgPt) {
+    const refs = _svgRefs[edgeRef.label];
+    if (!refs || edgeRef.viA == null) return;
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (!u) return;
+    ensureUnitPolygon(u);
+    // Projection du point cliqué sur l'arête sélectionnée (en px puis converti en m)
+    const { proj } = projectPointOnSegment(svgPt, edgeRef.p1, edgeRef.p2);
+    const newVertexM = { x: (proj.x - refs.cxSvg) / refs.scale, y: -(proj.y - refs.cySvg) / refs.scale };
+    // Insère le nouveau vertex ENTRE viA et viB dans u.polygon
+    const newPoly = [];
+    for (let i = 0; i < u.polygon.length; i++) {
+        newPoly.push({ x: u.polygon[i].x, y: u.polygon[i].y });
+        if (i === edgeRef.viA) newPoly.push(newVertexM);
+    }
+    commitUnitGeometry(edgeRef.label, edgeRef.unit_idx, { polygon: newPoly });
+    showToast(`Sommet inséré sur arête (${u.polygon.length} sommets)`);
 }
 
 // ═════════════ v9.2 — PARALLEL : rotation unité pour arête source // cible ═════════════
