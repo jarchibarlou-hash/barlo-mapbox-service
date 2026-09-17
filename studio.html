@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.17-NOBLOCK</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.18-FIT</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2178,6 +2178,15 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
             const cands = strat.generate(program, effectiveSA, opts);
             for (const c of cands) {
                 if (allCandidates.length >= maxCandidates) break;
+                // v10.18 — POST-FIT AGRESSIF : force chaque unité à rentrer dans la parcelle brute
+                // (limite HARD absolue). Utilise forceInsideContainer si dépasse.
+                for (const u of c.units) {
+                    const poly = u.polygonM;
+                    if (!poly || poly.length < 3) continue;
+                    if (!BARLO.geometry.polygonInside(poly, siteAnalysis.parcelPolygon)) {
+                        u.polygonM = BARLO.strategies._h.forceInsideContainer(poly, siteAnalysis.parcelPolygon);
+                    }
+                }
                 const validation = BARLO.constraints.validate(c, effectiveSA, opts);
                 if (!validation.valid) {
                     rejected.push({ strategy: c.strategy, axisDeg: c.axisDeg, anchor: c.anchor,
@@ -2286,36 +2295,54 @@ BARLO.strategies._h = {
             { x: cx - w/2, y: cy - h/2 }    // SW
         ];
     },
-    // v10.10 — Rect adaptatif qui rentre dans le buildable : essaie N aspects + N positions
-    // Retourne { polygon, aspect, cxAdjusted, cyAdjusted, fitScore [0..1] }
+    // v10.18 — Rect adaptatif AGRESSIF : garantit fit dans le buildable en essayant
+    // aspects × positions × réductions de taille progressives. Retourne toujours quelque chose.
     fitRectInBuildable(cx, cy, targetArea, initialAspect, buildable, angleDeg) {
         angleDeg = angleDeg || 0;
-        // 7 aspects candidats : de très allongé à carré
         const aspects = [initialAspect, 1.5, 2.0, 1.0, 2.5, 0.7, 3.0, 4.0];
-        // 5 positions candidates autour du (cx, cy) initial
-        const dxOptions = [0, -targetArea * 0.03, targetArea * 0.03];
-        const dyOptions = [0, -targetArea * 0.03, targetArea * 0.03];
+        // v10.18 — beaucoup plus de positions candidates + vers le centroïde du buildable
+        const centroid = BARLO.geometry.polygonCentroid(buildable);
+        const toC = { x: centroid.x - cx, y: centroid.y - cy };
+        const cDist = Math.hypot(toC.x, toC.y) || 1;
+        const cUnit = { x: toC.x / cDist, y: toC.y / cDist };
+        const shiftSteps = [0, 0.15, 0.3, 0.5, 0.75, 1.0];   // fraction de la distance au centroïde
         let best = null, bestFit = 0;
         for (const aspect of aspects) {
-            for (const dx of dxOptions) {
-                for (const dy of dyOptions) {
-                    const rect = BARLO.strategies._h.makeRectAt(cx + dx, cy + dy, targetArea, aspect);
-                    const rectRot = angleDeg ? BARLO.geometry.rotate(rect, cx + dx, cy + dy, angleDeg) : rect;
-                    // Test aire d'intersection avec buildable
-                    const clipped = BARLO.geometry.clipSutherlandHodgman(rectRot, buildable);
-                    if (!clipped || clipped.length < 3) continue;
-                    const areaClip = polygonAreaXY(clipped);
-                    const areaOrig = polygonAreaXY(rectRot);
-                    const fit = areaOrig > 0 ? areaClip / areaOrig : 0;
-                    if (fit > bestFit) {
-                        best = { polygon: rectRot, aspect, cxAdjusted: cx + dx, cyAdjusted: cy + dy, fitScore: fit };
-                        bestFit = fit;
-                        if (fit >= 0.995) return best;   // parfait, on retourne direct
-                    }
+            for (const shift of shiftSteps) {
+                const nx = cx + cUnit.x * cDist * shift;
+                const ny = cy + cUnit.y * cDist * shift;
+                const rect = BARLO.strategies._h.makeRectAt(nx, ny, targetArea, aspect);
+                const rectRot = angleDeg ? BARLO.geometry.rotate(rect, nx, ny, angleDeg) : rect;
+                const clipped = BARLO.geometry.clipSutherlandHodgman(rectRot, buildable);
+                if (!clipped || clipped.length < 3) continue;
+                const areaClip = polygonAreaXY(clipped);
+                const areaOrig = polygonAreaXY(rectRot);
+                const fit = areaOrig > 0 ? areaClip / areaOrig : 0;
+                if (fit > bestFit) {
+                    best = { polygon: rectRot, aspect, cxAdjusted: nx, cyAdjusted: ny, fitScore: fit };
+                    bestFit = fit;
+                    if (fit >= 0.995) return best;
                 }
             }
         }
-        return best;   // même partiel, meilleur candidat trouvé
+        return best;
+    },
+    // v10.18 — Force un polygon à rentrer entièrement dans un container en le translatant
+    // vers le centroïde jusqu'à ce qu'il soit inside. Utilisé pour garantir insideParcel.
+    forceInsideContainer(polyM, container) {
+        if (!container || container.length < 3) return polyM;
+        // Test rapide : déjà dedans ?
+        if (BARLO.geometry.polygonInside(polyM, container)) return polyM;
+        const cCentroid = BARLO.geometry.polygonCentroid(container);
+        const pCentroid = BARLO.geometry.polygonCentroid(polyM);
+        const vx = cCentroid.x - pCentroid.x, vy = cCentroid.y - pCentroid.y;
+        // Essaie de translater par fractions croissantes vers le centroïde container
+        for (const t of [0.15, 0.3, 0.5, 0.7, 0.85, 1.0]) {
+            const shifted = polyM.map(p => ({ x: p.x + vx * t, y: p.y + vy * t }));
+            if (BARLO.geometry.polygonInside(shifted, container)) return shifted;
+        }
+        // Dernier recours : place au centroïde container
+        return polyM.map(p => ({ x: p.x + vx, y: p.y + vy }));
     },
     // Rotate polygon autour d'un centre
     rotate(polyM, cx, cy, angleDeg) {
@@ -4165,9 +4192,11 @@ function clearSnapMarker(label) {
 function drawGhostPreview(label, svgMarkup) {
     const g = _cmdOverlayGroup(label);
     if (!g) return;
-    g.querySelectorAll(".ghost-preview,.ghost-line,.picked-ref").forEach(n => n.remove());
+    // v10.18 — Fix traînée : les wraps précédents étaient jamais supprimés (accumulation cercles measure)
+    g.querySelectorAll(".ghost-preview,.ghost-line,.picked-ref,.ghost-wrap").forEach(n => n.remove());
     if (!svgMarkup) return;
     const wrap = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    wrap.setAttribute("class", "ghost-wrap");
     wrap.innerHTML = svgMarkup;
     g.appendChild(wrap);
 }
@@ -4822,7 +4851,8 @@ const COMMANDS = {
         label: "MEASURE",
         cursor: "crosshair",
         hint: "Clique le 1er point (endpoint, milieu, sommet, arête)",
-        onStart() { clearGhostPreview(); },
+        // v10.18 — Fix traînée : efface TOUTE l'overlay (pas juste ghost) au start ET après chaque clic 2
+        onStart() { clearCmdOverlay(); },
         onPick(ref, svgPt, label) {
             if (!ref) { showToast("Snap sur un point ou une arête", true); return; }
             const pt = _pickAsPoint(ref, svgPt);
