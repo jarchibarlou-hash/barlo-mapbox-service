@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.15-SLIM</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.16-SOFT</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2193,10 +2193,16 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
                 const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
                 c.score = scoreObj.totalScore;
                 c.scoreBreakdown = scoreObj.breakdown;
+                // v10.16 — Diagnostic enrichi avec setback overflow + façades aveugles
+                const totalOverflow = (c._setbackDetails || []).reduce((s, d) => s + (d.overflow || 0), 0);
                 c.diagnostics = {
                     valid: true, strategy: c.strategy, axisDeg: Math.round(c.axisDeg),
                     programArea: program.reduce((s, u) => s + u.targetArea, 0),
                     generatedArea: c.units.reduce((s, u) => s + BARLO.geometry.polygonArea(u.polygonM), 0).toFixed(1),
+                    setbackRespect: scoreObj.breakdown.setbackRespect.toFixed(3),
+                    setbackOverflow_m2: Math.round(totalOverflow),
+                    setbackDetails: c._setbackDetails || [],
+                    blindFacadeCount: c._blindFacadeCount || 0,
                     orientationScore: scoreObj.breakdown.orientation.toFixed(3),
                     siteFit: scoreObj.breakdown.siteFit.toFixed(3),
                     complexity: scoreObj.breakdown.complexity.toFixed(3)
@@ -2747,17 +2753,22 @@ BARLO.solver.distributeByLevels = function(program, groundMaxArea, maxLevels) {
 
 // ─── HARD CONSTRAINTS : violation = rejet total du candidat ───
 BARLO.constraints.hard = {
-    // Chaque unité doit être ENTIÈREMENT dans le buildable polygon
-    insideBuildable(candidate, siteAnalysis) {
-        if (!siteAnalysis || !siteAnalysis.buildablePolygon || siteAnalysis.buildablePolygon.length < 3) {
-            return { ok: true, violations: [] };  // pas de buildable → skip la contrainte
+    // v10.16 — Ne PAS dépasser la PARCELLE brute (limite absolue). Les retraits sont soft.
+    insideParcel(candidate, siteAnalysis) {
+        if (!siteAnalysis || !siteAnalysis.parcelPolygon || siteAnalysis.parcelPolygon.length < 3) {
+            return { ok: true, violations: [] };
         }
         const violations = [];
         for (const unit of candidate.units) {
-            const inside = BARLO.geometry.polygonInside(unit.polygonM || unit.polygon, siteAnalysis.buildablePolygon);
-            if (!inside) violations.push({ type: "UNIT_OUTSIDE_BUILDABLE", unitId: unit.id || unit.unit_index });
+            const inside = BARLO.geometry.polygonInside(unit.polygonM || unit.polygon, siteAnalysis.parcelPolygon);
+            if (!inside) violations.push({ type: "UNIT_OUTSIDE_PARCEL", unitId: unit.id || unit.unit_index });
         }
         return { ok: violations.length === 0, violations };
+    },
+    // v10.16 — Ancien HARD 'insideBuildable' déplacé vers SOFT constraint (pénalité)
+    // Kept comme alias pour rétro-compat si appelée
+    insideBuildable(candidate, siteAnalysis) {
+        return BARLO.constraints.hard.insideParcel(candidate, siteAnalysis);
     },
     // Chaque unité doit respecter sa surface cible avec la tolérance définie
     areaTolerance(candidate) {
@@ -2876,16 +2887,56 @@ BARLO.constraints.soft = {
         if (!candidate.units.length) return 0;
         const avgVerts = candidate.units.reduce((s, u) => s + ((u.polygonM || u.polygon || []).length), 0) / candidate.units.length;
         if (avgVerts <= 6) return 0;
-        return Math.min(1, (avgVerts - 6) / 10);   // 6 = 0 pénalité, 16 = 1
+        return Math.min(1, (avgVerts - 6) / 10);
+    },
+    // v10.16 — Respect des retraits : % d'aire dans le buildable (versus dans parcelle mais hors buildable)
+    // Retourne score [0..1] : 1 = tout dans buildable, 0 = tout dépasse les retraits
+    setbackRespect(candidate, siteAnalysis) {
+        if (!siteAnalysis || !siteAnalysis.buildablePolygon || siteAnalysis.buildablePolygon.length < 3) return 1;
+        let totalArea = 0, respectedArea = 0;
+        const perUnitDetails = [];
+        for (const unit of candidate.units) {
+            const poly = unit.polygonM || unit.polygon;
+            const areaTotal = BARLO.geometry.polygonArea(poly);
+            const clippedBuild = BARLO.geometry.clipSutherlandHodgman(poly, siteAnalysis.buildablePolygon);
+            const areaBuild = clippedBuild && clippedBuild.length >= 3 ? BARLO.geometry.polygonArea(clippedBuild) : 0;
+            totalArea += areaTotal;
+            respectedArea += areaBuild;
+            const overflowArea = Math.max(0, areaTotal - areaBuild);
+            unit._setbackOverflow = overflowArea;   // stocké pour diagnostic
+            if (overflowArea > 0.5) {
+                perUnitDetails.push({ unitId: unit.id || unit.unit_index, overflow: Math.round(overflowArea), total: Math.round(areaTotal) });
+            }
+        }
+        candidate._setbackDetails = perUnitDetails;
+        return totalArea > 0 ? respectedArea / totalArea : 1;
+    },
+    // v10.16 — Façades aveugles : compte les arêtes d'unité qui coïncident (< 0.5m) avec une arête parcelle
+    blindFacades(candidate, siteAnalysis) {
+        if (!siteAnalysis || !siteAnalysis.edges) return { count: 0, ratio: 0 };
+        let blindCount = 0, totalEdges = 0;
+        for (const unit of candidate.units) {
+            const poly = unit.polygonM || unit.polygon;
+            for (let i = 0; i < poly.length; i++) {
+                totalEdges++;
+                const u1 = poly[i], u2 = poly[(i + 1) % poly.length];
+                const uMid = { x: (u1.x + u2.x) / 2, y: (u1.y + u2.y) / 2 };
+                // Test : le milieu de cette arête est-il très proche d'une arête parcelle ?
+                for (const e of siteAnalysis.edges) {
+                    const { dist } = projectPointOnSegment(uMid, e.p1, e.p2);
+                    if (dist < 0.5) { blindCount++; break; }
+                }
+            }
+        }
+        return { count: blindCount, ratio: totalEdges > 0 ? blindCount / totalEdges : 0 };
     }
 };
 
-// ─── VALIDATOR : valide un candidat contre toutes les hard constraints ───
-// Retourne { valid, violations: [{type, ...}] }
+// ─── VALIDATOR v10.16 : valide un candidat contre les hard constraints (parcelle absolue) ───
 BARLO.constraints.validate = function(candidate, siteAnalysis, opts) {
     opts = opts || {};
     const allViolations = [];
-    const rInside = BARLO.constraints.hard.insideBuildable(candidate, siteAnalysis);
+    const rInside = BARLO.constraints.hard.insideParcel(candidate, siteAnalysis);
     const rArea = BARLO.constraints.hard.areaTolerance(candidate);
     const rOverlap = BARLO.constraints.hard.noOverlapSameLevel(candidate);
     const rMinDim = BARLO.constraints.hard.minDimensions(candidate);
@@ -2895,28 +2946,38 @@ BARLO.constraints.validate = function(candidate, siteAnalysis, opts) {
 
 // ─── SCORER : score multi-critères d'un candidat VALIDE ───
 // Retourne { totalScore [0..1], breakdown: {orientation, compactness, siteFit, complexity} }
+// v10.16 — Pondérations réajustées avec setbackRespect (le plus important après orientation)
 BARLO.constraints.WEIGHTS = {
-    orientation: 0.30,
-    compactness: 0.15,
-    siteFit: 0.30,
-    complexity: 0.10,
-    typology: 0.15   // rempli par la Strategy elle-même
+    setbackRespect: 0.28,   // respect des retraits (soft) — pénalité si dépasse
+    orientation: 0.20,
+    siteFit: 0.20,
+    typology: 0.14,
+    compactness: 0.10,
+    blindFacades: 0.05,     // façades aveugles = léger malus (pas de vues)
+    complexity: 0.03
 };
 BARLO.constraints.score = function(candidate, siteAnalysis, opts) {
     opts = opts || {};
     const W = BARLO.constraints.WEIGHTS;
+    const blind = BARLO.constraints.soft.blindFacades(candidate, siteAnalysis);
     const bd = {
+        setbackRespect: BARLO.constraints.soft.setbackRespect(candidate, siteAnalysis),
         orientation: BARLO.constraints.soft.orientation(candidate, opts.preferredAxisDeg),
-        compactness: BARLO.constraints.soft.compactness(candidate),
         siteFit: BARLO.constraints.soft.siteFit(candidate, siteAnalysis),
-        complexity: 1 - BARLO.constraints.soft.complexityPenalty(candidate),
-        typology: candidate.typologyScore != null ? candidate.typologyScore : 0.7
+        typology: candidate.typologyScore != null ? candidate.typologyScore : 0.7,
+        compactness: BARLO.constraints.soft.compactness(candidate),
+        blindFacades: 1 - blind.ratio,   // moins de façades aveugles = mieux
+        complexity: 1 - BARLO.constraints.soft.complexityPenalty(candidate)
     };
-    const total = W.orientation * bd.orientation
-        + W.compactness * bd.compactness
+    candidate._blindFacadeCount = blind.count;
+    candidate._blindFacadeRatio = blind.ratio;
+    const total = W.setbackRespect * bd.setbackRespect
+        + W.orientation * bd.orientation
         + W.siteFit * bd.siteFit
-        + W.complexity * bd.complexity
-        + W.typology * bd.typology;
+        + W.typology * bd.typology
+        + W.compactness * bd.compactness
+        + W.blindFacades * bd.blindFacades
+        + W.complexity * bd.complexity;
     return { totalScore: total, breakdown: bd };
 };
 
@@ -6202,12 +6263,23 @@ function renderSolverPanel(label, result) {
     title.textContent = `🧠 ${result.total_shown}/${result.total_valid} propositions (${result.total_generated} explorés)`;
     grid.innerHTML = diagHtml + downgrade + result.candidates.map((c, i) => {
         const thumb = renderCandidateThumbnailSvg(c, result.effectiveSA || _svgRefs[label].siteAnalysis);
-        const meta = `${c.units.length}u · axe ${Math.round(c.axisDeg)}°`;
+        const meta = `${c.units.length}u · ${Math.round(c.axisDeg)}°`;
+        // v10.16 — Badges info : setback overflow + façades aveugles
+        const d = c.diagnostics || {};
+        const badges = [];
+        if (d.setbackOverflow_m2 > 0) {
+            badges.push(`<span title="Dépasse les retraits de ${d.setbackOverflow_m2}m² (pas de rejet, juste pénalité)" style="color:#F59E0B;font-size:.5rem">⚠${d.setbackOverflow_m2}m² hors retraits</span>`);
+        }
+        if (d.blindFacadeCount > 0) {
+            badges.push(`<span title="${d.blindFacadeCount} arêtes collent aux limites parcelle (façades aveugles)" style="color:#94A3B8;font-size:.5rem">▨${d.blindFacadeCount} aveugles</span>`);
+        }
+        const badgesHtml = badges.length ? `<div style="margin-top:.15rem;font-size:.5rem;display:flex;gap:.35rem;flex-wrap:wrap">${badges.join("")}</div>` : "";
         return `
             <div class="c-cand-card" onclick="applyCandidate('${label}', ${i})">
                 ${thumb}
                 <div class="cc-title"><span class="cc-strategy">${c.strategy}</span><span class="cc-score">${(c.score * 100).toFixed(0)}</span></div>
                 <div class="cc-meta"><span>${meta}</span><span title="Aire cumulée générée">${c.diagnostics.generatedArea}m²</span></div>
+                ${badgesHtml}
             </div>
         `;
     }).join("");
