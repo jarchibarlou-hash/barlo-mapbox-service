@@ -364,7 +364,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.1-EDIT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v9.2-CMD</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -856,6 +856,7 @@ function scenarioPanelTemplate(L) {
           <button type="button" class="cmd-btn" data-cmd="OF" onclick="cmdStart('OF','${L}')" title="Offset — OF — Saisis distance, hover arête, clique côté (ESC)">↔ Offset<small>OF</small></button>
           <button type="button" class="cmd-btn" data-cmd="TR" onclick="cmdStart('TR','${L}')" title="Trim — TR — Clique la limite coupante puis les arêtes à couper (côté cliqué = supprimé) (ESC)">✂ Trim<small>TR</small></button>
           <button type="button" class="cmd-btn" data-cmd="TC" onclick="cmdStart('TC','${L}')" title="Trim en angle — TC — Clique 2 arêtes à joindre à leur intersection (ESC)">└ Corner<small>TC</small></button>
+          <button type="button" class="cmd-btn" data-cmd="PA" onclick="cmdStart('PA','${L}')" title="Parallel — PA — Rend une arête parallèle à une référence (ESC)">∥ Parallel<small>PA</small></button>
           <span class="cmd-sep"></span>
           <button type="button" class="cmd-btn" data-cmd="MV" onclick="cmdStart('MV','${L}')" title="Move — MV — Clique point/arête base puis destination point/arête (ESC)">↔ Move<small>MV</small></button>
           <button type="button" class="cmd-btn" data-cmd="CO" onclick="cmdStart('CO','${L}')" title="Copy — CO — Duplique l'unité vers un point (ESC)">⧉ Copy<small>CO</small></button>
@@ -3075,12 +3076,12 @@ function resolveGeoRef(label, svgPt) {
             if (!u.placement_sector) continue;
             const geom = _unitEdgesGlobal(u, refs);
             if (!geom) continue;
-            for (const eKey of ["n","s","e","w"]) {
+            for (const eKey of Object.keys(geom.edges)) {
                 const e = geom.edges[eKey];
                 const mx = (e.p1.x + e.p2.x)/2, my = (e.p1.y + e.p2.y)/2;
                 const d = Math.hypot(svgPt.x - mx, svgPt.y - my);
                 if (d < SNAP_PX && (d < bestDist || 2 < bestPriority)) {
-                    best = { kind: "midpoint", label, unit_idx: idx, edge: eKey, p: { x: mx, y: my }, p1: e.p1, p2: e.p2, angleDeg: e.angleDeg };
+                    best = { kind: "midpoint", label, unit_idx: idx, edge: eKey, viA: e.viA, viB: e.viB, p: { x: mx, y: my }, p1: e.p1, p2: e.p2, angleDeg: e.angleDeg };
                     bestDist = d; bestPriority = 2;
                 }
             }
@@ -3105,11 +3106,11 @@ function resolveGeoRef(label, svgPt) {
             if (!u.placement_sector) continue;
             const geom = _unitEdgesGlobal(u, refs);
             if (!geom) continue;
-            for (const eKey of ["n","s","e","w"]) {
+            for (const eKey of Object.keys(geom.edges)) {
                 const e = geom.edges[eKey];
                 const { dist } = projectPointOnSegment(svgPt, e.p1, e.p2);
                 if (dist < SNAP_PX && (dist < bestDist || 4 < bestPriority)) {
-                    best = { kind: "edge", label, unit_idx: idx, edge: eKey, p1: e.p1, p2: e.p2, angleDeg: e.angleDeg };
+                    best = { kind: "edge", label, unit_idx: idx, edge: eKey, viA: e.viA, viB: e.viB, p1: e.p1, p2: e.p2, angleDeg: e.angleDeg };
                     bestDist = dist; bestPriority = 4;
                 }
             }
@@ -3128,33 +3129,26 @@ function resolveGeoRef(label, svgPt) {
     return best;
 }
 
-// Renvoie les 4 arêtes globales + 4 coins d'une unité (rect en repère local rotaté)
+// v9.2 — Retourne les N arêtes GLOBALES + N sommets d'une unité polygonale.
+// Compat rétro : les clefs edges sont indexées par n° (e0, e1, ...) — plus de n/s/e/w.
 function _unitEdgesGlobal(u, refs) {
-    if (!refs) return null;
-    const scale = refs.scale;
-    // Position centre en px SVG
-    const cx = refs.cxSvg + (u.offset_x_m || 0) * scale;
-    const cy = refs.cySvg - (u.offset_y_m || 0) * scale;
-    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
-    const w = w_m * scale, h = h_m * scale;
-    const rot = (u.rotation_deg || 0) * Math.PI / 180;
-    const local = [
-        { x: -w/2, y: -h/2 }, { x:  w/2, y: -h/2 },
-        { x:  w/2, y:  h/2 }, { x: -w/2, y:  h/2 }
-    ];
-    const rotate = (p) => ({
-        x: cx + p.x * Math.cos(rot) - p.y * Math.sin(rot),
-        y: cy + p.x * Math.sin(rot) + p.y * Math.cos(rot)
-    });
-    const corners = local.map(rotate);
-    const edges = {
-        n: { p1: corners[0], p2: corners[1], angleDeg: Math.atan2(corners[1].y-corners[0].y, corners[1].x-corners[0].x) * 180/Math.PI },
-        e: { p1: corners[1], p2: corners[2], angleDeg: Math.atan2(corners[2].y-corners[1].y, corners[2].x-corners[1].x) * 180/Math.PI },
-        s: { p1: corners[3], p2: corners[2], angleDeg: Math.atan2(corners[2].y-corners[3].y, corners[2].x-corners[3].x) * 180/Math.PI },
-        w: { p1: corners[0], p2: corners[3], angleDeg: Math.atan2(corners[3].y-corners[0].y, corners[3].x-corners[0].x) * 180/Math.PI }
-    };
-    return { center: {x:cx,y:cy}, corners, edges, w, h, rot };
+    if (!refs || !u) return null;
+    ensureUnitPolygon(u);
+    const polyM = unitPolygonM(u);
+    const polyPx = polygonMToSvgPx(polyM, refs.cxSvg, refs.cySvg, refs.scale);
+    const centroidM = polygonCentroidM(polyM);
+    const centerPx = { x: refs.cxSvg + centroidM.x * refs.scale, y: refs.cySvg - centroidM.y * refs.scale };
+    const N = polyPx.length;
+    const edges = {};
+    for (let i = 0; i < N; i++) {
+        const p1 = polyPx[i], p2 = polyPx[(i+1) % N];
+        edges["e" + i] = {
+            p1, p2,
+            angleDeg: Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180 / Math.PI,
+            viA: i, viB: (i+1) % N   // indices des vertices dans u.polygon
+        };
+    }
+    return { center: centerPx, corners: polyPx, edges, polyM, polyPx, N };
 }
 
 // ─────── Détection du scénario sous la souris ───────
@@ -3613,6 +3607,31 @@ const COMMANDS = {
         }
     },
 
+    // ─────── PARALLEL — PA — v9.2 rend une arête parallèle à une référence ───────
+    PA: {
+        label: "PARALLEL",
+        cursor: "crosshair",
+        hint: "Clique l'arête SOURCE à rendre parallèle",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (ref.kind !== "edge") { showToast("Source : arête d'unité", true); return; }
+                CMD.picks[0] = ref;
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Source OK · clique l'arête CIBLE (angle de référence)");
+            } else if (CMD.state === "WAIT_2") {
+                if (!["edge","segment"].includes(ref.kind)) { showToast("Cible : arête ou segment", true); return; }
+                _cmdParallelExecute(CMD.picks[0], ref);
+                CMD.picks = []; CMD.state = "WAIT_1";
+                updateCmdHUD("Parallèle ✓ · clique une nouvelle arête source (ESC pour quitter)");
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") { CMD.picks = []; CMD.state = "WAIT_1"; return "Clique l'arête SOURCE"; }
+            return "EXIT";
+        }
+    },
+
     // ─────── MEASURE — ME — v8.3.0 outil règle (mesure distance entre 2 points/arêtes) ───────
     ME: {
         label: "MEASURE",
@@ -3691,89 +3710,43 @@ const COMMANDS = {
     }
 };
 
-// Exécution ALIGN : déplace u_source pour que son arête source coïncide avec target
+// v9.2 — ALIGN sur polygon générique : translation pure pour que l'arête source
+// coïncide avec la cible. Pas de rotation (rotation via PARALLEL séparée).
 function _cmdAlignExecute(targetRef, sourceRef) {
     const label = sourceRef.label;
     const refs = _svgRefs[label];
     if (!refs) return;
     const u = (cockpitState.scenarios[label].units || [])[sourceRef.unit_idx];
-    if (!u) return;
-    // Angle cible : celui de la ligne cible (edge ou segment)
-    const targetAngleDeg = targetRef.angleDeg;
-    // Nouvelle rotation : aligne l'arête source (n/s = horiz ; e/w = vert) avec la cible
-    // Une arête n/s est horizontale (angle 0) → rot = targetAngleDeg
-    // Une arête e/w est verticale (angle 90) → rot = targetAngleDeg - 90 (pour que e/w devienne parallèle à target)
-    let newRotDeg = targetAngleDeg;
-    if (sourceRef.edge === "e" || sourceRef.edge === "w") newRotDeg -= 90;
-    // Normalise
-    while (newRotDeg > 180) newRotDeg -= 360;
-    while (newRotDeg < -180) newRotDeg += 360;
-
-    // Position à trouver : centre du rect tel que le milieu de son arête source
-    // se projette sur la ligne cible.
-    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
-    const w = w_m * refs.scale, h = h_m * refs.scale;
-    // Offset du milieu d'arête depuis le centre (en local)
-    let localMid = { x: 0, y: 0 };
-    if (sourceRef.edge === "e") localMid = { x:  w/2, y: 0 };
-    else if (sourceRef.edge === "w") localMid = { x: -w/2, y: 0 };
-    else if (sourceRef.edge === "n") localMid = { x: 0, y: -h/2 };
-    else if (sourceRef.edge === "s") localMid = { x: 0, y:  h/2 };
-    const rot = newRotDeg * Math.PI / 180;
-    const midOffsetGlobal = {
-        x: localMid.x * Math.cos(rot) - localMid.y * Math.sin(rot),
-        y: localMid.x * Math.sin(rot) + localMid.y * Math.cos(rot)
-    };
-    // Projette le milieu actuel sur la ligne cible pour trouver où doit être le nouveau milieu
-    const curCenter = { x: refs.cxSvg + (u.offset_x_m||0)*refs.scale, y: refs.cySvg - (u.offset_y_m||0)*refs.scale };
-    const curMid = { x: curCenter.x + midOffsetGlobal.x, y: curCenter.y + midOffsetGlobal.y };
-    const { proj } = projectPointOnSegment(curMid, targetRef.p1, targetRef.p2);
-    // Nouveau centre = proj - midOffsetGlobal
-    const newCenter = { x: proj.x - midOffsetGlobal.x, y: proj.y - midOffsetGlobal.y };
-    const new_offset_x_m = (newCenter.x - refs.cxSvg) / refs.scale;
-    const new_offset_y_m = -(newCenter.y - refs.cySvg) / refs.scale;
-    commitUnitGeometry(label, sourceRef.unit_idx, {
-        offset_x_m: new_offset_x_m,
-        offset_y_m: new_offset_y_m,
-        rotation_deg: newRotDeg,
-        polygon: null   // reset polygon custom pour un rectangle propre
-    });
-    showToast(`Align → arête ${sourceRef.edge.toUpperCase()} de "${u.unit_name||u.unit_type}" collée`);
+    if (!u || sourceRef.viA == null) return;
+    ensureUnitPolygon(u);
+    const pA_m = u.polygon[sourceRef.viA], pB_m = u.polygon[sourceRef.viB];
+    const sourceMid_m = { x: (pA_m.x + pB_m.x) / 2, y: (pA_m.y + pB_m.y) / 2 };
+    // Target line en mètres (depuis px SVG)
+    const tA_m = { x: (targetRef.p1.x - refs.cxSvg) / refs.scale, y: -(targetRef.p1.y - refs.cySvg) / refs.scale };
+    const tB_m = { x: (targetRef.p2.x - refs.cxSvg) / refs.scale, y: -(targetRef.p2.y - refs.cySvg) / refs.scale };
+    const { proj } = projectPointOnSegment(sourceMid_m, tA_m, tB_m);
+    const dxM = proj.x - sourceMid_m.x;
+    const dyM = proj.y - sourceMid_m.y;
+    const newPoly = translatePolygonM(u.polygon, dxM, dyM);
+    commitUnitGeometry(label, sourceRef.unit_idx, { polygon: newPoly });
+    showToast(`Align → arête source translatée sur la cible`);
 }
-// Ghost preview pour ALIGN : polygone SVG à la future position
 function _cmdAlignGhost(targetRef, sourceRef) {
     const refs = _svgRefs[sourceRef.label];
     if (!refs) return null;
     const u = (cockpitState.scenarios[sourceRef.label].units || [])[sourceRef.unit_idx];
-    if (!u) return null;
-    let newRotDeg = targetRef.angleDeg;
-    if (sourceRef.edge === "e" || sourceRef.edge === "w") newRotDeg -= 90;
-    const w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    const h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
-    const w = w_m * refs.scale, h = h_m * refs.scale;
-    let localMid = { x: 0, y: 0 };
-    if (sourceRef.edge === "e") localMid = { x:  w/2, y: 0 };
-    else if (sourceRef.edge === "w") localMid = { x: -w/2, y: 0 };
-    else if (sourceRef.edge === "n") localMid = { x: 0, y: -h/2 };
-    else if (sourceRef.edge === "s") localMid = { x: 0, y:  h/2 };
-    const rot = newRotDeg * Math.PI / 180;
-    const midOffsetGlobal = {
-        x: localMid.x * Math.cos(rot) - localMid.y * Math.sin(rot),
-        y: localMid.x * Math.sin(rot) + localMid.y * Math.cos(rot)
-    };
-    const curCenter = { x: refs.cxSvg + (u.offset_x_m||0)*refs.scale, y: refs.cySvg - (u.offset_y_m||0)*refs.scale };
-    const curMid = { x: curCenter.x + midOffsetGlobal.x, y: curCenter.y + midOffsetGlobal.y };
-    const { proj } = projectPointOnSegment(curMid, targetRef.p1, targetRef.p2);
-    const newCenter = { x: proj.x - midOffsetGlobal.x, y: proj.y - midOffsetGlobal.y };
-    const corners = [
-        { x: -w/2, y: -h/2 }, { x:  w/2, y: -h/2 },
-        { x:  w/2, y:  h/2 }, { x: -w/2, y:  h/2 }
-    ].map(p => ({
-        x: newCenter.x + p.x * Math.cos(rot) - p.y * Math.sin(rot),
-        y: newCenter.y + p.x * Math.sin(rot) + p.y * Math.cos(rot)
-    }));
-    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    if (!u || sourceRef.viA == null) return null;
+    ensureUnitPolygon(u);
+    const pA_m = u.polygon[sourceRef.viA], pB_m = u.polygon[sourceRef.viB];
+    const sourceMid_m = { x: (pA_m.x + pB_m.x) / 2, y: (pA_m.y + pB_m.y) / 2 };
+    const tA_m = { x: (targetRef.p1.x - refs.cxSvg) / refs.scale, y: -(targetRef.p1.y - refs.cySvg) / refs.scale };
+    const tB_m = { x: (targetRef.p2.x - refs.cxSvg) / refs.scale, y: -(targetRef.p2.y - refs.cySvg) / refs.scale };
+    const { proj } = projectPointOnSegment(sourceMid_m, tA_m, tB_m);
+    const dxM = proj.x - sourceMid_m.x;
+    const dyM = proj.y - sourceMid_m.y;
+    const newPolyM = translatePolygonM(u.polygon, dxM, dyM);
+    const polyPx = polygonMToSvgPx(newPolyM, refs.cxSvg, refs.cySvg, refs.scale);
+    const pts = polyPx.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
     return `<polygon class="ghost-preview" points="${pts}"/>`;
 }
 
@@ -3802,18 +3775,19 @@ function _rectCornersFromCenter(cx, cy, w, h, rotDeg) {
     }));
 }
 
-// ═════════════ OFFSET ═════════════
+// ═════════════ v9.2 — OFFSET polygon-générique ═════════════
+// dm positif = arête déplacée vers l'extérieur du polygon (agrandit)
 function _offsetSideSign(edgeRef, svgPt) {
-    // Signe positif = curseur du côté extérieur du rect (loin du centre)
-    // On calcule le vecteur normal sortant à partir de l'arête + on regarde où se trouve le curseur
+    // Signe positif = curseur du côté extérieur (loin centroïde)
     const mid = { x: (edgeRef.p1.x + edgeRef.p2.x)/2, y: (edgeRef.p1.y + edgeRef.p2.y)/2 };
     const n = _lineNormal(edgeRef.p1, edgeRef.p2);
-    // Détermine normal sortant : rect a un centre → si dot(n, mid-center) < 0, on inverse
     const refs = _svgRefs[edgeRef.label];
     const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
     if (u && refs) {
-        const cx = refs.cxSvg + (u.offset_x_m||0)*refs.scale;
-        const cy = refs.cySvg - (u.offset_y_m||0)*refs.scale;
+        ensureUnitPolygon(u);
+        const centroidM = polygonCentroidM(u.polygon);
+        const cx = refs.cxSvg + centroidM.x * refs.scale;
+        const cy = refs.cySvg - centroidM.y * refs.scale;
         const outward = (n.x * (mid.x - cx) + n.y * (mid.y - cy)) >= 0 ? 1 : -1;
         n.x *= outward; n.y *= outward;
     }
@@ -3823,53 +3797,100 @@ function _cmdOffsetExecute(edgeRef, dm) {
     const refs = _svgRefs[edgeRef.label];
     if (!refs) return;
     const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
-    if (!u) return;
-    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
-    const rot = (u.rotation_deg || 0) * Math.PI / 180;
-    let dLocalX = 0, dLocalY = 0;
-    if (edgeRef.edge === "e") { w_m += dm; dLocalX = dm / 2; }
-    else if (edgeRef.edge === "w") { w_m += dm; dLocalX = -dm / 2; }
-    else if (edgeRef.edge === "s") { h_m += dm; dLocalY = dm / 2; }
-    else if (edgeRef.edge === "n") { h_m += dm; dLocalY = -dm / 2; }
-    if (w_m < 1 || h_m < 1) { showToast("Dimensions trop petites", true); return; }
-    const shiftGX = dLocalX * Math.cos(rot) - dLocalY * Math.sin(rot);
-    const shiftGY = dLocalX * Math.sin(rot) + dLocalY * Math.cos(rot);
+    if (!u || edgeRef.viA == null) return;
+    ensureUnitPolygon(u);
+    const pA_m = u.polygon[edgeRef.viA], pB_m = u.polygon[edgeRef.viB];
+    const dx = pB_m.x - pA_m.x, dy = pB_m.y - pA_m.y;
+    const l = Math.hypot(dx, dy) || 1;
+    let nx = -dy / l, ny = dx / l;   // normale rot 90° CCW
+    const centroid = polygonCentroidM(u.polygon);
+    const midx = (pA_m.x + pB_m.x) / 2, midy = (pA_m.y + pB_m.y) / 2;
+    if ((nx * (midx - centroid.x) + ny * (midy - centroid.y)) < 0) { nx = -nx; ny = -ny; }
+    // Translate viA et viB de dm mètres selon la normale sortante
+    const newPoly = u.polygon.map((p, idx) =>
+        (idx === edgeRef.viA || idx === edgeRef.viB)
+            ? { x: p.x + dm * nx, y: p.y + dm * ny }
+            : { x: p.x, y: p.y }
+    );
     commitUnitGeometry(edgeRef.label, edgeRef.unit_idx, {
-        width_m: w_m, height_m: h_m,
-        unit_size_m2: Math.round(w_m * h_m),   // v8.3.0 : OFFSET redéfinit volontairement la cible
-        offset_x_m: (u.offset_x_m || 0) + shiftGX,
-        offset_y_m: (u.offset_y_m || 0) - shiftGY,
-        polygon: null
+        polygon: newPoly,
+        unit_size_m2: Math.round(polygonAreaM2(newPoly))
     });
 }
 function _cmdOffsetGhost(edgeRef, dm) {
     const refs = _svgRefs[edgeRef.label];
     if (!refs) return null;
     const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
-    if (!u) return null;
-    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
-    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
-    const rot = (u.rotation_deg || 0) * Math.PI / 180;
-    let dLocalX = 0, dLocalY = 0;
-    if (edgeRef.edge === "e") { w_m += dm; dLocalX = dm / 2; }
-    else if (edgeRef.edge === "w") { w_m += dm; dLocalX = -dm / 2; }
-    else if (edgeRef.edge === "s") { h_m += dm; dLocalY = dm / 2; }
-    else if (edgeRef.edge === "n") { h_m += dm; dLocalY = -dm / 2; }
-    if (w_m < 0.5 || h_m < 0.5) return null;
-    const shiftGX = dLocalX * Math.cos(rot) - dLocalY * Math.sin(rot);
-    const shiftGY = dLocalX * Math.sin(rot) + dLocalY * Math.cos(rot);
-    const newCx = refs.cxSvg + ((u.offset_x_m||0) + shiftGX) * refs.scale;
-    const newCy = refs.cySvg - ((u.offset_y_m||0) - shiftGY) * refs.scale;
-    const corners = _rectCornersFromCenter(newCx, newCy, w_m * refs.scale, h_m * refs.scale, u.rotation_deg || 0);
-    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    if (!u || edgeRef.viA == null) return null;
+    ensureUnitPolygon(u);
+    const pA_m = u.polygon[edgeRef.viA], pB_m = u.polygon[edgeRef.viB];
+    const dx = pB_m.x - pA_m.x, dy = pB_m.y - pA_m.y;
+    const l = Math.hypot(dx, dy) || 1;
+    let nx = -dy / l, ny = dx / l;
+    const centroid = polygonCentroidM(u.polygon);
+    const midx = (pA_m.x + pB_m.x) / 2, midy = (pA_m.y + pB_m.y) / 2;
+    if ((nx * (midx - centroid.x) + ny * (midy - centroid.y)) < 0) { nx = -nx; ny = -ny; }
+    const newPolyM = u.polygon.map((p, idx) =>
+        (idx === edgeRef.viA || idx === edgeRef.viB)
+            ? { x: p.x + dm * nx, y: p.y + dm * ny } : { x: p.x, y: p.y }
+    );
+    const polyPx = polygonMToSvgPx(newPolyM, refs.cxSvg, refs.cySvg, refs.scale);
+    const pts = polyPx.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
     return `<polygon class="ghost-preview" points="${pts}"/>`;
 }
 
-// ═════════════ TRIM / EXTEND — v8.2.0 côté cliqué = CONSERVÉ (convention Revit) ═════════════
-// Convertit clickPt et boundary en repère LOCAL de l'unité (rectangle axis-aligned),
-// intersecte boundary avec la ligne infinie de l'arête ciblée → point I sur l'arête.
-// Le côté du clic par rapport à I = partie CONSERVÉE. L'autre côté = supprimé.
+// ═════════════ v9.2 — TRIM TOPOLOGIQUE polygon-générique ═════════════
+// Half-plane clip du polygon par la ligne infinie de la boundary.
+// Le côté du clic est CONSERVÉ. Le polygon devient réellement le morceau restant.
+function _cmdTrimExtendExecute(boundary, edgeRef, clickPt) {
+    const refs = _svgRefs[edgeRef.label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (!u) return;
+    ensureUnitPolygon(u);
+    // Boundary + clickPt convertis en mètres
+    const bA_m = { x: (boundary.p1.x - refs.cxSvg) / refs.scale, y: -(boundary.p1.y - refs.cySvg) / refs.scale };
+    const bB_m = { x: (boundary.p2.x - refs.cxSvg) / refs.scale, y: -(boundary.p2.y - refs.cySvg) / refs.scale };
+    const click_m = { x: (clickPt.x - refs.cxSvg) / refs.scale, y: -(clickPt.y - refs.cySvg) / refs.scale };
+    // Normale de la boundary
+    const bdx = bB_m.x - bA_m.x, bdy = bB_m.y - bA_m.y;
+    let nx = -bdy, ny = bdx;
+    const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+    // Côté conservé = même signe que click
+    const sideClick = nx * (click_m.x - bA_m.x) + ny * (click_m.y - bA_m.y);
+    if (sideClick < 0) { nx = -nx; ny = -ny; }
+    // Half-plane clip (garde le demi-plan où la normale pointe)
+    const clipped = clipByHalfPlane(u.polygon, bA_m.x, bA_m.y, nx, ny);
+    if (!clipped || clipped.length < 3) {
+        showToast("Trim impossible (résultat vide)", true);
+        return;
+    }
+    commitUnitGeometry(edgeRef.label, edgeRef.unit_idx, {
+        polygon: clipped,
+        unit_size_m2: Math.round(polygonAreaM2(clipped))
+    });
+}
+function _cmdTrimExtendGhost(boundary, edgeRef, clickPt) {
+    const refs = _svgRefs[edgeRef.label];
+    if (!refs) return null;
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (!u) return null;
+    ensureUnitPolygon(u);
+    const bA_m = { x: (boundary.p1.x - refs.cxSvg) / refs.scale, y: -(boundary.p1.y - refs.cySvg) / refs.scale };
+    const bB_m = { x: (boundary.p2.x - refs.cxSvg) / refs.scale, y: -(boundary.p2.y - refs.cySvg) / refs.scale };
+    const click_m = { x: (clickPt.x - refs.cxSvg) / refs.scale, y: -(clickPt.y - refs.cySvg) / refs.scale };
+    const bdx = bB_m.x - bA_m.x, bdy = bB_m.y - bA_m.y;
+    let nx = -bdy, ny = bdx;
+    const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+    const sideClick = nx * (click_m.x - bA_m.x) + ny * (click_m.y - bA_m.y);
+    if (sideClick < 0) { nx = -nx; ny = -ny; }
+    const clipped = clipByHalfPlane(u.polygon, bA_m.x, bA_m.y, nx, ny);
+    if (!clipped || clipped.length < 3) return null;
+    const polyPx = polygonMToSvgPx(clipped, refs.cxSvg, refs.cySvg, refs.scale);
+    const pts = polyPx.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return `<polygon class="ghost-preview" points="${pts}"/>`;
+}
+// v9.2 — Legacy _cmdTrimResult conservé pour rétro-compat (utilisé par _cmdTrimExtendGhost anciennement)
 function _cmdTrimResult(boundary, edgeRef, clickPt) {
     const refs = _svgRefs[edgeRef.label];
     const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
@@ -3945,23 +3966,8 @@ function _cmdTrimResult(boundary, edgeRef, clickPt) {
         newCxG, newCyG, newW, newH, rotDeg
     };
 }
-function _cmdTrimExtendExecute(boundary, edgeRef, clickPt) {
-    const r = _cmdTrimResult(boundary, edgeRef, clickPt);
-    if (!r) { showToast("Trim impossible (côté trop petit ou boundary parallèle)", true); return; }
-    commitUnitGeometry(r.label, r.uidx, {
-        width_m: r.width_m, height_m: r.height_m,
-        unit_size_m2: Math.round(r.width_m * r.height_m),   // v8.3.0 : TRIM = modif volontaire cible
-        offset_x_m: r.offset_x_m, offset_y_m: r.offset_y_m,
-        polygon: null
-    });
-}
-function _cmdTrimExtendGhost(boundary, edgeRef, clickPt) {
-    const r = _cmdTrimResult(boundary, edgeRef, clickPt);
-    if (!r) return null;
-    const corners = _rectCornersFromCenter(r.newCxG, r.newCyG, r.newW, r.newH, r.rotDeg);
-    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-    return `<polygon class="ghost-preview" points="${pts}"/>`;
-}
+// v9.2 : _cmdTrimExtendExecute/Ghost v9.2 (polygon topologique) sont définis plus haut.
+// Ces implémentations rect-based sont retirées.
 
 // ═════════════ TRIM CORNER ═════════════
 // A + B → intersection théorique → ajuste les deux à cette intersection
@@ -4097,6 +4103,33 @@ function _reflectPointAcrossLine(p, a, b) {
     const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
     const proj = { x: a.x + t * dx, y: a.y + t * dy };
     return { x: 2 * proj.x - p.x, y: 2 * proj.y - p.y };
+}
+
+// ═════════════ v9.2 — PARALLEL : rotation unité pour arête source // cible ═════════════
+function _cmdParallelExecute(sourceRef, targetRef) {
+    const refs = _svgRefs[sourceRef.label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[sourceRef.label].units || [])[sourceRef.unit_idx];
+    if (!u || sourceRef.viA == null) return;
+    ensureUnitPolygon(u);
+    // Angle actuel de l'arête source (en SVG px)
+    const pA_px = { x: refs.cxSvg + u.polygon[sourceRef.viA].x * refs.scale, y: refs.cySvg - u.polygon[sourceRef.viA].y * refs.scale };
+    const pB_px = { x: refs.cxSvg + u.polygon[sourceRef.viB].x * refs.scale, y: refs.cySvg - u.polygon[sourceRef.viB].y * refs.scale };
+    const sourceAngle = Math.atan2(pB_px.y - pA_px.y, pB_px.x - pA_px.x);
+    const targetAngle = targetRef.angleDeg * Math.PI / 180;
+    // Prend le delta le plus court (mod PI pour ignorer sens opposé)
+    let deltaAngle = targetAngle - sourceAngle;
+    while (deltaAngle > Math.PI/2) deltaAngle -= Math.PI;
+    while (deltaAngle < -Math.PI/2) deltaAngle += Math.PI;
+    // Rotation autour du centroïde (en mètres, y inversé → angle inversé)
+    const centroid = polygonCentroidM(u.polygon);
+    const cosM = Math.cos(-deltaAngle), sinM = Math.sin(-deltaAngle);
+    const newPoly = u.polygon.map(p => {
+        const dx = p.x - centroid.x, dy = p.y - centroid.y;
+        return { x: centroid.x + dx * cosM - dy * sinM, y: centroid.y + dx * sinM + dy * cosM };
+    });
+    commitUnitGeometry(sourceRef.label, sourceRef.unit_idx, { polygon: newPoly });
+    showToast(`Parallèle ✓ (rotation ${(deltaAngle * 180 / Math.PI).toFixed(1)}°)`);
 }
 
 // ═════════════ v8.3.0 — MEASURE (outil règle) ═════════════
