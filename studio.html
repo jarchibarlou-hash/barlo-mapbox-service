@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.2-DIAG</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.3-CLIP</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2038,15 +2038,54 @@ BARLO.geometry.rotate = function(polyM, cx, cy, angleDeg) {
     });
 };
 
-// Test unité ⊆ polygone (aire d'intersection ≥ 99.5% de l'aire originale)
+// v11.3 — Test unité ⊆ polygone : d'abord Sutherland-Hodgman (rapide, convexe),
+// fallback échantillonnage grid pour containers non-convexes (retire le faux négatif).
+// Seuil assoupli à 97% pour tolérer erreurs numériques et biseaux.
 BARLO.geometry.polygonInside = function(polyPx, containerPx) {
     if (!polyPx || polyPx.length < 3 || !containerPx || containerPx.length < 3) return false;
-    const clipped = sutherlandHodgmanClip(polyPx, containerPx);
-    if (!clipped || clipped.length < 3) return false;
-    const aClip = polygonAreaXY(clipped);
     const aOrig = polygonAreaXY(polyPx);
-    return aOrig > 0 && aClip / aOrig >= 0.995;
+    if (aOrig <= 0) return false;
+    // 1) S-H clip rapide
+    const clipped = sutherlandHodgmanClip(polyPx, containerPx);
+    if (clipped && clipped.length >= 3) {
+        const aClip = polygonAreaXY(clipped);
+        const ratio = aClip / aOrig;
+        if (ratio >= 0.97) return true;
+        // Si ratio suspect (0.5..0.97), on double-check par échantillonnage — S-H peut mentir sur non-convexe
+        if (ratio < 0.5) return false;
+    }
+    // 2) Fallback échantillonnage grille 8×8 : compte points dedans / points totaux
+    // Utile quand le container est non-convexe (S-H peut faussement rejeter).
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    polyPx.forEach(p => { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; });
+    const NS = 8;
+    let inside = 0, total = 0;
+    for (let iy = 0; iy < NS; iy++) {
+        for (let ix = 0; ix < NS; ix++) {
+            const px = minX + (ix + 0.5) * (maxX - minX) / NS;
+            const py = minY + (iy + 0.5) * (maxY - minY) / NS;
+            // Point doit être dans polyPx ET dans containerPx
+            if (!pointInPolyGen({ x: px, y: py }, polyPx)) continue;
+            total++;
+            if (pointInPolyGen({ x: px, y: py }, containerPx)) inside++;
+        }
+    }
+    return total > 0 && inside / total >= 0.97;
 };
+
+// Point-in-polygon générique (ray casting), pour usage interne du fallback
+function pointInPolyGen(pt, poly) {
+    let ins = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        if (((yi > pt.y) !== (yj > pt.y)) &&
+            (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-9) + xi)) {
+            ins = !ins;
+        }
+    }
+    return ins;
+}
 
 // Test intersection de 2 polygones (aire commune > seuil)
 BARLO.geometry.polygonsIntersect = function(polyA, polyB, tolerancePx) {
