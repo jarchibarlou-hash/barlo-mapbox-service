@@ -356,7 +356,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.0.0-CMD</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.1.0-CMD</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -3133,7 +3133,6 @@ const COMMANDS = {
                     return;
                 }
                 _cmdAlignExecute(CMD.picks[0], ref);
-                // Reste actif — repart en WAIT_1 pour enchaîner
                 CMD.picks = [];
                 CMD.state = "WAIT_1";
                 clearGhostPreview();
@@ -3142,7 +3141,6 @@ const COMMANDS = {
         },
         onHover(ref, svgPt, label) {
             if (CMD.state === "WAIT_2" && ref && ref.kind === "edge" && CMD.picks[0]) {
-                // Ghost : montre la future position de l'unité source alignée sur la cible
                 const ghost = _cmdAlignGhost(CMD.picks[0], ref);
                 if (ghost) drawGhostPreview(label, ghost);
             } else {
@@ -3155,6 +3153,246 @@ const COMMANDS = {
                 clearGhostPreview();
                 return "Clique l'arête CIBLE";
             }
+            return "EXIT";
+        }
+    },
+
+    // ─────── OFFSET — OF — distance → hover unité → côté selon curseur → clic ───────
+    OF: {
+        label: "OFFSET",
+        cursor: "crosshair",
+        hint: "Saisis la distance (m) dans le HUD, puis hover une arête",
+        onStart() {
+            CMD.hudDistance = CMD.hudDistance || 3;
+        },
+        onPick(ref, svgPt, label) {
+            if (!ref || ref.kind !== "edge") { showToast("Clique une arête d'unité", true); return; }
+            const d = CMD.hudDistance;
+            if (!d || d <= 0) { showToast("Renseigne d'abord la distance dans le HUD", true); return; }
+            // Détermine le signe selon quel côté de l'arête le curseur se trouve (par rapport à la normale sortante)
+            const sign = _offsetSideSign(ref, svgPt);
+            _cmdOffsetExecute(ref, d * sign);
+            updateCmdHUD(`Offset ${d}m ✓ · clique une nouvelle arête (ESC pour quitter)`);
+        },
+        onHover(ref, svgPt, label) {
+            if (ref && ref.kind === "edge" && CMD.hudDistance > 0) {
+                const sign = _offsetSideSign(ref, svgPt);
+                const ghost = _cmdOffsetGhost(ref, CMD.hudDistance * sign);
+                if (ghost) drawGhostPreview(label, ghost);
+            } else {
+                clearGhostPreview();
+            }
+        },
+        onEscape() { return "EXIT"; }
+    },
+
+    // ─────── TRIM/EXTEND — TR — boundary → hover element → auto trim/extend ───────
+    TR: {
+        label: "TRIM / EXTEND",
+        cursor: "crosshair",
+        hint: "Clique la LIMITE (arête d'unité ou segment parcelle)",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (!["edge","segment"].includes(ref.kind)) {
+                    showToast("Limite : arête ou segment parcelle", true); return;
+                }
+                CMD.picks[0] = ref;
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Limite OK · clique la portion à conserver de l'ARÊTE à ajuster");
+            } else if (CMD.state === "WAIT_2") {
+                if (ref.kind !== "edge") {
+                    showToast("Clique une arête d'unité à ajuster", true); return;
+                }
+                _cmdTrimExtendExecute(CMD.picks[0], ref, svgPt);
+                updateCmdHUD("Trim/Extend ✓ · clique une nouvelle arête à ajuster (ESC pour quitter)");
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_2" && ref && ref.kind === "edge" && CMD.picks[0]) {
+                const ghost = _cmdTrimExtendGhost(CMD.picks[0], ref, svgPt);
+                if (ghost) drawGhostPreview(label, ghost);
+            } else clearGhostPreview();
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") {
+                CMD.picks = []; CMD.state = "WAIT_1";
+                clearGhostPreview();
+                return "Clique la LIMITE";
+            }
+            return "EXIT";
+        }
+    },
+
+    // ─────── TRIM/EXTEND TO CORNER — TC — élément A + élément B → coin ───────
+    TC: {
+        label: "TRIM / EXTEND TO CORNER",
+        cursor: "crosshair",
+        hint: "Clique la 1ère arête à joindre",
+        onPick(ref, svgPt, label) {
+            if (!ref || ref.kind !== "edge") { showToast("Clique une arête d'unité", true); return; }
+            if (CMD.state === "WAIT_1") {
+                CMD.picks[0] = ref;
+                CMD.state = "WAIT_2";
+                updateCmdHUD("1ère arête OK · clique la 2ᵉ arête (elles seront jointes à leur intersection)");
+            } else if (CMD.state === "WAIT_2") {
+                if (ref.unit_idx === CMD.picks[0].unit_idx && ref.edge === CMD.picks[0].edge) {
+                    showToast("Choisis une AUTRE arête", true); return;
+                }
+                _cmdTrimCornerExecute(CMD.picks[0], ref);
+                CMD.picks = []; CMD.state = "WAIT_1";
+                updateCmdHUD("Coin créé ✓ · clique une nouvelle 1ère arête (ESC pour quitter)");
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") {
+                CMD.picks = []; CMD.state = "WAIT_1";
+                return "Clique la 1ère arête";
+            }
+            return "EXIT";
+        }
+    },
+
+    // ─────── MOVE — MV — unité + point base → destination ───────
+    MV: {
+        label: "MOVE",
+        cursor: "move",
+        hint: "Clique dans l'unité à déplacer (arête, coin ou milieu)",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (ref.unit_idx === undefined) { showToast("Clique sur une unité", true); return; }
+                CMD.picks[0] = { unit_idx: ref.unit_idx, basePt: { x: svgPt.x, y: svgPt.y }, label };
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Clique le point DESTINATION");
+            } else if (CMD.state === "WAIT_2") {
+                const destPt = ref && ref.p ? ref.p : svgPt;
+                _cmdMoveExecute(CMD.picks[0], destPt);
+                updateCmdHUD("Déplacé ✓ · clique une nouvelle unité (ESC pour quitter)");
+                CMD.picks = []; CMD.state = "WAIT_1";
+                clearGhostPreview();
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_2" && CMD.picks[0]) {
+                const destPt = ref && ref.p ? ref.p : svgPt;
+                const ghost = _cmdMoveGhost(CMD.picks[0], destPt);
+                if (ghost) drawGhostPreview(label, ghost);
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") {
+                CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview();
+                return "Clique l'unité à déplacer";
+            }
+            return "EXIT";
+        }
+    },
+
+    // ─────── COPY — CO — unité + point base → destination (duplique) ───────
+    CO: {
+        label: "COPY",
+        cursor: "copy",
+        hint: "Clique dans l'unité à dupliquer",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (ref.unit_idx === undefined) { showToast("Clique sur une unité", true); return; }
+                CMD.picks[0] = { unit_idx: ref.unit_idx, basePt: { x: svgPt.x, y: svgPt.y }, label };
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Clique la DESTINATION de la copie");
+            } else if (CMD.state === "WAIT_2") {
+                const destPt = ref && ref.p ? ref.p : svgPt;
+                _cmdCopyExecute(CMD.picks[0], destPt);
+                updateCmdHUD("Copié ✓ · clique la destination suivante (ESC pour quitter)");
+                // Reste actif avec MÊME source pour copier plusieurs fois
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_2" && CMD.picks[0]) {
+                const destPt = ref && ref.p ? ref.p : svgPt;
+                const ghost = _cmdMoveGhost(CMD.picks[0], destPt);
+                if (ghost) drawGhostPreview(label, ghost);
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") {
+                CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview();
+                return "Clique l'unité à copier";
+            }
+            return "EXIT";
+        }
+    },
+
+    // ─────── ROTATE — RO — unité + centre → point d'angle ───────
+    RO: {
+        label: "ROTATE",
+        cursor: "crosshair",
+        hint: "Clique dans l'unité à faire pivoter",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (ref.unit_idx === undefined) { showToast("Clique sur une unité", true); return; }
+                CMD.picks[0] = { unit_idx: ref.unit_idx, label };
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Clique le CENTRE de rotation (défaut = centre unité)");
+            } else if (CMD.state === "WAIT_2") {
+                CMD.picks[1] = { centerPt: { x: svgPt.x, y: svgPt.y } };
+                CMD.state = "WAIT_N";
+                updateCmdHUD("Clique un point pour DÉFINIR L'ANGLE (référence)");
+            } else if (CMD.state === "WAIT_N" && CMD.picks.length === 2) {
+                CMD.picks[2] = { refPt: { x: svgPt.x, y: svgPt.y } };
+                CMD.state = "PREVIEW";
+                updateCmdHUD("Bouge la souris puis clique pour VALIDER l'angle");
+            } else if (CMD.state === "PREVIEW") {
+                _cmdRotateExecute(CMD.picks[0], CMD.picks[1], CMD.picks[2], { x: svgPt.x, y: svgPt.y });
+                updateCmdHUD("Pivoté ✓ · clique une nouvelle unité (ESC pour quitter)");
+                CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview();
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "PREVIEW" && CMD.picks.length === 3) {
+                const ghost = _cmdRotateGhost(CMD.picks[0], CMD.picks[1], CMD.picks[2], svgPt);
+                if (ghost) drawGhostPreview(label, ghost);
+            }
+        },
+        onEscape() {
+            if (CMD.state !== "WAIT_1") { CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview(); return "Clique l'unité à pivoter"; }
+            return "EXIT";
+        }
+    },
+
+    // ─────── MIRROR — MI — unité + 2 points définissant l'axe ───────
+    MI: {
+        label: "MIRROR",
+        cursor: "crosshair",
+        hint: "Clique dans l'unité à mirroriser",
+        onPick(ref, svgPt, label) {
+            if (!ref) return;
+            if (CMD.state === "WAIT_1") {
+                if (ref.unit_idx === undefined) { showToast("Clique sur une unité", true); return; }
+                CMD.picks[0] = { unit_idx: ref.unit_idx, label };
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Clique le 1er point de l'AXE MIROIR");
+            } else if (CMD.state === "WAIT_2") {
+                CMD.picks[1] = { p: { x: svgPt.x, y: svgPt.y } };
+                CMD.state = "WAIT_N";
+                updateCmdHUD("Clique le 2ème point de l'axe (ghost preview visible)");
+            } else if (CMD.state === "WAIT_N") {
+                CMD.picks[2] = { p: { x: svgPt.x, y: svgPt.y } };
+                _cmdMirrorExecute(CMD.picks[0], CMD.picks[1].p, CMD.picks[2].p);
+                updateCmdHUD("Mirroré ✓ · clique une nouvelle unité (ESC pour quitter)");
+                CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview();
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_N" && CMD.picks.length === 2) {
+                const ghost = _cmdMirrorGhost(CMD.picks[0], CMD.picks[1].p, svgPt);
+                if (ghost) drawGhostPreview(label, ghost);
+            }
+        },
+        onEscape() {
+            if (CMD.state !== "WAIT_1") { CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview(); return "Clique l'unité"; }
             return "EXIT";
         }
     }
@@ -3244,6 +3482,288 @@ function _cmdAlignGhost(targetRef, sourceRef) {
     }));
     const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
     return `<polygon class="ghost-preview" points="${pts}"/>`;
+}
+
+// ═════════════ Utilitaires géométrie CommandManager ═════════════
+function _lineNormal(p1, p2) {
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const l = Math.hypot(dx, dy) || 1;
+    return { x: -dy / l, y: dx / l };  // 90° CCW
+}
+function _lineLineIntersection(p1, p2, p3, p4) {
+    const d1x = p2.x - p1.x, d1y = p2.y - p1.y;
+    const d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+    const den = d1x * d2y - d1y * d2x;
+    if (Math.abs(den) < 1e-6) return null;
+    const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / den;
+    return { x: p1.x + t * d1x, y: p1.y + t * d1y, t };
+}
+function _rectCornersFromCenter(cx, cy, w, h, rotDeg) {
+    const r = rotDeg * Math.PI / 180;
+    return [
+        { x: -w/2, y: -h/2 }, { x:  w/2, y: -h/2 },
+        { x:  w/2, y:  h/2 }, { x: -w/2, y:  h/2 }
+    ].map(p => ({
+        x: cx + p.x * Math.cos(r) - p.y * Math.sin(r),
+        y: cy + p.x * Math.sin(r) + p.y * Math.cos(r)
+    }));
+}
+
+// ═════════════ OFFSET ═════════════
+function _offsetSideSign(edgeRef, svgPt) {
+    // Signe positif = curseur du côté extérieur du rect (loin du centre)
+    // On calcule le vecteur normal sortant à partir de l'arête + on regarde où se trouve le curseur
+    const mid = { x: (edgeRef.p1.x + edgeRef.p2.x)/2, y: (edgeRef.p1.y + edgeRef.p2.y)/2 };
+    const n = _lineNormal(edgeRef.p1, edgeRef.p2);
+    // Détermine normal sortant : rect a un centre → si dot(n, mid-center) < 0, on inverse
+    const refs = _svgRefs[edgeRef.label];
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (u && refs) {
+        const cx = refs.cxSvg + (u.offset_x_m||0)*refs.scale;
+        const cy = refs.cySvg - (u.offset_y_m||0)*refs.scale;
+        const outward = (n.x * (mid.x - cx) + n.y * (mid.y - cy)) >= 0 ? 1 : -1;
+        n.x *= outward; n.y *= outward;
+    }
+    return ((svgPt.x - mid.x) * n.x + (svgPt.y - mid.y) * n.y) >= 0 ? 1 : -1;
+}
+function _cmdOffsetExecute(edgeRef, dm) {
+    const refs = _svgRefs[edgeRef.label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (!u) return;
+    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const rot = (u.rotation_deg || 0) * Math.PI / 180;
+    let dLocalX = 0, dLocalY = 0;
+    if (edgeRef.edge === "e") { w_m += dm; dLocalX = dm / 2; }
+    else if (edgeRef.edge === "w") { w_m += dm; dLocalX = -dm / 2; }
+    else if (edgeRef.edge === "s") { h_m += dm; dLocalY = dm / 2; }
+    else if (edgeRef.edge === "n") { h_m += dm; dLocalY = -dm / 2; }
+    if (w_m < 1 || h_m < 1) { showToast("Dimensions trop petites", true); return; }
+    const shiftGX = dLocalX * Math.cos(rot) - dLocalY * Math.sin(rot);
+    const shiftGY = dLocalX * Math.sin(rot) + dLocalY * Math.cos(rot);
+    commitUnitGeometry(edgeRef.label, edgeRef.unit_idx, {
+        width_m: w_m, height_m: h_m,
+        offset_x_m: (u.offset_x_m || 0) + shiftGX,
+        offset_y_m: (u.offset_y_m || 0) - shiftGY,
+        polygon: null
+    });
+}
+function _cmdOffsetGhost(edgeRef, dm) {
+    const refs = _svgRefs[edgeRef.label];
+    if (!refs) return null;
+    const u = (cockpitState.scenarios[edgeRef.label].units || [])[edgeRef.unit_idx];
+    if (!u) return null;
+    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const rot = (u.rotation_deg || 0) * Math.PI / 180;
+    let dLocalX = 0, dLocalY = 0;
+    if (edgeRef.edge === "e") { w_m += dm; dLocalX = dm / 2; }
+    else if (edgeRef.edge === "w") { w_m += dm; dLocalX = -dm / 2; }
+    else if (edgeRef.edge === "s") { h_m += dm; dLocalY = dm / 2; }
+    else if (edgeRef.edge === "n") { h_m += dm; dLocalY = -dm / 2; }
+    if (w_m < 0.5 || h_m < 0.5) return null;
+    const shiftGX = dLocalX * Math.cos(rot) - dLocalY * Math.sin(rot);
+    const shiftGY = dLocalX * Math.sin(rot) + dLocalY * Math.cos(rot);
+    const newCx = refs.cxSvg + ((u.offset_x_m||0) + shiftGX) * refs.scale;
+    const newCy = refs.cySvg - ((u.offset_y_m||0) - shiftGY) * refs.scale;
+    const corners = _rectCornersFromCenter(newCx, newCy, w_m * refs.scale, h_m * refs.scale, u.rotation_deg || 0);
+    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return `<polygon class="ghost-preview" points="${pts}"/>`;
+}
+
+// ═════════════ TRIM / EXTEND ═════════════
+// Boundary = ligne infinie. Target = arête d'unité. Le côté cliqué = conservé.
+function _cmdTrimExtendExecute(boundary, targetEdgeRef, clickPt) {
+    const refs = _svgRefs[targetEdgeRef.label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[targetEdgeRef.label].units || [])[targetEdgeRef.unit_idx];
+    if (!u) return;
+    // Trim/Extend = ajuste la dimension perpendiculaire à l'arête cible pour que son milieu coïncide
+    // avec la projection sur la boundary. Le côté cliqué (par rapport au milieu de l'arête) = conservé.
+    const proj = _lineLineIntersection(boundary.p1, boundary.p2, targetEdgeRef.p1, targetEdgeRef.p2);
+    if (!proj) { showToast("Pas d'intersection possible", true); return; }
+    // Détermine quelle dimension modifier
+    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    const scale = refs.scale;
+    const cur = _unitEdgesGlobal(u, refs);
+    if (!cur) return;
+    const oppEdge = { n: "s", s: "n", e: "w", w: "e" }[targetEdgeRef.edge];
+    // Distance signée de proj à l'arête opposée dans le repère local perpendiculaire à l'arête
+    const oppMid = { x: (cur.edges[oppEdge].p1.x + cur.edges[oppEdge].p2.x)/2, y: (cur.edges[oppEdge].p1.y + cur.edges[oppEdge].p2.y)/2 };
+    const newDistPx = Math.hypot(proj.x - oppMid.x, proj.y - oppMid.y);
+    const newDistM = newDistPx / scale;
+    if (newDistM < 1) { showToast("Ajustement trop court", true); return; }
+    // Nouveau centre = milieu entre oppMid et proj
+    const newCx = (oppMid.x + proj.x) / 2;
+    const newCy = (oppMid.y + proj.y) / 2;
+    if (targetEdgeRef.edge === "e" || targetEdgeRef.edge === "w") w_m = newDistM;
+    else h_m = newDistM;
+    commitUnitGeometry(targetEdgeRef.label, targetEdgeRef.unit_idx, {
+        width_m: w_m, height_m: h_m,
+        offset_x_m: (newCx - refs.cxSvg) / scale,
+        offset_y_m: -(newCy - refs.cySvg) / scale,
+        polygon: null
+    });
+}
+function _cmdTrimExtendGhost(boundary, targetEdgeRef, clickPt) {
+    const refs = _svgRefs[targetEdgeRef.label];
+    if (!refs) return null;
+    const u = (cockpitState.scenarios[targetEdgeRef.label].units || [])[targetEdgeRef.unit_idx];
+    if (!u) return null;
+    const proj = _lineLineIntersection(boundary.p1, boundary.p2, targetEdgeRef.p1, targetEdgeRef.p2);
+    if (!proj) return null;
+    const cur = _unitEdgesGlobal(u, refs);
+    const oppEdge = { n: "s", s: "n", e: "w", w: "e" }[targetEdgeRef.edge];
+    const oppMid = { x: (cur.edges[oppEdge].p1.x + cur.edges[oppEdge].p2.x)/2, y: (cur.edges[oppEdge].p1.y + cur.edges[oppEdge].p2.y)/2 };
+    const newDistPx = Math.hypot(proj.x - oppMid.x, proj.y - oppMid.y);
+    const newDistM = newDistPx / refs.scale;
+    if (newDistM < 0.5) return null;
+    let w_m = u.width_m ? Number(u.width_m) : Math.sqrt(Math.max(4, Number(u.unit_size_m2) || 20) * 1.5);
+    let h_m = u.height_m ? Number(u.height_m) : (Math.max(4, Number(u.unit_size_m2) || 20) / w_m);
+    if (targetEdgeRef.edge === "e" || targetEdgeRef.edge === "w") w_m = newDistM;
+    else h_m = newDistM;
+    const newCx = (oppMid.x + proj.x) / 2, newCy = (oppMid.y + proj.y) / 2;
+    const corners = _rectCornersFromCenter(newCx, newCy, w_m * refs.scale, h_m * refs.scale, u.rotation_deg || 0);
+    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return `<polygon class="ghost-preview" points="${pts}"/>`;
+}
+
+// ═════════════ TRIM CORNER ═════════════
+// A + B → intersection théorique → ajuste les deux à cette intersection
+function _cmdTrimCornerExecute(refA, refB) {
+    const inter = _lineLineIntersection(refA.p1, refA.p2, refB.p1, refB.p2);
+    if (!inter) { showToast("Arêtes parallèles → pas de coin possible", true); return; }
+    // Applique Trim/Extend sur les deux — pour chaque unité, ajuste l'arête vers le point d'intersection
+    _cmdTrimExtendExecute({ p1: refB.p1, p2: refB.p2 }, refA, inter);
+    _cmdTrimExtendExecute({ p1: refA.p1, p2: refA.p2 }, refB, inter);
+    showToast(`Coin créé (intersection ${inter.x.toFixed(0)},${inter.y.toFixed(0)})`);
+}
+
+// ═════════════ MOVE ═════════════
+function _cmdMoveExecute(pick, destPt) {
+    const refs = _svgRefs[pick.label];
+    if (!refs) return;
+    const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
+    if (!u) return;
+    const dx = destPt.x - pick.basePt.x;
+    const dy = destPt.y - pick.basePt.y;
+    commitUnitGeometry(pick.label, pick.unit_idx, {
+        offset_x_m: (u.offset_x_m || 0) + dx / refs.scale,
+        offset_y_m: (u.offset_y_m || 0) - dy / refs.scale
+    });
+}
+function _cmdMoveGhost(pick, destPt) {
+    const refs = _svgRefs[pick.label];
+    const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
+    if (!refs || !u) return null;
+    const dx = destPt.x - pick.basePt.x, dy = destPt.y - pick.basePt.y;
+    const cur = _unitEdgesGlobal(u, refs);
+    if (!cur) return null;
+    const corners = cur.corners.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    const pts = corners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return `<polygon class="ghost-preview" points="${pts}"/>`;
+}
+
+// ═════════════ COPY ═════════════
+function _cmdCopyExecute(pick, destPt) {
+    const refs = _svgRefs[pick.label];
+    if (!refs) return;
+    const units = cockpitState.scenarios[pick.label].units || [];
+    const src = units[pick.unit_idx];
+    if (!src) return;
+    const dx = destPt.x - pick.basePt.x, dy = destPt.y - pick.basePt.y;
+    const nextIdx = units.length ? Math.max(...units.map(u => u.unit_index || 0)) + 1 : 1;
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.unit_index = nextIdx;
+    copy.unit_name = (src.unit_name || src.unit_type || "unit") + " (copie)";
+    copy.offset_x_m = (src.offset_x_m || 0) + dx / refs.scale;
+    copy.offset_y_m = (src.offset_y_m || 0) - dy / refs.scale;
+    copy.polygon = null;
+    units.push(copy);
+    renderUnitsTable(pick.label);
+    renderParcelSvg(pick.label);
+    updateConstraintsCount();
+    showToast(`Copie créée → "${copy.unit_name}"`);
+}
+
+// ═════════════ ROTATE ═════════════
+function _cmdRotateExecute(pick, centerPick, refPick, curPt) {
+    const refs = _svgRefs[pick.label];
+    const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
+    if (!refs || !u) return;
+    const cx = centerPick.centerPt.x, cy = centerPick.centerPt.y;
+    const a0 = Math.atan2(refPick.refPt.y - cy, refPick.refPt.x - cx);
+    const a1 = Math.atan2(curPt.y - cy, curPt.x - cx);
+    const deltaDeg = (a1 - a0) * 180 / Math.PI;
+    // Rotation du centre unit autour de (cx, cy)
+    const uCx = refs.cxSvg + (u.offset_x_m || 0) * refs.scale;
+    const uCy = refs.cySvg - (u.offset_y_m || 0) * refs.scale;
+    const dx = uCx - cx, dy = uCy - cy;
+    const rad = deltaDeg * Math.PI / 180;
+    const newCx = cx + dx * Math.cos(rad) - dy * Math.sin(rad);
+    const newCy = cy + dx * Math.sin(rad) + dy * Math.cos(rad);
+    commitUnitGeometry(pick.label, pick.unit_idx, {
+        offset_x_m: (newCx - refs.cxSvg) / refs.scale,
+        offset_y_m: -(newCy - refs.cySvg) / refs.scale,
+        rotation_deg: (u.rotation_deg || 0) + deltaDeg
+    });
+}
+function _cmdRotateGhost(pick, centerPick, refPick, curPt) {
+    const refs = _svgRefs[pick.label];
+    const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
+    if (!refs || !u) return null;
+    const cx = centerPick.centerPt.x, cy = centerPick.centerPt.y;
+    const a0 = Math.atan2(refPick.refPt.y - cy, refPick.refPt.x - cx);
+    const a1 = Math.atan2(curPt.y - cy, curPt.x - cx);
+    const deltaDeg = (a1 - a0) * 180 / Math.PI;
+    const cur = _unitEdgesGlobal(u, refs);
+    if (!cur) return null;
+    const rad = deltaDeg * Math.PI / 180;
+    const rotated = cur.corners.map(p => {
+        const dx = p.x - cx, dy = p.y - cy;
+        return { x: cx + dx * Math.cos(rad) - dy * Math.sin(rad), y: cy + dx * Math.sin(rad) + dy * Math.cos(rad) };
+    });
+    const pts = rotated.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    // Ligne du centre au curseur pour visualiser l'angle
+    return `<line class="ghost-line" x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${curPt.x.toFixed(1)}" y2="${curPt.y.toFixed(1)}"/><polygon class="ghost-preview" points="${pts}"/>`;
+}
+
+// ═════════════ MIRROR ═════════════
+function _cmdMirrorExecute(pick, axisA, axisB) {
+    const refs = _svgRefs[pick.label];
+    const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
+    if (!refs || !u) return;
+    // Mirror du centre unit par rapport à l'axe (axisA, axisB)
+    const uCx = refs.cxSvg + (u.offset_x_m || 0) * refs.scale;
+    const uCy = refs.cySvg - (u.offset_y_m || 0) * refs.scale;
+    const mir = _reflectPointAcrossLine({ x: uCx, y: uCy }, axisA, axisB);
+    // Rotation de l'unité miroirée : 2*angleAxis - rotOrig
+    const axisAngleDeg = Math.atan2(axisB.y - axisA.y, axisB.x - axisA.x) * 180 / Math.PI;
+    const newRot = 2 * axisAngleDeg - (u.rotation_deg || 0);
+    commitUnitGeometry(pick.label, pick.unit_idx, {
+        offset_x_m: (mir.x - refs.cxSvg) / refs.scale,
+        offset_y_m: -(mir.y - refs.cySvg) / refs.scale,
+        rotation_deg: newRot
+    });
+}
+function _cmdMirrorGhost(pick, axisA, curPt) {
+    const refs = _svgRefs[pick.label];
+    const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
+    if (!refs || !u) return null;
+    const cur = _unitEdgesGlobal(u, refs);
+    if (!cur) return null;
+    const mirCorners = cur.corners.map(p => _reflectPointAcrossLine(p, axisA, curPt));
+    const pts = mirCorners.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return `<line class="ghost-line" x1="${axisA.x.toFixed(1)}" y1="${axisA.y.toFixed(1)}" x2="${curPt.x.toFixed(1)}" y2="${curPt.y.toFixed(1)}"/><polygon class="ghost-preview" points="${pts}"/>`;
+}
+function _reflectPointAcrossLine(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const l2 = dx*dx + dy*dy || 1;
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+    const proj = { x: a.x + t * dx, y: a.y + t * dy };
+    return { x: 2 * proj.x - p.x, y: 2 * proj.y - p.y };
 }
 
 // Attache les listeners drag une seule fois (délégation sur document)
