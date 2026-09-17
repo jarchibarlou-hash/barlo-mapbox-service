@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.18-FIT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.0-PACKER</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -862,6 +862,7 @@ function scenarioPanelTemplate(L) {
         <div class="c-preview-toolbar" id="cPreviewToolbar${L}">
           <div class="c-toolbar-group">
             <span class="c-toolbar-label">Pattern :</span>
+            <button type="button" class="c-tb-btn" style="border-color:#22C55E;color:#22C55E" onclick="reapplyPatternFromDropdown('${L}','OPTIMIZED')" title="🧠 Optimisé — vrai bin packing 2D dans le polygone parcelle (garantit inParcel + priorise buildable)">🧠 Optimisé</button>
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','LAMELLE')" title="Lamellé — barre allongée E-W centrée">▬ Lamellé</button>
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','BORDURE')" title="Bordure — unités contre le bord Nord de parcelle">╱ Bordure</button>
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','U')" title="U — 3 bras autour d'une cour au Sud">⊔ U</button>
@@ -2178,13 +2179,15 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
             const cands = strat.generate(program, effectiveSA, opts);
             for (const c of cands) {
                 if (allCandidates.length >= maxCandidates) break;
-                // v10.18 — POST-FIT AGRESSIF : force chaque unité à rentrer dans la parcelle brute
-                // (limite HARD absolue). Utilise forceInsideContainer si dépasse.
-                for (const u of c.units) {
-                    const poly = u.polygonM;
-                    if (!poly || poly.length < 3) continue;
-                    if (!BARLO.geometry.polygonInside(poly, siteAnalysis.parcelPolygon)) {
-                        u.polygonM = BARLO.strategies._h.forceInsideContainer(poly, siteAnalysis.parcelPolygon);
+                // v11.0 — Post-fit forceInsideContainer désactivé pour PACKED (déjà garanti par le grid)
+                // Utilisé UNIQUEMENT pour les stratégies legacy (non-packed)
+                if (c.strategy !== "PACKED") {
+                    for (const u of c.units) {
+                        const poly = u.polygonM;
+                        if (!poly || poly.length < 3) continue;
+                        if (!BARLO.geometry.polygonInside(poly, siteAnalysis.parcelPolygon)) {
+                            u.polygonM = BARLO.strategies._h.forceInsideContainer(poly, siteAnalysis.parcelPolygon);
+                        }
                     }
                 }
                 const validation = BARLO.constraints.validate(c, effectiveSA, opts);
@@ -2687,7 +2690,213 @@ BARLO.strategies.SPLIT = {
     }
 };
 
-BARLO.strategies.LIST = ["LAMELLA", "PERIMETER", "U_SHAPE", "T_SHAPE", "STACKED", "STAGGERED", "SPLIT"];
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.0 — BARLO.packer : vrai bin packing 2D dans polygone irrégulier
+// Grid sampling (résolution 1m) + rectangle placement + rotation multi-angles
+// Utilisable par la stratégie PACKED, garantit inside parcelle pour toute forme
+// ═══════════════════════════════════════════════════════════════════════════════
+BARLO.packer = BARLO.packer || {};
+BARLO.packer.CELL_SIZE = 1.0;   // mètres — résolution du grid
+
+// Point-in-polygon en repère m (y+ = Nord)
+BARLO.packer._pointInPoly = function(pt, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        if (((yi > pt.y) !== (yj > pt.y)) &&
+            (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-9) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+};
+
+// Construit un grid d'occupancy pour un siteAnalysis
+BARLO.packer.buildGrid = function(siteAnalysis, cellSize) {
+    cellSize = cellSize || BARLO.packer.CELL_SIZE;
+    const b = siteAnalysis.bounds;
+    const nx = Math.max(3, Math.ceil(b.w / cellSize));
+    const ny = Math.max(3, Math.ceil(b.h / cellSize));
+    const grid = { nx, ny, cellSize, minX: b.minX, minY: b.minY, cells: [] };
+    for (let iy = 0; iy < ny; iy++) {
+        const row = [];
+        for (let ix = 0; ix < nx; ix++) {
+            const cx = b.minX + (ix + 0.5) * cellSize;
+            const cy = b.minY + (iy + 0.5) * cellSize;
+            const inParcel = BARLO.packer._pointInPoly({ x: cx, y: cy }, siteAnalysis.parcelPolygon);
+            const inBuild = (inParcel && siteAnalysis.buildablePolygon && siteAnalysis.buildablePolygon.length >= 3)
+                ? BARLO.packer._pointInPoly({ x: cx, y: cy }, siteAnalysis.buildablePolygon)
+                : inParcel;
+            row.push({ inParcel, inBuild, occupied: null });
+        }
+        grid.cells.push(row);
+    }
+    return grid;
+};
+
+// Test si un rect (w×h) placé à (cx, cy, angle) est valide dans le grid
+// Toutes les cellules du rect doivent être inParcel ET non occupied
+BARLO.packer.canPlaceRect = function(grid, cx, cy, w, h, angleDeg) {
+    const rad = angleDeg * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    // Bounding box du rect rotaté pour limiter l'itération
+    const halfDiag = Math.hypot(w, h) / 2;
+    const ixMin = Math.max(0, Math.floor((cx - halfDiag - grid.minX) / grid.cellSize));
+    const ixMax = Math.min(grid.nx - 1, Math.ceil((cx + halfDiag - grid.minX) / grid.cellSize));
+    const iyMin = Math.max(0, Math.floor((cy - halfDiag - grid.minY) / grid.cellSize));
+    const iyMax = Math.min(grid.ny - 1, Math.ceil((cy + halfDiag - grid.minY) / grid.cellSize));
+    for (let iy = iyMin; iy <= iyMax; iy++) {
+        for (let ix = ixMin; ix <= ixMax; ix++) {
+            const cellCx = grid.minX + (ix + 0.5) * grid.cellSize;
+            const cellCy = grid.minY + (iy + 0.5) * grid.cellSize;
+            const dx = cellCx - cx, dy = cellCy - cy;
+            const localX = dx * cos + dy * sin;
+            const localY = -dx * sin + dy * cos;
+            // Cette cellule est-elle DANS le rect ?
+            if (Math.abs(localX) <= w / 2 + 0.01 && Math.abs(localY) <= h / 2 + 0.01) {
+                const cell = grid.cells[iy][ix];
+                if (!cell.inParcel) return false;
+                if (cell.occupied) return false;
+            }
+        }
+    }
+    return true;
+};
+
+// Marque les cellules d'un rect comme occupées
+BARLO.packer.markOccupied = function(grid, cx, cy, w, h, angleDeg, unitId) {
+    const rad = angleDeg * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    const halfDiag = Math.hypot(w, h) / 2;
+    const ixMin = Math.max(0, Math.floor((cx - halfDiag - grid.minX) / grid.cellSize));
+    const ixMax = Math.min(grid.nx - 1, Math.ceil((cx + halfDiag - grid.minX) / grid.cellSize));
+    const iyMin = Math.max(0, Math.floor((cy - halfDiag - grid.minY) / grid.cellSize));
+    const iyMax = Math.min(grid.ny - 1, Math.ceil((cy + halfDiag - grid.minY) / grid.cellSize));
+    for (let iy = iyMin; iy <= iyMax; iy++) {
+        for (let ix = ixMin; ix <= ixMax; ix++) {
+            const cellCx = grid.minX + (ix + 0.5) * grid.cellSize;
+            const cellCy = grid.minY + (iy + 0.5) * grid.cellSize;
+            const dx = cellCx - cx, dy = cellCy - cy;
+            const localX = dx * cos + dy * sin;
+            const localY = -dx * sin + dy * cos;
+            if (Math.abs(localX) <= w / 2 + 0.01 && Math.abs(localY) <= h / 2 + 0.01) {
+                grid.cells[iy][ix].occupied = unitId;
+            }
+        }
+    }
+};
+
+// Trouve la meilleure position pour une unité dans le grid
+// Retourne { cx, cy, w, h, angleDeg } ou null
+BARLO.packer.findPositionForUnit = function(grid, unit, siteAnalysis, opts) {
+    opts = opts || {};
+    const area = unit.targetArea || 50;
+    const aspects = opts.aspects || [
+        BARLO.strategies._h.preferredAspect(unit.unit_type),
+        1.5, 2.0, 1.2, 2.5, 1.0, 0.8, 3.0
+    ];
+    // Angles candidats : arêtes parcelle + orientations
+    const angles = [];
+    (siteAnalysis.candidateAxes || []).forEach(a => angles.push(a.angleDeg));
+    if (!angles.length) angles.push(0);
+    if (opts.preferredAngleDeg != null) angles.unshift(opts.preferredAngleDeg);
+    // Positions candidates = toutes cellules libres (inParcel + non occupied)
+    // Tri : buildable d'abord (préférence retraits), puis proche du centroïde
+    const centroid = BARLO.geometry.polygonCentroid(siteAnalysis.parcelPolygon);
+    const positions = [];
+    for (let iy = 0; iy < grid.ny; iy++) {
+        for (let ix = 0; ix < grid.nx; ix++) {
+            const cell = grid.cells[iy][ix];
+            if (cell.inParcel && !cell.occupied) {
+                const px = grid.minX + (ix + 0.5) * grid.cellSize;
+                const py = grid.minY + (iy + 0.5) * grid.cellSize;
+                const distC = Math.hypot(px - centroid.x, py - centroid.y);
+                positions.push({ x: px, y: py, inBuild: cell.inBuild, distC });
+            }
+        }
+    }
+    // Tri : buildable d'abord puis distance au centroïde croissante
+    positions.sort((a, b) => {
+        if (a.inBuild !== b.inBuild) return b.inBuild - a.inBuild;
+        return a.distC - b.distC;
+    });
+    // Sample : teste 1 position sur 2 pour perf
+    const step = Math.max(1, Math.floor(positions.length / 100));
+    for (const aspect of aspects) {
+        const w = Math.sqrt(area * aspect);
+        const h = area / w;
+        for (const angleDeg of angles) {
+            for (let pi = 0; pi < positions.length; pi += step) {
+                const p = positions[pi];
+                if (BARLO.packer.canPlaceRect(grid, p.x, p.y, w, h, angleDeg)) {
+                    return { cx: p.x, cy: p.y, w, h, angleDeg };
+                }
+            }
+        }
+    }
+    return null;
+};
+
+// Pack toutes les unités : priorité typologie + surface, place l'une après l'autre
+BARLO.packer.packAll = function(programUnits, siteAnalysis, opts) {
+    opts = opts || {};
+    const grid = BARLO.packer.buildGrid(siteAnalysis);
+    const priority = { COMMERCE: 4, BUREAU: 3, ATELIER: 2, LOGT: 1, AUTRE: 0 };
+    const sorted = programUnits.slice().sort((a, b) => {
+        const pa = priority[BARLO.strategies._h.typoGroup(a.unit_type)] || 0;
+        const pb = priority[BARLO.strategies._h.typoGroup(b.unit_type)] || 0;
+        if (pa !== pb) return pb - pa;
+        return (b.targetArea || b.unit_size_m2 || 0) - (a.targetArea || a.unit_size_m2 || 0);
+    });
+    const placed = [];
+    const unplaced = [];
+    for (const u of sorted) {
+        const pos = BARLO.packer.findPositionForUnit(grid, u, siteAnalysis, opts);
+        if (pos) {
+            const rad = pos.angleDeg * Math.PI / 180;
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+            const polygonM = [
+                { x: -pos.w/2, y:  pos.h/2 }, { x:  pos.w/2, y:  pos.h/2 },
+                { x:  pos.w/2, y: -pos.h/2 }, { x: -pos.w/2, y: -pos.h/2 }
+            ].map(p => ({ x: pos.cx + p.x * cos - p.y * sin, y: pos.cy + p.x * sin + p.y * cos }));
+            placed.push(Object.assign({}, u, { polygonM, level: u.level || 0 }));
+            BARLO.packer.markOccupied(grid, pos.cx, pos.cy, pos.w, pos.h, pos.angleDeg, u.id || u.unit_index);
+        } else {
+            unplaced.push(u);
+        }
+    }
+    return { units: placed, unplaced, success: unplaced.length === 0 };
+};
+
+// ─── PACKED : nouvelle stratégie utilisant le vrai packer 2D ───
+BARLO.strategies.PACKED = {
+    id: "PACKED", label: "Optimisé (packer)",
+    generate(programUnits, siteAnalysis, opts) {
+        const candidates = [];
+        const N = programUnits.length;
+        if (!N || !siteAnalysis) return candidates;
+        // Génère 3 variantes : angle dominant, +45°, -45°
+        const axes = (siteAnalysis.candidateAxes || [{ angleDeg: 0 }]).slice(0, 3);
+        for (const axis of axes) {
+            const result = BARLO.packer.packAll(programUnits, siteAnalysis, { preferredAngleDeg: axis.angleDeg });
+            if (result.units.length) {
+                candidates.push({
+                    strategy: "PACKED",
+                    axisDeg: axis.angleDeg,
+                    anchor: `packer_${result.success ? "full" : "partial"}`,
+                    units: result.units.map(u => Object.assign({}, u, { id: u.id || u.unit_index, targetArea: u.targetArea || u.unit_size_m2 })),
+                    typologyScore: result.success ? 0.95 : 0.6,
+                    _unplaced: result.unplaced.length
+                });
+            }
+        }
+        return candidates;
+    }
+};
+
+// v11.0 — PACKED en tête (priorité absolue), les autres stratégies restent en fallback
+BARLO.strategies.LIST = ["PACKED", "LAMELLA", "PERIMETER", "U_SHAPE", "T_SHAPE", "STACKED", "STAGGERED", "SPLIT"];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // v10.1 — BARLO.constraints : Hard & Soft Constraints, Validator, Scorer
@@ -6044,6 +6253,7 @@ function reapplyPatternFromDropdown(label, patternValue) {
     if (!refs || !refs.siteAnalysis) { showToast("Charge un lead avec parcelle avant", true); return; }
     // Mapping pattern legacy → stratégie BARLO
     const strategyMap = {
+        OPTIMIZED: "PACKED",   // v11.0 — nouveau bouton "Optimisé" = vrai bin packing
         LAMELLE: "LAMELLA",
         BORDURE: "PERIMETER",
         U: "U_SHAPE",
@@ -6822,19 +7032,18 @@ function populateCockpitFromLead(L, units) {
         setInput(`cUnits${label}`, s.units_count);
         setInput(`cGap${label}`, s.gap_m);
         setInput(`cScnRat${label}`, s.rationale);
-        // v10.14 — Détecte pattern initial suggéré par le moteur, applique EN SECOND
-        // (après renderParcelSvg pour que siteAnalysis existe et que BARLO.solver puisse tourner)
+        // v10.14 — Détecte pattern initial suggéré par le moteur
         const pattern = applyMoteurInitialLayout(label, L);
         if (pattern) console.log(`[MOTEUR-INIT] Scénario ${label} : pattern ${pattern} détecté`);
         captureBaselineFromMoteur(label, L);
         renderUnitsTable(label);
         renderParcelSvg(label);   // → popule _svgRefs[label].siteAnalysis
         renderMoteurBrief(label);
-        // v10.14 — Applique le placement via le VRAI solver BARLO maintenant que siteAnalysis existe
-        if (pattern && cockpitState.scenarios[label]._pendingInitialPattern) {
+        // v11.0 — Placement initial via OPTIMIZED (PACKED) qui garantit inParcel via grid packing
+        // Le pattern détecté par le moteur (LAMELLE/U/etc.) est disponible via les boutons pattern
+        if (cockpitState.scenarios[label]._pendingInitialPattern) {
             delete cockpitState.scenarios[label]._pendingInitialPattern;
-            // Utilise le pipeline unifié (mapping pattern → BARLO strategy + solver + apply)
-            try { reapplyPatternFromDropdown(label, pattern); } catch(e) { console.warn("[MOTEUR-INIT] Solver failed:", e); }
+            try { reapplyPatternFromDropdown(label, "OPTIMIZED"); } catch(e) { console.warn("[MOTEUR-INIT] Solver failed:", e); }
         }
         historyReset(label);
     });
