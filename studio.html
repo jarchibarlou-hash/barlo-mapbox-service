@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.8-VALID</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v10.9-DOWN</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2060,19 +2060,62 @@ BARLO.geometry.polygonsIntersect = function(polyA, polyB, tolerancePx) {
 // v10.3 — BARLO.solver / .diversity : Générateur + Scorer + Diversity Filter
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Génère TOUS les candidats internes pour toutes les stratégies activées
-// puis valide (hard constraints) → score → diversifie → retourne le top N.
+// v10.9 — Génère TOUS les candidats internes puis valide → score → diversifie.
+// PIPELINE DE DOWNGRADE PROGRESSIF (Hektar-like) :
+//   1) Essaie buildable strict (retraits respectés)
+//   2) Si vide → downgrade vers parcelle brute (retraits ignorés) + tag warning
+//   3) Si toujours vide → détecte pourquoi (surface totale >> parcelle) + explique
+// TOUJOURS retourne quelque chose de cohérent tant que les surfaces demandées
+// tiennent physiquement dans la parcelle brute.
 BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
     opts = opts || {};
     const enabledStrategies = opts.strategies || BARLO.strategies.LIST;
     const preferredAxisDeg = opts.preferredAxisDeg;
     const topN = opts.topN || 6;
-    const maxCandidates = opts.maxCandidates || 200;
+    const maxCandidates = opts.maxCandidates || 300;
 
     if (!programUnits || !programUnits.length) return { candidates: [], rejected: [], reason: "NO_PROGRAM" };
-    if (!siteAnalysis || !siteAnalysis.buildablePolygon || siteAnalysis.buildablePolygon.length < 3) {
-        return { candidates: [], rejected: [], reason: "NO_BUILDABLE" };
+    if (!siteAnalysis || !siteAnalysis.parcelPolygon || siteAnalysis.parcelPolygon.length < 3) {
+        return { candidates: [], rejected: [], reason: "NO_PARCEL" };
     }
+
+    // v10.9 — Diagnostic pré-solve : compare surface demandée vs disponible
+    const totalDemande = programUnits.reduce((s, u) => s + (Number(u.unit_size_m2) || 50), 0);
+    const parcelArea = siteAnalysis.parcelArea || BARLO.geometry.polygonArea(siteAnalysis.parcelPolygon);
+    const buildableArea = siteAnalysis.buildableArea || 0;
+    const preDiag = { totalDemande, parcelArea: Math.round(parcelArea), buildableArea: Math.round(buildableArea) };
+
+    // Si surface demandée > 90% de la parcelle brute → physiquement impossible
+    if (totalDemande > parcelArea * 0.9) {
+        return { candidates: [], rejected: [], reason: "TOO_MUCH_PROGRAM", preDiag,
+            message: `Surface demandée ${Math.round(totalDemande)}m² > 90% de la parcelle ${Math.round(parcelArea)}m² · réduis les surfaces ou augmente les niveaux` };
+    }
+
+    // v10.9 — Buildable strict OU parcelle brute - retraits basiques 3m si buildable dégénéré
+    let effectiveBuildable = siteAnalysis.buildablePolygon;
+    let downgradeReason = null;
+    if (!effectiveBuildable || effectiveBuildable.length < 3 || buildableArea < parcelArea * 0.3
+        || buildableArea < totalDemande * 1.1) {
+        // Fallback : parcelle brute avec retrait uniforme minimum 3m
+        const shrunkPx = shrinkPolygonPx(
+            siteAnalysis.parcelPolygon.map(p => ({ x: p.x, y: -p.y })),   // temp SVG-style
+            3 // 3m uniform
+        );
+        effectiveBuildable = shrunkPx.map(p => ({ x: p.x, y: -p.y }));
+        downgradeReason = `Retraits stricts non tenables (buildable ${Math.round(buildableArea)}m² < surfaces demandées ${Math.round(totalDemande)}m²) — génération sur parcelle avec recul minimum 3m`;
+    }
+    // Si l'effectiveBuildable est encore trop petit, prend juste la parcelle brute
+    const effectiveArea = BARLO.geometry.polygonArea(effectiveBuildable);
+    if (effectiveArea < totalDemande * 1.05) {
+        effectiveBuildable = siteAnalysis.parcelPolygon;
+        downgradeReason = (downgradeReason ? downgradeReason + " · " : "")
+            + `Recul 3m non tenable — génération sur parcelle brute (attention aux limites)`;
+    }
+    // SiteAnalysis effective : on remplace le buildable pour la validation, le reste inchangé
+    const effectiveSA = Object.assign({}, siteAnalysis, {
+        buildablePolygon: effectiveBuildable,
+        buildableArea: BARLO.geometry.polygonArea(effectiveBuildable)
+    });
     // Convertit programUnits (schema Barlo) en format solver
     const program = programUnits.map((u, i) => ({
         id: u.unit_index || i + 1,
@@ -2087,24 +2130,24 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
         pilotis: u.pilotis, sous_sols: u.sous_sols, etages_unit: u.etages_unit,
         terrasse: u.terrasse, balcon: u.balcon, notes: u.notes
     }));
-    // Génération de tous les candidats internes
+    // Génération de tous les candidats internes (Hektar-like : plus de variantes explorées)
     const allCandidates = [];
     const rejected = [];
     for (const stratKey of enabledStrategies) {
         const strat = BARLO.strategies[stratKey];
         if (!strat || typeof strat.generate !== "function") continue;
         try {
-            const cands = strat.generate(program, siteAnalysis, opts);
+            const cands = strat.generate(program, effectiveSA, opts);
             for (const c of cands) {
                 if (allCandidates.length >= maxCandidates) break;
-                const validation = BARLO.constraints.validate(c, siteAnalysis, opts);
+                const validation = BARLO.constraints.validate(c, effectiveSA, opts);
                 if (!validation.valid) {
                     rejected.push({ strategy: c.strategy, axisDeg: c.axisDeg, anchor: c.anchor,
                         violations: validation.violations });
                     continue;
                 }
                 // Score
-                const scoreObj = BARLO.constraints.score(c, siteAnalysis, { preferredAxisDeg });
+                const scoreObj = BARLO.constraints.score(c, effectiveSA, { preferredAxisDeg });
                 c.score = scoreObj.totalScore;
                 c.scoreBreakdown = scoreObj.breakdown;
                 c.diagnostics = {
@@ -2115,6 +2158,7 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
                     siteFit: scoreObj.breakdown.siteFit.toFixed(3),
                     complexity: scoreObj.breakdown.complexity.toFixed(3)
                 };
+                if (downgradeReason) c.downgradeReason = downgradeReason;
                 allCandidates.push(c);
             }
         } catch (e) {
@@ -2122,7 +2166,8 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
         }
     }
     if (!allCandidates.length) {
-        return { candidates: [], rejected, reason: "NO_VALID_SOLUTION", program, siteAnalysis };
+        return { candidates: [], rejected, reason: "NO_VALID_SOLUTION", program, siteAnalysis: effectiveSA,
+            preDiag, downgradeReason };
     }
     // Trie par score décroissant
     allCandidates.sort((a, b) => b.score - a.score);
@@ -2133,7 +2178,9 @@ BARLO.solver.solve = function(programUnits, siteAnalysis, opts) {
     return { candidates: diverse, rejected, reason: "OK",
         total_generated: allCandidates.length + rejected.length,
         total_valid: allCandidates.length,
-        total_shown: diverse.length };
+        total_shown: diverse.length,
+        preDiag, downgradeReason,
+        effectiveSA };   // renvoie le buildable effectivement utilisé pour debug visuel
 };
 
 // ─── DIVERSITY FILTER : réduit à N candidats vraiment différents ───
@@ -5881,27 +5928,42 @@ function renderSolverPanel(label, result) {
     const debug = $(`cSolverDebug${label}`);
     if (!panel || !grid) return;
     panel.classList.add("active");
-    if (result.reason === "NO_VALID_SOLUTION") {
-        title.textContent = "❌ Aucune implantation valide trouvée";
-        grid.innerHTML = `<div class="c-solver-empty" style="color:#EF4444">
-            ${result.rejected.length} candidats rejetés · aucun ne passe les contraintes.<br>
-            Vérifie surfaces cibles vs buildable disponible.
-        </div>`;
-        debug.style.display = "block";
-        debug.textContent = "REJETS (top 5) :\n" + result.rejected.slice(0, 5).map(r =>
-            `${r.strategy}@${Math.round(r.axisDeg)}° → ${r.violations.map(v => v.type).join(", ")}`
-        ).join("\n");
-        return;
-    }
-    if (result.reason === "NO_BUILDABLE" || result.reason === "NO_PROGRAM") {
-        title.textContent = "⚠ " + result.reason;
-        grid.innerHTML = `<div class="c-solver-empty" style="color:#F59E0B">${result.reason}</div>`;
+    // v10.9 — Diagnostic Pre-Solve (surface demandée vs disponible)
+    const pd = result.preDiag;
+    const diagHtml = pd ? `<div style="font-size:.6rem;color:var(--text2);margin-bottom:.3rem;padding:.3rem;background:rgba(11,17,32,0.5);border-radius:4px">
+        📐 <strong>Programme :</strong> ${pd.totalDemande}m² · <strong>Parcelle :</strong> ${pd.parcelArea}m² · <strong>Buildable strict :</strong> ${pd.buildableArea}m²
+    </div>` : "";
+    if (result.reason === "TOO_MUCH_PROGRAM") {
+        title.textContent = "❌ Programme trop grand pour la parcelle";
+        grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#EF4444">${result.message}</div>`;
         debug.style.display = "none";
         return;
     }
-    title.textContent = `🧠 ${result.total_shown}/${result.total_valid} propositions (${result.total_generated} candidats explorés)`;
-    grid.innerHTML = result.candidates.map((c, i) => {
-        const thumb = renderCandidateThumbnailSvg(c, _svgRefs[label].siteAnalysis);
+    if (result.reason === "NO_PARCEL" || result.reason === "NO_PROGRAM") {
+        title.textContent = "⚠ " + result.reason;
+        grid.innerHTML = `<div class="c-solver-empty" style="color:#F59E0B">${result.reason === "NO_PARCEL" ? "Polygone parcelle manquant" : "Ajoute des unités d'abord"}</div>`;
+        debug.style.display = "none";
+        return;
+    }
+    if (result.reason === "NO_VALID_SOLUTION") {
+        title.textContent = "❌ Aucune implantation valide même en downgrade";
+        grid.innerHTML = diagHtml + `<div class="c-solver-empty" style="color:#EF4444">
+            ${result.rejected.length} candidats rejetés · même sans respect strict des reculs, rien ne rentre.<br>
+            Réduis les surfaces cibles ou repense les typologies.
+        </div>`;
+        debug.style.display = "block";
+        debug.textContent = "REJETS (top 5) :\n" + result.rejected.slice(0, 5).map(r =>
+            `${r.strategy}@${Math.round(r.axisDeg)}° → ${(r.violations || []).slice(0, 3).map(v => v.type).join(", ")}`
+        ).join("\n");
+        return;
+    }
+    // OK : affiche les candidats
+    const downgrade = result.downgradeReason ? `<div style="font-size:.6rem;color:#F59E0B;margin-bottom:.3rem;padding:.3rem;background:rgba(245,158,11,0.1);border-left:3px solid #F59E0B;border-radius:4px">
+        ⚠ <strong>Downgrade :</strong> ${result.downgradeReason}
+    </div>` : "";
+    title.textContent = `🧠 ${result.total_shown}/${result.total_valid} propositions (${result.total_generated} explorés)`;
+    grid.innerHTML = diagHtml + downgrade + result.candidates.map((c, i) => {
+        const thumb = renderCandidateThumbnailSvg(c, result.effectiveSA || _svgRefs[label].siteAnalysis);
         const meta = `${c.units.length}u · axe ${Math.round(c.axisDeg)}°`;
         return `
             <div class="c-cand-card" onclick="applyCandidate('${label}', ${i})">
@@ -5912,7 +5974,7 @@ function renderSolverPanel(label, result) {
         `;
     }).join("");
     debug.style.display = "block";
-    debug.textContent = `${result.total_generated} candidats générés · ${result.total_valid} valides · ${result.total_shown} après diversity filter · ${result.rejected.length} rejetés`;
+    debug.textContent = `${result.total_generated} candidats · ${result.total_valid} valides · ${result.total_shown} après diversity · ${result.rejected.length} rejetés`;
 }
 
 // Rendu SVG miniature d'un candidat (thumbnail 140x120)
