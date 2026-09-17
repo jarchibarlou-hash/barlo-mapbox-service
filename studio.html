@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.0-PACKER</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.1-COIN</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -2696,7 +2696,7 @@ BARLO.strategies.SPLIT = {
 // Utilisable par la stratégie PACKED, garantit inside parcelle pour toute forme
 // ═══════════════════════════════════════════════════════════════════════════════
 BARLO.packer = BARLO.packer || {};
-BARLO.packer.CELL_SIZE = 1.0;   // mètres — résolution du grid
+BARLO.packer.CELL_SIZE = 0.5;   // v11.1 : résolution doublée (plus précis pour bords biseautés)
 
 // Point-in-polygon en repère m (y+ = Nord)
 BARLO.packer._pointInPoly = function(pt, poly) {
@@ -2736,11 +2736,24 @@ BARLO.packer.buildGrid = function(siteAnalysis, cellSize) {
 };
 
 // Test si un rect (w×h) placé à (cx, cy, angle) est valide dans le grid
-// Toutes les cellules du rect doivent être inParcel ET non occupied
-BARLO.packer.canPlaceRect = function(grid, cx, cy, w, h, angleDeg) {
+// v11.1 : + test strict des 4 coins ET du milieu de chaque arête avec _pointInPoly
+BARLO.packer.canPlaceRect = function(grid, cx, cy, w, h, angleDeg, siteAnalysis) {
     const rad = angleDeg * Math.PI / 180;
     const cos = Math.cos(rad), sin = Math.sin(rad);
-    // Bounding box du rect rotaté pour limiter l'itération
+    // v11.1 : STEP 1 — tester les 4 coins + 4 midpoints d'arêtes directement dans le polygon parcelle
+    if (siteAnalysis && siteAnalysis.parcelPolygon) {
+        const hw = w / 2, hh = h / 2;
+        const localPts = [
+            { x: -hw, y: -hh }, { x:  hw, y: -hh }, { x:  hw, y:  hh }, { x: -hw, y:  hh },
+            { x:   0, y: -hh }, { x:  hw, y:   0 }, { x:   0, y:  hh }, { x: -hw, y:   0 }
+        ];
+        for (const lp of localPts) {
+            const wx = cx + lp.x * cos - lp.y * sin;
+            const wy = cy + lp.x * sin + lp.y * cos;
+            if (!BARLO.packer._pointInPoly({ x: wx, y: wy }, siteAnalysis.parcelPolygon)) return false;
+        }
+    }
+    // STEP 2 — test occupancy sur les cellules couvertes
     const halfDiag = Math.hypot(w, h) / 2;
     const ixMin = Math.max(0, Math.floor((cx - halfDiag - grid.minX) / grid.cellSize));
     const ixMax = Math.min(grid.nx - 1, Math.ceil((cx + halfDiag - grid.minX) / grid.cellSize));
@@ -2753,8 +2766,7 @@ BARLO.packer.canPlaceRect = function(grid, cx, cy, w, h, angleDeg) {
             const dx = cellCx - cx, dy = cellCy - cy;
             const localX = dx * cos + dy * sin;
             const localY = -dx * sin + dy * cos;
-            // Cette cellule est-elle DANS le rect ?
-            if (Math.abs(localX) <= w / 2 + 0.01 && Math.abs(localY) <= h / 2 + 0.01) {
+            if (Math.abs(localX) <= w / 2 - 0.05 && Math.abs(localY) <= h / 2 - 0.05) {
                 const cell = grid.cells[iy][ix];
                 if (!cell.inParcel) return false;
                 if (cell.occupied) return false;
@@ -2829,7 +2841,7 @@ BARLO.packer.findPositionForUnit = function(grid, unit, siteAnalysis, opts) {
         for (const angleDeg of angles) {
             for (let pi = 0; pi < positions.length; pi += step) {
                 const p = positions[pi];
-                if (BARLO.packer.canPlaceRect(grid, p.x, p.y, w, h, angleDeg)) {
+                if (BARLO.packer.canPlaceRect(grid, p.x, p.y, w, h, angleDeg, siteAnalysis)) {
                     return { cx: p.x, cy: p.y, w, h, angleDeg };
                 }
             }
@@ -2875,12 +2887,15 @@ BARLO.strategies.PACKED = {
     generate(programUnits, siteAnalysis, opts) {
         const candidates = [];
         const N = programUnits.length;
-        if (!N || !siteAnalysis) return candidates;
+        if (!N || !siteAnalysis) { console.warn("[PACKED] Skipped : N=", N, "SA=", !!siteAnalysis); return candidates; }
         // Génère 3 variantes : angle dominant, +45°, -45°
-        const axes = (siteAnalysis.candidateAxes || [{ angleDeg: 0 }]).slice(0, 3);
+        const axes = (siteAnalysis.candidateAxes && siteAnalysis.candidateAxes.length ? siteAnalysis.candidateAxes : [{ angleDeg: 0 }]).slice(0, 3);
+        console.log("[PACKED] axes:", axes.map(a => Math.round(a.angleDeg)).join(","), "| N units:", N, "| parcelArea:", Math.round(siteAnalysis.parcelArea), "| bounds:", siteAnalysis.bounds && Math.round(siteAnalysis.bounds.w) + "x" + Math.round(siteAnalysis.bounds.h));
         for (const axis of axes) {
             const result = BARLO.packer.packAll(programUnits, siteAnalysis, { preferredAngleDeg: axis.angleDeg });
+            console.log("[PACKED] axis", Math.round(axis.angleDeg) + "° → placed", result.units.length, "/", N, "| unplaced", result.unplaced.length);
             if (result.units.length) {
+                // v11.1 : Accepte AUSSI les partiels (pour éviter NO_VALID_SOLUTION quand rien ne rentre à 100%)
                 candidates.push({
                     strategy: "PACKED",
                     axisDeg: axis.angleDeg,
@@ -2891,6 +2906,7 @@ BARLO.strategies.PACKED = {
                 });
             }
         }
+        console.log("[PACKED] Total candidates generated:", candidates.length);
         return candidates;
     }
 };
