@@ -356,7 +356,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.2.0-CMD</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v8.3.0-CMD</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -853,6 +853,8 @@ function scenarioPanelTemplate(L) {
           <button type="button" class="cmd-btn" data-cmd="CO" onclick="cmdStart('CO','${L}')" title="Copy — CO — Duplique l'unité vers un point (ESC)">⧉ Copy<small>CO</small></button>
           <button type="button" class="cmd-btn" data-cmd="RO" onclick="cmdStart('RO','${L}')" title="Rotate — RO — Clique centre puis angle (ESC)">⟳ Rotate<small>RO</small></button>
           <button type="button" class="cmd-btn" data-cmd="MI" onclick="cmdStart('MI','${L}')" title="Mirror — MI — Clique 2 points définissant l'axe (ESC)">◫ Mirror<small>MI</small></button>
+          <span class="cmd-sep"></span>
+          <button type="button" class="cmd-btn" data-cmd="ME" onclick="cmdStart('ME','${L}')" title="Measure — ME — Règle : clique 2 points pour mesurer une distance (ESC)">📏 Règle<small>ME</small></button>
         </div>
 
         <div class="c-parcel-preview" id="cParcelPreview${L}">
@@ -2235,8 +2237,9 @@ function renderParcelSvg(label) {
     placements.forEach(p => {
         const { u, i, globalIdx, ux, uy, uW, uH, rotDeg, areaM2, displayW_m, displayH_m, color, label2, hasOverlap, pxPolyClipped } = p;
         const handleDist = uH/2 + 12;
-        const strokeColor = hasOverlap ? "#EF4444" : "#fff";
-        const strokeDash = hasOverlap ? ' stroke-dasharray="4,2"' : "";
+        // v8.3.0 : Jeremy — plus de bordure rouge alarmiste. L'overlap est légitime, on garde une simple info.
+        const strokeColor = "#fff";
+        const strokeDash = "";
         // v75.8.11 — Priorité de rendu : (1) pxPolyClipped (custom OU auto) (2) u.polygon direct (3) rect fallback
         if (pxPolyClipped && pxPolyClipped.length >= 3) {
             // Clip auto : polygone en coord absolues, wrapper translate(centroïde) sans rotate
@@ -2249,10 +2252,7 @@ function renderParcelSvg(label) {
             unitsHtml += `<g class="draggable-unit" data-scn="${label}" data-uidx="${globalIdx}" transform="translate(${ux.toFixed(1)},${uy.toFixed(1)}) rotate(${rotDeg.toFixed(1)})">`;
             unitsHtml += `<rect class="body" x="${(-uW/2).toFixed(1)}" y="${(-uH/2).toFixed(1)}" width="${uW.toFixed(1)}" height="${uH.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.88" stroke="${strokeColor}" stroke-width="${hasOverlap?"2":"1.2"}"${strokeDash}/>`;
         }
-        if (hasOverlap) {
-            unitsHtml += `<text x="0" y="${(uH/2 + 8).toFixed(1)}" text-anchor="middle" fill="#EF4444" font-size="7" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">⚠ conflit</text>`;
-        }
-        // v7.2.0 — labels plus discrets (Jeremy : textes trop gros écrasaient la figure)
+        // v8.3.0 : suppression du texte "⚠ conflit" — l'overlap est licite
         const fsName = Math.max(5, Math.min(8, uH * 0.14));
         const fsArea = Math.max(4, Math.min(6.5, uH * 0.10));
         let realAreaM2 = areaM2;
@@ -2260,8 +2260,9 @@ function renderParcelSvg(label) {
             realAreaM2 = Math.round(polygonAreaXY(pxPolyClipped) / (scale * scale));
         }
         const divergence = Math.abs(realAreaM2 - areaM2) / Math.max(1, areaM2);
-        const areaTextColor = divergence > 0.05 ? "#FBBF24" : "#fff";
-        const areaLabel = divergence > 0.05 ? `${realAreaM2} m² (cible ${areaM2})` : `${areaM2} m²`;
+        // v8.3.0 : cible TOUJOURS affichée + effective au rendu (jamais alarmiste)
+        const areaTextColor = "#fff";
+        const areaLabel = (divergence > 0.05) ? `${areaM2} m² · ${realAreaM2} eff.` : `${areaM2} m²`;
         unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
         unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${areaTextColor}" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
@@ -3039,18 +3040,19 @@ function polygonAreaPx(pts) {
 function commitUnitGeometry(label, uidx, patch) {
     const u = (cockpitState.scenarios[label].units || [])[uidx];
     if (!u) return;
-    historyPush(label);   // v8.2.0 — snapshot avant mutation pour undo/redo
+    historyPush(label);
+    // v8.3.0 — RÈGLE ABSOLUE : unit_size_m2 = surface CIBLE, jamais écrasée par la géométrie.
+    // La surface effective (post-clip parcelle) est calculée au rendu et affichée en info.
+    // On ne modifie unit_size_m2 QUE si patch.unit_size_m2 est fourni explicitement.
     if (patch.polygon) {
         u.polygon = patch.polygon;
-        const area = polygonAreaPx(patch.polygon);
-        if (area > 0) u.unit_size_m2 = Math.round(area);
         u.width_m = null; u.height_m = null;
     } else {
         if (patch.width_m != null) u.width_m = Number(patch.width_m.toFixed(2));
         if (patch.height_m != null) u.height_m = Number(patch.height_m.toFixed(2));
-        if (u.width_m && u.height_m) u.unit_size_m2 = Math.round(u.width_m * u.height_m);
         if (patch.polygon === null) u.polygon = null;
     }
+    if (patch.unit_size_m2 != null) u.unit_size_m2 = Number(patch.unit_size_m2);
     if (patch.offset_x_m != null) u.offset_x_m = Number(patch.offset_x_m.toFixed(2));
     if (patch.offset_y_m != null) u.offset_y_m = Number(patch.offset_y_m.toFixed(2));
     if (patch.rotation_deg != null) u.rotation_deg = Number(patch.rotation_deg);
@@ -3374,6 +3376,48 @@ const COMMANDS = {
         }
     },
 
+    // ─────── MEASURE — ME — v8.3.0 outil règle (mesure distance entre 2 points/arêtes) ───────
+    ME: {
+        label: "MEASURE",
+        cursor: "crosshair",
+        hint: "Clique le 1er point (endpoint, milieu, sommet, arête)",
+        onPick(ref, svgPt, label) {
+            if (!ref) { showToast("Snap sur un point ou une arête", true); return; }
+            const pt = _pickAsPoint(ref, svgPt);
+            if (CMD.state === "WAIT_1") {
+                CMD.picks[0] = { pt, label };
+                CMD.state = "WAIT_2";
+                updateCmdHUD("Clique le 2ᵉ point pour mesurer la distance");
+            } else if (CMD.state === "WAIT_2") {
+                const p1 = CMD.picks[0].pt;
+                const refs = _svgRefs[label];
+                const scale = refs ? refs.scale : 1;
+                const distPx = Math.hypot(pt.x - p1.x, pt.y - p1.y);
+                const distM = distPx / scale;
+                _cmdMeasureDraw(label, p1, pt, distM);
+                showToast(`Distance : ${distM.toFixed(2)} m`);
+                updateCmdHUD(`📏 ${distM.toFixed(2)} m · clique un nouveau 1er point (ESC pour quitter)`);
+                CMD.picks = [];
+                CMD.state = "WAIT_1";
+            }
+        },
+        onHover(ref, svgPt, label) {
+            if (CMD.state === "WAIT_2" && CMD.picks[0]) {
+                const pt = _pickAsPoint(ref, svgPt);
+                const p1 = CMD.picks[0].pt;
+                const refs = _svgRefs[label];
+                const scale = refs ? refs.scale : 1;
+                const distM = Math.hypot(pt.x - p1.x, pt.y - p1.y) / scale;
+                _cmdMeasurePreview(label, p1, pt, distM);
+                updateCmdHUD(`📏 ${distM.toFixed(2)} m · clique pour valider`);
+            }
+        },
+        onEscape() {
+            if (CMD.state === "WAIT_2") { CMD.picks = []; CMD.state = "WAIT_1"; clearGhostPreview(); return "Clique le 1er point"; }
+            return "EXIT";
+        }
+    },
+
     // ─────── MIRROR — MI — unité + 2 points définissant l'axe ───────
     MI: {
         label: "MIRROR",
@@ -3556,6 +3600,7 @@ function _cmdOffsetExecute(edgeRef, dm) {
     const shiftGY = dLocalX * Math.sin(rot) + dLocalY * Math.cos(rot);
     commitUnitGeometry(edgeRef.label, edgeRef.unit_idx, {
         width_m: w_m, height_m: h_m,
+        unit_size_m2: Math.round(w_m * h_m),   // v8.3.0 : OFFSET redéfinit volontairement la cible
         offset_x_m: (u.offset_x_m || 0) + shiftGX,
         offset_y_m: (u.offset_y_m || 0) - shiftGY,
         polygon: null
@@ -3668,6 +3713,7 @@ function _cmdTrimExtendExecute(boundary, edgeRef, clickPt) {
     if (!r) { showToast("Trim impossible (côté trop petit ou boundary parallèle)", true); return; }
     commitUnitGeometry(r.label, r.uidx, {
         width_m: r.width_m, height_m: r.height_m,
+        unit_size_m2: Math.round(r.width_m * r.height_m),   // v8.3.0 : TRIM = modif volontaire cible
         offset_x_m: r.offset_x_m, offset_y_m: r.offset_y_m,
         polygon: null
     });
@@ -3814,6 +3860,21 @@ function _reflectPointAcrossLine(p, a, b) {
     const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
     const proj = { x: a.x + t * dx, y: a.y + t * dy };
     return { x: 2 * proj.x - p.x, y: 2 * proj.y - p.y };
+}
+
+// ═════════════ v8.3.0 — MEASURE (outil règle) ═════════════
+function _cmdMeasurePreview(label, p1, p2, distM) {
+    const midX = (p1.x + p2.x) / 2, midY = (p1.y + p2.y) / 2;
+    const svg = `<line class="ghost-line" x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}" style="stroke:#FBBF24;stroke-width:1.8;stroke-dasharray:none"/>
+<circle cx="${p1.x.toFixed(1)}" cy="${p1.y.toFixed(1)}" r="3" fill="#FBBF24" pointer-events="none"/>
+<circle cx="${p2.x.toFixed(1)}" cy="${p2.y.toFixed(1)}" r="3" fill="#FBBF24" pointer-events="none"/>
+<rect x="${(midX-18).toFixed(1)}" y="${(midY-10).toFixed(1)}" width="36" height="14" rx="3" fill="#0B1120" stroke="#FBBF24" stroke-width="1" pointer-events="none"/>
+<text x="${midX.toFixed(1)}" y="${(midY+0.5).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#FBBF24" font-size="9" font-weight="700" font-family="Inter" pointer-events="none">${distM.toFixed(2)}m</text>`;
+    drawGhostPreview(label, svg);
+}
+function _cmdMeasureDraw(label, p1, p2, distM) {
+    // Persistent measure : reste affiché après clic (dans overlay)
+    _cmdMeasurePreview(label, p1, p2, distM);
 }
 
 // Attache les listeners drag une seule fois (délégation sur document)
@@ -4449,8 +4510,13 @@ function applyMoteurInitialLayout(label, L) {
     const layoutMode = L[`${label}_layout_mode`] || L.layout_mode || "";
     const typo = L[`${label}_typology_desc`] || L[`unit_mix_${label}`] || "";
     const justif = L[`${label}_config_justif`] || L.config_justification || "";
-    const pattern = detectLayoutPattern(layoutMode, typo, justif);
-    if (!pattern) return null;
+    let pattern = detectLayoutPattern(layoutMode, typo, justif);
+    // v8.3.0 — Fallback pattern : Jeremy veut TOUJOURS voir un placement initial.
+    // Défaut selon nombre d'unités : 1 = LAMELLE, 2 = SPLIT, 3-4 = U, 5+ = PLOT/compact
+    if (!pattern) {
+        const n = scenario.units.length;
+        pattern = n <= 1 ? "LAMELLE" : n === 2 ? "SPLIT_AV_AR" : n <= 4 ? "U" : "PLOT";
+    }
     const units = scenario.units;
     switch (pattern) {
         case "SPLIT_AV_AR": _layoutSplit(units); break;
