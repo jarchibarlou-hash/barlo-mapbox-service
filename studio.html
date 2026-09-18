@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.9-CLEANUP</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.10-PERSIST</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6565,7 +6565,7 @@ BARLO.mapbox.buildScenarioGeoJSON = function(units, parcelCentroidLatLon, scenar
 };
 
 // v10.8 — Bouton VALIDER : fige la géométrie manuelle actuelle et la persiste
-function validateScenarioImplantation(label) {
+async function validateScenarioImplantation(label) {
     const s = cockpitState.scenarios[label];
     if (!s || !s.units || s.units.length === 0) { showToast("Aucune unité à valider", true); return; }
     // Matérialise tous les polygons (si certains sont encore rect)
@@ -6580,7 +6580,7 @@ function validateScenarioImplantation(label) {
         target_area_m2: Number(u.unit_size_m2) || 0,
         actual_area_m2: Math.round(polygonAreaM2(u.polygon))
     }));
-    // GeoJSON pour Mapbox (à utiliser dans la Phase G ou export externe)
+    // GeoJSON pour Mapbox
     if (currentBody8D && currentBody8D.site_polygon) {
         const pts = currentBody8D.site_polygon.split(/[|;\n]/).map(p => {
             const [lat, lon] = p.trim().split(",").map(Number);
@@ -6592,13 +6592,68 @@ function validateScenarioImplantation(label) {
             s.geoJSON = BARLO.mapbox.buildScenarioGeoJSON(s.units, { lat: cLat, lon: cLon }, label);
         }
     }
-    // Save baseline pour history + toast
     const totalArea = s.units.reduce((a, u) => a + (Number(u.unit_size_m2) || 0), 0);
     const actualArea = s.units.reduce((a, u) => a + polygonAreaM2(u.polygon || []), 0);
-    showToast(`✅ Scénario ${label} validé : ${s.units.length} unités · ${Math.round(actualArea)}m² (cible ${totalArea}m²)`);
-    // Note : la persistance BDD durable arrivera en v10.4+ (migration SQL sb_lead_units polygon_json).
-    // En attendant, geoJSON est stocké dans cockpitState et transmis via override_units_detail à /generate-pptx.
     console.log(`[BARLO validate] Scénario ${label} :`, s.validatedGeometry, s.geoJSON);
+
+    // v11.10-FIX : PERSISTANCE VRAIE — POST /api/lead-units avec la géométrie COMPLÈTE
+    // Bug racine identifié : depuis v10.4+ un commentaire disait "persistance à faire". Elle ne l'a
+    // jamais été. Résultat : "Valider implantation" ne persistait qu'en RAM + console.log. Reload = tout perdu.
+    // Fix : envoie POST /api/lead-units/:ref avec tous les scénarios (A/B/C) et toute la géométrie.
+    const ref = (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
+    if (!ref) {
+        showToast(`⚠ Scénario ${label} validé en RAM uniquement (pas de lead_ref pour persister)`, true);
+        return;
+    }
+    // Construit le body avec les 3 scénarios (le POST est atomique par lead — remplace tout)
+    const unitsPayload = {};
+    for (const scen of ["A", "B", "C"]) {
+        const scS = cockpitState.scenarios[scen] || {};
+        unitsPayload[scen] = (scS.units || []).map((u, i) => ({
+            unit_index: u.unit_index || (i + 1),
+            unit_type: u.unit_type || "T3",
+            unit_name: u.unit_name || "",
+            unit_size_m2: Number(u.unit_size_m2) || 0,
+            placement_sector: u.placement_sector || null,
+            notes: u.notes || "",
+            // Géométrie riche → footprint_json côté serveur (v11.8-P0.3)
+            polygon: (u.polygon && Array.isArray(u.polygon)) ? u.polygon : null,
+            offset_x_m: u.offset_x_m != null ? Number(u.offset_x_m) : null,
+            offset_y_m: u.offset_y_m != null ? Number(u.offset_y_m) : null,
+            rotation_deg: u.rotation_deg != null ? Number(u.rotation_deg) : null,
+            width_m: u.width_m != null ? Number(u.width_m) : null,
+            height_m: u.height_m != null ? Number(u.height_m) : null,
+            shape_mode: u.shape_mode || null,
+            shape_type: u.shape_type || null,
+            pilotis: !!u.pilotis,
+            sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
+            etages_unit: u.etages_unit != null ? Number(u.etages_unit) : 0,
+            terrasse: !!u.terrasse,
+            balcon: !!u.balcon,
+            parking_ss: !!u.parking_ss,
+            notes_tech: u.notes_tech || ""
+        }));
+    }
+    try {
+        showToast(`⏳ Enregistrement scénario ${label}...`);
+        const res = await fetch(`${API}/api/lead-units/${encodeURIComponent(ref)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ units: unitsPayload })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+            console.error("[BARLO validate] POST failed:", res.status, data);
+            showToast(`❌ Enregistrement échoué : ${data.error || res.status}`, true);
+            return;
+        }
+        const geomCount = data.geometryPersisted || 0;
+        showToast(`✅ Scénario ${label} validé et enregistré : ${s.units.length} unités · ${Math.round(actualArea)}m² (cible ${totalArea}m²) · ${geomCount} géom persistée${geomCount > 1 ? "s" : ""}`);
+        console.log("[BARLO validate] POST OK:", data);
+    } catch (err) {
+        console.error("[BARLO validate] POST error:", err);
+        showToast(`❌ Erreur réseau enregistrement : ${err.message}`, true);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
