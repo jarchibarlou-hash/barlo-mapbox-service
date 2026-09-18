@@ -11065,8 +11065,312 @@ app.get("/api/moteur-feedback/insights", async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.11-3D-SYNC — Massing 3D synchronisé sur les unités individuelles
+// ═══════════════════════════════════════════════════════════════════════════════
+// Contexte : le pipeline /generate-massing (v72.x) extrude UN plateau global via
+// computeMassingPolygon. Il ne consomme jamais les unités individuelles du frontend.
+// Résultat : le client voit un bloc extrudé sans rapport avec les 3 unités éditées.
+//
+// Nouveau endpoint SÉPARÉ (safe, opt-in, ne touche pas /generate-massing) qui :
+//   1. Lit sb_lead_units.footprint_json (unités persistées v11.10)
+//   2. Convertit chaque u.polygon (mètres locaux) → GPS via l'inverse de toM()
+//   3. Construit un GeoJSON FeatureCollection (N features = N unités)
+//   4. Rend un massing 3D Mapbox avec N fill-extrusion (couleurs par typo)
+//   5. Screenshot puppeteer/browserless → upload Supabase Storage
+//   6. Met à jour PIPELINE.massing_scn_X_img_url pour que le prochain PPTX prenne la nouvelle image
+
+// Inverse de toM() : mètres locaux → lat/lon
+function fromM(xM, yM, cLat, cLon) {
+  const lat = cLat + (yM / R_EARTH) * 180 / Math.PI;
+  const lon = cLon + (xM / (R_EARTH * Math.cos(cLat * Math.PI / 180))) * 180 / Math.PI;
+  return { lat, lon };
+}
+
+// HTML Mapbox rendant N unités extrudées + parcelle en overlay
+function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken) {
+  // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], heightM, colorHex, floors }
+  const parcelGeoJSON = {
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] }
+  };
+  const unitsFeatures = unitsData.map((u, i) => ({
+    type: "Feature",
+    properties: {
+      id: u.id || i,
+      name: u.name || `unit_${i}`,
+      unit_type: u.type || "AUTRE",
+      height: u.heightM || 6,
+      base: 0,
+      color: u.colorHex || "#7098c8"
+    },
+    geometry: {
+      type: "Polygon",
+      coordinates: [[...u.polygonGeo.map(p => [p.lon, p.lat]), [u.polygonGeo[0].lon, u.polygonGeo[0].lat]]]
+    }
+  }));
+  const unitsGeoJSON = { type: "FeatureCollection", features: unitsFeatures };
+  // Collecte tous les vertices pour les afficher comme cercles (repères sommets)
+  const vertexFeatures = [];
+  unitsData.forEach((u, uIdx) => {
+    (u.polygonGeo || []).forEach((v, vIdx) => {
+      vertexFeatures.push({
+        type: "Feature",
+        properties: { unit_id: u.id || uIdx, vertex_idx: vIdx },
+        geometry: { type: "Point", coordinates: [v.lon, v.lat] }
+      });
+    });
+  });
+  const vertexGeoJSON = { type: "FeatureCollection", features: vertexFeatures };
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1280px; height: 1280px; overflow: hidden; background: #f2f0ec; }
+  #map { width: 1280px; height: 1280px; }
+  .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-group { display: none !important; }
+</style>
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+</head><body><div id="map"></div><script>
+(function() {
+  mapboxgl.accessToken = '${mapboxToken}';
+  const hektarStyle = {
+    "version": 8, "name": "Hektar",
+    "sources": { "composite": { "type": "vector", "url": "mapbox://mapbox.mapbox-streets-v8,mapbox.mapbox-terrain-v2" } },
+    "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+    "sprite": "mapbox://sprites/mapbox/light-v11",
+    "layers": [
+      { "id": "background", "type": "background", "paint": { "background-color": "#eae8e4" } },
+      { "id": "water", "type": "fill", "source": "composite", "source-layer": "water", "paint": { "fill-color": "#c4d4de" } },
+      { "id": "landuse-park", "type": "fill", "source": "composite", "source-layer": "landuse",
+        "filter": ["match", ["get", "class"], ["park", "grass", "cemetery", "wood", "scrub", "pitch"], true, false],
+        "paint": { "fill-color": "#dddcd6" } },
+      { "id": "landuse-urban", "type": "fill", "source": "composite", "source-layer": "landuse",
+        "filter": ["match", ["get", "class"], ["residential", "commercial", "industrial"], true, false],
+        "paint": { "fill-color": "#e4e2de" } },
+      { "id": "road-case-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#707070", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 28, 16, 56, 17, 80, 18, 100, 19, 120] } },
+      { "id": "road-case-street", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#888888", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 12, 16, 28, 17, 40, 18, 56, 19, 72] } },
+      { "id": "road-fill-secondary", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["secondary", "tertiary", "primary", "trunk", "motorway"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#808080", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 24, 16, 48, 17, 72, 18, 92, 19, 112] } },
+      { "id": "road-fill-street", "type": "line", "source": "composite", "source-layer": "road",
+        "filter": ["match", ["get", "class"], ["street", "street_limited", "service"], true, false],
+        "layout": { "line-cap": "round", "line-join": "round" },
+        "paint": { "line-color": "#989898", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48, 19, 64] } }
+    ]
+  };
+  const map = new mapboxgl.Map({
+    container: 'map', style: hektarStyle,
+    center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
+    antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false
+  });
+  map.on('style.load', () => {
+    map.setTerrain(null);
+    map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
+    // 3D buildings mapbox (contexte urbain autour)
+    map.addLayer({
+      id: '3d-buildings', source: 'composite', 'source-layer': 'building',
+      filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
+      paint: {
+        'fill-extrusion-color': '#f0ede8',
+        'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true
+      }
+    });
+    // Parcelle : contour rouge
+    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
+      paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.0 } }, '3d-buildings');
+    map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
+      paint: { 'line-color': '#c04020', 'line-width': 5, 'line-opacity': 1.0 } });
+    // v11.11 — UNITÉS INDIVIDUELLES extrudées (couleur par unité)
+    map.addSource('units', { type: 'geojson', data: ${JSON.stringify(unitsGeoJSON)} });
+    map.addLayer({
+      id: 'units-extrusion', type: 'fill-extrusion', source: 'units',
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-height': ['get', 'height'],
+        'fill-extrusion-base': ['get', 'base'],
+        'fill-extrusion-opacity': 0.92,
+        'fill-extrusion-vertical-gradient': true
+      }
+    });
+    // Contour footprint (base sol) — noir fin pour lisibilité
+    map.addLayer({ id: 'units-outline', type: 'line', source: 'units',
+      paint: { 'line-color': '#1a1a1a', 'line-width': 1.4, 'line-opacity': 0.85 } });
+    // Sommets bâtiments — cercles pour repères
+    map.addSource('unit-vertices', { type: 'geojson', data: ${JSON.stringify(vertexGeoJSON)} });
+    map.addLayer({ id: 'unit-vertices-circles', type: 'circle', source: 'unit-vertices',
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#FBBF24',
+        'circle-stroke-color': '#1a1a1a',
+        'circle-stroke-width': 1.2,
+        'circle-opacity': 0.95
+      }
+    });
+  });
+  let rendered = false;
+  map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
+  setTimeout(() => { window.__MAP_READY = true; }, 15000);
+})();
+</script></body></html>`;
+}
+
+// Endpoint : régénère le massing 3D depuis les unités persistées d'un lead+scénario
+// Body : { lead_ref: "BARLO-XXXX", scenario: "A"|"B"|"C", zoom?: 18.5, bearing?: 0, upload?: true }
+app.post("/api/regen-massing-from-units", async (req, res) => {
+  const t0 = Date.now();
+  const { lead_ref, scenario, zoom = 18.5, bearing = 0, upload = true } = req.body || {};
+  if (!lead_ref || !scenario) return res.status(400).json({ ok: false, error: "lead_ref et scenario requis" });
+  const scen = String(scenario).toUpperCase();
+  if (!["A", "B", "C"].includes(scen)) return res.status(400).json({ ok: false, error: "scenario doit être A/B/C" });
+  console.log(`═══ /api/regen-massing-from-units v11.11 ═══ lead=${lead_ref} scen=${scen}`);
+
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  try {
+    // 1. Lit les unités persistées + footprint_json
+    const { data: rows, error } = await sb
+      .from("sb_lead_units")
+      .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, footprint_json")
+      .eq("lead_ref", lead_ref)
+      .eq("scenario", scen)
+      .order("unit_index", { ascending: true });
+    if (error) throw new Error(`Supabase: ${error.message}`);
+    if (!rows || rows.length === 0) return res.status(404).json({ ok: false, error: `Aucune unité pour ${lead_ref} scenario ${scen}. Clique 'Valider implantation' d'abord.` });
+    console.log(`[REGEN-3D] ${rows.length} unités lues depuis sb_lead_units`);
+
+    // 2. Lit la parcelle GPS depuis polygon_drafts (source de vérité GPS)
+    const { data: drafts, error: dErr } = await sb
+      .from("polygon_drafts")
+      .select("polygon_points")
+      .eq("temp_id", lead_ref)
+      .limit(1);
+    if (dErr) throw new Error(`polygon_drafts: ${dErr.message}`);
+    let parcelCoords = [];
+    if (drafts && drafts[0] && drafts[0].polygon_points) {
+      // Format "lat,lon|lat,lon|..."
+      parcelCoords = String(drafts[0].polygon_points).split(/[|;\n]/).map(p => {
+        const [lat, lon] = p.trim().split(",").map(Number);
+        return { lat, lon };
+      }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+    }
+    if (parcelCoords.length < 3) {
+      return res.status(400).json({ ok: false, error: `Polygone parcelle GPS introuvable pour ${lead_ref} (polygon_drafts vide)` });
+    }
+    console.log(`[REGEN-3D] Parcelle GPS lue : ${parcelCoords.length} sommets`);
+
+    // 3. Centroïde parcelle (origine du repère mètres locaux — même convention que le frontend)
+    const cLat = parcelCoords.reduce((a, p) => a + p.lat, 0) / parcelCoords.length;
+    const cLon = parcelCoords.reduce((a, p) => a + p.lon, 0) / parcelCoords.length;
+
+    // 4. Palette couleurs par typologie
+    const colorByType = (t) => {
+      const T = String(t || "").toUpperCase();
+      if (T === "COMMERCE") return "#e07830";
+      if (T === "BUREAU") return "#8B5CF6";
+      if (T === "ATELIER") return "#6B7280";
+      if (T.startsWith("T")) return "#3a7ac0"; // T1/T2/T3/T4/T5 = logements bleu
+      return "#7098c8";
+    };
+
+    // 5. Construit unitsData : polygonGeo (mètres → GPS via fromM), hauteur (étages × 3m + pilotis)
+    const unitsData = [];
+    const rejected = [];
+    for (const row of rows) {
+      const fp = row.footprint_json && typeof row.footprint_json === "object" ? row.footprint_json : null;
+      if (!fp || !fp.polygon || !Array.isArray(fp.polygon) || fp.polygon.length < 3) {
+        rejected.push({ index: row.unit_index, name: row.unit_name, reason: "polygon absent" });
+        continue;
+      }
+      // Support des 2 schémas {x,y} et {x_m,y_m}
+      const polygonGeo = fp.polygon.map(p => {
+        const xm = p.x_m != null ? p.x_m : p.x;
+        const ym = p.y_m != null ? p.y_m : p.y;
+        return fromM(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
+      });
+      const etages = Number(fp.etages_unit) || 1;
+      const pilotisH = fp.pilotis ? 3 : 0;
+      const heightM = etages * 3 + pilotisH;
+      unitsData.push({
+        id: row.unit_index,
+        name: row.unit_name || `Unit ${row.unit_index}`,
+        type: row.unit_type,
+        polygonGeo,
+        heightM,
+        floors: etages,
+        colorHex: colorByType(row.unit_type)
+      });
+    }
+    console.log(`[REGEN-3D] ${unitsData.length} unités converties GPS, ${rejected.length} rejetées`);
+    if (unitsData.length === 0) {
+      return res.status(400).json({ ok: false, error: "Aucune unité avec polygon exploitable", rejected });
+    }
+
+    // 6. Génère HTML + screenshot Puppeteer
+    const html = generateMultiUnitMassingHTML(
+      { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN
+    );
+    if (!BROWSERLESS_TOKEN) return res.status(503).json({ ok: false, error: "BROWSERLESS_TOKEN manquant" });
+    let browser = null, page = null;
+    try {
+      browser = await puppeteer.connect({ browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_TOKEN}` });
+      page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 1280, deviceScaleFactor: 2 });
+      await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
+      await new Promise(r => setTimeout(r, 1500));
+      const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+      console.log(`[REGEN-3D] Screenshot OK (${screenshotBuf.length} bytes)`);
+
+      // 7. Upload Supabase Storage
+      let publicUrl = null;
+      if (upload && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+        const ts = Date.now();
+        const path = `hektar/${lead_ref}/scenario_${scen}_massing_multi_${ts}.png`;
+        const up = await sb.storage.from("massing-images").upload(path, screenshotBuf, {
+          contentType: "image/png", upsert: false
+        });
+        if (up.error) {
+          console.warn(`[REGEN-3D] Upload Supabase Storage failed: ${up.error.message}`);
+        } else {
+          const { data: pub } = sb.storage.from("massing-images").getPublicUrl(path);
+          publicUrl = pub && pub.publicUrl ? pub.publicUrl : null;
+          console.log(`[REGEN-3D] Uploaded → ${publicUrl}`);
+        }
+      }
+
+      const ms = Date.now() - t0;
+      res.json({
+        ok: true, lead_ref, scenario: scen,
+        units_rendered: unitsData.length, units_rejected: rejected.length,
+        parcel_vertices: parcelCoords.length,
+        image_url: publicUrl,
+        image_base64: publicUrl ? null : `data:image/png;base64,${screenshotBuf.toString("base64")}`,
+        duration_ms: ms
+      });
+    } finally {
+      try { if (page) await page.close(); } catch (_) {}
+      try { if (browser) await browser.disconnect(); } catch (_) {}
+    }
+  } catch (err) {
+    console.error(`[REGEN-3D] ${lead_ref}/${scen}: ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
-  console.log(`BARLO v7.1.0-cockpit-refonte on port ${PORT}`);
+  console.log(`BARLO v11.11-3D-SYNC on port ${PORT}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);

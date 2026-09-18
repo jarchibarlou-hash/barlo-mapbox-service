@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.10-PERSIST</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.11-3D-SYNC</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -876,6 +876,7 @@ function scenarioPanelTemplate(L) {
             <span class="c-toolbar-label" style="color:#A78BFA">Solver :</span>
             <button type="button" class="c-tb-btn c-tb-btn-cyan" style="border-color:#A78BFA;color:#A78BFA" onclick="runSolverForScenario('${L}')" title="🧠 Génère plusieurs implantations valides via BARLO Site Layout Solver (multi-candidats + scoring + diversity)">🧠 Générer propositions</button>
             <button type="button" class="c-tb-btn" style="border-color:#22C55E;color:#22C55E" onclick="validateScenarioImplantation('${L}')" title="✅ Fige la géométrie finale : sauvegarde les u.polygon comme scénario BARLO officiel (envoyé au PPTX et exportable Mapbox)">✅ Valider implantation</button>
+            <button type="button" class="c-tb-btn" style="border-color:#F59E0B;color:#F59E0B" onclick="regenMassing3D('${L}')" title="🎨 Régénère l'image massing 3D depuis tes unités éditées (Mapbox + extrusion N polygones). Le prochain PPTX utilisera cette image.">🎨 Régénérer 3D</button>
           </div>
           <div class="c-toolbar-group">
             <span class="c-toolbar-label">Axe :</span>
@@ -6653,6 +6654,58 @@ async function validateScenarioImplantation(label) {
     } catch (err) {
         console.error("[BARLO validate] POST error:", err);
         showToast(`❌ Erreur réseau enregistrement : ${err.message}`, true);
+    }
+}
+
+// v11.11-3D-SYNC — Régénère l'image massing 3D depuis les unités éditées
+// Précondition : le scénario doit avoir été validé (POST /api/lead-units → footprint_json en base)
+async function regenMassing3D(label) {
+    const ref = (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
+    if (!ref) { showToast("⚠ Aucun lead_ref (charge un lead d'abord)", true); return; }
+    const s = cockpitState.scenarios[label] || {};
+    if (!s.units || s.units.length === 0) { showToast("Aucune unité pour ce scénario", true); return; }
+    // Vérif que les units ont des polygons — sinon on rappelle à l'utilisateur de Valider d'abord
+    const withPoly = s.units.filter(u => u.polygon && Array.isArray(u.polygon) && u.polygon.length >= 3);
+    if (withPoly.length === 0) {
+        showToast("⚠ Clique '✅ Valider implantation' d'abord (aucun polygon à extruder)", true);
+        return;
+    }
+    try {
+        showToast(`🎨 Régénération 3D scénario ${label} en cours (~10-20s)...`);
+        const res = await fetch(`${API}/api/regen-massing-from-units`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lead_ref: ref, scenario: label, zoom: 18.5, bearing: 0, upload: true })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+            const msg = data.error || `HTTP ${res.status}`;
+            if (msg.includes("Clique 'Valider implantation'")) {
+                showToast("⚠ " + msg, true);
+            } else {
+                showToast(`❌ Régénération 3D échouée : ${msg}`, true);
+            }
+            console.error("[REGEN-3D] fail:", res.status, data);
+            return;
+        }
+        console.log("[REGEN-3D] OK:", data);
+        showToast(`✅ Massing 3D régénéré : ${data.units_rendered} unités extrudées (${data.duration_ms}ms). Le prochain PPTX utilisera cette image.`);
+        // Affiche l'image dans un overlay pour vérification visuelle immédiate
+        if (data.image_url || data.image_base64) {
+            const src = data.image_url || data.image_base64;
+            const overlay = document.createElement("div");
+            overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:2rem";
+            overlay.innerHTML = `<div style="max-width:90%;max-height:90%;background:#0B1120;border-radius:8px;padding:1rem;text-align:center">
+                <img src="${src}" style="max-width:100%;max-height:75vh;border-radius:4px;box-shadow:0 8px 40px rgba(0,0,0,0.5)"/>
+                <div style="color:#F8FAFC;margin-top:.8rem;font-size:.8rem">Massing 3D scénario ${label} · ${data.units_rendered} unités · ${data.duration_ms}ms</div>
+                <div style="color:#94A3B8;margin-top:.3rem;font-size:.65rem">Clique n'importe où pour fermer</div>
+            </div>`;
+            overlay.onclick = () => overlay.remove();
+            document.body.appendChild(overlay);
+        }
+    } catch (err) {
+        console.error("[REGEN-3D] network error:", err);
+        showToast(`❌ Erreur réseau régénération 3D : ${err.message}`, true);
     }
 }
 
