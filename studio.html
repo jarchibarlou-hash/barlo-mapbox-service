@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.8-P0-FIXES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.9-CLEANUP</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -799,12 +799,13 @@ function scenarioPanelTemplate(L) {
           </label>
           <label>Layout (change → réapplique)
             <select id="cLayout${L}" data-scn="${L}" data-field="layout" onchange="reapplyPatternFromDropdown('${L}',this.value)">
+              <option value="OPTIMIZED">🧠 Optimisé (packer)</option>
               <option value="">Auto (moteur)</option>
-              <option value="SPLIT_AV_AR">SPLIT_AV_AR (2 volumes)</option>
-              <option value="SUPERPOSE">SUPERPOSE (1 volume compact)</option>
               <option value="U">U (cour Sud)</option>
-              <option value="LAMELLE">LAMELLE (3:1 sur Sud)</option>
+              <option value="LAMELLE">LAMELLE (3:1)</option>
               <option value="PLOT">PLOT (compact grille)</option>
+              <option value="SUPERPOSE">SUPERPOSE (1 volume compact)</option>
+              <!-- v11.9-CLEANUP : SPLIT_AV_AR retiré du dropdown (legacy écrasé par PACKED au load) -->
             </select>
           </label>
           <label>SDP cible (m²)
@@ -869,7 +870,7 @@ function scenarioPanelTemplate(L) {
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','T')" title="T — barre horizontale Nord + verticale Sud">╤ T</button>
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SUPERPOSE')" title="Superposé — bandes empilées mitoyennes">▤ Superposé</button>
             <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','DECALE')" title="Décalé — unités en zigzag alterné">↯ Décalé</button>
-            <button type="button" class="c-tb-btn" onclick="reapplyPatternFromDropdown('${L}','SPLIT_AV_AR')" title="Split — 2 groupes séparés Nord/Sud">⚌ Split</button>
+            <!-- v11.9-CLEANUP : bouton SPLIT_AV_AR retiré (legacy, plus utilisé) -->
           </div>
           <div class="c-toolbar-group">
             <span class="c-toolbar-label" style="color:#A78BFA">Solver :</span>
@@ -7278,18 +7279,23 @@ function populateCockpitFromLead(L, units) {
         setInput(`cUnits${label}`, s.units_count);
         setInput(`cGap${label}`, s.gap_m);
         setInput(`cScnRat${label}`, s.rationale);
-        // v10.14 — Détecte pattern initial suggéré par le moteur
-        const pattern = applyMoteurInitialLayout(label, L);
-        if (pattern) console.log(`[MOTEUR-INIT] Scénario ${label} : pattern ${pattern} détecté`);
+        // v10.14 — Détecte pattern initial suggéré par le moteur (silencieux depuis v11.9)
+        applyMoteurInitialLayout(label, L);
         captureBaselineFromMoteur(label, L);
         renderUnitsTable(label);
         renderParcelSvg(label);   // → popule _svgRefs[label].siteAnalysis
         renderMoteurBrief(label);
         // v11.0 — Placement initial via OPTIMIZED (PACKED) qui garantit inParcel via grid packing
-        // Le pattern détecté par le moteur (LAMELLE/U/etc.) est disponible via les boutons pattern
-        if (cockpitState.scenarios[label]._pendingInitialPattern) {
+        // v11.8-P0.3 — Si des unités ont déjà footprint_json restauré depuis Supabase, on NE re-solve PAS
+        // (le user les a validées avant, on doit préserver leur position). Solver déclenché uniquement
+        // si aucune unit n'a de polygon custom (nouveau lead ou reset).
+        const hasRestoredGeom = (cockpitState.scenarios[label].units || []).some(u => u.polygon && Array.isArray(u.polygon) && u.polygon.length >= 3);
+        if (cockpitState.scenarios[label]._pendingInitialPattern && !hasRestoredGeom) {
             delete cockpitState.scenarios[label]._pendingInitialPattern;
-            try { reapplyPatternFromDropdown(label, "OPTIMIZED"); } catch(e) { console.warn("[MOTEUR-INIT] Solver failed:", e); }
+            try { reapplyPatternFromDropdown(label, "OPTIMIZED"); } catch(_) { /* silent */ }
+        } else if (hasRestoredGeom) {
+            // Nettoie le flag sans re-solver (géométrie déjà en state)
+            delete cockpitState.scenarios[label]._pendingInitialPattern;
         }
         historyReset(label);
     });
