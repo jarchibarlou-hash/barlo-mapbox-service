@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.15-LIVE</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.16-PPTX-URL</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6707,8 +6707,18 @@ async function regenMassing3D(label) {
             return;
         }
         console.log("[REGEN-3D] OK:", data);
-        const applyMsg = data.applied_to_pipeline ? " · ✅ PIPELINE mise à jour" : " · ⚠ PIPELINE pas mise à jour (URL applied manuellement)";
+        const applyMsg = data.applied_to_pipeline ? " · ✅ PIPELINE mise à jour" : " · ⚠ PIPELINE pas mise à jour";
         showToast(`✅ Massing 3D régénéré : ${data.units_rendered} unités (zoom ${(data.zoom_used||0).toFixed(1)}, ${data.duration_ms}ms)${applyMsg}`);
+        // v11.16 — CRITIQUE : override currentBody8D.images.scenario_X_massing pour que le
+        // prochain POST /generate-pptx envoie la NOUVELLE URL (server.js:10360 fait
+        // `images: p.images || {}` — il ne relit PAS la Sheet mise à jour par apply_to_pipeline).
+        if (data.image_url && currentBody8D) {
+            if (!currentBody8D.images || typeof currentBody8D.images !== "object") currentBody8D.images = {};
+            currentBody8D.images[`scenario_${label}_massing`] = data.image_url;
+            // Aussi les champs flat au cas où (rétro-compat multi-lecteurs)
+            currentBody8D[`massing_scn_${label}_img_url`] = data.image_url;
+            console.log(`[REGEN-3D] currentBody8D.images.scenario_${label}_massing = ${data.image_url}`);
+        }
         // v11.12 : refresh du panneau IMAGES pour voir la nouvelle vignette Massing X
         try {
             const imgEl = document.querySelector(`img[data-massing-scn="${label}"]`);
