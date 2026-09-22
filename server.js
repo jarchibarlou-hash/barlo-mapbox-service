@@ -11204,10 +11204,18 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
   map.on('style.load', () => {
     map.setTerrain(null);
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    // 3D buildings mapbox (contexte urbain autour)
+    // v11.17 — Parcelle chargée AVANT le layer 3d-buildings pour permettre le filtre `within`
+    const parcelData = ${JSON.stringify(parcelGeoJSON)};
+    map.addSource('parcel', { type: 'geojson', data: parcelData });
+    // v11.17 — 3D buildings Mapbox EXCLUANT ceux qui intersectent la parcelle (filter within)
+    // Ainsi le bâti existant sous la parcelle est masqué, nos unités extrudées deviennent visibles.
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
-      filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 13,
+      filter: ['all',
+        ['==', 'extrude', 'true'],
+        ['!', ['within', parcelData]]
+      ],
+      type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': '#f0ede8',
         'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
@@ -11215,8 +11223,7 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
         'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true
       }
     });
-    // Parcelle : contour rouge
-    map.addSource('parcel', { type: 'geojson', data: ${JSON.stringify(parcelGeoJSON)} });
+    // Parcelle : fill invisible (juste pour z-order) + contour rouge visible
     map.addLayer({ id: 'parcel-fill', type: 'fill', source: 'parcel',
       paint: { 'fill-color': '#dcc8a0', 'fill-opacity': 0.0 } }, '3d-buildings');
     map.addLayer({ id: 'parcel-outline', type: 'line', source: 'parcel',
