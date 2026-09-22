@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.11-3D-SYNC</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.12-CENTROID</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6672,10 +6672,12 @@ async function regenMassing3D(label) {
     }
     try {
         showToast(`🎨 Régénération 3D scénario ${label} en cours (~10-20s)...`);
+        // v11.12 : zoom auto (bbox parcelle), centroïde géométrique, apply_to_pipeline=true
+        // pour que le prochain PPTX consomme automatiquement cette nouvelle image
         const res = await fetch(`${API}/api/regen-massing-from-units`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lead_ref: ref, scenario: label, zoom: 18.5, bearing: 0, upload: true })
+            body: JSON.stringify({ lead_ref: ref, scenario: label, bearing: 0, upload: true, apply_to_pipeline: true })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
@@ -6689,7 +6691,15 @@ async function regenMassing3D(label) {
             return;
         }
         console.log("[REGEN-3D] OK:", data);
-        showToast(`✅ Massing 3D régénéré : ${data.units_rendered} unités extrudées (${data.duration_ms}ms). Le prochain PPTX utilisera cette image.`);
+        const applyMsg = data.applied_to_pipeline ? " · ✅ PIPELINE mise à jour" : " · ⚠ PIPELINE pas mise à jour (URL applied manuellement)";
+        showToast(`✅ Massing 3D régénéré : ${data.units_rendered} unités (zoom ${(data.zoom_used||0).toFixed(1)}, ${data.duration_ms}ms)${applyMsg}`);
+        // v11.12 : refresh du panneau IMAGES pour voir la nouvelle vignette Massing X
+        try {
+            const imgEl = document.querySelector(`img[data-massing-scn="${label}"]`);
+            if (imgEl && data.image_url) {
+                imgEl.src = data.image_url + "?t=" + Date.now();  // cache-bust
+            }
+        } catch (_) {}
         // Affiche l'image dans un overlay pour vérification visuelle immédiate
         if (data.image_url || data.image_base64) {
             const src = data.image_url || data.image_base64;

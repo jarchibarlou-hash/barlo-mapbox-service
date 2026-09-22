@@ -11087,6 +11087,53 @@ function fromM(xM, yM, cLat, cLon) {
   return { lat, lon };
 }
 
+// v11.12 — CENTROÏDE GÉOMÉTRIQUE (formule shoelace) pour matcher EXACTEMENT ce que le
+// frontend utilise dans studio.html:analyzeParcel + BARLO.geometry.polygonCentroid.
+// La moyenne arithmétique des sommets != vrai centroïde pour polygon non-régulier.
+// Sans ce fix : les u.polygon (mètres locaux) arrivent décalés en GPS car repère différent.
+function polygonCentroidGeo(coords) {
+  // coords : array of {lat, lon}. Projette d'abord vers un repère métrique local plat,
+  // calcule le centroïde shoelace, reprojette vers GPS.
+  const n = coords.length;
+  if (n < 3) return { lat: coords[0].lat, lon: coords[0].lon };
+  // Origine provisoire = moyenne arithmétique (juste pour projection locale)
+  const meanLat = coords.reduce((a, p) => a + p.lat, 0) / n;
+  const meanLon = coords.reduce((a, p) => a + p.lon, 0) / n;
+  // Projette en mètres locaux
+  const xy = coords.map(p => toM(p.lat, p.lon, meanLat, meanLon));
+  // Shoelace centroid en mètres
+  let cxM = 0, cyM = 0, A = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const cross = xy[i].x * xy[j].y - xy[j].x * xy[i].y;
+    A += cross;
+    cxM += (xy[i].x + xy[j].x) * cross;
+    cyM += (xy[i].y + xy[j].y) * cross;
+  }
+  A = A / 2;
+  if (Math.abs(A) < 1e-9) return { lat: meanLat, lon: meanLon };
+  cxM = cxM / (6 * A);
+  cyM = cyM / (6 * A);
+  // Reprojette en GPS
+  return fromM(cxM, cyM, meanLat, meanLon);
+}
+
+// v11.12 — Calcul auto du zoom Mapbox depuis la diagonale bbox de la parcelle.
+// Cible : parcelle occupe ~40% du viewport (zoomé de près pour voir les unités).
+function autoZoomForParcel(parcelCoords, cLat) {
+  if (!parcelCoords || parcelCoords.length < 3) return 19;
+  const xy = parcelCoords.map(p => toM(p.lat, p.lon, cLat, parcelCoords[0].lon));
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of xy) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const diameter_m = Math.max(maxX - minX, maxY - minY);
+  // Formule empirique : zoom 20 pour 25m, zoom 19 pour 50m, zoom 18 pour 100m
+  const zoom = Math.max(17, Math.min(20.5, 21 - Math.log2(Math.max(diameter_m, 10) / 20)));
+  return zoom;
+}
+
 // HTML Mapbox rendant N unités extrudées + parcelle en overlay
 function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken) {
   // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], heightM, colorHex, floors }
@@ -11230,7 +11277,7 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
 // Body : { lead_ref: "BARLO-XXXX", scenario: "A"|"B"|"C", zoom?: 18.5, bearing?: 0, upload?: true }
 app.post("/api/regen-massing-from-units", async (req, res) => {
   const t0 = Date.now();
-  const { lead_ref, scenario, zoom = 18.5, bearing = 0, upload = true } = req.body || {};
+  const { lead_ref, scenario, zoom: zoomOverride = null, bearing = 0, upload = true, apply_to_pipeline = false } = req.body || {};
   if (!lead_ref || !scenario) return res.status(400).json({ ok: false, error: "lead_ref et scenario requis" });
   const scen = String(scenario).toUpperCase();
   if (!["A", "B", "C"].includes(scen)) return res.status(400).json({ ok: false, error: "scenario doit être A/B/C" });
@@ -11270,9 +11317,13 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     }
     console.log(`[REGEN-3D] Parcelle GPS lue : ${parcelCoords.length} sommets`);
 
-    // 3. Centroïde parcelle (origine du repère mètres locaux — même convention que le frontend)
-    const cLat = parcelCoords.reduce((a, p) => a + p.lat, 0) / parcelCoords.length;
-    const cLon = parcelCoords.reduce((a, p) => a + p.lon, 0) / parcelCoords.length;
+    // 3. v11.12 — VRAI centroïde géométrique (shoelace) pour matcher le frontend
+    // (studio.html:BARLO.geometry.polygonCentroid). CRITIQUE : la moyenne arithmétique des
+    // sommets ne matche pas — les u.polygon arrivent décalés en GPS.
+    const centGeo = polygonCentroidGeo(parcelCoords);
+    const cLat = centGeo.lat;
+    const cLon = centGeo.lon;
+    console.log(`[REGEN-3D] Centroïde géométrique : lat=${cLat.toFixed(7)}, lon=${cLon.toFixed(7)}`);
 
     // 4. Palette couleurs par typologie
     const colorByType = (t) => {
@@ -11317,7 +11368,10 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Aucune unité avec polygon exploitable", rejected });
     }
 
-    // 6. Génère HTML + screenshot Puppeteer
+    // 6. v11.12 — Auto-zoom depuis la bbox parcelle (sauf override)
+    const zoom = zoomOverride != null ? Number(zoomOverride) : autoZoomForParcel(parcelCoords, cLat);
+    console.log(`[REGEN-3D] Zoom auto = ${zoom.toFixed(2)}`);
+    // Génère HTML + screenshot Puppeteer
     const html = generateMultiUnitMassingHTML(
       { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN
     );
@@ -11350,13 +11404,43 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         }
       }
 
+      // v11.12 — Applique l'URL à PIPELINE Google Sheet pour que le prochain PPTX l'utilise
+      let appliedToPipeline = false;
+      if (apply_to_pipeline && publicUrl && APPS_SCRIPT_URL) {
+        try {
+          const refsData = await gasGet("readPipelineRefs");
+          const pipeRow = (refsData.rows || []).find(r => String(r.ref || r.barlo_code || "").trim().toUpperCase() === lead_ref.toUpperCase());
+          if (pipeRow && pipeRow.rowNum) {
+            const currentRow = await gasGet("readPipelineRow", { row: pipeRow.rowNum });
+            const headers = await gasGet("readPipelineHeaders");
+            const colName = `massing_scn_${scen}_img_url`;
+            const colIdx = (headers.headers || []).indexOf(colName);
+            if (colIdx >= 0) {
+              const newRow = (currentRow.row || []).slice();
+              newRow[colIdx] = publicUrl;
+              await gasPost("writePipelineRow", { rowNum: pipeRow.rowNum, row: newRow });
+              appliedToPipeline = true;
+              console.log(`[REGEN-3D] URL appliquée à PIPELINE row ${pipeRow.rowNum} col ${colName}`);
+            } else {
+              console.warn(`[REGEN-3D] colonne ${colName} introuvable dans PIPELINE headers`);
+            }
+          } else {
+            console.warn(`[REGEN-3D] lead_ref ${lead_ref} introuvable dans PIPELINE`);
+          }
+        } catch (e) {
+          console.warn(`[REGEN-3D] apply_to_pipeline failed: ${e.message}`);
+        }
+      }
+
       const ms = Date.now() - t0;
       res.json({
         ok: true, lead_ref, scenario: scen,
         units_rendered: unitsData.length, units_rejected: rejected.length,
         parcel_vertices: parcelCoords.length,
+        zoom_used: zoom,
         image_url: publicUrl,
         image_base64: publicUrl ? null : `data:image/png;base64,${screenshotBuf.toString("base64")}`,
+        applied_to_pipeline: appliedToPipeline,
         duration_ms: ms
       });
     } finally {
