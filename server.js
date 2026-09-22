@@ -11172,6 +11172,8 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
 </style>
 <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
 <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+<!-- v11.21 : Turf.js pour intersect precis cote client -->
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 </head><body><div id="map"></div><script>
 (function() {
   mapboxgl.accessToken = '${mapboxToken}';
@@ -11215,24 +11217,18 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
   map.on('style.load', () => {
     map.setTerrain(null);
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    // v11.19 - Parcelle brute + buffer 5m (masque bati existant a l'interieur seulement)
+    // v11.21 - Parcelle GeoJSON (utilisee par hideIntersectingBuildings apres load)
     const parcelData = ${JSON.stringify(parcelGeoJSON)};
-    const parcelMask = ${JSON.stringify(parcelMaskGeoJSON)};
     map.addSource('parcel', { type: 'geojson', data: parcelData });
-    // v11.19 - 3D buildings Mapbox : opacity 0 dans la zone buffer parcelle, normale ailleurs
-    // Plus safe qu'un filter (evite bug where 'within' cache tout si polygon complexe).
+    // 3D buildings Mapbox : rendu normal. Le masquage se fait ensuite via map.setFilter
+    // dans hideIntersectingBuildings (turf.booleanIntersects contre la parcelle bufferisee).
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['==', 'extrude', 'true'],
       type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': '#f0ede8',
-        // v11.19 : height = 0 dans la zone buffer parcelle (masque effet visuel)
-        // fill-extrusion-height supporte data expressions, contrairement a opacity.
-        'fill-extrusion-height': ['case',
-          ['within', parcelMask], 0,
-          ['case', ['has', 'height'], ['get', 'height'], 7]
-        ],
+        'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
         'fill-extrusion-base': 0,
         'fill-extrusion-opacity': 0.92,
         'fill-extrusion-vertical-gradient': true
@@ -11270,8 +11266,42 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       }
     });
   });
+  // v11.21 : detection precise intersect côté client + masquage batiments concernes
+  let hiddenBuildingIds = new Set();
+  let intersectDone = false;
+  function hideIntersectingBuildings() {
+    if (intersectDone) return;
+    try {
+      const buildings = map.queryRenderedFeatures({ layers: ['3d-buildings'] });
+      if (!buildings || buildings.length === 0) return;
+      const parcelBuffered = turf.buffer(parcelData, 2, { units: 'meters' });
+      buildings.forEach(b => {
+        if (!b.geometry || !b.id) return;
+        try {
+          if (turf.booleanIntersects(b.geometry, parcelBuffered)) {
+            hiddenBuildingIds.add(b.id);
+          }
+        } catch (_) {}
+      });
+      if (hiddenBuildingIds.size > 0) {
+        // Applique un filter qui exclut les IDs detectes
+        const ids = Array.from(hiddenBuildingIds);
+        map.setFilter('3d-buildings', ['all',
+          ['==', 'extrude', 'true'],
+          ['!', ['in', ['id'], ['literal', ids]]]
+        ]);
+        console.log('[MASK] Hidden', ids.length, 'buildings intersecting parcelle');
+      }
+      intersectDone = true;
+    } catch (e) { console.warn('[MASK] failed:', e.message); intersectDone = true; }
+  }
   let rendered = false;
-  map.on('idle', () => { if (rendered) return; rendered = true; setTimeout(() => { window.__MAP_READY = true; }, 2500); });
+  map.on('idle', () => {
+    hideIntersectingBuildings();
+    if (rendered) return; rendered = true;
+    // Extra wait apres masquage pour laisser Mapbox redessiner
+    setTimeout(() => { window.__MAP_READY = true; }, 3000);
+  });
   setTimeout(() => { window.__MAP_READY = true; }, 15000);
 })();
 </script></body></html>`;
