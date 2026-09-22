@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.31-RED-CIRCLES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.32-LABELS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6659,7 +6659,8 @@ async function validateScenarioImplantation(label) {
 
 // v11.11-3D-SYNC — Régénère l'image massing 3D depuis les unités éditées
 // v11.22 — Accepte hiddenIds pour override du choix de masquage
-async function regenMassing3D(label, hiddenIds) {
+// v11.32 — Accepte aussi hiddenLabels (numeros 1,2,3,4) en fallback matching
+async function regenMassing3D(label, hiddenIds, hiddenLabels) {
     const ref = (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
     if (!ref) { showToast("⚠ Aucun lead_ref (charge un lead d'abord)", true); return; }
     const s = cockpitState.scenarios[label] || {};
@@ -6692,8 +6693,9 @@ async function regenMassing3D(label, hiddenIds) {
                 lead_ref: ref, scenario: label, bearing: 0, upload: true, apply_to_pipeline: true,
                 units_live: unitsPayload,
                 parcel_polygon_string: parcelGeo,
-                // v11.22 : si hiddenIds fourni, on masque exactement ceux-là. Sinon défaut = tous les détectés.
-                hidden_building_ids: Array.isArray(hiddenIds) ? hiddenIds : null
+                hidden_building_ids: Array.isArray(hiddenIds) ? hiddenIds : null,
+                // v11.32 : envoie aussi les labels (numeros 1,2,3,4) pour matching robuste cote serveur
+                hidden_building_labels: Array.isArray(hiddenLabels) ? hiddenLabels : null
             })
         });
         const data = await res.json().catch(() => ({}));
@@ -6810,14 +6812,25 @@ async function regenMassing3D(label, hiddenIds) {
             if (btnRegen) btnRegen.addEventListener("click", () => {
                 const listEl = overlay.querySelector(`#buildingList_${label}`);
                 const checkboxes = listEl ? listEl.querySelectorAll('input[type="checkbox"]') : [];
-                const selectedIds = Array.from(checkboxes).filter(cb => cb.checked).map(cb => {
+                // v11.32 : envoie aussi les LABELS (numeros 1,2,3,4) en plus des IDs
+                // pour matching cote serveur meme si tri detecte varie entre requetes.
+                const selectedIds = [];
+                const selectedLabels = [];
+                Array.from(checkboxes).forEach((cb, idx) => {
+                    if (!cb.checked) return;
                     const raw = cb.getAttribute("data-bid");
-                    // Les IDs Mapbox sont parfois numériques, parfois string — on essaie de préserver le type
                     const n = Number(raw);
-                    return isNaN(n) ? raw : n;
+                    selectedIds.push(isNaN(n) ? raw : n);
+                    // Trouve le numero du label (1, 2, 3, 4) via le row
+                    const row = cb.closest('label.mask-item');
+                    if (row) {
+                        const allRows = Array.from(listEl.querySelectorAll('label.mask-item'));
+                        const posIdx = allRows.indexOf(row);
+                        if (posIdx >= 0) selectedLabels.push(posIdx + 1);
+                    }
                 });
                 overlay.remove();
-                regenMassing3D(label, selectedIds);
+                regenMassing3D(label, selectedIds, selectedLabels);
             });
             if (btnClose) btnClose.addEventListener("click", () => overlay.remove());
         }

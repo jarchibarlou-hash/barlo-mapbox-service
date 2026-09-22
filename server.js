@@ -11118,7 +11118,7 @@ function autoZoomForParcel(parcelCoords, cLat) {
 
 // HTML Mapbox rendant N unités extrudées + parcelle en overlay
 // hiddenBuildingIds : array optionnel d'IDs Mapbox composite/building à masquer (choix user)
-function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken, hiddenBuildingIds) {
+function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken, hiddenBuildingIds, hiddenBuildingLabels) {
   // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], heightM, colorHex, floors }
   const parcelGeoJSON = {
     type: "Feature",
@@ -11269,7 +11269,9 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     });
   });
   // v11.23 : detection intersect robuste (querySourceFeatures + composite ID synthetique)
+  // v11.32 : hiddenLabels = numeros 1,2,3,4 des batis a masquer (matching par index detected)
   const preHiddenIds = ${JSON.stringify(hiddenBuildingIds || [])};
+  const preHiddenLabels = ${JSON.stringify(hiddenBuildingLabels || [])};
   window.__DETECTED_BUILDINGS = [];
   window.__MASKED_IDS = preHiddenIds.slice();
   window.__MASK_DIAG = { attempts: 0, source_loaded: false, features_found: 0, intersected: 0, errors: [] };
@@ -11383,23 +11385,30 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       detected.sort((a, b) => (secOrder[a.sector] - secOrder[b.sector]) || (b.area_m2 - a.area_m2));
       window.__DETECTED_BUILDINGS = detected;
 
-      // Masquage : on ne peut pas filter par id inventé côté Mapbox si l'original était null.
-      // Solution : utiliser une fill-extrusion-height data-driven qui met height=0 pour les buildings
-      // dont la géometrie intersecte la parcelle. On construit un GeoJSON des buildings à masquer.
-      const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
-      window.__MASKED_IDS = idsToMask;
-      // v11.31 : labels numerotes 1, 2, 3, 4 avec COULEUR selon etat masquage
-      // ROUGE = masque · JAUNE = visible. Ainsi Jeremy voit visuellement quel batiment
-      // est cible AVANT/APRES regeneration.
-      const preHiddenSet = new Set((preHiddenIds || []).map(String));
+      // v11.32 : labels numerotes 1, 2, 3, 4 avec COULEUR selon etat masquage
+      // Matching PRIORITAIRE par LABEL (numero 1..4 = position dans detected) car
+      // les IDs Mapbox composite peuvent varier entre 2 requetes.
+      const preHiddenLabelSet = new Set((preHiddenLabels || []).map(Number));
+      const preHiddenIdSet = new Set((preHiddenIds || []).map(String));
+      const anyPreHidden = preHiddenLabelSet.size > 0 || preHiddenIdSet.size > 0;
       const labelFeatures = detected.map((d, i) => {
-        const isMasked = preHiddenSet.size > 0 ? preHiddenSet.has(String(d.id)) : true;  // defaut : tous masques
+        const numero = i + 1;
+        let isMasked;
+        if (anyPreHidden) {
+          // Match par LABEL en priorite (stable), fallback ID
+          isMasked = preHiddenLabelSet.has(numero) || preHiddenIdSet.has(String(d.id));
+        } else {
+          // 1er appel : defaut = tous masques
+          isMasked = true;
+        }
         return {
           type: 'Feature',
-          properties: { label: String(i + 1), masked: isMasked ? 1 : 0 },
+          properties: { label: String(numero), masked: isMasked ? 1 : 0 },
           geometry: { type: 'Point', coordinates: [d.centroid[1], d.centroid[0]] }
         };
       });
+      // Log detaille pour debug
+      console.log('[MASK-LABEL] preHiddenLabels=', JSON.stringify(preHiddenLabels), 'labelFeatures.masked=', labelFeatures.map(f => f.properties.masked).join(','));
       if (labelFeatures.length > 0) {
         try {
           if (map.getLayer('bldg-labels-circles')) map.removeLayer('bldg-labels-circles');
@@ -11437,10 +11446,20 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
         } catch (e) { window.__MASK_DIAG.errors.push('labels: ' + e.message); }
       }
 
+      // v11.32 : construction de idsToMask basee sur LABELS (numeros) en priorite
+      // preHiddenLabels contient les numeros 1..N des batis a masquer.
+      // detected[i] correspond au bati numero (i+1).
+      let idsToMask;
+      if (preHiddenLabels && preHiddenLabels.length > 0) {
+        idsToMask = detected.filter((d, i) => preHiddenLabels.includes(i + 1)).map(d => d.id);
+      } else if (preHiddenIds && preHiddenIds.length > 0) {
+        idsToMask = preHiddenIds;
+      } else {
+        idsToMask = detected.map(d => d.id);  // defaut : tous
+      }
+      window.__MASKED_IDS = idsToMask;
       if (idsToMask.length > 0) {
-        // v11.30 : APPROCHE DEFINITIVE : REMOVE + RE-ADD le layer 3d-buildings avec filter natif.
-        // Les IDs Mapbox composite sont valides (diag confirme has_id: true).
-        // Le remove+add force un rebuild complet du layer, le filter est definitivement applique.
+        // v11.30 : REMOVE + RE-ADD le layer 3d-buildings avec filter natif.
         const nativeIds = [];
         const geomsToMask = [];
         buildings.forEach((b, idx) => {
@@ -11542,7 +11561,8 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     upload = true, apply_to_pipeline = false,
     units_live = null,               // v11.15
     parcel_polygon_string = null,    // v11.15
-    hidden_building_ids = null       // v11.22 : IDs Mapbox à masquer choisis par user (sinon: masque tous les intersect détectés)
+    hidden_building_ids = null,      // v11.22 : IDs Mapbox à masquer
+    hidden_building_labels = null    // v11.32 : numéros 1,2,3,4 (fallback matching par index)
   } = req.body || {};
   if (!lead_ref || !scenario) return res.status(400).json({ ok: false, error: "lead_ref et scenario requis" });
   const scen = String(scenario).toUpperCase();
@@ -11665,10 +11685,15 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     // 6. v11.12 — Auto-zoom depuis la bbox parcelle (sauf override)
     const zoom = zoomOverride != null ? Number(zoomOverride) : autoZoomForParcel(parcelCoords, cLat);
     console.log(`[REGEN-3D] Zoom auto = ${zoom.toFixed(2)}`);
+    // v11.32 : log detaille des IDs et labels a masquer
+    if (hidden_building_ids || hidden_building_labels) {
+      console.log(`[REGEN-3D] Mask request: ids=${JSON.stringify(hidden_building_ids)} labels=${JSON.stringify(hidden_building_labels)}`);
+    }
     // Génère HTML + screenshot Puppeteer
     const html = generateMultiUnitMassingHTML(
       { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN,
-      Array.isArray(hidden_building_ids) ? hidden_building_ids : null
+      Array.isArray(hidden_building_ids) ? hidden_building_ids : null,
+      Array.isArray(hidden_building_labels) ? hidden_building_labels : null
     );
     if (!BROWSERLESS_TOKEN) return res.status(503).json({ ok: false, error: "BROWSERLESS_TOKEN manquant" });
     let browser = null, page = null;
