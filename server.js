@@ -11215,11 +11215,12 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
     antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false
   });
+  // v11.26 : parcelData au niveau IIFE pour etre accessible par detectAndMaskBuildings()
+  const parcelData = ${JSON.stringify(parcelGeoJSON)};
+  const parcelMask = ${JSON.stringify(parcelMaskGeoJSON)};
   map.on('style.load', () => {
     map.setTerrain(null);
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    // v11.21 - Parcelle GeoJSON (utilisee par hideIntersectingBuildings apres load)
-    const parcelData = ${JSON.stringify(parcelGeoJSON)};
     map.addSource('parcel', { type: 'geojson', data: parcelData });
     // 3D buildings Mapbox : rendu normal. Le masquage se fait ensuite via map.setFilter
     // dans hideIntersectingBuildings (turf.booleanIntersects contre la parcelle bufferisee).
