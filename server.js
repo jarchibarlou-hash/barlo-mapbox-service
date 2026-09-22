@@ -11313,32 +11313,67 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       if (!buildings || buildings.length === 0) return;
 
       const parcelBuffered = turf.buffer(parcelData, 2, { units: 'meters' });
+      const parcelBbox = turf.bbox(parcelBuffered);  // [minX, minY, maxX, maxY] en lon/lat
       const parcelCentroid = turf.centroid(parcelData);
+      // v11.25 : log sample du 1er building pour debug format
+      if (buildings.length > 0 && !window.__MASK_DIAG.sample) {
+        try {
+          const s = buildings[0];
+          window.__MASK_DIAG.sample = {
+            has_geometry: !!s.geometry,
+            geom_type: s.geometry && s.geometry.type,
+            first_coord: s.geometry && s.geometry.coordinates && JSON.stringify(s.geometry.coordinates).substring(0, 200),
+            parcel_bbox: parcelBbox,
+            id: s.id, has_id: s.id != null,
+            props_sample: s.properties && Object.keys(s.properties).slice(0, 6).join(',')
+          };
+        } catch (_) {}
+      }
       const detected = [];
       const seenKeys = new Set();
-      const fingerprintToSyntheticId = new Map();
       let synCounter = 0;
+      // v11.25 : fallback intersect en 3 methodes (bbox pre-check + turf.intersect + turf.boolean-intersects)
+      function testIntersect(buildingGeom) {
+        try {
+          // Method 1 : bbox pre-check (rapide, rejette 99% des non-candidats)
+          const bBbox = turf.bbox({ type: 'Feature', geometry: buildingGeom });
+          const [bMinX, bMinY, bMaxX, bMaxY] = bBbox;
+          const [pMinX, pMinY, pMaxX, pMaxY] = parcelBbox;
+          const bboxOverlap = !(bMaxX < pMinX || bMinX > pMaxX || bMaxY < pMinY || bMinY > pMaxY);
+          if (!bboxOverlap) return false;
+          // Method 2 : test Feature wrappe (plus safe)
+          const bFeature = { type: 'Feature', properties: {}, geometry: buildingGeom };
+          if (turf.booleanIntersects(bFeature, parcelBuffered)) return true;
+          // Method 3 : cast en Polygon simple si MultiPolygon (parfois bug Turf)
+          if (buildingGeom.type === 'MultiPolygon' && buildingGeom.coordinates.length > 0) {
+            for (const poly of buildingGeom.coordinates) {
+              const singleFeature = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: poly } };
+              if (turf.booleanIntersects(singleFeature, parcelBuffered)) return true;
+            }
+          }
+          return false;
+        } catch (e) { window.__MASK_DIAG.errors.push('testIntersect: ' + e.message); return false; }
+      }
       buildings.forEach((b, idx) => {
         if (!b.geometry) return;
         const fp = buildingFingerprint(b, idx);
         if (seenKeys.has(fp)) return;
         try {
-          if (turf.booleanIntersects(b.geometry, parcelBuffered)) {
+          if (testIntersect(b.geometry)) {
             seenKeys.add(fp);
-            const centroid = turf.centroid(b);
+            const bFeature = { type: 'Feature', properties: b.properties || {}, geometry: b.geometry };
+            const centroid = turf.centroid(bFeature);
             const [bLon, bLat] = centroid.geometry.coordinates;
             const bearingDeg = turf.bearing(parcelCentroid, centroid);
             const compassDeg = (bearingDeg + 360) % 360;
             const sector = sectorFromBearing(compassDeg);
-            const areaM2 = Math.round(turf.area(b));
+            const areaM2 = Math.round(turf.area(bFeature));
             const height = (b.properties && (b.properties.height || b.properties.render_height)) || 6;
-            // On utilise le fp comme ID stable pour setFilter
             detected.push({
               id: fp, sector, bearing_deg: Math.round(compassDeg),
               area_m2: areaM2, height_m: Math.round(height),
               centroid: [+bLat.toFixed(7), +bLon.toFixed(7)]
             });
-            fingerprintToSyntheticId.set(fp, b.id != null ? b.id : ('syn_' + (synCounter++)));
           }
         } catch (e) { window.__MASK_DIAG.errors.push(e.message); }
       });
