@@ -11123,11 +11123,13 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] }
   };
-  // v11.19 — Buffer 5m autour parcelle pour masquer aussi les bâtiments qui débordent légèrement
-  // sans toucher le contexte urbain au-delà. Turf gère la buffer géodésique en mètres.
+  // v11.20 — Buffer 15m autour parcelle. Le within Mapbox exige que TOUT le bâtiment soit
+  // dans le polygon → un bâti qui déborde même de 1m dehors reste visible avec buffer 5m.
+  // Buffer 15m capte tous les bâtiments qui touchent la parcelle en débordant d'au plus 15m
+  // à l'extérieur (couvre les cas Douala où le voisin construit en limite).
   let parcelMaskGeoJSON = parcelGeoJSON;
   try {
-    const buffered = turf.buffer(parcelGeoJSON, 5, { units: "meters" });
+    const buffered = turf.buffer(parcelGeoJSON, 15, { units: "meters" });
     if (buffered && buffered.geometry) parcelMaskGeoJSON = buffered;
   } catch (e) {
     console.warn("[REGEN-3D] turf.buffer failed, fallback sur parcelle brute:", e.message);
