@@ -11080,13 +11080,15 @@ app.get("/api/moteur-feedback/insights", async (req, res) => {
 //   5. Screenshot puppeteer/browserless → upload Supabase Storage
 //   6. Met à jour PIPELINE.massing_scn_X_img_url pour que le prochain PPTX prenne la nouvelle image
 
-// v11.13 — Inverse EXACT du repère utilisé par studio.html:renderParcelSvg l.3527-3535 :
-//   - Origine : MOYENNE ARITHMÉTIQUE des sommets GPS (pas centroïde shoelace)
-//   - Convention : y+ = SUD (studio fait y = -(lat-cLat)*rad*R pour avoir Nord-en-haut en SVG)
-// Sans cette inversion, les polygons arrivent décalés + miroirs verticalement en GPS.
+// v11.14 — Repère EXACT du studio pour u.polygon :
+//   - Origine : moyenne arithmétique des sommets GPS (studio.html:3528-3529)
+//   - Convention : y+ = NORD (studio fait DOUBLE INVERSION : parcelPtsM ligne 3587
+//     `y: -(p.y - cySvg)/scale` où p.y est déjà y-down SVG issu de y=-(lat-cLat)*R).
+//     Commentaire explicite l.3586: "Convention Model : y+ = Nord."
+//     Donc u.polygon a y+ = Nord dans son repère mètres.
 function fromM_studio(xM, yM, cLat, cLon) {
-  // yM > 0 dans le studio = SUD → lat plus petite. Donc on soustrait (yM/R) pour retomber Nord.
-  const lat = cLat - (yM / R_EARTH) * 180 / Math.PI;
+  // yM positif = Nord → lat plus grande (on ADDITIONNE)
+  const lat = cLat + (yM / R_EARTH) * 180 / Math.PI;
   const lon = cLon + (xM / (R_EARTH * Math.cos(cLat * Math.PI / 180))) * 180 / Math.PI;
   return { lat, lon };
 }
