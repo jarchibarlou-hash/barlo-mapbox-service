@@ -11080,42 +11080,22 @@ app.get("/api/moteur-feedback/insights", async (req, res) => {
 //   5. Screenshot puppeteer/browserless → upload Supabase Storage
 //   6. Met à jour PIPELINE.massing_scn_X_img_url pour que le prochain PPTX prenne la nouvelle image
 
-// Inverse de toM() : mètres locaux → lat/lon
-function fromM(xM, yM, cLat, cLon) {
-  const lat = cLat + (yM / R_EARTH) * 180 / Math.PI;
+// v11.13 — Inverse EXACT du repère utilisé par studio.html:renderParcelSvg l.3527-3535 :
+//   - Origine : MOYENNE ARITHMÉTIQUE des sommets GPS (pas centroïde shoelace)
+//   - Convention : y+ = SUD (studio fait y = -(lat-cLat)*rad*R pour avoir Nord-en-haut en SVG)
+// Sans cette inversion, les polygons arrivent décalés + miroirs verticalement en GPS.
+function fromM_studio(xM, yM, cLat, cLon) {
+  // yM > 0 dans le studio = SUD → lat plus petite. Donc on soustrait (yM/R) pour retomber Nord.
+  const lat = cLat - (yM / R_EARTH) * 180 / Math.PI;
   const lon = cLon + (xM / (R_EARTH * Math.cos(cLat * Math.PI / 180))) * 180 / Math.PI;
   return { lat, lon };
 }
-
-// v11.12 — CENTROÏDE GÉOMÉTRIQUE (formule shoelace) pour matcher EXACTEMENT ce que le
-// frontend utilise dans studio.html:analyzeParcel + BARLO.geometry.polygonCentroid.
-// La moyenne arithmétique des sommets != vrai centroïde pour polygon non-régulier.
-// Sans ce fix : les u.polygon (mètres locaux) arrivent décalés en GPS car repère différent.
-function polygonCentroidGeo(coords) {
-  // coords : array of {lat, lon}. Projette d'abord vers un repère métrique local plat,
-  // calcule le centroïde shoelace, reprojette vers GPS.
+// Centroïde moyenne arithmétique (exactement comme le studio, pas shoelace)
+function polygonCentroidStudio(coords) {
   const n = coords.length;
-  if (n < 3) return { lat: coords[0].lat, lon: coords[0].lon };
-  // Origine provisoire = moyenne arithmétique (juste pour projection locale)
   const meanLat = coords.reduce((a, p) => a + p.lat, 0) / n;
   const meanLon = coords.reduce((a, p) => a + p.lon, 0) / n;
-  // Projette en mètres locaux
-  const xy = coords.map(p => toM(p.lat, p.lon, meanLat, meanLon));
-  // Shoelace centroid en mètres
-  let cxM = 0, cyM = 0, A = 0;
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    const cross = xy[i].x * xy[j].y - xy[j].x * xy[i].y;
-    A += cross;
-    cxM += (xy[i].x + xy[j].x) * cross;
-    cyM += (xy[i].y + xy[j].y) * cross;
-  }
-  A = A / 2;
-  if (Math.abs(A) < 1e-9) return { lat: meanLat, lon: meanLon };
-  cxM = cxM / (6 * A);
-  cyM = cyM / (6 * A);
-  // Reprojette en GPS
-  return fromM(cxM, cyM, meanLat, meanLon);
+  return { lat: meanLat, lon: meanLon };
 }
 
 // v11.12 — Calcul auto du zoom Mapbox depuis la diagonale bbox de la parcelle.
@@ -11317,13 +11297,13 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     }
     console.log(`[REGEN-3D] Parcelle GPS lue : ${parcelCoords.length} sommets`);
 
-    // 3. v11.12 — VRAI centroïde géométrique (shoelace) pour matcher le frontend
-    // (studio.html:BARLO.geometry.polygonCentroid). CRITIQUE : la moyenne arithmétique des
-    // sommets ne matche pas — les u.polygon arrivent décalés en GPS.
-    const centGeo = polygonCentroidGeo(parcelCoords);
-    const cLat = centGeo.lat;
-    const cLon = centGeo.lon;
-    console.log(`[REGEN-3D] Centroïde géométrique : lat=${cLat.toFixed(7)}, lon=${cLon.toFixed(7)}`);
+    // 3. v11.13 — Centroïde MOYENNE ARITHMÉTIQUE (identique studio.html:3528-3529)
+    // Le studio utilise la moyenne des sommets GPS comme origine du repère mètres locaux,
+    // PAS le centroïde géométrique shoelace. v11.12 était faux dans les 2 sens.
+    const centStudio = polygonCentroidStudio(parcelCoords);
+    const cLat = centStudio.lat;
+    const cLon = centStudio.lon;
+    console.log(`[REGEN-3D] Origine (moyenne arith. studio) : lat=${cLat.toFixed(7)}, lon=${cLon.toFixed(7)}`);
 
     // 4. Palette couleurs par typologie
     const colorByType = (t) => {
@@ -11344,11 +11324,12 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         rejected.push({ index: row.unit_index, name: row.unit_name, reason: "polygon absent" });
         continue;
       }
+      // v11.13 — Utilise fromM_studio (y+ = SUD comme le studio) au lieu de fromM (y+ = Nord)
       // Support des 2 schémas {x,y} et {x_m,y_m}
       const polygonGeo = fp.polygon.map(p => {
         const xm = p.x_m != null ? p.x_m : p.x;
         const ym = p.y_m != null ? p.y_m : p.y;
-        return fromM(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
+        return fromM_studio(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
       });
       const etages = Number(fp.etages_unit) || 1;
       const pilotisH = fp.pilotis ? 3 : 0;
