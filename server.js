@@ -11436,7 +11436,9 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       }
 
       if (idsToMask.length > 0) {
-        // v11.28 : masquage via ID Mapbox natif + fallback overlay opaque
+        // v11.30 : APPROCHE DEFINITIVE : REMOVE + RE-ADD le layer 3d-buildings avec filter natif.
+        // Les IDs Mapbox composite sont valides (diag confirme has_id: true).
+        // Le remove+add force un rebuild complet du layer, le filter est definitivement applique.
         const nativeIds = [];
         const geomsToMask = [];
         buildings.forEach((b, idx) => {
@@ -11446,45 +11448,63 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
             geomsToMask.push(b.geometry);
           }
         });
-        // Filter Mapbox natif : exclut les buildings dont l'id est dans notre liste
+
         if (nativeIds.length > 0) {
           try {
-            map.setFilter('3d-buildings', ['all',
-              ['==', 'extrude', 'true'],
-              ['!', ['in', ['id'], ['literal', nativeIds]]]
-            ]);
-            console.log('[MASK] setFilter with', nativeIds.length, 'native IDs');
-          } catch (e) { console.warn('[MASK] setFilter failed:', e.message); }
+            // Retire l'ancien layer
+            if (map.getLayer('3d-buildings')) map.removeLayer('3d-buildings');
+            // Recree avec filter EXCLUANT nos IDs, INSERT AVANT le layer parcel-outline
+            // pour que le contour parcelle reste visible par-dessus.
+            const beforeId = map.getLayer('parcel-outline') ? 'parcel-outline' : undefined;
+            map.addLayer({
+              id: '3d-buildings',
+              source: 'composite',
+              'source-layer': 'building',
+              filter: ['all',
+                ['==', 'extrude', 'true'],
+                ['!', ['in', ['id'], ['literal', nativeIds]]]
+              ],
+              type: 'fill-extrusion',
+              minzoom: 13,
+              paint: {
+                'fill-extrusion-color': '#f0ede8',
+                'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
+                'fill-extrusion-base': 0,
+                'fill-extrusion-opacity': 0.92,
+                'fill-extrusion-vertical-gradient': true
+              }
+            }, beforeId);
+            console.log('[MASK] Recreated 3d-buildings layer excluding', nativeIds.length, 'IDs');
+            map.triggerRepaint();
+          } catch (e) { console.warn('[MASK] removeLayer+addLayer failed:', e.message); }
         }
-        // Approche 2 en complement : overlay opaque BEIGE (couleur fond) pile sur les geometries a masquer
-        // Force le rendu a masquer meme si setFilter n'a pas d'effet (safe cascade).
+
+        // v11.30 : Cascade de securite - overlay opaque en DERNIER layer pour couvrir tout residuel
         if (geomsToMask.length > 0) {
           const maskFC = {
             type: 'FeatureCollection',
             features: geomsToMask.map(g => ({ type: 'Feature', properties: {}, geometry: g }))
           };
-          if (!map.getSource('bldg-mask-src')) {
-            map.addSource('bldg-mask-src', { type: 'geojson', data: maskFC });
-          } else {
-            map.getSource('bldg-mask-src').setData(maskFC);
-          }
-          // Overlay fill-extrusion couleur background hauteur = max building alentour + 5m
-          if (!map.getLayer('bldg-mask-cover')) {
-            map.addLayer({
-              id: 'bldg-mask-cover',
-              source: 'bldg-mask-src',
-              type: 'fill-extrusion',
-              paint: {
-                'fill-extrusion-color': '#eae8e4',
-                'fill-extrusion-height': 50,   // 50m suffit pour tout batiment residentiel Douala
-                'fill-extrusion-base': 0,
-                'fill-extrusion-opacity': 1.0,
-                'fill-extrusion-vertical-gradient': false
-              }
-            });
-          }
-          console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked (setFilter+overlay)');
+          if (map.getLayer('bldg-mask-cover')) map.removeLayer('bldg-mask-cover');
+          if (map.getSource('bldg-mask-src')) map.removeSource('bldg-mask-src');
+          map.addSource('bldg-mask-src', { type: 'geojson', data: maskFC });
+          // Ajoute AU-DESSUS de 3d-buildings mais SOUS les unites BARLO et les labels
+          const beforeId = map.getLayer('units-extrusion') ? 'units-extrusion' : undefined;
+          map.addLayer({
+            id: 'bldg-mask-cover',
+            source: 'bldg-mask-src',
+            type: 'fill-extrusion',
+            paint: {
+              'fill-extrusion-color': '#eae8e4',
+              'fill-extrusion-height': 100,   // 100m pour depasser toute construction Douala
+              'fill-extrusion-base': 0,
+              'fill-extrusion-opacity': 1.0,
+              'fill-extrusion-vertical-gradient': false
+            }
+          }, beforeId);
+          console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked (filter+overlay h=100m under units)');
         }
+        map.triggerRepaint();
       }
       intersectDone = true;
     } catch (e) { console.warn('[MASK] failed:', e.message); window.__MASK_DIAG.errors.push(e.message); intersectDone = true; }
