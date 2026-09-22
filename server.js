@@ -11204,11 +11204,11 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
   map.on('style.load', () => {
     map.setTerrain(null);
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    // v11.17 — Parcelle chargée AVANT le layer 3d-buildings pour permettre le filtre `within`
+    // v11.17 - Parcelle chargee AVANT le layer 3d-buildings pour permettre le filtre within
     const parcelData = ${JSON.stringify(parcelGeoJSON)};
     map.addSource('parcel', { type: 'geojson', data: parcelData });
-    // v11.17 — 3D buildings Mapbox EXCLUANT ceux qui intersectent la parcelle (filter within)
-    // Ainsi le bâti existant sous la parcelle est masqué, nos unités extrudées deviennent visibles.
+    // v11.17 - 3D buildings Mapbox EXCLUANT ceux qui intersectent la parcelle (filter within)
+    // Le bati existant sous la parcelle est masque, nos unites extrudees deviennent visibles.
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
       filter: ['all',
