@@ -11267,16 +11267,13 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       }
     });
   });
-  // v11.22 : detection precise intersect + collecte metadata (sector cardinal, height, area)
-  // Expose window.__DETECTED_BUILDINGS pour extraction Puppeteer.
-  // Si preHiddenIds est fourni (deuxieme regen apres choix user), on masque seulement ceux-la
-  // sans re-detecter.
+  // v11.23 : detection intersect robuste (querySourceFeatures + composite ID synthetique)
   const preHiddenIds = ${JSON.stringify(hiddenBuildingIds || [])};
   window.__DETECTED_BUILDINGS = [];
   window.__MASKED_IDS = preHiddenIds.slice();
+  window.__MASK_DIAG = { attempts: 0, source_loaded: false, features_found: 0, intersected: 0, errors: [] };
   let intersectDone = false;
   function sectorFromBearing(deg) {
-    // 0 = N, 90 = E, 180 = S, 270 = W
     const d = ((deg % 360) + 360) % 360;
     if (d < 22.5 || d >= 337.5) return 'N';
     if (d < 67.5) return 'NE';
@@ -11287,63 +11284,122 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     if (d < 292.5) return 'W';
     return 'NW';
   }
+  // Fingerprint unique par building (fallback si feature.id absent)
+  function buildingFingerprint(f, idx) {
+    if (f.id != null) return String(f.id);
+    // Composite : coords du premier vertex + surface (quasi-unique)
+    try {
+      const c = f.geometry && f.geometry.coordinates && f.geometry.coordinates[0] && f.geometry.coordinates[0][0];
+      if (c) return 'syn_' + c[0].toFixed(6) + '_' + c[1].toFixed(6);
+    } catch (_) {}
+    return 'idx_' + idx;
+  }
   function detectAndMaskBuildings() {
     if (intersectDone) return;
+    window.__MASK_DIAG.attempts++;
     try {
-      const buildings = map.queryRenderedFeatures({ layers: ['3d-buildings'] });
+      // Attend que la source composite soit vraiment chargee
+      const sourceLoaded = map.isSourceLoaded('composite');
+      window.__MASK_DIAG.source_loaded = sourceLoaded;
+      if (!sourceLoaded) return;
+
+      // querySourceFeatures : retourne geometries COMPLETES (pas clippees aux tuiles)
+      // vs queryRenderedFeatures qui clipping per tile.
+      const buildings = map.querySourceFeatures('composite', {
+        sourceLayer: 'building',
+        filter: ['==', 'extrude', 'true']
+      });
+      window.__MASK_DIAG.features_found = buildings.length;
       if (!buildings || buildings.length === 0) return;
+
       const parcelBuffered = turf.buffer(parcelData, 2, { units: 'meters' });
       const parcelCentroid = turf.centroid(parcelData);
-      const [pcLon, pcLat] = parcelCentroid.geometry.coordinates;
       const detected = [];
-      const seenIds = new Set();
-      buildings.forEach(b => {
-        if (!b.geometry || b.id == null) return;
-        if (seenIds.has(b.id)) return;
+      const seenKeys = new Set();
+      const fingerprintToSyntheticId = new Map();
+      let synCounter = 0;
+      buildings.forEach((b, idx) => {
+        if (!b.geometry) return;
+        const fp = buildingFingerprint(b, idx);
+        if (seenKeys.has(fp)) return;
         try {
           if (turf.booleanIntersects(b.geometry, parcelBuffered)) {
-            seenIds.add(b.id);
+            seenKeys.add(fp);
             const centroid = turf.centroid(b);
             const [bLon, bLat] = centroid.geometry.coordinates;
             const bearingDeg = turf.bearing(parcelCentroid, centroid);
-            // bearing = -180..180 avec 0=N, 90=E, 180=S, -90=W → convert to 0..360
             const compassDeg = (bearingDeg + 360) % 360;
             const sector = sectorFromBearing(compassDeg);
             const areaM2 = Math.round(turf.area(b));
             const height = (b.properties && (b.properties.height || b.properties.render_height)) || 6;
+            // On utilise le fp comme ID stable pour setFilter
             detected.push({
-              id: b.id, sector, bearing_deg: Math.round(compassDeg),
+              id: fp, sector, bearing_deg: Math.round(compassDeg),
               area_m2: areaM2, height_m: Math.round(height),
               centroid: [+bLat.toFixed(7), +bLon.toFixed(7)]
             });
+            fingerprintToSyntheticId.set(fp, b.id != null ? b.id : ('syn_' + (synCounter++)));
           }
-        } catch (_) {}
+        } catch (e) { window.__MASK_DIAG.errors.push(e.message); }
       });
-      // Ordre : N, NE, E, SE, S, SW, W, NW
+      window.__MASK_DIAG.intersected = detected.length;
       const secOrder = { 'N':0,'NE':1,'E':2,'SE':3,'S':4,'SW':5,'W':6,'NW':7 };
       detected.sort((a, b) => (secOrder[a.sector] - secOrder[b.sector]) || (b.area_m2 - a.area_m2));
       window.__DETECTED_BUILDINGS = detected;
-      // Si preHiddenIds fourni : on masque exactement ceux-la (choix user).
-      // Sinon (premier appel) : on masque TOUS les detectes par defaut.
+
+      // Masquage : on ne peut pas filter par id inventé côté Mapbox si l'original était null.
+      // Solution : utiliser une fill-extrusion-height data-driven qui met height=0 pour les buildings
+      // dont la géometrie intersecte la parcelle. On construit un GeoJSON des buildings à masquer.
       const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
       window.__MASKED_IDS = idsToMask;
       if (idsToMask.length > 0) {
-        map.setFilter('3d-buildings', ['all',
-          ['==', 'extrude', 'true'],
-          ['!', ['in', ['id'], ['literal', idsToMask]]]
-        ]);
-        console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked');
+        // Reconstruit un MultiPolygon des geometries a masquer (via fingerprint match)
+        const maskGeoms = [];
+        buildings.forEach((b, idx) => {
+          const fp = buildingFingerprint(b, idx);
+          if (idsToMask.includes(fp) && b.geometry) {
+            maskGeoms.push(b.geometry);
+          }
+        });
+        // Feature collection des buildings a masquer, utilisee comme masque geometrique
+        const maskFC = { type: 'FeatureCollection', features: maskGeoms.map(g => ({ type: 'Feature', geometry: g, properties: {} })) };
+        map.addSource('building-mask', { type: 'geojson', data: maskFC });
+        // Layer opaque beige au-dessus des 3d-buildings pour masquer visuellement
+        // (fill-extrusion avec meme hauteur mais couleur fond = disparait visuellement)
+        map.addLayer({
+          id: 'building-mask-cover',
+          source: 'building-mask',
+          type: 'fill-extrusion',
+          paint: {
+            'fill-extrusion-color': '#eae8e4',  // meme couleur que background
+            'fill-extrusion-height': 200,        // au-dessus de tout
+            'fill-extrusion-base': 0,
+            'fill-extrusion-opacity': 1.0,
+            'fill-extrusion-vertical-gradient': false
+          }
+        });
+        console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked via geojson overlay');
       }
       intersectDone = true;
-    } catch (e) { console.warn('[MASK] failed:', e.message); intersectDone = true; }
+    } catch (e) { console.warn('[MASK] failed:', e.message); window.__MASK_DIAG.errors.push(e.message); intersectDone = true; }
   }
   let rendered = false;
+  let idleCount = 0;
   map.on('idle', () => {
+    idleCount++;
     detectAndMaskBuildings();
+    // Retry jusqu'a 5 fois si detection pas encore faite (source pas encore hydratee)
+    if (!intersectDone && idleCount < 5) return;
     if (rendered) return; rendered = true;
     setTimeout(() => { window.__MAP_READY = true; }, 3000);
   });
-  setTimeout(() => { window.__MAP_READY = true; }, 15000);
+  // Retry hors idle si idle ne se declenche pas assez
+  const retryInterval = setInterval(() => {
+    if (intersectDone) { clearInterval(retryInterval); return; }
+    detectAndMaskBuildings();
+  }, 1500);
+  setTimeout(() => { clearInterval(retryInterval); }, 12000);
+  setTimeout(() => { window.__MAP_READY = true; }, 18000);
 })();
 </script></body></html>`;
 }
@@ -11502,7 +11558,10 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       const maskedIds = await page.evaluate(() => {
         try { return window.__MASKED_IDS || []; } catch (_) { return []; }
       }).catch(() => []);
-      console.log(`[REGEN-3D] Detected ${detectedBuildings.length} buildings touching parcel, masked ${maskedIds.length}`);
+      const maskDiag = await page.evaluate(() => {
+        try { return window.__MASK_DIAG || {}; } catch (_) { return {}; }
+      }).catch(() => ({}));
+      console.log(`[REGEN-3D] Detected ${detectedBuildings.length} buildings, masked ${maskedIds.length} | diag:`, JSON.stringify(maskDiag));
       const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
       console.log(`[REGEN-3D] Screenshot OK (${screenshotBuf.length} bytes)`);
 
@@ -11563,6 +11622,7 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         // v11.22 : liste des bâtiments Mapbox touchant la parcelle + ceux effectivement masqués
         detected_buildings: detectedBuildings,
         masked_building_ids: maskedIds,
+        mask_diagnostics: maskDiag,
         duration_ms: ms
       });
     } finally {
