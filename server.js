@@ -11389,7 +11389,9 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
       window.__MASKED_IDS = idsToMask;
       if (idsToMask.length > 0) {
-        // Reconstruit un MultiPolygon des geometries a masquer (via fingerprint match)
+        // v11.27 : masquage propre via fill-extrusion-height data-driven expression `within`.
+        // Construit un MultiPolygon UNION des buildings a masquer, puis update le paint du layer
+        // 3d-buildings pour que ces polygones aient height=0 (invisibles) tout en preservant le reste.
         const maskGeoms = [];
         buildings.forEach((b, idx) => {
           const fp = buildingFingerprint(b, idx);
@@ -11397,24 +11399,23 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
             maskGeoms.push(b.geometry);
           }
         });
-        // Feature collection des buildings a masquer, utilisee comme masque geometrique
-        const maskFC = { type: 'FeatureCollection', features: maskGeoms.map(g => ({ type: 'Feature', geometry: g, properties: {} })) };
-        map.addSource('building-mask', { type: 'geojson', data: maskFC });
-        // Layer opaque beige au-dessus des 3d-buildings pour masquer visuellement
-        // (fill-extrusion avec meme hauteur mais couleur fond = disparait visuellement)
-        map.addLayer({
-          id: 'building-mask-cover',
-          source: 'building-mask',
-          type: 'fill-extrusion',
-          paint: {
-            'fill-extrusion-color': '#eae8e4',  // meme couleur que background
-            'fill-extrusion-height': 200,        // au-dessus de tout
-            'fill-extrusion-base': 0,
-            'fill-extrusion-opacity': 1.0,
-            'fill-extrusion-vertical-gradient': false
-          }
-        });
-        console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked via geojson overlay');
+        if (maskGeoms.length > 0) {
+          // Construit un FeatureCollection des buildings a masquer (utilise par expression within)
+          const maskFC = {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'MultiPolygon',
+              coordinates: maskGeoms.flatMap(g => g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates])
+            }
+          };
+          // Update fill-extrusion-height sur 3d-buildings : height=0 si within(mask), sinon normal
+          map.setPaintProperty('3d-buildings', 'fill-extrusion-height', ['case',
+            ['within', maskFC], 0,
+            ['case', ['has', 'height'], ['get', 'height'], 7]
+          ]);
+        }
+        console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked via fill-extrusion-height');
       }
       intersectDone = true;
     } catch (e) { console.warn('[MASK] failed:', e.message); window.__MASK_DIAG.errors.push(e.message); intersectDone = true; }
