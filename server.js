@@ -11388,9 +11388,55 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       // dont la géometrie intersecte la parcelle. On construit un GeoJSON des buildings à masquer.
       const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
       window.__MASKED_IDS = idsToMask;
+      // v11.29 : ajout labels numerotes 1, 2, 3, 4 au-dessus de CHAQUE batiment detecte
+      // (correspond aux 'Bati #N' du panel studio pour identification visuelle)
+      const labelFeatures = detected.map((d, i) => ({
+        type: 'Feature',
+        properties: { label: String(i + 1) },
+        geometry: { type: 'Point', coordinates: [d.centroid[1], d.centroid[0]] }  // [lon, lat]
+      }));
+      if (labelFeatures.length > 0) {
+        try {
+          if (!map.getSource('bldg-labels-src')) {
+            map.addSource('bldg-labels-src', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
+          } else {
+            map.getSource('bldg-labels-src').setData({ type: 'FeatureCollection', features: labelFeatures });
+          }
+          if (!map.getLayer('bldg-labels-circles')) {
+            map.addLayer({
+              id: 'bldg-labels-circles',
+              source: 'bldg-labels-src',
+              type: 'circle',
+              paint: {
+                'circle-radius': 14,
+                'circle-color': '#FBBF24',
+                'circle-stroke-color': '#1a1a1a',
+                'circle-stroke-width': 2,
+                'circle-opacity': 0.95
+              }
+            });
+          }
+          if (!map.getLayer('bldg-labels-text')) {
+            map.addLayer({
+              id: 'bldg-labels-text',
+              source: 'bldg-labels-src',
+              type: 'symbol',
+              layout: {
+                'text-field': ['get', 'label'],
+                'text-size': 16,
+                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                'text-allow-overlap': true
+              },
+              paint: {
+                'text-color': '#1a1a1a'
+              }
+            });
+          }
+        } catch (e) { window.__MASK_DIAG.errors.push('labels: ' + e.message); }
+      }
+
       if (idsToMask.length > 0) {
-        // v11.28 : masquage via ID Mapbox natif quand disponible + fallback GeoJSON overlay opaque background.
-        // Approche 1 : setFilter par IDs (Mapbox natif, safe si ids existent)
+        // v11.28 : masquage via ID Mapbox natif + fallback overlay opaque
         const nativeIds = [];
         const geomsToMask = [];
         buildings.forEach((b, idx) => {
