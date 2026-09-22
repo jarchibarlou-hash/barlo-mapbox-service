@@ -11389,7 +11389,7 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
       window.__MASKED_IDS = idsToMask;
       if (idsToMask.length > 0) {
-        // v11.27 : masquage propre via fill-extrusion-height data-driven expression `within`.
+        // v11.27 : masquage propre via fill-extrusion-height data-driven expression within.
         // Construit un MultiPolygon UNION des buildings a masquer, puis update le paint du layer
         // 3d-buildings pour que ces polygones aient height=0 (invisibles) tout en preservant le reste.
         const maskGeoms = [];
