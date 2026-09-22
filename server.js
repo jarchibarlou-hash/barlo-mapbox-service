@@ -11259,45 +11259,78 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
 // Body : { lead_ref: "BARLO-XXXX", scenario: "A"|"B"|"C", zoom?: 18.5, bearing?: 0, upload?: true }
 app.post("/api/regen-massing-from-units", async (req, res) => {
   const t0 = Date.now();
-  const { lead_ref, scenario, zoom: zoomOverride = null, bearing = 0, upload = true, apply_to_pipeline = false } = req.body || {};
+  const {
+    lead_ref, scenario,
+    zoom: zoomOverride = null, bearing = 0,
+    upload = true, apply_to_pipeline = false,
+    units_live = null,               // v11.15 : units envoyées direct depuis cockpit RAM (prioritaire sur base)
+    parcel_polygon_string = null     // v11.15 : "lat,lon|lat,lon|..." depuis currentBody8D.site_polygon (prioritaire sur polygon_drafts)
+  } = req.body || {};
   if (!lead_ref || !scenario) return res.status(400).json({ ok: false, error: "lead_ref et scenario requis" });
   const scen = String(scenario).toUpperCase();
   if (!["A", "B", "C"].includes(scen)) return res.status(400).json({ ok: false, error: "scenario doit être A/B/C" });
   console.log(`═══ /api/regen-massing-from-units v11.11 ═══ lead=${lead_ref} scen=${scen}`);
 
   const sb = getLeadUnitsSupabase();
-  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
   try {
-    // 1. Lit les unités persistées + footprint_json
-    const { data: rows, error } = await sb
-      .from("sb_lead_units")
-      .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, footprint_json")
-      .eq("lead_ref", lead_ref)
-      .eq("scenario", scen)
-      .order("unit_index", { ascending: true });
-    if (error) throw new Error(`Supabase: ${error.message}`);
-    if (!rows || rows.length === 0) return res.status(404).json({ ok: false, error: `Aucune unité pour ${lead_ref} scenario ${scen}. Clique 'Valider implantation' d'abord.` });
-    console.log(`[REGEN-3D] ${rows.length} unités lues depuis sb_lead_units`);
+    // 1. v11.15 — Source de vérité UNITÉS : body units_live (RAM cockpit) > sinon base sb_lead_units
+    let rows;
+    if (Array.isArray(units_live) && units_live.length > 0) {
+      // Normalise en format compatible avec la suite du code
+      rows = units_live.map(u => ({
+        scenario: scen,
+        unit_index: u.unit_index,
+        unit_type: u.unit_type,
+        unit_name: u.unit_name || "",
+        unit_size_m2: u.unit_size_m2,
+        footprint_json: {
+          polygon: u.polygon,
+          etages_unit: u.etages_unit != null ? u.etages_unit : 1,
+          pilotis: !!u.pilotis
+        }
+      }));
+      console.log(`[REGEN-3D] ${rows.length} unités LIVE (source RAM cockpit — reflète éditions non-validées)`);
+    } else {
+      if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré (et pas d'units_live fournies)" });
+      const { data, error } = await sb
+        .from("sb_lead_units")
+        .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, footprint_json")
+        .eq("lead_ref", lead_ref)
+        .eq("scenario", scen)
+        .order("unit_index", { ascending: true });
+      if (error) throw new Error(`Supabase: ${error.message}`);
+      if (!data || data.length === 0) return res.status(404).json({ ok: false, error: `Aucune unité pour ${lead_ref} scenario ${scen}. Clique 'Valider implantation' d'abord ou envoie units_live.` });
+      rows = data;
+      console.log(`[REGEN-3D] ${rows.length} unités lues depuis sb_lead_units (base)`);
+    }
 
-    // 2. Lit la parcelle GPS depuis polygon_drafts (source de vérité GPS)
-    const { data: drafts, error: dErr } = await sb
-      .from("polygon_drafts")
-      .select("polygon_points")
-      .eq("temp_id", lead_ref)
-      .limit(1);
-    if (dErr) throw new Error(`polygon_drafts: ${dErr.message}`);
+    // 2. v11.15 — Source parcelle GPS : body parcel_polygon_string > sinon Supabase polygon_drafts
     let parcelCoords = [];
-    if (drafts && drafts[0] && drafts[0].polygon_points) {
-      // Format "lat,lon|lat,lon|..."
-      parcelCoords = String(drafts[0].polygon_points).split(/[|;\n]/).map(p => {
+    if (parcel_polygon_string && typeof parcel_polygon_string === "string") {
+      parcelCoords = parcel_polygon_string.split(/[|;\n]/).map(p => {
         const [lat, lon] = p.trim().split(",").map(Number);
         return { lat, lon };
       }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+      console.log(`[REGEN-3D] Parcelle GPS LIVE (body) : ${parcelCoords.length} sommets`);
+    }
+    if (parcelCoords.length < 3 && sb) {
+      const { data: drafts, error: dErr } = await sb
+        .from("polygon_drafts")
+        .select("polygon_points")
+        .eq("temp_id", lead_ref)
+        .limit(1);
+      if (dErr) throw new Error(`polygon_drafts: ${dErr.message}`);
+      if (drafts && drafts[0] && drafts[0].polygon_points) {
+        parcelCoords = String(drafts[0].polygon_points).split(/[|;\n]/).map(p => {
+          const [lat, lon] = p.trim().split(",").map(Number);
+          return { lat, lon };
+        }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+        console.log(`[REGEN-3D] Parcelle GPS lue depuis polygon_drafts : ${parcelCoords.length} sommets`);
+      }
     }
     if (parcelCoords.length < 3) {
-      return res.status(400).json({ ok: false, error: `Polygone parcelle GPS introuvable pour ${lead_ref} (polygon_drafts vide)` });
+      return res.status(400).json({ ok: false, error: `Polygone parcelle GPS introuvable pour ${lead_ref}` });
     }
-    console.log(`[REGEN-3D] Parcelle GPS lue : ${parcelCoords.length} sommets`);
 
     // 3. v11.13 — Centroïde MOYENNE ARITHMÉTIQUE (identique studio.html:3528-3529)
     // Le studio utilise la moyenne des sommets GPS comme origine du repère mètres locaux,
