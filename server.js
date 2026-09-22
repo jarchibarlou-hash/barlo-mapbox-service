@@ -11117,7 +11117,8 @@ function autoZoomForParcel(parcelCoords, cLat) {
 }
 
 // HTML Mapbox rendant N unités extrudées + parcelle en overlay
-function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken) {
+// hiddenBuildingIds : array optionnel d'IDs Mapbox composite/building à masquer (choix user)
+function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken, hiddenBuildingIds) {
   // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], heightM, colorHex, floors }
   const parcelGeoJSON = {
     type: "Feature",
@@ -11266,40 +11267,80 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       }
     });
   });
-  // v11.21 : detection precise intersect côté client + masquage batiments concernes
-  let hiddenBuildingIds = new Set();
+  // v11.22 : detection precise intersect + collecte metadata (sector cardinal, height, area)
+  // Expose window.__DETECTED_BUILDINGS pour extraction Puppeteer.
+  // Si preHiddenIds est fourni (deuxieme regen apres choix user), on masque seulement ceux-la
+  // sans re-detecter.
+  const preHiddenIds = ${JSON.stringify(hiddenBuildingIds || [])};
+  window.__DETECTED_BUILDINGS = [];
+  window.__MASKED_IDS = preHiddenIds.slice();
   let intersectDone = false;
-  function hideIntersectingBuildings() {
+  function sectorFromBearing(deg) {
+    // 0 = N, 90 = E, 180 = S, 270 = W
+    const d = ((deg % 360) + 360) % 360;
+    if (d < 22.5 || d >= 337.5) return 'N';
+    if (d < 67.5) return 'NE';
+    if (d < 112.5) return 'E';
+    if (d < 157.5) return 'SE';
+    if (d < 202.5) return 'S';
+    if (d < 247.5) return 'SW';
+    if (d < 292.5) return 'W';
+    return 'NW';
+  }
+  function detectAndMaskBuildings() {
     if (intersectDone) return;
     try {
       const buildings = map.queryRenderedFeatures({ layers: ['3d-buildings'] });
       if (!buildings || buildings.length === 0) return;
       const parcelBuffered = turf.buffer(parcelData, 2, { units: 'meters' });
+      const parcelCentroid = turf.centroid(parcelData);
+      const [pcLon, pcLat] = parcelCentroid.geometry.coordinates;
+      const detected = [];
+      const seenIds = new Set();
       buildings.forEach(b => {
-        if (!b.geometry || !b.id) return;
+        if (!b.geometry || b.id == null) return;
+        if (seenIds.has(b.id)) return;
         try {
           if (turf.booleanIntersects(b.geometry, parcelBuffered)) {
-            hiddenBuildingIds.add(b.id);
+            seenIds.add(b.id);
+            const centroid = turf.centroid(b);
+            const [bLon, bLat] = centroid.geometry.coordinates;
+            const bearingDeg = turf.bearing(parcelCentroid, centroid);
+            // bearing = -180..180 avec 0=N, 90=E, 180=S, -90=W → convert to 0..360
+            const compassDeg = (bearingDeg + 360) % 360;
+            const sector = sectorFromBearing(compassDeg);
+            const areaM2 = Math.round(turf.area(b));
+            const height = (b.properties && (b.properties.height || b.properties.render_height)) || 6;
+            detected.push({
+              id: b.id, sector, bearing_deg: Math.round(compassDeg),
+              area_m2: areaM2, height_m: Math.round(height),
+              centroid: [+bLat.toFixed(7), +bLon.toFixed(7)]
+            });
           }
         } catch (_) {}
       });
-      if (hiddenBuildingIds.size > 0) {
-        // Applique un filter qui exclut les IDs detectes
-        const ids = Array.from(hiddenBuildingIds);
+      // Ordre : N, NE, E, SE, S, SW, W, NW
+      const secOrder = { 'N':0,'NE':1,'E':2,'SE':3,'S':4,'SW':5,'W':6,'NW':7 };
+      detected.sort((a, b) => (secOrder[a.sector] - secOrder[b.sector]) || (b.area_m2 - a.area_m2));
+      window.__DETECTED_BUILDINGS = detected;
+      // Si preHiddenIds fourni : on masque exactement ceux-la (choix user).
+      // Sinon (premier appel) : on masque TOUS les detectes par defaut.
+      const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
+      window.__MASKED_IDS = idsToMask;
+      if (idsToMask.length > 0) {
         map.setFilter('3d-buildings', ['all',
           ['==', 'extrude', 'true'],
-          ['!', ['in', ['id'], ['literal', ids]]]
+          ['!', ['in', ['id'], ['literal', idsToMask]]]
         ]);
-        console.log('[MASK] Hidden', ids.length, 'buildings intersecting parcelle');
+        console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked');
       }
       intersectDone = true;
     } catch (e) { console.warn('[MASK] failed:', e.message); intersectDone = true; }
   }
   let rendered = false;
   map.on('idle', () => {
-    hideIntersectingBuildings();
+    detectAndMaskBuildings();
     if (rendered) return; rendered = true;
-    // Extra wait apres masquage pour laisser Mapbox redessiner
     setTimeout(() => { window.__MAP_READY = true; }, 3000);
   });
   setTimeout(() => { window.__MAP_READY = true; }, 15000);
@@ -11315,8 +11356,9 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     lead_ref, scenario,
     zoom: zoomOverride = null, bearing = 0,
     upload = true, apply_to_pipeline = false,
-    units_live = null,               // v11.15 : units envoyées direct depuis cockpit RAM (prioritaire sur base)
-    parcel_polygon_string = null     // v11.15 : "lat,lon|lat,lon|..." depuis currentBody8D.site_polygon (prioritaire sur polygon_drafts)
+    units_live = null,               // v11.15
+    parcel_polygon_string = null,    // v11.15
+    hidden_building_ids = null       // v11.22 : IDs Mapbox à masquer choisis par user (sinon: masque tous les intersect détectés)
   } = req.body || {};
   if (!lead_ref || !scenario) return res.status(400).json({ ok: false, error: "lead_ref et scenario requis" });
   const scen = String(scenario).toUpperCase();
@@ -11441,7 +11483,8 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     console.log(`[REGEN-3D] Zoom auto = ${zoom.toFixed(2)}`);
     // Génère HTML + screenshot Puppeteer
     const html = generateMultiUnitMassingHTML(
-      { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN
+      { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN,
+      Array.isArray(hidden_building_ids) ? hidden_building_ids : null
     );
     if (!BROWSERLESS_TOKEN) return res.status(503).json({ ok: false, error: "BROWSERLESS_TOKEN manquant" });
     let browser = null, page = null;
@@ -11452,6 +11495,14 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 20000 });
       await page.waitForFunction("window.__MAP_READY === true", { timeout: 60000 });
       await new Promise(r => setTimeout(r, 1500));
+      // v11.22 : extrait la liste des bâtiments Mapbox détectés (touchant la parcelle)
+      const detectedBuildings = await page.evaluate(() => {
+        try { return window.__DETECTED_BUILDINGS || []; } catch (_) { return []; }
+      }).catch(() => []);
+      const maskedIds = await page.evaluate(() => {
+        try { return window.__MASKED_IDS || []; } catch (_) { return []; }
+      }).catch(() => []);
+      console.log(`[REGEN-3D] Detected ${detectedBuildings.length} buildings touching parcel, masked ${maskedIds.length}`);
       const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
       console.log(`[REGEN-3D] Screenshot OK (${screenshotBuf.length} bytes)`);
 
@@ -11509,6 +11560,9 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         image_url: publicUrl,
         image_base64: publicUrl ? null : `data:image/png;base64,${screenshotBuf.toString("base64")}`,
         applied_to_pipeline: appliedToPipeline,
+        // v11.22 : liste des bâtiments Mapbox touchant la parcelle + ceux effectivement masqués
+        detected_buildings: detectedBuildings,
+        masked_building_ids: maskedIds,
         duration_ms: ms
       });
     } finally {

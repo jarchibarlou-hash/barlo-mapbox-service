@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.21-CLIENT-INTERSECT</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.22-PICK-BUILDINGS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6658,13 +6658,12 @@ async function validateScenarioImplantation(label) {
 }
 
 // v11.11-3D-SYNC — Régénère l'image massing 3D depuis les unités éditées
-// Précondition : le scénario doit avoir été validé (POST /api/lead-units → footprint_json en base)
-async function regenMassing3D(label) {
+// v11.22 — Accepte hiddenIds pour override du choix de masquage
+async function regenMassing3D(label, hiddenIds) {
     const ref = (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
     if (!ref) { showToast("⚠ Aucun lead_ref (charge un lead d'abord)", true); return; }
     const s = cockpitState.scenarios[label] || {};
     if (!s.units || s.units.length === 0) { showToast("Aucune unité pour ce scénario", true); return; }
-    // Vérif que les units ont des polygons — sinon on rappelle à l'utilisateur de Valider d'abord
     const withPoly = s.units.filter(u => u.polygon && Array.isArray(u.polygon) && u.polygon.length >= 3);
     if (withPoly.length === 0) {
         showToast("⚠ Clique '✅ Valider implantation' d'abord (aucun polygon à extruder)", true);
@@ -6691,8 +6690,10 @@ async function regenMassing3D(label) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 lead_ref: ref, scenario: label, bearing: 0, upload: true, apply_to_pipeline: true,
-                units_live: unitsPayload,                // v11.15 : source RAM (prioritaire)
-                parcel_polygon_string: parcelGeo         // v11.15 : parcelle GPS depuis currentBody8D
+                units_live: unitsPayload,
+                parcel_polygon_string: parcelGeo,
+                // v11.22 : si hiddenIds fourni, on masque exactement ceux-là. Sinon défaut = tous les détectés.
+                hidden_building_ids: Array.isArray(hiddenIds) ? hiddenIds : null
             })
         });
         const data = await res.json().catch(() => ({}));
@@ -6726,18 +6727,55 @@ async function regenMassing3D(label) {
                 imgEl.src = data.image_url + "?t=" + Date.now();  // cache-bust
             }
         } catch (_) {}
-        // Affiche l'image dans un overlay pour vérification visuelle immédiate
+        // v11.22 — Overlay avec image + panel liste bâtiments détectés + checkboxes
         if (data.image_url || data.image_base64) {
             const src = data.image_url || data.image_base64;
+            const detected = Array.isArray(data.detected_buildings) ? data.detected_buildings : [];
+            const maskedSet = new Set(Array.isArray(data.masked_building_ids) ? data.masked_building_ids : []);
             const overlay = document.createElement("div");
-            overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:2rem";
-            overlay.innerHTML = `<div style="max-width:90%;max-height:90%;background:#0B1120;border-radius:8px;padding:1rem;text-align:center">
-                <img src="${src}" style="max-width:100%;max-height:75vh;border-radius:4px;box-shadow:0 8px 40px rgba(0,0,0,0.5)"/>
-                <div style="color:#F8FAFC;margin-top:.8rem;font-size:.8rem">Massing 3D scénario ${label} · ${data.units_rendered} unités · ${data.duration_ms}ms</div>
-                <div style="color:#94A3B8;margin-top:.3rem;font-size:.65rem">Clique n'importe où pour fermer</div>
+            overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.88);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1.5rem";
+            const buildingsList = detected.length === 0
+                ? `<div style="color:#94A3B8;font-style:italic;padding:.8rem">Aucun bâtiment Mapbox ne touche la parcelle</div>`
+                : detected.map((b, i) => {
+                    const checked = maskedSet.has(b.id) ? "checked" : "";
+                    return `<label style="display:flex;align-items:center;gap:.5rem;padding:.35rem .5rem;background:rgba(139,92,246,0.08);border-radius:3px;font-size:.68rem;color:#F8FAFC;cursor:pointer">
+                        <input type="checkbox" ${checked} data-bid="${b.id}" style="cursor:pointer">
+                        <span style="min-width:2.2rem;color:#FBBF24;font-weight:700;text-align:center">${b.sector}</span>
+                        <span style="flex:1">Bâti #${i+1}</span>
+                        <span style="color:#94A3B8">h=${b.height_m}m</span>
+                        <span style="color:#94A3B8">${b.area_m2}m²</span>
+                    </label>`;
+                }).join("");
+            overlay.innerHTML = `<div style="max-width:95vw;max-height:95vh;background:#0B1120;border-radius:10px;padding:1rem;display:flex;gap:1rem;box-shadow:0 20px 60px rgba(0,0,0,0.6)">
+                <div style="flex:1;display:flex;flex-direction:column;align-items:center;min-width:0">
+                    <img id="regenPreview_${label}" src="${src}" style="max-width:100%;max-height:75vh;border-radius:4px;box-shadow:0 4px 20px rgba(0,0,0,0.4)"/>
+                    <div style="color:#F8FAFC;margin-top:.6rem;font-size:.75rem">Massing 3D scénario ${label} · ${data.units_rendered} unités · zoom ${(data.zoom_used||0).toFixed(1)} · ${data.duration_ms}ms</div>
+                </div>
+                <div style="width:280px;display:flex;flex-direction:column;gap:.6rem;color:#F8FAFC">
+                    <div style="font-size:.75rem;font-weight:700;color:#A78BFA">🏢 Bâtiments Mapbox touchant la parcelle</div>
+                    <div style="font-size:.6rem;color:#94A3B8">Coche/décoche pour masquer/afficher</div>
+                    <div id="buildingList_${label}" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem;max-height:55vh;padding-right:.3rem">${buildingsList}</div>
+                    <button id="btnRegenMask_${label}" style="padding:.6rem;background:#F59E0B;color:#0B1120;border:none;border-radius:5px;font-weight:700;cursor:pointer;font-size:.75rem" ${detected.length === 0 ? "disabled" : ""}>🎨 Régénérer avec ce masquage</button>
+                    <button id="btnCloseOverlay_${label}" style="padding:.5rem;background:transparent;color:#94A3B8;border:1px solid #333;border-radius:5px;cursor:pointer;font-size:.65rem">Fermer</button>
+                </div>
             </div>`;
-            overlay.onclick = () => overlay.remove();
             document.body.appendChild(overlay);
+            // Handler bouton régénérer avec choix
+            const btnRegen = overlay.querySelector(`#btnRegenMask_${label}`);
+            const btnClose = overlay.querySelector(`#btnCloseOverlay_${label}`);
+            if (btnRegen) btnRegen.addEventListener("click", () => {
+                const listEl = overlay.querySelector(`#buildingList_${label}`);
+                const checkboxes = listEl ? listEl.querySelectorAll('input[type="checkbox"]') : [];
+                const selectedIds = Array.from(checkboxes).filter(cb => cb.checked).map(cb => {
+                    const raw = cb.getAttribute("data-bid");
+                    // Les IDs Mapbox sont parfois numériques, parfois string — on essaie de préserver le type
+                    const n = Number(raw);
+                    return isNaN(n) ? raw : n;
+                });
+                overlay.remove();
+                regenMassing3D(label, selectedIds);
+            });
+            if (btnClose) btnClose.addEventListener("click", () => overlay.remove());
         }
     } catch (err) {
         console.error("[REGEN-3D] network error:", err);
