@@ -11388,50 +11388,52 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       // dont la géometrie intersecte la parcelle. On construit un GeoJSON des buildings à masquer.
       const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
       window.__MASKED_IDS = idsToMask;
-      // v11.29 : ajout labels numerotes 1, 2, 3, 4 au-dessus de CHAQUE batiment detecte
-      // (correspond aux 'Bati #N' du panel studio pour identification visuelle)
-      const labelFeatures = detected.map((d, i) => ({
-        type: 'Feature',
-        properties: { label: String(i + 1) },
-        geometry: { type: 'Point', coordinates: [d.centroid[1], d.centroid[0]] }  // [lon, lat]
-      }));
+      // v11.31 : labels numerotes 1, 2, 3, 4 avec COULEUR selon etat masquage
+      // ROUGE = masque · JAUNE = visible. Ainsi Jeremy voit visuellement quel batiment
+      // est cible AVANT/APRES regeneration.
+      const preHiddenSet = new Set((preHiddenIds || []).map(String));
+      const labelFeatures = detected.map((d, i) => {
+        const isMasked = preHiddenSet.size > 0 ? preHiddenSet.has(String(d.id)) : true;  // defaut : tous masques
+        return {
+          type: 'Feature',
+          properties: { label: String(i + 1), masked: isMasked ? 1 : 0 },
+          geometry: { type: 'Point', coordinates: [d.centroid[1], d.centroid[0]] }
+        };
+      });
       if (labelFeatures.length > 0) {
         try {
-          if (!map.getSource('bldg-labels-src')) {
-            map.addSource('bldg-labels-src', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
-          } else {
-            map.getSource('bldg-labels-src').setData({ type: 'FeatureCollection', features: labelFeatures });
-          }
-          if (!map.getLayer('bldg-labels-circles')) {
-            map.addLayer({
-              id: 'bldg-labels-circles',
-              source: 'bldg-labels-src',
-              type: 'circle',
-              paint: {
-                'circle-radius': 14,
-                'circle-color': '#FBBF24',
-                'circle-stroke-color': '#1a1a1a',
-                'circle-stroke-width': 2,
-                'circle-opacity': 0.95
-              }
-            });
-          }
-          if (!map.getLayer('bldg-labels-text')) {
-            map.addLayer({
-              id: 'bldg-labels-text',
-              source: 'bldg-labels-src',
-              type: 'symbol',
-              layout: {
-                'text-field': ['get', 'label'],
-                'text-size': 16,
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-                'text-allow-overlap': true
-              },
-              paint: {
-                'text-color': '#1a1a1a'
-              }
-            });
-          }
+          if (map.getLayer('bldg-labels-circles')) map.removeLayer('bldg-labels-circles');
+          if (map.getLayer('bldg-labels-text')) map.removeLayer('bldg-labels-text');
+          if (map.getSource('bldg-labels-src')) map.removeSource('bldg-labels-src');
+          map.addSource('bldg-labels-src', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
+          map.addLayer({
+            id: 'bldg-labels-circles',
+            source: 'bldg-labels-src',
+            type: 'circle',
+            paint: {
+              'circle-radius': 16,
+              // v11.31 : rouge si masque, jaune si visible
+              'circle-color': ['case', ['==', ['get', 'masked'], 1], '#EF4444', '#FBBF24'],
+              'circle-stroke-color': '#1a1a1a',
+              'circle-stroke-width': 2,
+              'circle-opacity': 0.95
+            }
+          });
+          map.addLayer({
+            id: 'bldg-labels-text',
+            source: 'bldg-labels-src',
+            type: 'symbol',
+            layout: {
+              'text-field': ['get', 'label'],
+              'text-size': 18,
+              'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+              'text-allow-overlap': true,
+              'text-ignore-placement': true
+            },
+            paint: {
+              'text-color': ['case', ['==', ['get', 'masked'], 1], '#FFFFFF', '#1a1a1a']
+            }
+          });
         } catch (e) { window.__MASK_DIAG.errors.push('labels: ' + e.message); }
       }
 
