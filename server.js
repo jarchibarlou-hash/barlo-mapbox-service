@@ -11389,33 +11389,56 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       const idsToMask = preHiddenIds.length > 0 ? preHiddenIds : detected.map(d => d.id);
       window.__MASKED_IDS = idsToMask;
       if (idsToMask.length > 0) {
-        // v11.27 : masquage propre via fill-extrusion-height data-driven expression within.
-        // Construit un MultiPolygon UNION des buildings a masquer, puis update le paint du layer
-        // 3d-buildings pour que ces polygones aient height=0 (invisibles) tout en preservant le reste.
-        const maskGeoms = [];
+        // v11.28 : masquage via ID Mapbox natif quand disponible + fallback GeoJSON overlay opaque background.
+        // Approche 1 : setFilter par IDs (Mapbox natif, safe si ids existent)
+        const nativeIds = [];
+        const geomsToMask = [];
         buildings.forEach((b, idx) => {
           const fp = buildingFingerprint(b, idx);
           if (idsToMask.includes(fp) && b.geometry) {
-            maskGeoms.push(b.geometry);
+            if (b.id != null) nativeIds.push(b.id);
+            geomsToMask.push(b.geometry);
           }
         });
-        if (maskGeoms.length > 0) {
-          // Construit un FeatureCollection des buildings a masquer (utilise par expression within)
-          const maskFC = {
-            type: 'Feature',
-            properties: {},
-            geometry: {
-              type: 'MultiPolygon',
-              coordinates: maskGeoms.flatMap(g => g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates])
-            }
-          };
-          // Update fill-extrusion-height sur 3d-buildings : height=0 si within(mask), sinon normal
-          map.setPaintProperty('3d-buildings', 'fill-extrusion-height', ['case',
-            ['within', maskFC], 0,
-            ['case', ['has', 'height'], ['get', 'height'], 7]
-          ]);
+        // Filter Mapbox natif : exclut les buildings dont l'id est dans notre liste
+        if (nativeIds.length > 0) {
+          try {
+            map.setFilter('3d-buildings', ['all',
+              ['==', 'extrude', 'true'],
+              ['!', ['in', ['id'], ['literal', nativeIds]]]
+            ]);
+            console.log('[MASK] setFilter with', nativeIds.length, 'native IDs');
+          } catch (e) { console.warn('[MASK] setFilter failed:', e.message); }
         }
-        console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked via fill-extrusion-height');
+        // Approche 2 en complement : overlay opaque BEIGE (couleur fond) pile sur les geometries a masquer
+        // Force le rendu a masquer meme si setFilter n'a pas d'effet (safe cascade).
+        if (geomsToMask.length > 0) {
+          const maskFC = {
+            type: 'FeatureCollection',
+            features: geomsToMask.map(g => ({ type: 'Feature', properties: {}, geometry: g }))
+          };
+          if (!map.getSource('bldg-mask-src')) {
+            map.addSource('bldg-mask-src', { type: 'geojson', data: maskFC });
+          } else {
+            map.getSource('bldg-mask-src').setData(maskFC);
+          }
+          // Overlay fill-extrusion couleur background hauteur = max building alentour + 5m
+          if (!map.getLayer('bldg-mask-cover')) {
+            map.addLayer({
+              id: 'bldg-mask-cover',
+              source: 'bldg-mask-src',
+              type: 'fill-extrusion',
+              paint: {
+                'fill-extrusion-color': '#eae8e4',
+                'fill-extrusion-height': 50,   // 50m suffit pour tout batiment residentiel Douala
+                'fill-extrusion-base': 0,
+                'fill-extrusion-opacity': 1.0,
+                'fill-extrusion-vertical-gradient': false
+              }
+            });
+          }
+          console.log('[MASK]', detected.length, 'detected,', idsToMask.length, 'masked (setFilter+overlay)');
+        }
       }
       intersectDone = true;
     } catch (e) { console.warn('[MASK] failed:', e.message); window.__MASK_DIAG.errors.push(e.message); intersectDone = true; }
