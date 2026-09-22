@@ -11123,6 +11123,15 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] }
   };
+  // v11.19 — Buffer 5m autour parcelle pour masquer aussi les bâtiments qui débordent légèrement
+  // sans toucher le contexte urbain au-delà. Turf gère la buffer géodésique en mètres.
+  let parcelMaskGeoJSON = parcelGeoJSON;
+  try {
+    const buffered = turf.buffer(parcelGeoJSON, 5, { units: "meters" });
+    if (buffered && buffered.geometry) parcelMaskGeoJSON = buffered;
+  } catch (e) {
+    console.warn("[REGEN-3D] turf.buffer failed, fallback sur parcelle brute:", e.message);
+  }
   const unitsFeatures = unitsData.map((u, i) => ({
     type: "Feature",
     properties: {
@@ -11204,23 +11213,27 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
   map.on('style.load', () => {
     map.setTerrain(null);
     map.setLight({ anchor: 'map', color: '#ffffff', intensity: 0.55, position: [1.2, 210, 35] });
-    // v11.17 - Parcelle chargee AVANT le layer 3d-buildings pour permettre le filtre within
+    // v11.19 - Parcelle brute + buffer 5m (masque bati existant a l'interieur seulement)
     const parcelData = ${JSON.stringify(parcelGeoJSON)};
+    const parcelMask = ${JSON.stringify(parcelMaskGeoJSON)};
     map.addSource('parcel', { type: 'geojson', data: parcelData });
-    // v11.17 - 3D buildings Mapbox EXCLUANT ceux qui intersectent la parcelle (filter within)
-    // Le bati existant sous la parcelle est masque, nos unites extrudees deviennent visibles.
+    // v11.19 - 3D buildings Mapbox : opacity 0 dans la zone buffer parcelle, normale ailleurs
+    // Plus safe qu'un filter (evite bug where 'within' cache tout si polygon complexe).
     map.addLayer({
       id: '3d-buildings', source: 'composite', 'source-layer': 'building',
-      filter: ['all',
-        ['==', 'extrude', 'true'],
-        ['!', ['within', parcelData]]
-      ],
+      filter: ['==', 'extrude', 'true'],
       type: 'fill-extrusion', minzoom: 13,
       paint: {
         'fill-extrusion-color': '#f0ede8',
-        'fill-extrusion-height': ['case', ['has', 'height'], ['get', 'height'], 7],
+        // v11.19 : height = 0 dans la zone buffer parcelle (masque effet visuel)
+        // fill-extrusion-height supporte data expressions, contrairement a opacity.
+        'fill-extrusion-height': ['case',
+          ['within', parcelMask], 0,
+          ['case', ['has', 'height'], ['get', 'height'], 7]
+        ],
         'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.92, 'fill-extrusion-vertical-gradient': true
+        'fill-extrusion-opacity': 0.92,
+        'fill-extrusion-vertical-gradient': true
       }
     });
     // Parcelle : fill invisible (juste pour z-order) + contour rouge visible
