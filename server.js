@@ -11856,6 +11856,7 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       res.json({
         ok: true, lead_ref, scenario: scen,
         units_rendered: unitsData.length, units_rejected: rejected.length,
+        units_geometry: unitsData.map(u => ({ name: u.name, ground_m: u.groundM, base_m: u.baseM, top_m: u.topM, levels: u.floors, poteaux: (u.postsGeo || []).length })),
         parcel_vertices: parcelCoords.length,
         zoom_used: zoom,
         image_url: publicUrl,
