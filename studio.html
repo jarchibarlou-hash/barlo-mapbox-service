@@ -181,6 +181,17 @@
         .v12-kpi.warn .v{color:var(--brick2)}
         .v12-score{font-size:.6rem;font-weight:700;padding:.1rem .45rem;border-radius:10px;border:1px solid var(--border);color:var(--text2);cursor:help;margin-left:auto;margin-right:.4rem}
         .v12-score.rec{color:#0B1120;background:var(--amber);border-color:var(--amber)}
+        .v12-findings{margin:.2rem 0 .7rem}
+        .v12-findings:empty{display:none}
+        .v12-findings details{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:.45rem .7rem}
+        .v12-findings summary{cursor:pointer;font-size:.68rem;font-weight:700;color:var(--text)}
+        .v12-findings ul{list-style:none;margin:.4rem 0 0;padding:0;display:flex;flex-direction:column;gap:.25rem}
+        .v12-findings li{font-size:.64rem;line-height:1.35;padding-left:1.1rem;position:relative;color:var(--text2)}
+        .v12-findings li::before{position:absolute;left:0}
+        .v12-findings li.bloquant{color:var(--brick2)} .v12-findings li.bloquant::before{content:"⛔"}
+        .v12-findings li.attention{color:var(--amber)} .v12-findings li.attention::before{content:"⚠"}
+        .v12-findings li.atout{color:#2ECC71} .v12-findings li.atout::before{content:"★"}
+        .v12-findings li.info::before{content:"·"}
         .v12-kpi input{width:96px;padding:.15rem .3rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.74rem;font-weight:700}
         .v12-kpi input:focus{outline:none;border-color:var(--amber)}
         .c-scn-tab .v12-tabstate{font-size:.55rem;font-weight:700;margin-left:.3rem}
@@ -407,7 +418,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.11-SCORING</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.12-CONSTATS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -468,17 +479,20 @@
                         </div>
                     </div>
 
+                    <!-- v12.12 : constats du projet (faits vérifiés, base de la rédaction du PPT) -->
+                    <div class="v12-findings" id="cV12Findings"></div>
+
                     <!-- v6.2.1 : Rollback tabs A/B/C (1 scénario à la fois) -->
                     <div class="c-scn-tabs">
                         <button class="c-scn-tab active" data-tab="A" onclick="switchScenarioTab('A')" title="A — Intention client : traduction fidèle de la demande du client">
                             <span>A · Intention client<span class="v12-tabstate" id="cTabStateA"></span></span>
                             <span class="c-badge-coh" id="cBadgeA" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
-                        <button class="c-scn-tab" data-tab="B" onclick="switchScenarioTab('B')" title="B — Équilibre : l'essentiel de l'intention, avec une solution globalement plus équilibrée">
+                        <button class="c-scn-tab" data-tab="B" onclick="switchScenarioTab('B')" title="B — Équilibre : même programme en plans optimisés (T1–T2 −5 %, T3+ −10 %), comparé au budget avec 10 % de réserve">
                             <span>B · Équilibre<span class="v12-tabstate" id="cTabStateB"></span></span>
                             <span class="c-badge-coh" id="cBadgeB" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
-                        <button class="c-scn-tab" data-tab="C" onclick="switchScenarioTab('C')" title="C — Prudence : davantage de marge sur les contraintes, les coûts et les risques">
+                        <button class="c-scn-tab" data-tab="C" onclick="switchScenarioTab('C')" title="C — Prudence : même programme en plans compacts (T1–T2 −10 %, T3+ −20 %), 20 % de réserve, phase 2 si le budget l'exige">
                             <span>C · Prudence<span class="v12-tabstate" id="cTabStateC"></span></span>
                             <span class="c-badge-coh" id="cBadgeC" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
@@ -6053,7 +6067,9 @@ async function syncScenarioModels() {
         v12Models = d.models;
         v12Models._persisted = d.persisted;
         v12Models._storeError = d.store_error || null;
+        v12Models._findings = d.findings || [];
         ["A", "B", "C"].forEach(renderV12Strip);
+        renderV12Findings();
     } catch (e) {
         console.warn("[V12] synchronisation :", e.message);
         ["A", "B", "C"].forEach(L => { const el = $(`cV12Strip${L}`); if (el) el.innerHTML = `<span class="c-hint">Scénarios non synchronisés : ${esc(e.message)}</span>`; });
@@ -6137,6 +6153,20 @@ function renderV12Strip(L) {
         tabState.textContent = icon;
         tabState.title = m.status ? (V12_STATUS_LABEL[m.status] || "") : "";
     }
+}
+
+// v12.12 — Constats du projet : les mêmes faits que ceux sur lesquels s'appuie la rédaction du PPT
+function renderV12Findings() {
+    const el = $("cV12Findings");
+    if (!el) return;
+    const list = (v12Models && v12Models._findings) || [];
+    if (!list.length) { el.innerHTML = ""; return; }
+    const n = lvl => list.filter(c => c.niveau === lvl).length;
+    const head = [n("bloquant") ? `${n("bloquant")} bloquant${n("bloquant") > 1 ? "s" : ""}` : "", n("attention") ? `${n("attention")} à surveiller` : ""]
+        .filter(Boolean).join(" · ") || "aucun point bloquant";
+    const open = n("bloquant") > 0 ? " open" : "";
+    el.innerHTML = `<details${open}><summary>Constats du projet — ${esc(head)}</summary><ul>${
+        list.map(c => `<li class="${escAttr(c.niveau)}">${esc(c.message)}</li>`).join("")}</ul></details>`;
 }
 
 // v12.11 — Score du moteur (7 critères mesurés sur le contenu réel) + recommandation ; détail au survol

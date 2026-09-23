@@ -29,7 +29,7 @@ test("géométrie validée avec erreurs : conformité basse, expliquée", () => 
   const rr = { A: sc({ _v12_validated: true, geometry_checks_v12: [{ level: "error", code: "HORS_ZONE_CONSTRUCTIBLE", message: "x" }] }), B: sc({}), C: sc({}) };
   S.scoreScenariosV12(rr, CTX);
   assert.equal(rr.A.score_detail.cos_conformity.score, 0.1);
-  assert.match(rr.A.score_detail.cos_conformity.explication, /geometrie validee/);
+  assert.match(rr.A.score_detail.cos_conformity.explication, /géométrie validée/);
   assert.equal(rr.B.score_detail.cos_conformity.score, 1);
 });
 
