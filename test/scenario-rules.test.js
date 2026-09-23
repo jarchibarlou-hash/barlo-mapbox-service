@@ -34,6 +34,27 @@ test("COS = occupation au sol par zone : ville 60, périphérie 45, campagne 30"
   assert.equal(unknown.source, "HYPOTHESIS", "zone inconnue : signalée comme hypothèse");
 });
 
+test("fourchette de budget : bas ET haut lus dans tous les formats du questionnaire", () => {
+  const M = r => [Math.round(r.min / 1e5) / 10, Math.round(r.max / 1e5) / 10];
+  assert.deepEqual(M(R.parseBudgetRange("⭕ 50 000 – 100 000 € (~33–66 M FCFA)")), [33, 66]);
+  assert.deepEqual(M(R.parseBudgetRange("40 000 - 50 000 €")), [26.2, 32.8]);
+  assert.deepEqual(M(R.parseBudgetRange("500 000 € – 1 M €")), [328, 656]);
+  assert.deepEqual(M(R.parseBudgetRange("328–656 M FCFA")), [328, 656]);
+  assert.deepEqual(M(R.parseBudgetRange("30 000 000 FCFA")), [30, 30]);
+  assert.deepEqual(M(R.parseBudgetRange(50000)), [32.8, 32.8], "nombre < 1 M : euros");
+  assert.equal(R.parseBudgetRange("Plus de 1 M €").open_ended, true);
+  assert.equal(R.parseBudgetRange(""), null, "budget inconnu : rien d'inventé");
+});
+
+test("position dans la fourchette : bas = dans le budget, entre les deux = haut de fourchette", () => {
+  const range = { min: 33e6, max: 66e6 };
+  assert.equal(R.budgetStatus(30e6, range), "DANS_BUDGET");
+  assert.equal(R.budgetStatus(50e6, range), "BUDGET_TENDU");
+  assert.equal(R.budgetStatus(70e6, range), "HORS_BUDGET");
+  assert.equal(R.budgetStatus(900e6, { min: 656e6, max: 656e6, open_ended: true }), "BUDGET_TENDU", "fourchette ouverte : jamais « hors »");
+  assert.equal(R.budgetStatus(30e6, null), "N/A");
+});
+
 test("grille de surfaces : réduction selon la typologie, plancher absolu, commerce inchangé", () => {
   const { BALANCED: B, PRUDENT: C, CLIENT_INTENT: A } = R.DEFAULT_RULES;
   assert.equal(R.unitSurface("T3", 65, A), 65);

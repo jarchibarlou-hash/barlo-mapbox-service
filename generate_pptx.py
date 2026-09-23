@@ -1269,7 +1269,7 @@ def assemble_pptx(data, template_path, output_path):
                 # Translate budget_fit labels
                 fit_label = {
                     'DANS_BUDGET': 'DANS BUDGET',
-                    'BUDGET_TENDU': 'BUDGET TENDU',
+                    'BUDGET_TENDU': 'HAUT DE FOURCHETTE',
                     'HORS_BUDGET': 'HORS BUDGET',
                 }.get(budget_fit, budget_fit)
                 table_rows.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
@@ -1348,7 +1348,7 @@ def assemble_pptx(data, template_path, output_path):
                 budget_fit = flat_data.get(f'{sc_key}_budget_fit', '')
                 fit_label = {
                     'DANS_BUDGET': 'DANS BUDGET',
-                    'BUDGET_TENDU': 'BUDGET TENDU',
+                    'BUDGET_TENDU': 'HAUT DE FOURCHETTE',
                     'HORS_BUDGET': 'HORS BUDGET',
                 }.get(budget_fit, budget_fit)
                 table_rows_18.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])

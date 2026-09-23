@@ -1958,17 +1958,27 @@ function groundOccupation(sc, siteArea, cosSol, groundOverride) {
     cos_compliance: (allowed <= 0 || ratio <= 1 + 1e-9) ? "CONFORME" : "AMBITIEUX_HORS_COS",
   };
 }
-// v12.6 — Comparaison au budget, réserve du rôle comprise, après toute modification du coût
-function refreshBudgetFit(sc, budgetMax) {
+// v12.6/12.7 — Comparaison à la fourchette du client, réserve du rôle comprise, après toute
+// modification du coût (saisies du cockpit) ; coût final = phase 1 + phase 2 pour C.
+function refreshBudgetFit(sc, range) {
   if (!sc || typeof sc.cost_total_fcfa !== "number") return;
   const target = Number(sc.role_rules_v12 && sc.role_rules_v12.budget_target) || 1;
   sc.budget_needed_fcfa = Math.round(sc.cost_total_fcfa / target);
   sc.reserve_fcfa = sc.budget_needed_fcfa - sc.cost_total_fcfa;
-  const b = Number(budgetMax) || 0;
-  sc.budget_gap_pct = b > 0 ? Math.round((sc.budget_needed_fcfa / b - 1) * 100) : null;
-  sc.budget_fit = b > 0
-    ? (sc.budget_needed_fcfa <= b ? "DANS_BUDGET" : sc.budget_needed_fcfa <= b * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
-    : "N/A";
+  const max = range && range.max > 0 ? range.max : 0;
+  sc.budget_gap_pct = max > 0 ? Math.round((sc.budget_needed_fcfa / max - 1) * 100) : null;
+  sc.budget_fit = ScenarioRules.budgetStatus(sc.budget_needed_fcfa, range);
+  const p2 = sc.phase_2_v12 && sc.phase_2_v12.cost_fcfa ? sc.phase_2_v12.cost_fcfa : 0;
+  sc.cost_final_fcfa = sc.cost_total_fcfa + p2;
+  sc.final_budget_fit = p2 ? ScenarioRules.budgetStatus(Math.round(sc.cost_final_fcfa / target), range) : sc.budget_fit;
+}
+// Fourchette de budget du client, telle que saisie : « 33 – 66 M FCFA » (jamais une seule borne)
+function budgetRangeLabel(raw) {
+  const r = ScenarioRules.parseBudgetRange(raw);
+  if (!r) return "N/A";
+  const m = v => { const x = v / 1e6; return String(x >= 100 ? Math.round(x) : Math.round(x * 10) / 10).replace(".", ","); };
+  if (r.open_ended) return `plus de ${m(r.min)} M FCFA`;
+  return r.min === r.max ? `${m(r.max)} M FCFA` : `${m(r.min)} – ${m(r.max)} M FCFA`;
 }
 // Libellés textes/PPT dans le vocabulaire de Jeremy (COS = occupation au sol, jamais « 2,5 »)
 function cosSolLabel(siteDiag) {
@@ -3592,6 +3602,12 @@ function computeSmartScenarios({
     }
     console.log(`│ v57.21 FIX budget_fit: budgetMax était 0 → recalculé depuis ${detectedMaxFCFA > 0 ? 'FCFA=' + detectedMaxFCFA : 'EUR=' + detectedMaxEUR} → budgetMax=${budgetMax} FCFA`);
   }
+  // v12.7 — Fourchette complète du client (bas ET haut). Le haut reste budgetMax (historique) ;
+  // le bas sert à C (phase 1 financée même au bas de la fourchette) et au statut de chaque scénario.
+  const budgetRangeV12 = ScenarioRules.parseBudgetRange(budget_range_raw || budget_range)
+    || (budgetMax > 0 ? { min: budgetMax, max: budgetMax, open_ended: false, source: "QUESTIONNAIRE" } : null);
+  if (budgetRangeV12) budgetMax = budgetRangeV12.max;
+  const budgetMinV12 = budgetRangeV12 ? budgetRangeV12.min : 0;
   for (const label of ["A", "B", "C"]) {
     const role = SCENARIO_ROLE[label];
     const mode = SCENARIO_MASSING_MODE[label];
@@ -3654,7 +3670,8 @@ function computeSmartScenarios({
       // Dérogation COS cochée par l'utilisateur (« Ignorer plafond COS ») : pas de plafond au sol
       ignore_cos: !!(arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.regulatory
         && arguments[0]._leadConstraints.regulatory.ignore_cos),
-      budget_fcfa: budgetMax,
+      // C (prudence) finance sa phase 1 même si le client est au bas de sa fourchette
+      budget_fcfa: budgetMinV12 || budgetMax,
       cost_per_m2: costForSizingV12,
       role_rules,
       max_fp_m2: (arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.geometry
@@ -3799,11 +3816,16 @@ function computeSmartScenarios({
     // budgetMax is already computed before the loop
     // v12.6 — comparaison au budget RÉSERVE COMPRISE (B 10 %, C 20 % ; A sans réserve) :
     // budget nécessaire = coût / part utilisable du budget. Le budget est comparé, jamais imposé à A/B.
+    // v12.7 — comparé à la FOURCHETTE du client : ≤ bas = dans le budget, entre bas et haut = haut de
+    // fourchette, > haut = hors budget.
     const budgetTargetV12 = Number(v73Result.role_rules_v12 && v73Result.role_rules_v12.budget_target) || 1;
     const budgetNeededV12 = Math.round(estimatedCost / budgetTargetV12);
-    const budgetFit = budgetMax > 0
-      ? (budgetNeededV12 <= budgetMax ? "DANS_BUDGET" : budgetNeededV12 <= budgetMax * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
-      : "N/A";
+    const budgetFit = ScenarioRules.budgetStatus(budgetNeededV12, budgetRangeV12);
+    // v12.7 — C : coût de la phase 2 (aux prix d'aujourd'hui) et coût final du projet complet
+    const phase2V12 = v73Result.phase_2_v12
+      ? Object.assign({}, v73Result.phase_2_v12, { cost_fcfa: Math.round(v73Result.phase_2_v12.sdp_m2 * costPerM2 * 1.05) })
+      : null;
+    const costFinalV12 = estimatedCost + (phase2V12 ? phase2V12.cost_fcfa : 0);
     const freeGround = envelope_area - (fpRdc || fp); // espace libre au sol = enveloppe - empreinte RDC
     const parkingEst = hasPilotis ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
     // ── v57.13 PARKING DÉTAILLÉ + ESPACE DÉGAGÉ (corrigé) ──
@@ -3909,7 +3931,7 @@ function computeSmartScenarios({
       sdp_limits_v12: v73Result.sdp_limits_v12,
       adaptations_v12: v73Result.adaptations_v12,
       infeasible_v12: v73Result.infeasible_v12,
-      phase_2_v12: v73Result.phase_2_v12,
+      phase_2_v12: phase2V12,
       label_fr: labels_fr[label],
       accent_color: accents[label],
       estimated_cost: estimatedCost,
@@ -3919,10 +3941,16 @@ function computeSmartScenarios({
       cost_per_m2_source: costOverrideV12 > 0 ? ScenarioModel.SOURCE.USER_OVERRIDE : costSuggestionV12.source,
       cost_adjusted: costAdjusted,
       budget_fit: budgetFit,
-      // v12.6 — budget nécessaire réserve comprise et écart au budget du client (null si budget inconnu)
+      // v12.6/12.7 — budget nécessaire réserve comprise, fourchette du client, écart au HAUT de fourchette
       budget_needed_fcfa: budgetNeededV12,
       reserve_fcfa: budgetNeededV12 - estimatedCost,
+      budget_min_fcfa: budgetRangeV12 ? budgetRangeV12.min : null,
+      budget_max_fcfa: budgetRangeV12 ? budgetRangeV12.max : null,
+      budget_open_ended: budgetRangeV12 ? !!budgetRangeV12.open_ended : false,
       budget_gap_pct: budgetMax > 0 ? Math.round((budgetNeededV12 / budgetMax - 1) * 100) : null,
+      // C : coût final = phase 1 + phase 2 (aux prix d'aujourd'hui) ; = coût estimé sans phase 2
+      cost_final_fcfa: costFinalV12,
+      final_budget_fit: phase2V12 ? ScenarioRules.budgetStatus(Math.round(costFinalV12 / budgetTargetV12), budgetRangeV12) : budgetFit,
       // v57.0 CES-driven extras
       program_driven: isProgramDriven,
       program_key: programKey || "NONE",
@@ -4527,13 +4555,17 @@ function computeSmartScenarios({
     }
     cout.push(`${Math.round((sc.cost_per_m2_sdp || 0) / 1000)}k FCFA/m² SDP`);
     if (coutLogt > 0 && sc.total_units > 1) cout.push(`${coutLogt}M FCFA par logement (construction seule)`);
+    // v12.7 — position dans la fourchette du client, réserve pour imprévus comprise
     if (sc.budget_fit === "DANS_BUDGET") {
-      cout.push(`Ce montant s'inscrit dans votre enveloppe budgetaire`);
+      cout.push(`Ce montant tient dans le bas de votre fourchette budgetaire, reserve pour imprevus comprise`);
     } else if (sc.budget_fit === "BUDGET_TENDU") {
-      cout.push(`Montant proche de votre limite — optimisable par ajustement des finitions`);
+      cout.push(`Ce montant suppose de vous placer dans le haut de votre fourchette budgetaire`);
     } else if (sc.budget_fit === "HORS_BUDGET" && budgetMaxCtx > 0) {
-      const dep = Math.round(((sc.cost_total_fcfa || sc.estimated_cost) - budgetMaxCtx) / 1e6);
-      cout.push(`Depassement de ${dep}M FCFA sur la construction. Cout global tout compris : ${globalM}M FCFA`);
+      const dep = Math.round(((sc.budget_needed_fcfa || sc.cost_total_fcfa || sc.estimated_cost) - budgetMaxCtx) / 1e6);
+      cout.push(`Depassement de ${dep}M FCFA au-dessus du haut de votre fourchette. Cout global tout compris : ${globalM}M FCFA`);
+    }
+    if (sc.phase_2_v12 && sc.phase_2_v12.cost_fcfa) {
+      cout.push(`Phase 2 prevue : ${Math.round(sc.phase_2_v12.cost_fcfa / 1e6)}M FCFA aux prix actuels, soit un cout final de ${Math.round((sc.cost_final_fcfa || 0) / 1e6)}M FCFA pour le projet complet`);
     }
     cout.push(`Duree estimee du chantier : ${sc.duree_chantier_mois || "N/A"} mois`);
     parts.push(`◆ BUDGET GLOBAL DU PROJET — ${cout.join(". ")}.`);
@@ -4990,7 +5022,7 @@ function computeSmartScenarios({
   // on cap fp/sdp/units/mix en cascade. Sinon, no-op (isEmpty=true).
   // v12 : en mode programme, l'emprise maximale est déjà un plafond du dimensionnement
   // (lib/scenario-rules.js) ; le repère est porté par l'objet renvoyé pour les appels suivants.
-  const _siteV12 = { site_area: Number(site_area) || 0, cos_sol: ces, budget_fcfa: budgetMax || 0 };
+  const _siteV12 = { site_area: Number(site_area) || 0, cos_sol: ces, budget_range: budgetRangeV12 };
   const _scenarios = { A: r.A, B: r.B, C: r.C, _v12_program_driven: !!isProgramDriven, _site_v12: _siteV12 };
   if (arguments[0] && arguments[0]._leadConstraints) {
     applyConstraintsToScenarios(_scenarios, arguments[0]._leadConstraints);
@@ -5239,7 +5271,7 @@ function applyConstraintsToScenarios(scenarios, constraints) {
         // COS (occupation au sol) recalculé sur la nouvelle emprise, budget sur le nouveau coût
         if (scenarios._site_v12) {
           Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol));
-          refreshBudgetFit(sc, scenarios._site_v12.budget_fcfa);
+          refreshBudgetFit(sc, scenarios._site_v12.budget_range);
         }
         sc.fp_capped_by_constraint = true;
         sc.fp_original_m2 = oldFp;
@@ -5315,7 +5347,7 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       // v12.5 — COS (occupation au sol) recalculé sur l'emprise saisie (même emprise à tous les niveaux)
       if (scenarios._site_v12) {
         Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol, ov.fp > 0 ? sc.fp_m2 : 0));
-        refreshBudgetFit(sc, scenarios._site_v12.budget_fcfa);
+        refreshBudgetFit(sc, scenarios._site_v12.budget_range);
       }
       // v75.1 — COS cible saisi pour ce scénario (occupation au sol, 0,60 ou 60) : conservé tel quel
       if (ov.cos > 0) {
@@ -8811,7 +8843,7 @@ function buildTemplateTexts(flat, scenarios) {
     const s = String(bf || "").toUpperCase().replace(/[_ ]/g, "_");
     if (s.includes("HORS")) return "hors budget";
     if (s.includes("DANS")) return "dans le budget";
-    if (s.includes("TENDU") || s.includes("LIMITE")) return "en limite de budget";
+    if (s.includes("TENDU") || s.includes("LIMITE")) return "dans le haut de votre fourchette";
     return "N/A";
   }
   function qualifRisqueCompacite(m2) {
@@ -9095,15 +9127,8 @@ function enrichFlatForTemplates(flat, p, scenarios) {
   flat.envelope_area = flat.envelope_area || String(p.envelope_area || Math.round(Number(p.envelope_w || 0) * Number(p.envelope_d || 0)));
   // ── Budget FCFA (parsed from budget_range) ──
   if (!flat.budget_fcfa) {
-    const raw = String(p.budget_range || "");
-    const fcfaM = raw.match(/(\d[\d\s.,]*)\s*M\s*FCFA/i);
-    if (fcfaM) flat.budget_fcfa = fcfaM[1].replace(/[\s,]/g, '').replace(',', '.') + "M FCFA";
-    else {
-      const eurM = raw.match(/(\d[\d\s.,]*)\s*M?\s*€/i);
-      if (eurM) { const eur = parseFloat(eurM[1].replace(/[\s,]/g, '')) * (eurM[0].includes('M') ? 1e6 : 1); flat.budget_fcfa = Math.round(eur * 655.957 / 1e6) + "M FCFA"; }
-      else if (Number(p.budget_range) > 0) flat.budget_fcfa = Math.round(Number(p.budget_range) * 655.957 / 1e6) + "M FCFA";
-      else flat.budget_fcfa = "N/A";
-    }
+    // v12.7 — fourchette complète du client (« 33 – 66 M FCFA »), plus seulement une borne
+    flat.budget_fcfa = budgetRangeLabel(p.budget_range);
   }
   // ── Feasibility posture FR ──
   if (!flat.feasibility_posture_fr) {
@@ -9168,7 +9193,7 @@ function sanitizePremiumTexts(texts, flat) {
   // Budget label translations
   const LABEL_TR = {
     "HORS_BUDGET": "hors budget",
-    "BUDGET_TENDU": "budget tendu",
+    "BUDGET_TENDU": "haut de fourchette",
     "DANS_BUDGET": "dans le budget",
     "BALANCED": "equilibree",
     "AGGRESSIVE": "ambitieuse",
@@ -9350,14 +9375,15 @@ function validateConformity(flat, scenarios, texts) {
   // ── 6. CHECK: Budget fit coherence ──
   for (const lbl of ["A", "B", "C"]) {
     const sc = scenarios[lbl] || {};
-    const budgetMax = flat.budget_fcfa ? parseInt(String(flat.budget_fcfa).replace(/[^\d]/g, "")) * 1e6 : 0;
-    if (budgetMax > 0 && sc.cost_total_fcfa) {
-      const ratio = sc.cost_total_fcfa / budgetMax;
-      if (sc.budget_fit === "DANS_BUDGET" && ratio > 1.05) {
-        errors.push(`${lbl}: budget_fit=DANS_BUDGET mais coût/budget = ${(ratio*100).toFixed(0)}%`);
+    // v12.7 — cohérence avec la fourchette : besoin (réserve comprise) vs bas / haut de fourchette
+    const need = Number(sc.budget_needed_fcfa) || Number(sc.cost_total_fcfa) || 0;
+    const bMin = Number(sc.budget_min_fcfa) || 0, bMax = Number(sc.budget_max_fcfa) || 0;
+    if (bMax > 0 && need > 0) {
+      if (sc.budget_fit === "DANS_BUDGET" && need > bMin * 1.001) {
+        errors.push(`${lbl}: budget_fit=DANS_BUDGET mais besoin ${Math.round(need / 1e6)}M > bas de fourchette ${Math.round(bMin / 1e6)}M`);
       }
-      if (sc.budget_fit === "HORS_BUDGET" && ratio < 1.0) {
-        errors.push(`${lbl}: budget_fit=HORS_BUDGET mais coût/budget = ${(ratio*100).toFixed(0)}%`);
+      if (sc.budget_fit === "HORS_BUDGET" && need <= bMax) {
+        errors.push(`${lbl}: budget_fit=HORS_BUDGET mais besoin ${Math.round(need / 1e6)}M ≤ haut de fourchette ${Math.round(bMax / 1e6)}M`);
       }
     }
   }
@@ -9810,17 +9836,8 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
     C_ventil_lt_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round((cv.lots_techniques_fcfa || 0) / t * 100)}%`; })(),
     C_ventil_vrd_pct: (() => { const cv = sC.cout_ventilation || {}; const t = sC.cost_total_fcfa || 1; return `${Math.round(((cv.vrd_fcfa || 0) + (cv.amenagements_ext_fcfa || 0)) / t * 100)}%`; })(),
     // v72.80: Budget as clean FCFA string (parsed from raw budget_range)
-    budget_fcfa: (() => {
-      const raw = String(p.budget_range || "");
-      const fcfaM = raw.match(/(\d[\d\s.,]*)\s*M\s*FCFA/i);
-      if (fcfaM) return fcfaM[1].replace(/[\s,]/g, '').replace(',', '.') + "M FCFA";
-      const fcfaPlain = raw.match(/~?\s*(\d[\d\s]*)\s*M\s*FCFA/i);
-      if (fcfaPlain) return fcfaPlain[1].replace(/\s/g, '') + "M FCFA";
-      const eurM = raw.match(/(\d[\d\s.,]*)\s*M?\s*€/i);
-      if (eurM) { const eur = parseFloat(eurM[1].replace(/[\s,]/g, '')) * (eurM[0].includes('M') ? 1e6 : 1); return Math.round(eur * 655.957 / 1e6) + "M FCFA"; }
-      if (Number(p.budget_range) > 0) return Math.round(Number(p.budget_range) * 655.957 / 1e6) + "M FCFA";
-      return "N/A";
-    })(),
+    // v12.7 — fourchette complète du client (« 33 – 66 M FCFA »), plus seulement une borne
+    budget_fcfa: budgetRangeLabel(p.budget_range),
     // v72.80: Posture in French
     feasibility_posture_fr: (() => {
       const p2 = String(flat.profil_posture || p.feasibility_posture || "").toUpperCase();
@@ -10308,6 +10325,8 @@ app.post("/generate-pptx", async (req, res) => {
       flat[`${key}_config_justif`] = s.config_justification || "";
       flat[`${key}_layout_mode`] = s.layout_mode || "SUPERPOSE";
       flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
+      // v12.7 — coût final (C : phase 1 + phase 2 aux prix actuels ; sinon = coût total)
+      flat[`${key}_cost_final`] = `${Math.round((s.cost_final_fcfa || s.cost_total_fcfa || 0) / 1e6)}M FCFA`;
       flat[`${key}_cost_m2`] = `${s.cost_per_m2_sdp ? Math.round(s.cost_per_m2_sdp / 1000) : 0}k FCFA/m²`;
       flat[`${key}_cost_m2_marche`] = `${s.market_cost_per_m2 ? Math.round(s.market_cost_per_m2 / 1000) : 0}k`;
       flat[`${key}_cost_m2_ajuste`] = `${s.cost_per_m2 ? Math.round(s.cost_per_m2 / 1000) : 0}k`;
@@ -10739,6 +10758,8 @@ app.post("/generate-pptx-premium", async (req, res) => {
       flat[`${key}_sdp`] = String(s.sdp_m2 || 0);
       flat[`${key}_units`] = String(s.total_units || 0);
       flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
+      // v12.7 — coût final (C : phase 1 + phase 2 aux prix actuels ; sinon = coût total)
+      flat[`${key}_cost_final`] = `${Math.round((s.cost_final_fcfa || s.cost_total_fcfa || 0) / 1e6)}M FCFA`;
       flat[`${key}_cost_unit`] = `${s.cost_per_unit ? Math.round(s.cost_per_unit / 1e6) : 0}M FCFA`;
       flat[`${key}_score`] = String(Math.round((s.recommendation_score || 0) * 100));
     }
@@ -10893,7 +10914,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.6";
+const V12_ENGINE_VERSION = "12.7";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -11014,6 +11035,9 @@ function scenarioModelView(letter, row, engineScenario, siteArea) {
         cost_total_fcfa: e.cost_total_fcfa || null, budget_fit: e.budget_fit || null,
         budget_needed_fcfa: e.budget_needed_fcfa || null, reserve_fcfa: e.reserve_fcfa || null,
         budget_gap_pct: e.budget_gap_pct != null ? e.budget_gap_pct : null,
+        budget_min_fcfa: e.budget_min_fcfa || null, budget_max_fcfa: e.budget_max_fcfa || null,
+        budget_open_ended: !!e.budget_open_ended,
+        cost_final_fcfa: e.cost_final_fcfa || null, final_budget_fit: e.final_budget_fit || null,
         unit_mix_detail: e.unit_mix_detail || null,
         // COS (vocabulaire de Jeremy) = occupation au sol : emprise au sol / terrain, et part de l'emprise permise
         cos: site > 0 && (e.emprise_sol_m2 || e.fp_m2) ? Math.round(((e.emprise_sol_m2 || e.fp_m2) / site) * 1000) / 1000 : null,

@@ -82,6 +82,20 @@ test("budget serré : A et B gardent tout le programme et affichent l'écart ; C
   assert.equal(phase1 + phase2, 5, "phase 1 + phase 2 = tout le programme");
 });
 
+test("fourchette large : C finance sa phase 1 au bas de la fourchette, budgétise la phase 2 et le coût final", () => {
+  const lead = Object.assign({}, LEAD, { budget_range: "⭕ 50 000 – 100 000 € (~33–66 M FCFA)", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
+  assert.equal(r.C.budget_min_fcfa, 33e6);
+  assert.equal(r.C.budget_max_fcfa, 66e6);
+  assert.ok(r.C.budget_needed_fcfa <= 33e6, "phase 1 finançable même au bas de la fourchette");
+  assert.equal(r.C.budget_fit, "DANS_BUDGET");
+  assert.ok(r.C.phase_2_v12.cost_fcfa > 0, "phase 2 chiffrée");
+  assert.equal(r.C.cost_final_fcfa, r.C.cost_total_fcfa + r.C.phase_2_v12.cost_fcfa, "coût final = phase 1 + phase 2");
+  const wide = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, lead, { budget_range: "⭕ 100 000 – 200 000 € (~66–131 M FCFA)" }), {}));
+  assert.equal(wide.A.budget_fit, "BUDGET_TENDU", "96 M dans 66–131 M : haut de fourchette, pas « dans le budget »");
+  assert.equal(wide.B.budget_fit, "BUDGET_TENDU");
+});
+
 test("programme impossible même phasé → signalé, jamais masqué", () => {
   const lead = Object.assign({}, LEAD, { budget_range: "10 000 - 20 000 €", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
   const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));

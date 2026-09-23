@@ -405,7 +405,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.6-SURFACES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.7-FOURCHETTE</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6109,15 +6109,22 @@ function renderV12Strip(L) {
           <span class="s">BARLO ${num(sugCost)} FCFA</span>
         </label>
         ${(() => {
-            // Budget comparé réserve comprise (B 10 %, C 20 %, A sans réserve), jamais imposé à A/B
+            // Budget comparé à la FOURCHETTE du client, réserve comprise (B 10 %, C 20 %, A sans réserve)
             const lim = eng.limits || {};
-            const gap = eng.budget_gap_pct;
-            const gapTxt = gap == null ? "" : gap <= 0 ? "dans le budget" : `budget +${gap} %`;
-            const need = eng.budget_needed_fcfa && lim.reserve_pct ? `besoin ${fmtC(eng.budget_needed_fcfa)} réserve ${lim.reserve_pct} % comprise` : "";
-            const sub = [gapTxt, need].filter(Boolean).join(" · ") || (eng.budget_fit ? esc(eng.budget_fit) : "");
-            return kpi("Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", sub,
-                `Coût de construction estimé (SDP × coût/m² effectif, VRD compris).${lim.reserve_pct ? ` Comparé au budget avec une réserve de ${lim.reserve_pct} % pour les imprévus.` : " Sans réserve : l'écart au budget est affiché tel quel."}`,
-                gap != null && gap > 0 ? "warn" : "");
+            const M = v => `${Math.round(v / 1e6)} M`;
+            const range = eng.budget_max_fcfa
+                ? (eng.budget_open_ended ? `plus de ${M(eng.budget_min_fcfa)}` : eng.budget_min_fcfa && eng.budget_min_fcfa !== eng.budget_max_fcfa ? `${M(eng.budget_min_fcfa)}–${M(eng.budget_max_fcfa)}` : M(eng.budget_max_fcfa))
+                : "";
+            const status = { DANS_BUDGET: "dans le budget", BUDGET_TENDU: "haut de fourchette", HORS_BUDGET: `hors budget${eng.budget_gap_pct > 0 ? " +" + eng.budget_gap_pct + " %" : ""}` }[eng.budget_fit] || "";
+            const hasP2 = !!(eng.phase_2 && eng.phase_2.cost_fcfa);
+            const sub = [status, range ? `fourchette ${range}` : ""].filter(Boolean).join(" · ");
+            const cost = kpi(hasP2 ? "Coût phase 1" : "Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", sub,
+                `Coût de construction estimé (SDP × coût/m² effectif, VRD compris). Comparé à la fourchette du client${lim.reserve_pct ? `, avec ${lim.reserve_pct} % de réserve pour imprévus (besoin ${eng.budget_needed_fcfa ? fmtC(eng.budget_needed_fcfa) : "—"})` : ", sans réserve"} : « dans le budget » = tient au bas de la fourchette, « haut de fourchette » = tient seulement vers le haut.`,
+                eng.budget_fit === "HORS_BUDGET" ? "warn" : "");
+            if (!hasP2) return cost;
+            const finalStatus = { DANS_BUDGET: "dans le budget", BUDGET_TENDU: "haut de fourchette", HORS_BUDGET: "au-delà de la fourchette" }[eng.final_budget_fit] || "";
+            return cost + kpi("Coût final", fmtC(eng.cost_final_fcfa), `phase 2 : ${fmtC(eng.phase_2.cost_fcfa)}${finalStatus ? " · " + finalStatus : ""}`,
+                "Projet complet : phase 1 + phase 2, aux prix d'aujourd'hui (la phase 2 se finance plus tard).");
         })()}
       </div>
       ${v12RulesLine(m)}`;
