@@ -18,13 +18,19 @@ function fresh() {
   return { S, fake };
 }
 
-test("sans réglage : règle 3 m partout sur la vraie parcelle, C avec +1 m", async () => {
+test("sans réglage : règle 3 m partout sur la vraie parcelle ; C prend 85 % de l'emprise permise", async () => {
   const { S } = fresh();
   const r = await S.getOrComputeScenarioSet(Object.assign({}, LEAD));
   const A = r.scenarios.A.sdp_limits_v12, C = r.scenarios.C.sdp_limits_v12;
   assert.equal(A.emprise_source, "PARCELLE_RETRAITS");
   near(A.buildable_area, 74, 1, "zone constructible A");
-  near(C.buildable_area, 35, 1, "zone constructible C (retraits +1 m)");
+  near(C.buildable_area, 74, 1, "zone constructible C : mêmes retraits (plus de +1 m)");
+  near(A.emprise_max, 74, 1, "A : min(COS 60 % = 150 m², zone constructible 74 m²)");
+  near(C.emprise_max, 63, 1, "C : 85 % de 74 m²");
+  assert.equal(r.scenarios.A.retraits_regl === undefined, true);
+  const retr = r.scenarios.diagnostic.retraits_reglementaires;
+  assert.equal(retr.rue_identifiee, false, "façade rue à indiquer");
+  assert.equal(retr.mitoyennete_cotes, 0);
   assert.equal(r.site.source, "BARLO_RULE");
   assert.equal(r.site.has_street, false, "façade rue à préciser");
 });

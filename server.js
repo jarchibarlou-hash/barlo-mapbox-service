@@ -1932,16 +1932,44 @@ const FP_RATIOS = {
   MIXTE_PROGRAMME:    { A: 0.85, B: 0.75, C: 0.65 },
   PHASAGE_FONCIER:    { A: 0.80, B: 0.70, C: 0.60 },
 };
-// CES par zoning_type — Coefficient d'Emprise au Sol RÉGLEMENTAIRE (max autorisé)
-const ZONING_CES = {
-  URBAIN: 0.60, PERIURBAIN: 0.45, PAVILLON: 0.30,
-  RURAL: 0.20, MIXTE: 0.50, Z_DEFAULT: 0.40,
-};
-// COS par zoning_type — Coefficient d'Occupation du Sol → contrôle la SDP TOTALE (plancher tous niveaux)
-const ZONING_COS = {
-  URBAIN: 2.50, PERIURBAIN: 1.50, PAVILLON: 0.80,
-  RURAL: 0.40, MIXTE: 2.00, Z_DEFAULT: 1.50,
-};
+// v12.5 — COS de Jeremy = OCCUPATION AU SOL (emprise / parcelle) : ville 60 %, périphérie 45 %,
+// campagne 30 % (mixte = ville, pavillonnaire = périphérie). Source unique : lib/scenario-rules.js.
+// Il n'existe plus de COS « surface de plancher totale » (valeurs 2,5/1,5… inventées) : les deux
+// noms historiques pointent sur la même règle d'occupation au sol.
+const ZONING_CES = Object.assign({ Z_DEFAULT: ScenarioRules.COS_SOL_BY_ZONE.URBAIN }, ScenarioRules.COS_SOL_BY_ZONE);
+const ZONING_COS = ZONING_CES;
+
+// v12.5 — Conformité au COS (occupation au sol) d'un scénario.
+// Emprise au sol = projection du bâti : plus grand plancher, ou somme des deux volumes si scindé.
+// cos_ratio_pct = part de l'emprise permise (COS × parcelle) utilisée ; > 100 % = hors COS.
+function groundOccupation(sc, siteArea, cosSol, groundOverride) {
+  const split = sc && sc.split_layout;
+  const ground = groundOverride > 0 ? groundOverride
+    : (split && split.volume_commerce && split.volume_logement)
+      ? (Number(split.volume_commerce.fp_m2) || 0) + (Number(split.volume_logement.fp_m2) || 0)
+      : Math.max(Number(sc.fp_rdc_m2) || 0, Number(sc.fp_etages_m2) || 0, Number(sc.fp_m2) || 0);
+  const site = Number(siteArea) || 0;
+  const allowed = (Number(cosSol) || 0) * site;
+  const ratio = allowed > 0 ? ground / allowed : 0;
+  return {
+    emprise_sol_m2: Math.round(ground),
+    occupation_sol_pct: site > 0 ? Math.round(ground / site * 100) : 0,
+    cos_ratio_pct: Math.round(ratio * 100),
+    cos_compliance: (allowed <= 0 || ratio <= 1 + 1e-9) ? "CONFORME" : "AMBITIEUX_HORS_COS",
+  };
+}
+// Libellés textes/PPT dans le vocabulaire de Jeremy (COS = occupation au sol, jamais « 2,5 »)
+function cosSolLabel(siteDiag) {
+  const s = siteDiag || {};
+  const pct = Number(s.cos_sol_pct) || Number(s.ces_reglementaire_pct) || 0;
+  if (!pct) return "non renseigné";
+  return `${pct} % d'occupation au sol${s.cos_zone ? ` (${s.cos_zone})` : ""}`;
+}
+function retraitAvantLabel(retr) {
+  const r = retr || {};
+  if (r.rue_identifiee === false) return `à préciser (façade rue non indiquée : ${r.lateral_m || 3} m appliqués sur tous les côtés)`;
+  return `${r.avant_m || 0}m`;
+}
 // ══════════════════════════════════════════════════════════════════════════════
 // v56.8 — RÉSERVE SOL + PILOTIS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2095,23 +2123,17 @@ const COST_RANGE_MULT = { bas: 0.85, median: 1.0, haut: 1.20 };
 // Mitoyenneté : en urbain dense, les murs pignons touchent la limite → retrait=0
 // La combinaison retrait + mitoyenneté réduit l'emprise RÉELLE constructible
 // ══════════════════════════════════════════════════════════════════════════════
+// v12.5 — Règle de Jeremy, identique dans toutes les zones : 5 m côté rue, 3 m ailleurs
+// (les anciens retraits agrandis hors ville, 6/4/4 à 10/6/6 m, n'avaient pas de source).
 const RETRAITS_M = {
   URBAIN:     { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
-  PERIURBAIN: { avant: 6, lateral: 4, arriere: 4, mitoyen_possible: true },
-  PAVILLON:   { avant: 8, lateral: 5, arriere: 5, mitoyen_possible: false },
-  RURAL:      { avant: 10, lateral: 6, arriere: 6, mitoyen_possible: false },
+  PERIURBAIN: { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
+  PAVILLON:   { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
+  RURAL:      { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
   MIXTE:      { avant: 5, lateral: 3, arriere: 3, mitoyen_possible: true },
 };
-// Mitoyenneté : en zone urbaine dense, un ou deux côtés sont mitoyens
-// → retrait latéral = 0 sur les côtés mitoyens
-// On modélise le nombre de côtés mitoyens par zonage
-const MITOYENNETE_SIDES = {
-  URBAIN: 2,      // 2 côtés mitoyens (typique Douala centre)
-  PERIURBAIN: 1,  // 1 côté mitoyen
-  PAVILLON: 0,    // isolé
-  RURAL: 0,
-  MIXTE: 1,
-};
+// v12.5 — La mitoyenneté n'est JAMAIS déduite de la zone : seulement les côtés que Jeremy
+// indique « mitoyen » dans le cockpit (anciennement 2 côtés supposés en ville, 1 en périphérie).
 // ══════════════════════════════════════════════════════════════════════════════
 // v57.7 — VENTILATION COÛTS PAR POSTE (% du coût construction hors VRD)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3032,7 +3054,7 @@ function computeProgramDrivenScenarioV73(params) {
     zoning_type = "URBAIN",
     commerce_size_m2 = 0,
     // v12 — règles de rôle (cf. lib/scenario-rules.js)
-    cos_regl = 0,         // COS réglementaire (SDP max = COS × terrain)
+    ignore_cos = false,   // « Ignorer plafond COS » coché : pas de plafond d'occupation au sol
     budget_fcfa = 0,      // budget client en FCFA (0 = inconnu : aucune limite inventée)
     cost_per_m2 = 0,      // coût/m² effectif du scénario (grille du rôle ou saisie utilisateur)
     role_rules = null,    // règles de rôle surchargées pour ce lead (sinon valeurs par défaut)
@@ -3102,8 +3124,10 @@ function computeProgramDrivenScenarioV73(params) {
     typologiesA_logements = [];
   }
   // 4. CAPACITÉ DU SITE (réglementation + enveloppe)
-  const ZONING_CES_V73 = { URBAIN: 0.60, PERIURBAIN: 0.45, PAVILLON: 0.30, RURAL: 0.20, MIXTE: 0.50, Z_DEFAULT: 0.40 };
-  const ces = ZONING_CES_V73[zoning_type] || ZONING_CES_V73.Z_DEFAULT;
+  // v12.5 — COS de Jeremy = occupation au sol (ville 60 %, périphérie 45 %, campagne 30 %) ;
+  // « Ignorer plafond COS » (dérogation assumée) lève ce plafond, la zone constructible reste.
+  const cosSolV12 = ScenarioRules.cosSolForZone(zoning_type);
+  const ces = ignore_cos ? 0 : cosSolV12.value;
   const maxLevelsHauteur = Math.floor((max_height_m || 99) / floor_height);
   const maxLevelsAbsolu = Math.min(max_floors || 99, maxLevelsHauteur, 10);
   const levelsBounds = LEVELS_BY_TYPE_V73[programType] || { min: 1, maxRaisonnable: 4 };
@@ -3117,19 +3141,21 @@ function computeProgramDrivenScenarioV73(params) {
   // Zone constructible réelle : parcelle − retraits de chaque côté − retrait renforcé du rôle
   const siteV12 = site_polygon ? SiteGeometry.siteBuildable(site_polygon, site_segments, rulesV12.setback_extra_m) : null;
   const limitsV12 = ScenarioRules.scenarioSdpLimits({
-    rules: rulesV12, site_area, ces, cos_regl, envelope_w, envelope_d,
+    rules: rulesV12, site_area, ces, envelope_w, envelope_d,
     levels_min: levelsMin, levels_max: levelsMaxRaisonnable, budget_fcfa, cost_per_m2,
     max_fp: max_fp_m2,
     buildable_area: siteV12 ? siteV12.buildable_area_m2 : undefined,
   });
   const clientProgramV12 = { logements: typologiesA_logements.map(t => ({ type: t.type, count: t.count })), commerce: commerceCountA };
   const sdpOfProgramV12 = pr => computeSdpFromMixV73(pr.logements, pr.commerce, standing_level).sdp_total;
-  let scenarioProgramV12 = clientProgramV12, adaptationsV12 = [], infeasibleV12 = false;
+  let scenarioProgramV12 = clientProgramV12, adaptationsV12 = [], infeasibleV12 = false, phase2V12 = null;
   if (rulesV12.adapt_program) {
-    const fit = ScenarioRules.fitProgram(clientProgramV12, sdpOfProgramV12, limitsV12.sdp_max, limitsV12.binding);
+    const fit = ScenarioRules.fitProgram(clientProgramV12, sdpOfProgramV12, limitsV12.sdp_max, limitsV12.binding, rulesV12.adapt_mode);
     scenarioProgramV12 = fit.program;
     adaptationsV12 = fit.adaptations;
     infeasibleV12 = fit.infeasible;
+    // C : ce qui ne tient pas en phase 1 est reporté, structure prévue pour l'accueillir
+    if (fit.phase_2) phase2V12 = Object.assign({}, fit.phase_2, { sdp_m2: Math.round(sdpOfProgramV12(fit.phase_2)) });
   }
   const scenarioMix = scenarioProgramV12.logements;
   const scenarioCommerceCount = scenarioProgramV12.commerce;
@@ -3233,17 +3259,24 @@ function computeProgramDrivenScenarioV73(params) {
     sdp_limits_v12: {
       sdp_max: isFinite(limitsV12.sdp_max) ? Math.round(limitsV12.sdp_max) : null,
       binding: limitsV12.binding,
-      cos: isFinite(limitsV12.limits.cos) ? Math.round(limitsV12.limits.cos) : null,
       capacity: isFinite(limitsV12.limits.capacity) ? Math.round(limitsV12.limits.capacity) : null,
       budget: isFinite(limitsV12.limits.budget) ? Math.round(limitsV12.limits.budget) : null,
       emprise_max: Math.round(limitsV12.emprise_max),
       levels_cap: limitsV12.levels_cap,
+      // COS = occupation au sol (règle de Jeremy par zone) ; null = plafond levé par dérogation
+      cos_sol: ignore_cos ? null : cosSolV12.value,
+      cos_sol_source: ignore_cos ? "USER_OVERRIDE" : cosSolV12.source,
+      cos_zone: cosSolV12.zone,
+      emprise_cos: limitsV12.emprise_cos,
       buildable_area: limitsV12.buildable_area,     // zone constructible réelle (null = enveloppe estimée)
       emprise_source: limitsV12.emprise_source,
       has_street: siteV12 ? !!siteV12.has_street : null,
+      reserve_pct: limitsV12.reserve_pct,           // réserve pour imprévus gardée sur le budget
+      reserve_fcfa: limitsV12.reserve_fcfa,
     },
     adaptations_v12: adaptationsV12,
     infeasible_v12: infeasibleV12,
+    phase_2_v12: phase2V12,
   };
 }
 function computeSmartScenarios({
@@ -3293,33 +3326,41 @@ function computeSmartScenarios({
   // computeMassingPolygon au moment du rendu, avec cross-section + containment check.
   const envelope_bbox = envelope_w * envelope_d;
   const envelope_area = env_area_override || envelope_bbox;
-  const ces = ZONING_CES[zoning_type] || 0.50;
+  // v12.5 — COS de Jeremy = occupation au sol (ville 60 %, périphérie 45 %, campagne 30 %)
+  const cosSolInfo = ScenarioRules.cosSolForZone(zoning_type);
+  const ces = cosSolInfo.value;
   const max_fp = ces * site_area;  // v56.3: CES seul, pas de cap par envelope_bbox erroné
   // ⚠ Diagnostic : si envelope_bbox << ces*site_area, les dimensions Sheet sont suspectes
   if (envelope_bbox > 0 && envelope_bbox < max_fp * 0.6) {
     console.warn(`⚠ ENVELOPE SUSPECT: bbox=${envelope_bbox}m² (${envelope_w}×${envelope_d}) << max_fp=${max_fp}m² (CES×site). Les dimensions Sheet sont probablement fausses.`);
   }
-  // COS → surface de plancher totale max (SDP = fp × niveaux)
-  const cos = ZONING_COS[zoning_type] || 1.50;
-  const max_sdp = cos * site_area;
+  // v12.5 — « COS » = occupation au sol (vocabulaire de Jeremy) ; il n'y a plus de plafond de
+  // surface de plancher totale (l'ancien COS 2,5 par zone était une valeur inventée).
+  const cos = ces;
   const ratios = FP_RATIOS[primary_driver] || FP_RATIOS.MAX_CAPACITE;
   // ══════════════════════════════════════════════════════════════════════════════
   // v57.7 — RETRAITS RÉGLEMENTAIRES & MITOYENNETÉ → emprise constructible réduite
+  // v12.5 — Règle de Jeremy dans toutes les zones : 5 m côté rue, 3 m ailleurs ; mitoyenneté
+  // uniquement si elle est indiquée (côtés « mitoyen » du cockpit), jamais déduite de la zone.
+  // Avec la parcelle GPS, la zone constructible est calculée sur la vraie géométrie.
   // ══════════════════════════════════════════════════════════════════════════════
   const retraitsZone = RETRAITS_M[zoning_type] || RETRAITS_M.URBAIN;
-  const rAvant = retrait_avant_m > 0 ? retrait_avant_m : retraitsZone.avant;
+  const segsV12 = Array.isArray(site_segments) ? site_segments : [];
+  const rueSegsV12 = segsV12.filter(s => s.type === "rue");
+  const rAvant = retrait_avant_m > 0 ? retrait_avant_m
+    : (rueSegsV12.length ? Math.max(...rueSegsV12.map(s => Number(s.retrait_m) || 0)) : retraitsZone.avant);
   const rLateral = retrait_lateral_m > 0 ? retrait_lateral_m : retraitsZone.lateral;
   const rArriere = retrait_arriere_m > 0 ? retrait_arriere_m : retraitsZone.arriere;
-  const nbMitoyens = nb_cotes_mitoyens >= 0 ? nb_cotes_mitoyens : (MITOYENNETE_SIDES[zoning_type] || 0);
-  // Emprise constructible = envelope réduite par les retraits
-  // Modèle simplifié : on retire les retraits de W et D
-  // Mitoyenneté : chaque côté mitoyen annule un retrait latéral
-  const retraitLatEffectif = Math.max(0, rLateral * (2 - nbMitoyens)); // 0 si 2 mitoyens
+  const nbMitoyens = nb_cotes_mitoyens >= 0 ? nb_cotes_mitoyens : segsV12.filter(s => s.type === "mitoyen").length;
+  const siteGeomV12 = site_polygon ? SiteGeometry.siteBuildable(site_polygon, site_segments, 0) : null;
+  // Emprise constructible : vraie géométrie si la parcelle est connue, sinon modèle l × p simplifié
+  const retraitLatEffectif = Math.max(0, rLateral * (2 - Math.min(2, nbMitoyens))); // 0 si 2 mitoyens
   const wConstructible = Math.max(envelope_w - retraitLatEffectif, envelope_w * 0.5);
   const dConstructible = Math.max(envelope_d - rAvant - rArriere, envelope_d * 0.5);
-  const empriseConstructible = wConstructible * dConstructible;
+  const empriseConstructible = siteGeomV12 ? siteGeomV12.buildable_area_m2 : wConstructible * dConstructible;
   // L'emprise constructible est un plafond physique supplémentaire (en plus du CES)
-  const setbackReductionPct = envelope_bbox > 0 ? Math.round((1 - empriseConstructible / envelope_bbox) * 100) : 0;
+  const setbackBaseV12 = siteGeomV12 ? siteGeomV12.parcel_area_m2 : envelope_bbox;
+  const setbackReductionPct = setbackBaseV12 > 0 ? Math.round((1 - empriseConstructible / setbackBaseV12) * 100) : 0;
   console.log(`│ v57.7 retraits: avant=${rAvant}m lat=${rLateral}m(×${2-nbMitoyens} côtés) arr=${rArriere}m → W=${wConstructible.toFixed(1)}×D=${dConstructible.toFixed(1)}=${Math.round(empriseConstructible)}m² (-${setbackReductionPct}%)`);
   // ══════════════════════════════════════════════════════════════════════════════
   // v57.9 — ORIENTATION SOLAIRE → impact profondeur de corps + géométrie
@@ -3473,6 +3514,8 @@ function computeSmartScenarios({
     Math.floor((Number(max_height_m) || 99) / floor_height),
     10
   );
+  // v12.5 — capacité théorique de plancher = emprise permise (COS au sol) × niveaux max
+  const max_sdp = Math.round(max_fp * absMaxLevels);
   const isMixte = /mixte|mixed/i.test(program_main) || forceCommerce;
   const commerceLevels = isMixte ? 1 : 0;
   // ══════════════════════════════════════════════════════════════════════════════
@@ -3591,9 +3634,9 @@ function computeSmartScenarios({
       floor_height: Number(floor_height) || 3.2,
       zoning_type: zoning_type || "URBAIN",
       commerce_size_m2: Number(commerce_size_m2) || 0,
-      // Dérogation COS cochée par l'utilisateur (« Ignorer plafond COS ») : pas de limite COS
-      cos_regl: (arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.regulatory
-        && arguments[0]._leadConstraints.regulatory.ignore_cos) ? 0 : cos,
+      // Dérogation COS cochée par l'utilisateur (« Ignorer plafond COS ») : pas de plafond au sol
+      ignore_cos: !!(arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.regulatory
+        && arguments[0]._leadConstraints.regulatory.ignore_cos),
       budget_fcfa: budgetMax,
       cost_per_m2: costForSizingV12,
       role_rules,
@@ -3682,11 +3725,10 @@ function computeSmartScenarios({
       : ((fpRdc && fpEtages && levels > 1)
         ? fpRdc + fpEtages * (levels - 1)
         : fp * levels);
-    const cosRatio = max_sdp > 0 ? sdp / max_sdp : 0;
-    let compliance;
-    if (cosRatio <= 1.05) compliance = "CONFORME";
-    else if (cosRatio <= 1.30) compliance = "DEROGATION_POSSIBLE";
-    else compliance = "AMBITIEUX_HORS_COS";
+    // v12.5 — COS = occupation au sol : emprise au sol du scénario vs COS × parcelle
+    const groundV12 = groundOccupation({ fp_m2: fp, fp_rdc_m2: fpRdc, fp_etages_m2: fpEtages, split_layout: splitLayout }, site_area, ces);
+    const cosRatio = groundV12.cos_ratio_pct / 100;
+    const compliance = groundV12.cos_compliance;
     // v57.6: Coût estimé FCFA (Cameroun) = Construction + VRD
     // Construction = SDP × coût/m²
     // VRD = 10% de SDP × 50% du coût/m²
@@ -3802,6 +3844,8 @@ function computeSmartScenarios({
       sdp_m2: sdp,
       cos_compliance: compliance,
       cos_ratio_pct: Math.round(cosRatio * 100),
+      emprise_sol_m2: groundV12.emprise_sol_m2,
+      occupation_sol_pct: groundV12.occupation_sol_pct,
       has_pilotis: hasPilotis,
       pilotis_levels: pilotisLevels,
       total_levels_incl_pilotis: totalLevelsWithPilotis,
@@ -3844,6 +3888,7 @@ function computeSmartScenarios({
       sdp_limits_v12: v73Result.sdp_limits_v12,
       adaptations_v12: v73Result.adaptations_v12,
       infeasible_v12: v73Result.infeasible_v12,
+      phase_2_v12: v73Result.phase_2_v12,
       label_fr: labels_fr[label],
       accent_color: accents[label],
       estimated_cost: estimatedCost,
@@ -4350,7 +4395,7 @@ function computeSmartScenarios({
       contrainteExplication = `le budget disponible (${Math.round(budgetMaxCtx / 1e6)}M FCFA) est le facteur limitant principal de ce projet`;
     } else if (sc.cos_ratio_pct > 85) {
       contrainteDominante = "reglementation";
-      contrainteExplication = `la densite reglementaire (COS a ${sc.cos_ratio_pct}%) est le facteur structurant — le terrain est exploite pres de sa capacite maximale`;
+      contrainteExplication = `l'occupation au sol (${sc.cos_ratio_pct}% de l'emprise autorisee par le COS) est le facteur structurant — le terrain est occupe pres de son maximum au sol`;
     } else if (solLibrePct < 0.25 || setbackReductionPct > 20) {
       contrainteDominante = "terrain";
       contrainteExplication = `la geometrie du terrain et les retraits reglementaires (${setbackReductionPct}% de reduction d'emprise) sont les contraintes majeures de l'implantation`;
@@ -4510,7 +4555,7 @@ function computeSmartScenarios({
     // ── 6. ANALYSE DE RISQUE ──
     const risques = [];
     if (sc.budget_fit === "HORS_BUDGET") risques.push("Risque budgetaire : depassement de l'enveloppe — phasage ou optimisation recommande");
-    if (sc.cos_ratio_pct > 90) risques.push(`Densite elevee : COS a ${sc.cos_ratio_pct}% — marges d'evolution limitees`);
+    if (sc.cos_ratio_pct > 90) risques.push(`Emprise au sol elevee : ${sc.cos_ratio_pct}% de l'emprise autorisee par le COS — peu de marge pour une extension au sol`);
     if (solLibrePct < 0.25) risques.push(`Emprise importante : seulement ${Math.round(solLibrePct * 100)}% du terrain libre — contrainte pour parking et acces`);
     if ((sc.complexite || {}).score >= 4) risques.push(`Complexite technique ${(sc.complexite || {}).label} : maitrise d'oeuvre experimentee requise`);
     if (sc.total_units > ctx.target_units * 1.3) risques.push(`Surdimensionnement (+${Math.round((sc.total_units / ctx.target_units - 1) * 100)}% vs besoin) : investissement supplementaire sans garantie de demande`);
@@ -4519,8 +4564,7 @@ function computeSmartScenarios({
     parts.push(`◆ ANALYSE DE RISQUE — ${risques.join(". ")}.`);
     // ── 7. RÉGLEMENTAIRE + RETRAITS ──
     const regParts = [];
-    regParts.push(`CES utilise ${reg.ces_utilise_pct || sc.ces_fill_pct}% sur ${reg.ces_reglementaire_pct || ""}% autorises (marge ${reg.ces_marge_pct || ""}%)`);
-    regParts.push(`COS a ${reg.cos_utilise_pct || sc.cos_ratio_pct}% de la capacite reglementaire`);
+    regParts.push(`COS (occupation au sol) : ${sc.occupation_sol_pct != null ? sc.occupation_sol_pct : (reg.ces_utilise_pct || sc.ces_fill_pct)}% du terrain occupe sur ${reg.ces_reglementaire_pct || ""}% autorises (${sc.cos_ratio_pct}% de l'emprise permise)`);
     regParts.push(`Hauteur ${sc.height_m}m sur ${reg.hauteur_max_m || ""}m autorises`);
     if (reg.retrait_avant_m) {
       regParts.push(`Retraits : avant ${reg.retrait_avant_m}m, lateral ${reg.retrait_lateral_m}m, arriere ${reg.retrait_arriere_m}m${reg.mitoyennete_cotes > 0 ? ` (${reg.mitoyennete_cotes} mitoyennete(s))` : ""}`);
@@ -4536,7 +4580,7 @@ function computeSmartScenarios({
     } else if (contrainteDominante === "terrain") {
       conseil.push(`Recommandation : sur ce terrain contraint, privilegiez la densite verticale plutot que l'etalement. Chaque niveau supplementaire ajoute de la surface sans consommer d'emprise au sol`);
     } else if (contrainteDominante === "reglementation") {
-      conseil.push(`Recommandation : le COS est presque atteint. Toute evolution future (surelevation, extension) necessitera une derogation ou un changement de zonage`);
+      conseil.push(`Recommandation : l'emprise au sol autorisee par le COS est presque atteinte. Une extension au sol necessitera une derogation ; une surelevation reste possible si la hauteur autorisee le permet`);
     } else if (recommended === "A" && sc.total_units > ctx.target_units * 1.2) {
       conseil.push(`Recommandation : vous pouvez construire plus que votre cible initiale. Verifiez que le marche local absorbe ce surplus avant de maximiser`);
     } else {
@@ -4564,11 +4608,6 @@ function computeSmartScenarios({
       r.B.levels = Math.max(1, r.A.levels - 1);
     }
     for (const lbl of ["A", "B", "C"]) recalcSdp(r[lbl]);
-    for (const lbl of ["A", "B", "C"]) {
-      const cr = max_sdp > 0 ? r[lbl].sdp_m2 / max_sdp : 0;
-      r[lbl].cos_ratio_pct = Math.round(cr * 100);
-      r[lbl].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
-    }
     if (r.B.fp_m2 > 0 && r.C.fp_m2 > 0) {
       const diff = Math.abs(r.B.fp_m2 - r.C.fp_m2) / Math.max(r.B.fp_m2, r.C.fp_m2);
       if (diff < 0.15) {
@@ -4599,11 +4638,9 @@ function computeSmartScenarios({
   } else {
     console.log(`│ v73.1.4: v57.21 fp inversion check NEUTRALISÉ (program-driven mode)`);
   }
-  // Recalc COS ratios after post-processing
+  // Recalc COS (occupation au sol) after post-processing
   for (const lbl of ["A", "B", "C"]) {
-    const cr = max_sdp > 0 ? r[lbl].sdp_m2 / max_sdp : 0;
-    r[lbl].cos_ratio_pct = Math.round(cr * 100);
-    r[lbl].cos_compliance = cr <= 1.05 ? "CONFORME" : cr <= 1.30 ? "DEROGATION_POSSIBLE" : "AMBITIEUX_HORS_COS";
+    if (r[lbl] && !r[lbl].unsupported) Object.assign(r[lbl], groundOccupation(r[lbl], site_area, ces));
   }
   // ══════════════════════════════════════════════════════════════════════════════
   // MOTEUR DE RECOMMANDATION v57.6 (CLIENT-CENTRIC)
@@ -4819,10 +4856,15 @@ function computeSmartScenarios({
       zonage: zoning_type,
       ces_reglementaire_pct: Math.round(ces * 100),
       cos_reglementaire: cos,
+      // v12.5 — COS = occupation au sol (règle de Jeremy par zone)
+      cos_sol_pct: Math.round(ces * 100),
+      cos_source: cosSolInfo.source,
+      cos_zone: cosSolInfo.zone,
       hauteur_max_m: Number(max_height_m) || 99,
       niveaux_max: absMaxLevels,
       emprise_max_m2: Math.round(max_fp),
       sdp_max_m2: Math.round(max_sdp),
+      zone_constructible_m2: Math.round(empriseConstructible),
     },
     // A vs B vs C comparison + deltas
     comparatif: (() => {
@@ -4892,6 +4934,10 @@ function computeSmartScenarios({
       emprise_constructible_m2: Math.round(empriseConstructible),
       emprise_effective_m2: Math.round(empriseEffective),
       reduction_pct: setbackReductionPct,
+      // v12.5 — provenance : retraits réglés dans le cockpit, sinon règle BARLO (5 m rue / 3 m)
+      source: segsV12.length ? "USER_OVERRIDE" : "BARLO_RULE",
+      rue_identifiee: siteGeomV12 ? rueSegsV12.length > 0 : undefined,
+      calcul: siteGeomV12 ? "PARCELLE_REELLE" : "ENVELOPPE_ESTIMEE",
     },
     // v57.9: orientation solaire
     orientation_solaire: {
@@ -4919,14 +4965,15 @@ function computeSmartScenarios({
   // on cap fp/sdp/units/mix en cascade. Sinon, no-op (isEmpty=true).
   // v12 : en mode programme, l'emprise maximale est déjà un plafond du dimensionnement
   // (lib/scenario-rules.js) ; le repère est porté par l'objet renvoyé pour les appels suivants.
-  const _scenarios = { A: r.A, B: r.B, C: r.C, _v12_program_driven: !!isProgramDriven };
+  const _siteV12 = { site_area: Number(site_area) || 0, cos_sol: ces };
+  const _scenarios = { A: r.A, B: r.B, C: r.C, _v12_program_driven: !!isProgramDriven, _site_v12: _siteV12 };
   if (arguments[0] && arguments[0]._leadConstraints) {
     applyConstraintsToScenarios(_scenarios, arguments[0]._leadConstraints);
     if (!arguments[0]._leadConstraints.isEmpty) {
       console.log(`│ [PUSH11] Apres contraintes: A=${_scenarios.A.fp_m2}m²×${_scenarios.A.levels}niv=${_scenarios.A.sdp_m2}m² | B=${_scenarios.B.fp_m2}m²×${_scenarios.B.levels}niv=${_scenarios.B.sdp_m2}m² | C=${_scenarios.C.fp_m2}m²×${_scenarios.C.levels}niv=${_scenarios.C.sdp_m2}m²`);
     }
   }
-  return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band, _v12_program_driven: !!isProgramDriven };
+  return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band, _v12_program_driven: !!isProgramDriven, _site_v12: _siteV12 };
 }
 // ═══════════════════════════════════════════════════════════════════════════
 // v74.30 PUSH 11 — LEAD CONSTRAINTS FRAMEWORK
@@ -5164,13 +5211,8 @@ function applyConstraintsToScenarios(scenarios, constraints) {
           }
         }
         if (sc.unit_mix_detail) sc.unit_mix_detail = rescaleMixDetail(sc.unit_mix_detail, sdpScale);
-        // COS ratio recalcule
-        if (typeof sc.cos_ratio_pct === "number") {
-          sc.cos_ratio_pct = Math.round(sc.cos_ratio_pct * sdpScale);
-          sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
-            : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
-            : "AMBITIEUX_HORS_COS";
-        }
+        // COS (occupation au sol) recalculé sur la nouvelle emprise
+        if (scenarios._site_v12) Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol));
         sc.fp_capped_by_constraint = true;
         sc.fp_original_m2 = oldFp;
         console.log(`│ [CONSTRAINTS] ${lbl}: fp ${oldFp}→${sc.fp_m2}m² | sdp ${oldSdp}→${sc.sdp_m2}m² | units ${Math.round(sc.total_units / sdpScale)}→${sc.total_units}`);
@@ -5242,20 +5284,14 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       const type = m2pu < 28 ? "T1" : m2pu < 45 ? "T2" : m2pu < 65 ? "T3" : m2pu < 85 ? "T4" : "T5";
       sc.unit_mix_detail = `${sc.total_units}×${type}(${m2pu}m²)`;
       sc.unit_mix = { [type]: sc.total_units };
-      // COS recalcule proportionnel
-      if (typeof sc.cos_ratio_pct === "number" && oldSdp > 0) {
-        sc.cos_ratio_pct = Math.round(sc.cos_ratio_pct * sdpScale);
-        sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
-          : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
-          : "AMBITIEUX_HORS_COS";
+      // v12.5 — COS (occupation au sol) recalculé sur l'emprise saisie (même emprise à tous les niveaux)
+      if (scenarios._site_v12) {
+        Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol, ov.fp > 0 ? sc.fp_m2 : 0));
       }
-      // v75.1 — COS force par scénario : override le pourcentage affiché
+      // v75.1 — COS cible saisi pour ce scénario (occupation au sol, 0,60 ou 60) : conservé tel quel
       if (ov.cos > 0) {
-        sc.cos_ratio_pct = Math.round(ov.cos * 100);
-        sc.cos_compliance = sc.cos_ratio_pct <= 105 ? "CONFORME"
-          : sc.cos_ratio_pct <= 130 ? "DEROGATION_POSSIBLE"
-          : "AMBITIEUX_HORS_COS";
-        console.log(`│ [CONSTRAINTS] ${lbl} COS forcé : ${sc.cos_ratio_pct}%`);
+        sc.cos_cible_pct = Math.round(ov.cos > 1 ? ov.cos : ov.cos * 100);
+        console.log(`│ [CONSTRAINTS] ${lbl} COS cible saisi : ${sc.cos_cible_pct}%`);
       }
       // v75.1 — units_detail force le mix complet (par ex. bureaux + logement mixte)
       if (Array.isArray(ov.units_detail) && ov.units_detail.length > 0) {
@@ -5450,7 +5486,7 @@ app.post("/compute-scenarios", (req, res) => {
     orient_malus_pct: String(orient.malus_orientation_pct || 0),
     orient_recommandation: orient.recommandation || "",
     // ── RETRAITS (texte plat) ──
-    retrait_avant: `${retr.avant_m || 0}m`,
+    retrait_avant: retraitAvantLabel(retr),
     retrait_lateral: `${retr.lateral_m || 0}m`,
     retrait_arriere: `${retr.arriere_m || 0}m`,
     retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
@@ -5585,7 +5621,7 @@ app.post("/compute-scenarios", (req, res) => {
     constraints_rationale: String(p.constraints_rationale || ""),
     // ── SITE DIAG ──
     site_ces_regl: `${siteDiag.ces_reglementaire_pct || 0}%`,
-    site_cos_regl: String(siteDiag.cos_reglementaire || 0),
+    site_cos_regl: cosSolLabel(siteDiag),
     site_hauteur_max: `${siteDiag.hauteur_max_m || 0}m`,
     site_niveaux_max: String(siteDiag.niveaux_max || 0),
     site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
@@ -8911,7 +8947,7 @@ function buildTemplateTexts(flat, scenarios) {
     } else if (cosCompliance === "DEROGATION_POSSIBLE") {
       urbanismeBullet = `COS à **${cosPct} %** — légèrement au-dessus du plafond, dérogation envisageable.`;
     } else {
-      urbanismeBullet = `COS à **${cosPct} %** du maximum autorisé. Hauteurs et retraits conformes.`;
+      urbanismeBullet = `Emprise au sol à **${cosPct} %** du maximum autorisé par le COS.`;
     }
     // Détails budgétaires spécifiques
     let budgetAnalysis = "";
@@ -8945,7 +8981,7 @@ function buildTemplateTexts(flat, scenarios) {
   // v74.18 — slide 3 : roles purs sans SDP (chiffres reveles dans les slides scenario detaillees)
   // v74.30 PUSH 11 — prefixer l'intro slide 3 par le bloc alerte si contraintes lead
   const constraintsAlertPrefix = flat._constraints_alert_text ? `${flat._constraints_alert_text}\n\n` : "";
-  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${f("A_units")} unités** en standing ${f("standing_level").toLowerCase()}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (Coefficient d'Occupation des Sols) de **${f("site_cos_regl")}**, un **CES** (Coefficient d'Emprise au Sol) de **${f("site_ces_regl")} %**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — l'ambition** : maximise la densité et exploite pleinement le potentiel foncier. C'est la configuration qui se rapproche le plus de votre demande initiale.\n- **Scénario B — l'équilibre** : ajuste densité et coût pour gagner en faisabilité financière, tout en préservant un programme cohérent.\n- **Scénario C — la prudence** : version la plus économique, qui sécurise le budget et minimise le risque de dépassement.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Emprise constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Enveloppe : **${f("envelope_w")} × ${f("envelope_d")} m**\n- **SDP** (Surface De Plancher) max théorique : **${f("site_sdp_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${f("retrait_mitoyennete")}** côtés`;
+  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${f("A_units")} unités** en standing ${f("standing_level").toLowerCase()}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (part du terrain que le bâtiment peut couvrir) de **${f("site_cos_regl")}**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : tout le programme réalisé maintenant, dans votre budget, en gardant une réserve de 10 % pour les imprévus ; si nécessaire, certaines typologies sont réduites d'un cran.\n- **Scénario C — la prudence** : le même projet, sécurisé et réalisé en deux phases, avec une réserve de 20 % ; ce qui ne tient pas en phase 1 est prévu en phase 2, sans renoncer à vos typologies.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Emprise constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Enveloppe : **${f("envelope_w")} × ${f("envelope_d")} m**\n- Emprise au sol maximale (COS) : **${f("site_emprise_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${f("retrait_mitoyennete")}** côtés`;
   texts.slide_3_programme_text = "";
   // ── SLIDE 4: Terrain ──
   // v74.14 — slide 4 : focus EMPRISE (déduit slide 3), sans COS/CES (déjà mentionnés)
@@ -9047,7 +9083,7 @@ function enrichFlatForTemplates(flat, p, scenarios) {
   }
   // ── Site SDPmax ──
   if (!flat.site_sdp_max) {
-    flat.site_sdp_max = `${siteDiag.sdp_max_m2 || Math.round(Number(p.site_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`;
+    flat.site_sdp_max = `${siteDiag.sdp_max_m2 || 0} m²`;
   }
   // ── Per-scenario: score, hab_m2_total, ventil_*_pct ──
   for (const [key, sc] of [["A", sA], ["B", sB], ["C", sC]]) {
@@ -9443,7 +9479,7 @@ UTILISER les accents français.`;
 7. NE PAS utiliser d'accents. Ecrire en francais SANS accents (a au lieu de a, e au lieu de e/e, etc.).
 8. TOUJOURS utiliser les chiffres EXACTS du JSON. Ne pas arrondir differemment.
 9. Utiliser \\n pour les sauts de ligne.
-10. COS et CES : expliquer ce que sont le COS (Coefficient d'Occupation des Sols) et le CES (Coefficient d'Emprise au Sol) UNE SEULE FOIS dans slide_4_text. Ensuite, ne plus expliquer ni definir ces termes — utiliser simplement les valeurs en %.
+10. COS : dans ce rapport, le COS designe l'OCCUPATION AU SOL (part maximale du terrain que le batiment peut couvrir : 60 % en ville, 45 % en peripherie, 30 % a la campagne). L'expliquer UNE SEULE FOIS dans slide_4_text, puis utiliser simplement les valeurs en %. Ne jamais parler de CES, ni d'un COS exprime en surface de plancher.
 11. Les termes "economique", "tropical", "standard", "premium", "hors budget", "dans le budget" doivent etre en MINUSCULES dans le texte courant. JAMAIS "TROPICAL", "ECONOMIQUE" etc. en majuscules sauf dans un titre.
 12. La posture "BALANCED" doit etre ecrite "EQUILIBREE" en francais, "AGGRESSIVE" → "AMBITIEUSE", "CONSERVATIVE" → "PRUDENTE".
 13. UTILISE {budget_fcfa} pour le budget (c'est le montant FCFA formate). Ne pas utiliser {budget_range} directement.
@@ -9464,7 +9500,7 @@ Les paragraphes sont separes par \\n\\n (double saut de ligne).
 --- slide_3_intro_text ---
 STRUCTURE OBLIGATOIRE (4 paragraphes) :
 PARA 1: "Ce projet consiste a valoriser un terrain de {site_area} m2 situe a {city}, dans le cadre d'un programme {program_main}. Le programme cible prevoit {target_units} unites pour un standing {standing_level}, avec un budget de reference de l'ordre de {budget_fcfa}."
-PARA 2: "L'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de {site_cos_regl}, un CES de {site_ces_regl}%, et des retraits reglementaires qui reduisent significativement l'emprise constructible."
+PARA 2: "L'objectif strategique est d'identifier la meilleure configuration possible en respectant les contraintes urbanistiques du site, notamment un COS de {site_cos_regl} et des retraits reglementaires qui reduisent l'emprise constructible."
 PARA 3: "Pour repondre a cette question, trois scenarios ont ete elabores :\\n- Le Scenario A ({A_role}) explore [description courte A].\\n- Le Scenario B ({B_role}) recherche [description courte B].\\n- Le Scenario C ({C_role}) privilegie [description courte C]."
 PARA 4: "Le present rapport diagnostic analyse chacun de ces scenarios sous l'angle volumetrique, financier et reglementaire, afin d'orienter le porteur de projet vers le scenario le plus recommande au regard de ses priorites et de son enveloppe budgetaire."
 --- slide_3_programme_text ---
@@ -9476,12 +9512,12 @@ PARA 1: "Ce terrain de {site_area} m2 se situe dans un tissu urbain [qualificati
 PARA 2: "Les contraintes reglementaires imposent les retraits suivants :\\n- Recul avant : {retrait_avant} (par rapport a la voie)\\n- Recul lateral : {retrait_lateral} de chaque cote\\n- Recul arriere : {retrait_arriere}\\n- Mitoyennete : {retrait_mitoyennete} cotes"
 PARA 3: "L'impact de ces retraits est significatif : ils reduisent l'emprise constructible de {retrait_reduction_pct}, la ramenant a environ {retrait_emprise_constructible} exploitables."
 PARA 4: "Le programme envisage prevoit {target_units} unites en usage {program_main}, dans un standing {standing_level}."
-PARA 5: "- Zone climatique : {orient_zone}\\n- COS reglementaire : {site_cos_regl}\\n- CES reglementaire : {site_ces_regl} %"
+PARA 5: "- Zone climatique : {orient_zone}\\n- COS : {site_cos_regl}, soit une emprise au sol maximale de {site_emprise_max}"
 --- slide_5_text ---
 STRUCTURE OBLIGATOIRE (5 paragraphes) :
 PARA 1: Description de l'environnement bati (quartier, densite, voisinage). Contextualisee a {city}.
 PARA 2: Rapport a la rue et impact de la mitoyennete ({retrait_mitoyennete} cotes) sur les ouvertures, l'eclairage, la ventilation.
-PARA 3: "La surface de plancher est limitee par plusieurs facteurs cumules :\\n- L'emprise constructible apres retraits est reduite a {retrait_emprise_constructible} (soit {retrait_reduction_pct} de perte)\\n- Le COS de {site_cos_regl} autorise jusqu'a {site_sdp_max} de SDP theorique, mais l'emprise reelle au sol limite fortement cette capacite\\n- Le CES de {site_ces_regl}% n'est pas le facteur limitant ici"
+PARA 3: "L'emprise au sol du batiment est limitee par deux regles cumulees :\\n- Le COS de {site_cos_regl} autorise une emprise au sol maximale de {site_emprise_max}\\n- Les retraits ramenent la zone constructible a {retrait_emprise_constructible} (soit {retrait_reduction_pct} de la parcelle en moins)\\nLa plus petite de ces deux valeurs fixe l'emprise maximale ; la surface de plancher depend ensuite du nombre de niveaux."
 PARA 4: Impact de la zone climatique {orient_zone} sur le confort thermique, l'orientation, les facades.
 PARA 5: Conclusion sur la densite du voisinage et le gabarit a respecter.
 --- scenario_A_summary_text ---
@@ -9492,7 +9528,7 @@ PARA 3 Justification architecturale: Reprendre {A_config_justif} et le reformule
 PARA 4 Programme: "Programme :\\n- [detail du mix: {A_unit_summary}]"
 PARA 5: "La surface utile et habitable par logement, hors circulations et parties communes, est estimee a environ {A_m2_par_logt} m2, un niveau [compact/confortable/spacieux] pour des T[X] en standing {standing_level}."
 PARA 6: Description de l'acces et circulation.
-PARA 7: "- Parking : {A_parking_places} places en surface, [deficit/aucun deficit]\\n- Gabarit et impact visuel : [qualificatif] mais conforme\\n- COS utilise : {A_cos_pct} % du COS autorise ({A_sdp} m2 sur {site_sdp_max})"
+PARA 7: "- Parking : {A_parking_places} places en surface, [deficit/aucun deficit]\\n- Gabarit et impact visuel : [qualificatif] mais conforme\\n- COS : emprise au sol a {A_cos_pct} % de l'emprise autorisee ({site_emprise_max})"
 --- scenario_B_summary_text ---
 MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables B_* (B_fp, B_levels, B_sdp, B_pilotis_desc, B_typology_desc, B_config_justif, B_unit_summary, B_m2_par_logt, B_parking_places, B_cos_pct) et en decrivant la philosophie d'equilibre. IMPORTANT: utiliser {B_pilotis_desc} pour decrire la disposition (PAS "Pas de pilotis" par defaut).
 --- scenario_C_summary_text ---
@@ -9512,7 +9548,7 @@ MEME STRUCTURE QUE scenario_A_financial_text, avec variables C_* (C_ventil_go, C
 --- scenario_A_risk_text ---
 STRUCTURE OBLIGATOIRE :
 PARA 1: "Le scoring evalue le Scenario A selon 7 criteres ponderes, chacun note de 1 a 5. Le score global de {A_score}/100 reflete un profil [qualificatif] :"
-PARA 2: "1) Risque urbanistique : conforme au COS ({A_cos_pct} % utilise sur {site_cos_regl} autorise), hauteurs et retraits respectes.\\n2) Risque de compacite : {A_m2_par_logt} m2/logement de surface utile habitable, [faible/moyen/fort] risque de refus de permis.\\n3) Risque financier : position {A_budget_fit}. [detail depassement si HORS_BUDGET].\\n4) Risque de parking : [deficit ou aucun deficit] ({A_parking_places} places pour {A_units} unites).\\n5) Risque de construction : complexite d'un R+{A_levels} en standing {standing_level}, [qualificatif]."
+PARA 2: "1) Risque urbanistique : emprise au sol a {A_cos_pct} % de l'emprise autorisee par le COS ({site_cos_regl}) [conforme si <= 100 %, sinon derogation a instruire].\\n2) Risque de compacite : {A_m2_par_logt} m2/logement de surface utile habitable, [faible/moyen/fort] risque de refus de permis.\\n3) Risque financier : position {A_budget_fit}. [detail depassement si HORS_BUDGET].\\n4) Risque de parking : [deficit ou aucun deficit] ({A_parking_places} places pour {A_units} unites).\\n5) Risque de construction : complexite d'un R+{A_levels} en standing {standing_level}, [qualificatif]."
 PARA 3: "Probabilite [faible/moyenne/elevee], impact [faible/modere/eleve], [mitigation possible]."
 --- scenario_B_risk_text ---
 MEME STRUCTURE, variables B_*, comparer avec A si pertinent.
@@ -9616,9 +9652,10 @@ function buildGptDataContext(p, scenarios, flat, templateTexts) {
     envelope_area: flat.site_emprise_max || `${Number(p.envelope_w) * Number(p.envelope_d)} m²`,
     zoning_type: p.zoning_type,
     max_floors: p.max_floors, max_height_m: p.max_height_m,
-    site_cos_regl: flat.site_cos_regl || "2.5",
-    site_ces_regl: flat.site_ces_regl || "60%",
-    site_sdp_max: flat.site_sdp_max || `${Math.round(Number(p.site_area || 0) * Number(siteDiag.cos_reglementaire || p.max_floors || 2.5))} m²`,
+    site_cos_regl: flat.site_cos_regl || cosSolLabel(siteDiag),
+    site_ces_regl: flat.site_ces_regl || `${siteDiag.ces_reglementaire_pct || 60}%`,
+    site_sdp_max: flat.site_sdp_max || `${siteDiag.sdp_max_m2 || 0} m²`,
+    site_emprise_max: flat.site_emprise_max || `${siteDiag.emprise_max_m2 || 0} m²`,
     // Retraits
     retrait_avant: flat.retrait_avant, retrait_lateral: flat.retrait_lateral,
     retrait_arriere: flat.retrait_arriere,
@@ -9937,13 +9974,13 @@ app.post("/generate-texts", async (req, res) => {
     orient_zone: orient.zone_climatique || "",
     orient_facade_optimale: orient.facade_optimale || "",
     orient_recommandation: orient.recommandation || "",
-    retrait_avant: `${retr.avant_m || 0}m`,
+    retrait_avant: retraitAvantLabel(retr),
     retrait_lateral: `${retr.lateral_m || 0}m`,
     retrait_arriere: `${retr.arriere_m || 0}m`,
     retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
     retrait_emprise_constructible: `${retr.emprise_constructible_m2 || 0} m²`,
     retrait_reduction_pct: `${retr.reduction_pct || 0}%`,
-    site_cos_regl: String(siteDiag.cos_reglementaire || siteDiag.cos_regl || "2.5"),
+    site_cos_regl: cosSolLabel(siteDiag),
     site_ces_regl: String(siteDiag.ces_reglementaire_pct || siteDiag.ces_regl_pct || "60"),
     site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
     site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
@@ -10205,13 +10242,14 @@ app.post("/generate-pptx", async (req, res) => {
       rec_scenario: (diag.recommandation || {}).scenario || "",
       rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100), // v72.80 FIX: 0-1 → 0-100
       phasage_text: phasageD.text || "",
-      retrait_avant: `${retrD.avant_m || 0}m`,
+      retrait_avant: retraitAvantLabel(retrD),
       retrait_lateral: `${retrD.lateral_m || 0}m`,
       retrait_arriere: `${retrD.arriere_m || 0}m`,
       retrait_mitoyennete: String(retrD.mitoyennete_cotes || 0),
       retrait_emprise_constructible: `${retrD.emprise_constructible_m2 || 0} m²`,
       retrait_reduction_pct: `${retrD.reduction_pct || 0}%`,
-      site_cos_regl: String((diag.site || {}).cos_reglementaire || (diag.site || {}).cos_regl || "2.5"),
+      site_cos_regl: cosSolLabel(diag.site),
+      site_emprise_max: `${(diag.site || {}).emprise_max_m2 || 0} m²`,
       site_ces_regl: String((diag.site || {}).ces_reglementaire_pct || (diag.site || {}).ces_regl_pct || "60"),
       orient_zone: orientD.zone_climatique || "",
       delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
@@ -10645,9 +10683,10 @@ app.post("/generate-pptx-premium", async (req, res) => {
       city: p.city || p.project_city || "Douala",
       project_address: p.project_address || "",
       site_area: String(p.site_area || 0),
-      site_cos_regl: String((diag.site || {}).cos_reglementaire || (diag.site || {}).cos_regl || "2.5"),
+      site_cos_regl: cosSolLabel(diag.site),
+      site_emprise_max: `${(diag.site || {}).emprise_max_m2 || 0} m²`,
       site_ces_regl: String((diag.site || {}).ces_reglementaire_pct || (diag.site || {}).ces_regl_pct || "60"),
-      retrait_avant: `${retr.avant_m || 0}m`,
+      retrait_avant: retraitAvantLabel(retr),
       retrait_lateral: `${retr.lateral_m || 0}m`,
       retrait_arriere: `${retr.arriere_m || 0}m`,
       retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
@@ -10825,7 +10864,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.4";
+const V12_ENGINE_VERSION = "12.5";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -10945,11 +10984,16 @@ function scenarioModelView(letter, row, engineScenario, siteArea) {
         total_units: e.total_units || null, cost_per_m2: e.cost_per_m2 || null,
         cost_total_fcfa: e.cost_total_fcfa || null, budget_fit: e.budget_fit || null,
         unit_mix_detail: e.unit_mix_detail || null,
-        cos: site > 0 && e.sdp_m2 ? Math.round((e.sdp_m2 / site) * 1000) / 1000 : null,
-        // Règles du rôle : limites, adaptations du programme, programme impossible à tenir
+        // COS (vocabulaire de Jeremy) = occupation au sol : emprise au sol / terrain, et part de l'emprise permise
+        cos: site > 0 && (e.emprise_sol_m2 || e.fp_m2) ? Math.round(((e.emprise_sol_m2 || e.fp_m2) / site) * 1000) / 1000 : null,
+        emprise_sol_m2: e.emprise_sol_m2 || null,
+        cos_ratio_pct: e.cos_ratio_pct != null ? e.cos_ratio_pct : null,
+        cos_compliance: e.cos_compliance || null,
+        // Règles du rôle : limites, adaptations du programme, programme impossible à tenir, phase 2
         limits: e.sdp_limits_v12 || null,
         adaptations: e.adaptations_v12 || [],
         infeasible: !!e.infeasible_v12,
+        phase_2: e.phase_2_v12 || null,
         rules: e.role_rules_v12 || null,
       } : null,
     },

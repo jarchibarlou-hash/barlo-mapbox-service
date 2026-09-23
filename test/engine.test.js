@@ -87,8 +87,45 @@ test("règles de rôle : C respecte son plafond de niveaux ; dérogation COS res
   const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
   assert.ok(r.C.levels <= r.C.sdp_limits_v12.levels_cap, "niveaux C ≤ plafond");
   assert.ok(r.C.sdp_limits_v12.levels_cap <= r.A.sdp_limits_v12.levels_cap);
+  assert.equal(r.B.sdp_limits_v12.cos_sol, 0.60, "COS ville = 60 % d'occupation au sol");
   const withDerog = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, lead, { override_ignore_cos: "Y" }), {}));
-  assert.equal(withDerog.B.sdp_limits_v12.cos, null, "COS ignoré sur dérogation");
+  assert.equal(withDerog.B.sdp_limits_v12.cos_sol, null, "COS levé sur dérogation");
+  assert.equal(withDerog.B.sdp_limits_v12.emprise_cos, null);
+});
+
+test("COS = occupation au sol : conformité calculée sur l'emprise, zone campagne à 30 %", () => {
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(LEAD, {}));
+  for (const k of ["A", "B", "C"]) {
+    const sc = r[k];
+    const allowed = 0.60 * 250;
+    assert.equal(sc.cos_ratio_pct, Math.round(sc.emprise_sol_m2 / allowed * 100), `${k} : % de l'emprise permise`);
+    assert.equal(sc.cos_compliance, sc.emprise_sol_m2 <= allowed ? "CONFORME" : "AMBITIEUX_HORS_COS");
+  }
+  assert.equal(r.diagnostic.site.cos_sol_pct, 60);
+  const rural = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, LEAD, { zoning_type: "RURAL" }), {}));
+  assert.equal(rural.diagnostic.site.cos_sol_pct, 30);
+  assert.equal(rural.B.sdp_limits_v12.cos_sol, 0.30);
+});
+
+test("mitoyenneté jamais supposée ; retraits 5/3 m dans toutes les zones", () => {
+  for (const zone of ["URBAIN", "PERIURBAIN", "RURAL"]) {
+    const r = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, LEAD, { zoning_type: zone }), {}));
+    const retr = r.diagnostic.retraits_reglementaires;
+    assert.equal(retr.mitoyennete_cotes, 0, `${zone} : pas de mitoyenneté sans indication`);
+    assert.deepEqual([retr.avant_m, retr.lateral_m, retr.arriere_m], [5, 3, 3], `${zone} : 5/3/3 m`);
+  }
+});
+
+test("C phasé : ce qui ne tient pas est reporté en phase 2, avec la réserve de 20 %", () => {
+  const lead = Object.assign({}, LEAD, { budget_range: "40 000 - 50 000 €", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
+  assert.equal(r.C.sdp_limits_v12.reserve_pct, 20);
+  assert.equal(r.B.sdp_limits_v12.reserve_pct, 10);
+  assert.equal(r.A.sdp_limits_v12.reserve_pct, null, "A : pas de réserve, l'écart au budget est affiché");
+  if (r.C.adaptations_v12.length) {
+    assert.ok(r.C.adaptations_v12.every(a => a.kind === "PHASE_2"), "C reporte, ne réduit pas");
+    assert.ok(r.C.phase_2_v12 && r.C.phase_2_v12.sdp_m2 > 0);
+  }
 });
 
 test("emprise max saisie = plafond : jamais d'emprise agrandie ni de ratios fixes par lettre", () => {

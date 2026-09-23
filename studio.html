@@ -178,6 +178,7 @@
         .v12-kpi .v{font-family:'JetBrains Mono',monospace;font-size:.78rem;font-weight:700}
         .v12-kpi .s{font-size:.55rem;color:var(--text2)}
         .v12-kpi.user .v,.v12-kpi.user input{color:var(--amber)}
+        .v12-kpi.warn .v{color:var(--brick2)}
         .v12-kpi input{width:96px;padding:.15rem .3rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.74rem;font-weight:700}
         .v12-kpi input:focus{outline:none;border-color:var(--amber)}
         .c-scn-tab .v12-tabstate{font-size:.55rem;font-weight:700;margin-left:.3rem}
@@ -404,7 +405,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.4-RETRAITS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.5-COS-SOL</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -3231,24 +3232,27 @@ BARLO.strategies.LIST = ["PACKED", "LAMELLA", "PERIMETER", "U_SHAPE", "T_SHAPE",
 BARLO.constraints.AREA_TOLERANCE_PCT = 0.01;
 BARLO.constraints.AREA_TOLERANCE_ABS_M2 = 0.5;
 
-// v10.11 — Règle BARLO COS par contexte :
-//   Ville   : 60%
-//   Campagne: 45%
-//   Nature  : 30%
+// v12.5 — Règle de Jeremy : COS = occupation au sol. Ville 60 %, périphérie 45 %, campagne 30 %
+// (même table que le moteur : lib/scenario-rules.js ; mixte = ville, pavillonnaire = périphérie).
 BARLO.constraints.getCOSMax = function(context) {
-    const map = { ville: 0.60, campagne: 0.45, nature: 0.30 };
+    const map = { ville: 0.60, peripherie: 0.45, campagne: 0.30 };
     return map[String(context || "").toLowerCase()] || 0.60;
 };
 BARLO.site.detectContext = function(lead) {
     lead = lead || {};
+    // Zone du lead (PIPELINE) en priorité : même source que le moteur
+    const ZONE_CTX = { URBAIN: "ville", MIXTE: "ville", PERIURBAIN: "peripherie", PAVILLON: "peripherie", RURAL: "campagne" };
+    const z = String(lead.zoning_type || "").toUpperCase();
+    if (ZONE_CTX[z]) return ZONE_CTX[z];
     const scan = [
         lead.zone, lead.zone_urbaine, lead.environnement, lead.context,
         lead.site_type, lead.milieu, lead.type_environment, lead.location_type,
         lead.city, lead.commune
     ].map(v => String(v || "").toLowerCase()).join(" ");
+    // Périphérie testée avant la ville (« périurbain » contient « urban »)
+    if (/p[ée]riph|p[ée]riurb|banlieue|pavillon/.test(scan)) return "peripherie";
     if (/ville|urban|centre[- ]?ville|dens|douala|yaound[eé]/.test(scan)) return "ville";
-    if (/nature|for[eê]t|parc|montag/.test(scan)) return "nature";
-    if (/campagne|rural|village/.test(scan)) return "campagne";
+    if (/campagne|rural|village|nature|for[eê]t|montag/.test(scan)) return "campagne";
     return "ville";   // default cameroun urbain
 };
 
@@ -6088,14 +6092,29 @@ function renderV12Strip(L) {
         })()}
         ${kpi("Niveaux", levelsTxt(eng.levels ?? v(s.levels)), `BARLO ${levelsTxt(v(s.levels))}`, tip(s.levels))}
         ${kpi("Unités", num(eng.total_units ?? s.total_units), `BARLO ${num(s.total_units)}`, s.unit_mix_detail ? `Suggestion BARLO : ${s.unit_mix_detail}${eng.unit_mix_detail ? " — Actuel : " + eng.unit_mix_detail : ""}` : "")}
-        ${kpi("COS", eng.cos != null ? Number(eng.cos).toFixed(2) : (v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—"), `BARLO ${v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—"}`, "SDP / surface du terrain")}
+        ${(() => {
+            // COS = occupation au sol (règle de Jeremy : ville 60 %, périphérie 45 %, campagne 30 %)
+            const pct = x => x != null ? `${Math.round(Number(x) * 100)} %` : "—";
+            const lim = eng.limits || {};
+            const maxTxt = lim.cos_sol != null ? `max ${pct(lim.cos_sol)}${lim.cos_zone ? " · " + esc(lim.cos_zone) : ""}` : (lim.cos_sol_source === "USER_OVERRIDE" ? "plafond levé (dérogation)" : "");
+            const over = eng.cos_compliance === "AMBITIEUX_HORS_COS";
+            return kpi("COS", pct(eng.cos != null ? eng.cos : v(s.cos)), `${maxTxt}${v(s.cos) != null ? " · BARLO " + pct(v(s.cos)) : ""}`,
+                `Occupation au sol : emprise au sol du bâtiment / surface du terrain.${eng.cos_ratio_pct != null ? ` ${eng.cos_ratio_pct} % de l'emprise autorisée.` : ""}${lim.cos_sol_source === "HYPOTHESIS" ? " Zone non renseignée : règle « ville » supposée." : ""}`,
+                over ? "warn" : "");
+        })()}
         <label class="v12-kpi ${cost.source === "USER_OVERRIDE" ? "user" : ""}" title="${escAttr(`Suggestion BARLO : ${num(sugCost)} FCFA/m² (${tip(s.cost_per_m2)}). Saisis ta valeur ; vide = retour à la suggestion.`)}">
           <span class="k">Coût/m² ${cost.source === "USER_OVERRIDE" ? "· ta saisie" : ""}</span>
           <input type="text" inputmode="numeric" value="${escAttr(costOv)}" placeholder="${escAttr(sugCost != null ? sugCost : "")}"
                  onchange="saveV12Override('${L}','cost_per_m2',this.value)">
           <span class="s">BARLO ${num(sugCost)} FCFA</span>
         </label>
-        ${kpi("Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", eng.budget_fit ? esc(eng.budget_fit) : "", "Coût de construction estimé (SDP × coût/m² effectif, VRD compris)")}
+        ${(() => {
+            const lim = eng.limits || {};
+            const reserve = lim.reserve_pct != null ? `réserve ${lim.reserve_pct} %${lim.reserve_fcfa ? " (" + fmtC(lim.reserve_fcfa) + ")" : ""}` : "";
+            const sub = [eng.budget_fit ? esc(eng.budget_fit) : "", reserve].filter(Boolean).join(" · ");
+            return kpi("Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", sub,
+                `Coût de construction estimé (SDP × coût/m² effectif, VRD compris).${lim.reserve_pct != null ? ` Le scénario garde ${lim.reserve_pct} % du budget pour les imprévus (hypothèse BARLO).` : m.role === "CLIENT_INTENT" ? " A n'est pas dimensionné sur le budget : l'écart éventuel est affiché tel quel." : ""}`);
+        })()}
       </div>
       ${v12RulesLine(m)}`;
     const tabState = $(`cTabState${L}`);
@@ -6107,18 +6126,24 @@ function renderV12Strip(L) {
 }
 
 // Ligne « règles du rôle » : limite qui s'impose, adaptations du programme, signal d'infaisabilité
-const V12_LIMIT_LABEL = { budget: "budget", cos: "COS", capacity: "capacité du terrain" };
+const V12_LIMIT_LABEL = { budget: "budget, réserve comprise", capacity: "place sur le terrain" };
 function v12RulesLine(m) {
     const eng = (m.effective && m.effective.engine) || {};
     const L = eng.limits;
     if (!L) return "";
     const parts = [];
     if (L.binding && L.sdp_max) parts.push(`Limite qui s'impose : ${V12_LIMIT_LABEL[L.binding] || L.binding} (${Number(L.sdp_max).toLocaleString("fr-FR")} m² de SDP max)`);
-    const ad = eng.adaptations || [];
+    const ad = (eng.adaptations || []).filter(a => a.kind !== "PHASE_2");
+    const p2 = eng.phase_2;
     if (ad.length) {
         const txt = ad.map(a => a.kind === "DOWNGRADE" ? `${a.from} → ${a.to}` : a.kind === "REMOVE_UNIT" ? `− 1 ${a.type}` : "− 1 commerce");
         parts.push(`Programme adapté (${V12_LIMIT_LABEL[ad[0].reason] || ad[0].reason}) : ${txt.join(", ")}`);
-    } else if (m.role !== "CLIENT_INTENT") {
+    }
+    if (p2) {
+        // C : rien n'est retiré, le reste du programme du client est prévu en phase 2
+        const list = (p2.logements || []).map(t => `${t.count} ${t.type}`).concat(p2.commerce ? [`${p2.commerce} commerce`] : []);
+        parts.push(`Phase 2 prévue (structure dimensionnée pour) : ${list.join(" + ")}${p2.sdp_m2 ? ` · ${Number(p2.sdp_m2).toLocaleString("fr-FR")} m²` : ""}`);
+    } else if (!ad.length && m.role !== "CLIENT_INTENT") {
         parts.push(eng.infeasible ? "Aucune réduction possible (programme déjà minimal)" : "Programme du client conservé");
     }
     let warn = eng.infeasible ? `<span style="color:var(--brick2);font-weight:700">⚠ Le programme ne tient pas dans les limites de ce scénario, même réduit.</span> ` : "";

@@ -55,14 +55,14 @@ test("programme lu depuis unit_mix_detail", () => {
   assert.deepEqual(M.parseUnitMixDetail(""), []);
 });
 
-test("suggestion normalisée : COS et CES calculés, rôle posé", () => {
+test("suggestion normalisée : COS = occupation au sol, rôle posé", () => {
   const s = M.normalizeSuggestion("B", {
     sdp_m2: 180, fp_m2: 90, levels: 2, total_units: 3, unit_mix_detail: "1×COMMERCE(60m²) + 2×T3(55m²)",
     cost_total_fcfa: 37800000, market_cost_per_m2: 200000, layout_mode: "SUPERPOSE",
   }, { site_area: 250 });
   assert.equal(s.role, "BALANCED");
-  assert.equal(s.cos.value, 0.72);
-  assert.equal(s.ces.value, 0.36);
+  assert.equal(s.cos.value, 0.36, "emprise 90 m² / terrain 250 m²");
+  assert.equal(s.ces, undefined, "un seul terme : COS");
   assert.equal(s.total_units, 3);
   assert.equal(s.orientation.source, "UNKNOWN", "pas d'orientation inventée");
   const noSite = M.normalizeSuggestion("A", { sdp_m2: 100 }, {});
