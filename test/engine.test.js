@@ -50,6 +50,61 @@ test("la suggestion pure retire les réglages de l'utilisateur mais garde les r�
   assert.equal(S.suggestionOnlyInputs(S.scenarioEngineInputs(LEAD, {})), null, "rien à retirer");
 });
 
+const units = sc => (sc.client_program_v12 ? null : null, sc.total_units);
+
+test("règles de rôle : sans contrainte, B garde exactement le programme du client", () => {
+  const lead = Object.assign({}, LEAD, { budget_range: "" });
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
+  assert.equal(r.B.unit_mix_detail, r.A.unit_mix_detail, "B n'est pas plus petit par principe");
+  assert.equal(r.B.adaptations_v12.length, 0);
+  assert.equal(r.A.adaptations_v12.length, 0);
+  assert.ok(r.B.cost_total_fcfa < r.A.cost_total_fcfa, "même programme, coût/m² du rôle B plus bas");
+  assert.equal(r.B.sdp_limits_v12.budget, null, "budget inconnu : aucune limite inventée");
+});
+
+test("règles de rôle : budget serré → B et C s'adaptent (raison tracée), A jamais", () => {
+  const lead = Object.assign({}, LEAD, { budget_range: "40 000 - 50 000 €", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
+  assert.equal(r.A.adaptations_v12.length, 0, "A = intention du client, jamais adaptée");
+  assert.ok(r.B.adaptations_v12.length > 0, "B adapté");
+  assert.ok(r.B.adaptations_v12.every(a => a.reason === "budget"), "raison = budget");
+  assert.equal(r.B.sdp_limits_v12.binding, "budget");
+  assert.equal(r.B.infeasible_v12, false);
+  assert.ok(r.B.sdp_m2 <= r.B.sdp_limits_v12.sdp_max + 1, "B tient dans son budget");
+  assert.ok(r.C.sdp_m2 <= r.C.sdp_limits_v12.sdp_max + 1, "C tient dans ses marges");
+  assert.ok(r.B.cost_total_fcfa < r.A.cost_total_fcfa);
+});
+
+test("règles de rôle : programme impossible dans le budget → signalé, jamais masqué", () => {
+  const lead = Object.assign({}, LEAD, { budget_range: "10 000 - 20 000 €", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
+  assert.equal(r.B.infeasible_v12, true);
+  assert.equal(r.A.infeasible_v12, false, "A n'est pas dimensionné sur le budget");
+});
+
+test("règles de rôle : C respecte son plafond de niveaux ; dérogation COS respectée", () => {
+  const lead = Object.assign({}, LEAD, { input_typologies: "T3=6, COMMERCE=1", target_units: 7, budget_range: "" });
+  const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
+  assert.ok(r.C.levels <= r.C.sdp_limits_v12.levels_cap, "niveaux C ≤ plafond");
+  assert.ok(r.C.sdp_limits_v12.levels_cap <= r.A.sdp_limits_v12.levels_cap);
+  const withDerog = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, lead, { override_ignore_cos: "Y" }), {}));
+  assert.equal(withDerog.B.sdp_limits_v12.cos, null, "COS ignoré sur dérogation");
+});
+
+test("emprise max saisie = plafond : jamais d'emprise agrandie ni de ratios fixes par lettre", () => {
+  const lead = Object.assign({}, LEAD, { input_typologies: "T1=1", target_units: 1, budget_range: "",
+    override_max_fp_m2: "150", override_lateral_hug: "EAST", override_lateral_gap_m: "3" });
+  const inputs = S.scenarioEngineInputs(lead, {});
+  const r = S.computeSmartScenarios(inputs);
+  S.applyScenarioOverrides(r, lead);
+  for (const k of ["A", "B", "C"]) {
+    assert.ok(r[k].sdp_m2 < 150, `${k} : SDP du petit programme, pas gonflée à 150 m² × niveaux`);
+    assert.ok(!r[k].fp_capped_by_constraint, `${k} : ancien plafond à ratios fixes non appliqué`);
+  }
+  const tight = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, LEAD, { override_max_fp_m2: "40" }), {}));
+  assert.ok(tight.B.sdp_limits_v12.emprise_max <= 40, "le plafond saisi réduit l'emprise disponible");
+});
+
 test("le moteur est déterministe (condition de la relecture du résultat enregistré)", () => {
   const a = JSON.stringify(S.computeSmartScenarios(S.scenarioEngineInputs(LEAD, {})));
   const b = JSON.stringify(S.computeSmartScenarios(S.scenarioEngineInputs(LEAD, {})));

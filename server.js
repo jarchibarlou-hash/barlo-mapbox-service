@@ -6,6 +6,7 @@ const FormData = require("form-data");
 const fetch = require("node-fetch");
 const turf = require("@turf/turf");
 const ScenarioModel = require("./lib/scenario-model");
+const ScenarioRules = require("./lib/scenario-rules");
 const app = express();
 
 // ═══ STABILITÉ — une erreur dans une requête ne doit jamais faire tomber le serveur ═══
@@ -3029,6 +3030,12 @@ function computeProgramDrivenScenarioV73(params) {
     floor_height = 3.2,
     zoning_type = "URBAIN",
     commerce_size_m2 = 0,
+    // v12 — règles de rôle (cf. lib/scenario-rules.js)
+    cos_regl = 0,         // COS réglementaire (SDP max = COS × terrain)
+    budget_fcfa = 0,      // budget client en FCFA (0 = inconnu : aucune limite inventée)
+    cost_per_m2 = 0,      // coût/m² effectif du scénario (grille du rôle ou saisie utilisateur)
+    role_rules = null,    // règles de rôle surchargées pour ce lead (sinon valeurs par défaut)
+    max_fp_m2 = 0,        // emprise maximale saisie pour ce lead (plafond, jamais une cible)
   } = params;
   // 1. CLASSIFIER
   const programType = classifyProgramTypeV73(program_main);
@@ -3089,42 +3096,43 @@ function computeProgramDrivenScenarioV73(params) {
     // on convertit tout en commerces
     const totalUnits = typologiesA_logements.reduce((s, t) => s + t.count, 0) + commerceCountA;
     commerceCountA = totalUnits;
-    commerceCountB = totalUnits;
-    commerceCountC = 1;
     typologiesA_logements = [];
   }
-  // 4. MIX A/B/C
-  let mixA_logements, mixB_logements, mixC_logements;
-  if (programType === "COMMERCIAL") {
-    mixA_logements = []; mixB_logements = []; mixC_logements = [];
-  } else if (programType === "MAISON") {
-    mixA_logements = typologiesA_logements;
-    mixB_logements = consolidateTypologiesV73(typologiesA_logements.map(t => ({ type: downgradeTypeV73(t.type), count: t.count })));
-    mixC_logements = consolidateTypologiesV73(typologiesA_logements.map(t => ({ type: downgradeTypeV73(downgradeTypeV73(t.type)), count: t.count })));
-  } else {
-    mixA_logements = typologiesA_logements;
-    mixB_logements = buildMixB_logements_V73(typologiesA_logements);
-    mixC_logements = buildMixC_logements_V73(typologiesA_logements, mixB_logements);
-  }
-  // 5. SDP DU SCÉNARIO
-  let scenarioMix, scenarioCommerceCount;
-  if (label === "A") { scenarioMix = mixA_logements; scenarioCommerceCount = commerceCountA; }
-  else if (label === "B") { scenarioMix = mixB_logements; scenarioCommerceCount = commerceCountB; }
-  else { scenarioMix = mixC_logements; scenarioCommerceCount = commerceCountC; }
-  const sdpData = computeSdpFromMixV73(scenarioMix, scenarioCommerceCount, standing_level);
-  const sdpTotal = sdpData.sdp_total;
-  // 6. NIVEAUX & EMPRISE
+  // 4. CAPACITÉ DU SITE (réglementation + enveloppe)
   const ZONING_CES_V73 = { URBAIN: 0.60, PERIURBAIN: 0.45, PAVILLON: 0.30, RURAL: 0.20, MIXTE: 0.50, Z_DEFAULT: 0.40 };
   const ces = ZONING_CES_V73[zoning_type] || ZONING_CES_V73.Z_DEFAULT;
-  const empriseMaxCes = ces * site_area;
-  const empriseMaxEnv = (envelope_w * envelope_d) * 0.85;
-  const empriseMaxAbsolue = Math.min(empriseMaxCes, empriseMaxEnv);
   const maxLevelsHauteur = Math.floor((max_height_m || 99) / floor_height);
   const maxLevelsAbsolu = Math.min(max_floors || 99, maxLevelsHauteur, 10);
   const levelsBounds = LEVELS_BY_TYPE_V73[programType] || { min: 1, maxRaisonnable: 4 };
   const levelsMin = Math.min(levelsBounds.min, maxLevelsAbsolu);
   const levelsMaxRaisonnable = Math.min(levelsBounds.maxRaisonnable, maxLevelsAbsolu);
-  const isSplit = layout_mode === "SPLIT_AV_AR" && programType === "MIXTE" && scenarioCommerceCount > 0 && label !== "C";
+  // 5. v12 — PROGRAMME DU SCÉNARIO selon les règles de son rôle (lib/scenario-rules.js).
+  // A = programme du client tel quel. B/C = programme du client, adapté seulement si une
+  // limite l'impose (coût/m² du rôle × budget, COS, capacité) ; chaque adaptation est tracée.
+  const roleV12 = ScenarioModel.roleOf(label);
+  const rulesV12 = Object.assign({}, ScenarioRules.DEFAULT_RULES[roleV12], (role_rules && role_rules[roleV12]) || {});
+  const limitsV12 = ScenarioRules.scenarioSdpLimits({
+    rules: rulesV12, site_area, ces, cos_regl, envelope_w, envelope_d,
+    levels_min: levelsMin, levels_max: levelsMaxRaisonnable, budget_fcfa, cost_per_m2,
+    max_fp: max_fp_m2,
+  });
+  const clientProgramV12 = { logements: typologiesA_logements.map(t => ({ type: t.type, count: t.count })), commerce: commerceCountA };
+  const sdpOfProgramV12 = pr => computeSdpFromMixV73(pr.logements, pr.commerce, standing_level).sdp_total;
+  let scenarioProgramV12 = clientProgramV12, adaptationsV12 = [], infeasibleV12 = false;
+  if (rulesV12.adapt_program) {
+    const fit = ScenarioRules.fitProgram(clientProgramV12, sdpOfProgramV12, limitsV12.sdp_max, limitsV12.binding);
+    scenarioProgramV12 = fit.program;
+    adaptationsV12 = fit.adaptations;
+    infeasibleV12 = fit.infeasible;
+  }
+  const scenarioMix = scenarioProgramV12.logements;
+  const scenarioCommerceCount = scenarioProgramV12.commerce;
+  const sdpData = computeSdpFromMixV73(scenarioMix, scenarioCommerceCount, standing_level);
+  const sdpTotal = sdpData.sdp_total;
+  // 6. NIVEAUX & EMPRISE — plafonds du rôle (identiques à l'ancien calcul pour A)
+  const empriseMaxAbsolue = limitsV12.emprise_max;
+  const levelsCapRole = limitsV12.levels_cap;
+  const isSplit = layout_mode === "SPLIT_AV_AR" && programType === "MIXTE" && scenarioCommerceCount > 0 && !rulesV12.compact;
   let fp, fpRdc, fpEtages, levels, splitLayout = null, hasPilotis = false;
   if (isSplit) {
     const std = String(standing_level).toUpperCase();
@@ -3135,10 +3143,9 @@ function computeProgramDrivenScenarioV73(params) {
     const empriseMaxLogement = Math.max(50, empriseMaxAbsolue - fpCommerce);
     let levelsLogement = Math.max(1, Math.ceil(sdpLogements / empriseMaxLogement));
     levelsLogement = Math.max(levelsLogement, levelsMin);
-    levelsLogement = Math.min(levelsLogement, levelsMaxRaisonnable);
-    if (label === "C") levelsLogement = levelsMin;
+    levelsLogement = Math.min(levelsLogement, levelsCapRole);
     const fpLogement = Math.max(50, Math.round(sdpLogements / levelsLogement));
-    if (label === "A" || label === "B") hasPilotis = true;
+    hasPilotis = true; // volume logement arrière sur pilotis (programme scindé, jamais en mode compact)
     splitLayout = {
       mode: "SPLIT_AV_AR",
       volume_commerce: {
@@ -3172,8 +3179,7 @@ function computeProgramDrivenScenarioV73(params) {
       const sdpRestante = sdpTotal - fpCommerceRdc;
       let levelsTotal = Math.max(1, Math.ceil(sdpRestante / empriseMaxAbsolue) + 1);
       levelsTotal = Math.max(levelsTotal, levelsMin);
-      levelsTotal = Math.min(levelsTotal, levelsMaxRaisonnable);
-      if (label === "C") levelsTotal = levelsMin;
+      levelsTotal = Math.min(levelsTotal, levelsCapRole);
       const nbEtagesLog = Math.max(1, levelsTotal - 1);
       const fpLogEtages = Math.max(50, Math.round(sdpRestante / nbEtagesLog));
       fpRdc = Math.round(fpCommerceRdc);
@@ -3183,8 +3189,7 @@ function computeProgramDrivenScenarioV73(params) {
     } else {
       let nbNiveaux = Math.max(1, Math.ceil(sdpTotal / empriseMaxAbsolue));
       nbNiveaux = Math.max(nbNiveaux, levelsMin);
-      nbNiveaux = Math.min(nbNiveaux, levelsMaxRaisonnable);
-      if (label === "C") nbNiveaux = levelsMin;
+      nbNiveaux = Math.min(nbNiveaux, levelsCapRole);
       const fpUniforme = Math.max(50, Math.round(sdpTotal / nbNiveaux));
       fp = fpUniforme; fpRdc = fpUniforme; fpEtages = fpUniforme; levels = nbNiveaux;
     }
@@ -3215,9 +3220,21 @@ function computeProgramDrivenScenarioV73(params) {
     m2_habitable_par_logement: sdpData.nb_logements > 0 ? Math.round(sdpData.surface_utile_logements / sdpData.nb_logements) : 0,
     using_surface_fallback: usingSurfaceFallback,
     typologies_input: typologiesA_logements,
-    mix_a: mixA_logements,
-    mix_b: mixB_logements,
-    mix_c: mixC_logements,
+    // v12 — traçabilité : programme du client, règles du rôle, limites, adaptations
+    client_program_v12: clientProgramV12,
+    role_rules_v12: rulesV12,
+    role_rules_source_v12: ScenarioRules.RULES_SOURCE,
+    sdp_limits_v12: {
+      sdp_max: isFinite(limitsV12.sdp_max) ? Math.round(limitsV12.sdp_max) : null,
+      binding: limitsV12.binding,
+      cos: isFinite(limitsV12.limits.cos) ? Math.round(limitsV12.limits.cos) : null,
+      capacity: isFinite(limitsV12.limits.capacity) ? Math.round(limitsV12.limits.capacity) : null,
+      budget: isFinite(limitsV12.limits.budget) ? Math.round(limitsV12.limits.budget) : null,
+      emprise_max: Math.round(limitsV12.emprise_max),
+      levels_cap: limitsV12.levels_cap,
+    },
+    adaptations_v12: adaptationsV12,
+    infeasible_v12: infeasibleV12,
   };
 }
 function computeSmartScenarios({
@@ -3254,6 +3271,8 @@ function computeSmartScenarios({
   commerce_size_m2 = 0,  // override commerce surface
   // v12 : coût/m² saisi par l'utilisateur, par scénario ({ A: 400000 }). Jamais écrasé.
   cost_per_m2_overrides = {},
+  // v12 : règles de rôle surchargées pour ce lead ({ PRUDENT: { cos_usage_max: 0.8 } }), sinon défauts
+  role_rules = null,
 }) {
   // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
   // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
@@ -3530,6 +3549,19 @@ function computeSmartScenarios({
 // Tout ce qui était entre ces deux points DOIT être supprimé et remplacé par ce code.
 //
 // ═══════════════════════════════════════════════════════════════════════════════
+    // ── v12 — coût/m² du scénario, connu AVANT le dimensionnement : c'est lui qui détermine
+    // le programme finançable de B et C. Suggestion = grille de Jeremy (standing × rôle),
+    // saisie utilisateur prioritaire. Standing non reconnu : grille STANDARD, marquée hypothèse.
+    const standingKeyV84 = String(standing_level || "ECONOMIQUE").toUpperCase();
+    const roleV12 = ScenarioModel.roleOf(label);
+    let costSuggestionV12 = ScenarioModel.suggestedCostPerM2(standingKeyV84, roleV12);
+    if (costSuggestionV12.value == null) {
+      costSuggestionV12 = ScenarioModel.pv(ScenarioModel.COST_GRID.STANDARD[roleV12], ScenarioModel.SOURCE.HYPOTHESIS,
+        `Standing "${standing_level}" non reconnu : grille STANDARD appliquée`);
+    }
+    const marketCostV84 = costSuggestionV12.value;
+    const costOverrideV12 = Number((cost_per_m2_overrides || {})[label]) || 0;
+    const costForSizingV12 = costOverrideV12 > 0 ? costOverrideV12 : marketCostV84;
     // ── v73 PROGRAM-DRIVEN ENGINE ─────────────────────────────────────────────
     const v73Result = computeProgramDrivenScenarioV73({
       label,
@@ -3547,6 +3579,14 @@ function computeSmartScenarios({
       floor_height: Number(floor_height) || 3.2,
       zoning_type: zoning_type || "URBAIN",
       commerce_size_m2: Number(commerce_size_m2) || 0,
+      // Dérogation COS cochée par l'utilisateur (« Ignorer plafond COS ») : pas de limite COS
+      cos_regl: (arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.regulatory
+        && arguments[0]._leadConstraints.regulatory.ignore_cos) ? 0 : cos,
+      budget_fcfa: budgetMax,
+      cost_per_m2: costForSizingV12,
+      role_rules,
+      max_fp_m2: (arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.geometry
+        && Number(arguments[0]._leadConstraints.geometry.max_fp_m2)) || 0,
     });
     // ── Si type non supporté → retourner un message d'erreur lisible ──────────
     if (v73Result.isUnsupported) {
@@ -3614,17 +3654,6 @@ function computeSmartScenarios({
     // consommer directement le résultat v73Result.
     // ─────────────────────────────────────────────────────────────────────────
     isProgramDriven = !v73Result.isUnsupported || isProgramDriven; // v73 patch : assigne au scope externe (sticky : true reste true si au moins un scenario v73 OK)
-    const standingKeyV84 = String(standing_level || "ECONOMIQUE").toUpperCase();
-    // v12 — coût/m² suggéré = grille de Jeremy (standing × rôle), cf. lib/scenario-model.js.
-    // Standing non reconnu : grille STANDARD, marquée comme hypothèse.
-    const roleV12 = ScenarioModel.roleOf(label);
-    let costSuggestionV12 = ScenarioModel.suggestedCostPerM2(standingKeyV84, roleV12);
-    if (costSuggestionV12.value == null) {
-      costSuggestionV12 = ScenarioModel.pv(ScenarioModel.COST_GRID.STANDARD[roleV12], ScenarioModel.SOURCE.HYPOTHESIS,
-        `Standing "${standing_level}" non reconnu : grille STANDARD appliquée`);
-    }
-    const marketCostV84 = costSuggestionV12.value;
-    const costOverrideV12 = Number((cost_per_m2_overrides || {})[label]) || 0;
     const BUDGET_CAP_FACTOR_V84 = { A: 1.20, B: 1.00, C: 0.85 };
     // ══════════════════════════════════════════════════════════════════════════
     // CALCULS COMMUNS (program-driven et regulation-driven)
@@ -3794,6 +3823,13 @@ function computeSmartScenarios({
       // v12 — rôle métier explicite (A=CLIENT_INTENT, B=BALANCED, C=PRUDENT)
       role_v12: roleV12,
       role_label_v12: ScenarioModel.ROLE_LABEL_FR[roleV12],
+      // v12 — traçabilité du dimensionnement : programme demandé, règles du rôle, limites, adaptations
+      client_program_v12: v73Result.client_program_v12,
+      role_rules_v12: v73Result.role_rules_v12,
+      role_rules_source_v12: v73Result.role_rules_source_v12,
+      sdp_limits_v12: v73Result.sdp_limits_v12,
+      adaptations_v12: v73Result.adaptations_v12,
+      infeasible_v12: v73Result.infeasible_v12,
       label_fr: labels_fr[label],
       accent_color: accents[label],
       estimated_cost: estimatedCost,
@@ -4049,8 +4085,10 @@ function computeSmartScenarios({
   // ══════════════════════════════════════════════════════════════════
   // v70.10 ROBUST ANTI-COLLAPSE : post-loop B vs C differentiation
   // If B and C have identical levels AND identical fp → FORCE differentiation
+  // v12 : désactivé en mode programme — les écarts entre scénarios viennent des règles de rôle
+  // (coût, marges, plafonds), jamais d'une différenciation artificielle (spec §5).
   // ══════════════════════════════════════════════════════════════════
-  if (r.B && r.C) {
+  if (!isProgramDriven && r.B && r.C) {
     const bLev = r.B.levels, cLev = r.C.levels;
     const bFp = Math.round(r.B.fp_m2), cFp = Math.round(r.C.fp_m2);
     const bSdp = Math.round(r.B.sdp_m2), cSdp = Math.round(r.C.sdp_m2);
@@ -4500,32 +4538,9 @@ function computeSmartScenarios({
   // Avec CES_FILL 95%>80%>65% + extension étages, la hiérarchie est naturelle.
   // Mais des cas edge (BUREAUX avec mix function différents) peuvent inverser B>A en units
   if (isProgramDriven) {
-    // Enforce: A.levels >= B.levels >= C.levels
-    if (r.A.levels < r.B.levels) {
-      r.A.levels = r.B.levels;
-      recalcSdp(r.A);
-    }
-    if (r.B.levels < r.C.levels) {
-      r.C.levels = Math.max(1, r.B.levels - 1);
-      if (r.C.levels === r.B.levels) r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.90);
-      recalcSdp(r.C);
-    }
-    // v5.4 FIX: Ne PAS capper total_units entre scénarios.
-    // B peut avoir PLUS de logements que A si les logements sont plus compacts (UNIT_SIZES plus petits).
-    // La hiérarchie A >= B >= C s'applique aux NIVEAUX et à la SDP, pas au nombre de logements.
-    // L'ancien code écrasait B.total_units = A.total_units SANS recalculer unit_mix_detail,
-    // surf_hab et m2_par_logt, ce qui créait une incohérence (unit_mix=10 mais total_units=8).
-    // Supprimé — le nombre de logements est un RÉSULTAT du dimensionnement, pas une contrainte.
-    // SDP check (original logic preserved)
-    if (r.A.sdp_m2 < r.B.sdp_m2) {
-      r.A.levels = Math.max(r.A.levels, r.B.levels);
-      recalcSdp(r.A);
-    }
-    if (r.B.sdp_m2 < r.C.sdp_m2) {
-      r.C.levels = Math.max(1, r.B.levels - 1 || 1);
-      if (r.C.levels === r.B.levels) r.C.fp_m2 = Math.round(r.C.fp_m2 * 0.90);
-      recalcSdp(r.C);
-    }
+    // v12 : plus de hiérarchie A ≥ B ≥ C imposée après coup (elle modifiait niveaux et SDP,
+    // y compris l'intention du client, sans recalculer les coûts). A reste le programme du
+    // client ; B et C résultent de leurs règles de rôle (lib/scenario-rules.js).
   } else {
     // Regulation-driven : ancienne logique de différenciation
     if (r.C.levels <= r.A.levels && absMaxLevels > r.A.levels) {
@@ -4888,14 +4903,16 @@ function computeSmartScenarios({
   // v74.30 PUSH 11 — appliquer les contraintes structurelles du lead.
   // Si _leadConstraints est present (injecte par /compute-scenarios depuis le body),
   // on cap fp/sdp/units/mix en cascade. Sinon, no-op (isEmpty=true).
-  const _scenarios = { A: r.A, B: r.B, C: r.C };
+  // v12 : en mode programme, l'emprise maximale est déjà un plafond du dimensionnement
+  // (lib/scenario-rules.js) ; le repère est porté par l'objet renvoyé pour les appels suivants.
+  const _scenarios = { A: r.A, B: r.B, C: r.C, _v12_program_driven: !!isProgramDriven };
   if (arguments[0] && arguments[0]._leadConstraints) {
     applyConstraintsToScenarios(_scenarios, arguments[0]._leadConstraints);
     if (!arguments[0]._leadConstraints.isEmpty) {
       console.log(`│ [PUSH11] Apres contraintes: A=${_scenarios.A.fp_m2}m²×${_scenarios.A.levels}niv=${_scenarios.A.sdp_m2}m² | B=${_scenarios.B.fp_m2}m²×${_scenarios.B.levels}niv=${_scenarios.B.sdp_m2}m² | C=${_scenarios.C.fp_m2}m²×${_scenarios.C.levels}niv=${_scenarios.C.sdp_m2}m²`);
     }
   }
-  return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band };
+  return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band, _v12_program_driven: !!isProgramDriven };
 }
 // ═══════════════════════════════════════════════════════════════════════════
 // v74.30 PUSH 11 — LEAD CONSTRAINTS FRAMEWORK
@@ -5077,7 +5094,10 @@ function applyConstraintsToScenarios(scenarios, constraints) {
   // visuelle, evite que A et B saturent au meme bD physique). v74.33 PUSH 14.
   const cap = constraints.geometry && constraints.geometry.max_fp_m2;
   const hugActive = !!(constraints.geometry && constraints.geometry.lateral_hug);
-  if (cap && cap > 0) {
+  // v12 : en mode programme, le plafond d'emprise est intégré au dimensionnement de chaque rôle.
+  // Ce bloc historique (ratios fixes A=100 % / B=65 % / C=40 % avec mitoyenneté, qui pouvaient
+  // AGRANDIR l'emprise) ne s'applique plus qu'à l'ancien mode réglementation.
+  if (cap && cap > 0 && !scenarios._v12_program_driven) {
     const labels = ["A", "B", "C"].filter(l => scenarios[l]);
     const maxFpDefault = Math.max(...labels.map(l => scenarios[l].fp_m2 || 0));
     // Determine target fp per scenario
@@ -10791,7 +10811,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.1";
+const V12_ENGINE_VERSION = "12.2";
 
 // Paramètres du moteur à partir d'un body lead (identique pour 8D, textes, PPT).
 function scenarioEngineInputs(p, costOverrides) {
@@ -10877,6 +10897,12 @@ function scenarioModelView(letter, row, engineScenario) {
         sdp_m2: e.sdp_m2 || null, fp_m2: e.fp_m2 || null, levels: e.levels || null,
         total_units: e.total_units || null, cost_per_m2: e.cost_per_m2 || null,
         cost_total_fcfa: e.cost_total_fcfa || null, budget_fit: e.budget_fit || null,
+        unit_mix_detail: e.unit_mix_detail || null,
+        // Règles du rôle : limites, adaptations du programme, programme impossible à tenir
+        limits: e.sdp_limits_v12 || null,
+        adaptations: e.adaptations_v12 || [],
+        infeasible: !!e.infeasible_v12,
+        rules: e.role_rules_v12 || null,
       } : null,
     },
     actual: (row && row.actual) || null,

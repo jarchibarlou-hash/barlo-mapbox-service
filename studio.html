@@ -403,7 +403,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.2-SCENARIOS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.3-REGLES-ABC</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6011,13 +6011,33 @@ function renderV12Strip(L) {
           <span class="s">BARLO ${num(sugCost)} FCFA</span>
         </label>
         ${kpi("Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", eng.budget_fit ? esc(eng.budget_fit) : "", "Coût de construction estimé (SDP × coût/m² effectif, VRD compris)")}
-      </div>`;
+      </div>
+      ${v12RulesLine(m)}`;
     const tabState = $(`cTabState${L}`);
     if (tabState) {
         const icon = { SUGGESTED: "", EDITING: " ●", VALIDATED: " ✓", ANALYZED: " ✓", OUTDATED: " ⚠" }[m.status] || "";
         tabState.textContent = icon;
         tabState.title = m.status ? (V12_STATUS_LABEL[m.status] || "") : "";
     }
+}
+
+// Ligne « règles du rôle » : limite qui s'impose, adaptations du programme, signal d'infaisabilité
+const V12_LIMIT_LABEL = { budget: "budget", cos: "COS", capacity: "capacité du terrain" };
+function v12RulesLine(m) {
+    const eng = (m.effective && m.effective.engine) || {};
+    const L = eng.limits;
+    if (!L) return "";
+    const parts = [];
+    if (L.binding && L.sdp_max) parts.push(`Limite qui s'impose : ${V12_LIMIT_LABEL[L.binding] || L.binding} (${Number(L.sdp_max).toLocaleString("fr-FR")} m² de SDP max)`);
+    const ad = eng.adaptations || [];
+    if (ad.length) {
+        const txt = ad.map(a => a.kind === "DOWNGRADE" ? `${a.from} → ${a.to}` : a.kind === "REMOVE_UNIT" ? `− 1 ${a.type}` : "− 1 commerce");
+        parts.push(`Programme adapté (${V12_LIMIT_LABEL[ad[0].reason] || ad[0].reason}) : ${txt.join(", ")}`);
+    } else if (m.role !== "CLIENT_INTENT") {
+        parts.push("Programme du client conservé");
+    }
+    const warn = eng.infeasible ? `<span style="color:var(--brick2);font-weight:700">⚠ Le programme ne tient pas dans les limites de ce scénario, même réduit.</span> ` : "";
+    return `<div class="c-hint" style="margin-top:.4rem" title="Règles du rôle : hypothèses BARLO modifiables">${warn}${esc(parts.join(" · "))}</div>`;
 }
 
 async function saveV12Override(L, key, raw) {
