@@ -4,8 +4,7 @@
   "description": "BARLO image engine — Hektar style + OpenAI edits",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test test/*.test.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",

@@ -5,7 +5,6 @@ const { createCanvas, loadImage } = require("canvas");
 const FormData = require("form-data");
 const fetch = require("node-fetch");
 const turf = require("@turf/turf");
-const ScenarioModel = require("./lib/scenario-model");
 const app = express();
 // v72.160: CORS — allow BARLO Diagnostic Studio (Netlify) and any origin
 app.use((req, res, next) => {
@@ -17,8 +16,6 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: "2mb", type: () => true }));
-// Modules partagés serveur/studio (fonctions pures)
-app.use("/lib", express.static(require("path").join(__dirname, "lib")));
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY; // v73.2.6 : Google Maps Static API pour vue top haute qualite
@@ -1181,16 +1178,6 @@ app.post("/api/process-lead", async (req, res) => {
 
     const display = {};
     for (const col of EXTRA_DISPLAY_COLS) { if (finalObj[col] !== undefined) display[col] = finalObj[col]; }
-
-    // v12 — enregistre la suggestion BARLO de ce traitement (source de vérité des scénarios)
-    try {
-      const pV12 = Object.assign({}, body8D);
-      if (!pV12.lead_id) pV12.lead_id = leadRef;
-      await mergeLeadOverridesFromPipeline(pV12);
-      await getOrComputeScenarioSet(pV12);
-    } catch (e) {
-      console.warn(`[V12] 8D : enregistrement des scénarios échoué : ${e.message}`);
-    }
 
     res.json({ ok: true, ref: leadRef, reprocessed: isReprocessing, body8D, display, raw_columns: Object.keys(finalObj).length, duration_ms: Date.now() - t0 });
   } catch (err) {
@@ -3139,8 +3126,6 @@ function computeSmartScenarios({
   // v72.157 : typology-driven fields (from /compute-scenarios request)
   input_typologies = "", // typologies string (e.g., "T2,T3,T4")
   commerce_size_m2 = 0,  // override commerce surface
-  // v12 : coût/m² saisi par l'utilisateur, par scénario ({ A: 400000 }). Jamais écrasé.
-  cost_per_m2_overrides = {},
 }) {
   // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
   // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
@@ -3452,8 +3437,6 @@ function computeSmartScenarios({
         unit_mix: {}, total_useful_m2: 0,
         m2_habitable_par_logement: 0,
         role: SCENARIO_ROLE[label],
-        role_v12: ScenarioModel.roleOf(label),
-        role_label_v12: ScenarioModel.ROLE_LABEL_FR[ScenarioModel.roleOf(label)],
         label_fr: { A: "Scenario intensification", B: "Scenario equilibre", C: "Scenario prudent" }[label],
         accent_color: { A: "#2a5298", B: "#1e8449", C: "#d35400" }[label],
         recommendation_score: 0,
@@ -3502,16 +3485,15 @@ function computeSmartScenarios({
     // ─────────────────────────────────────────────────────────────────────────
     isProgramDriven = !v73Result.isUnsupported || isProgramDriven; // v73 patch : assigne au scope externe (sticky : true reste true si au moins un scenario v73 OK)
     const standingKeyV84 = String(standing_level || "ECONOMIQUE").toUpperCase();
-    // v12 — coût/m² suggéré = grille de Jeremy (standing × rôle), cf. lib/scenario-model.js.
-    // Standing non reconnu : grille STANDARD, marquée comme hypothèse.
-    const roleV12 = ScenarioModel.roleOf(label);
-    let costSuggestionV12 = ScenarioModel.suggestedCostPerM2(standingKeyV84, roleV12);
-    if (costSuggestionV12.value == null) {
-      costSuggestionV12 = ScenarioModel.pv(ScenarioModel.COST_GRID.STANDARD[roleV12], ScenarioModel.SOURCE.HYPOTHESIS,
-        `Standing "${standing_level}" non reconnu : grille STANDARD appliquée`);
-    }
-    const marketCostV84 = costSuggestionV12.value;
-    const costOverrideV12 = Number((cost_per_m2_overrides || {})[label]) || 0;
+    const _COST_PER_M2_ROLE_V73COMPAT = {
+      ECONOMIQUE: { A: 250000, B: 215000, C: 175000 },
+      ECO:        { A: 250000, B: 215000, C: 175000 },
+      STANDARD:   { A: 350000, B: 300000, C: 250000 },
+      HAUT:       { A: 450000, B: 385000, C: 325000 },
+      PREMIUM:    { A: 550000, B: 475000, C: 400000 },
+    };
+    const _costTableV73COMPAT = _COST_PER_M2_ROLE_V73COMPAT[standingKeyV84] || _COST_PER_M2_ROLE_V73COMPAT.STANDARD;
+    const marketCostV84 = _costTableV73COMPAT[label] || _costTableV73COMPAT.B;
     const BUDGET_CAP_FACTOR_V84 = { A: 1.20, B: 1.00, C: 0.85 };
     // ══════════════════════════════════════════════════════════════════════════
     // CALCULS COMMUNS (program-driven et regulation-driven)
@@ -3572,11 +3554,6 @@ function computeSmartScenarios({
     } else {
       // v75.1 : chemin par défaut — prix marché maintenu.
       // console.log(`│   v75.1 HONEST-PRICING: ${label} costPerM2=${marketCostPerM2/1000}k/m² (prix marché du standing)`);
-    }
-    // v12 — la saisie utilisateur prime toujours sur la suggestion (et sur tout ajustement)
-    if (costOverrideV12 > 0) {
-      costPerM2 = costOverrideV12;
-      costAdjusted = false;
     }
     const constructionCost = sdp * costPerM2;
     const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
@@ -3678,16 +3655,11 @@ function computeSmartScenarios({
         largeur_recuperee_m: nbMitoyens * rLateral,
       },
       role: SCENARIO_ROLE[label],
-      // v12 — rôle métier explicite (A=CLIENT_INTENT, B=BALANCED, C=PRUDENT)
-      role_v12: roleV12,
-      role_label_v12: ScenarioModel.ROLE_LABEL_FR[roleV12],
       label_fr: labels_fr[label],
       accent_color: accents[label],
       estimated_cost: estimatedCost,
       cost_per_m2: costPerM2,
       market_cost_per_m2: marketCostPerM2,
-      cost_per_m2_suggested: costSuggestionV12,
-      cost_per_m2_source: costOverrideV12 > 0 ? ScenarioModel.SOURCE.USER_OVERRIDE : costSuggestionV12.source,
       cost_adjusted: costAdjusted,
       budget_fit: budgetFit,
       // v57.0 CES-driven extras
@@ -9757,8 +9729,49 @@ app.post("/generate-texts", async (req, res) => {
   }
   // v74.35 PUSH 19 : re-merge lead-specific overrides depuis PIPELINE
   await mergeLeadOverridesFromPipeline(p);
-  // Step 1: v12 — même résultat moteur que le PPT (source de vérité unique)
-  const { scenarios } = await getOrComputeScenarioSet(p);
+  // Step 1: Compute scenarios (reuse existing engine)
+  const scenarios = computeSmartScenarios({
+    site_area: Number(p.site_area),
+    envelope_w: Number(p.envelope_w),
+    envelope_d: Number(p.envelope_d),
+    envelope_area: Number(p.envelope_area) || undefined,
+    zoning_type: p.zoning_type || "URBAIN",
+    floor_height: Number(p.floor_height) || 3.2,
+    primary_driver: p.primary_driver || "MAX_CAPACITE",
+    max_floors: Number(p.max_floors) || 99,
+    max_height_m: Number(p.max_height_m) || 99,
+    program_main: p.program_main || p.project_type || "",
+    target_surface_m2: Number(p.target_surface_m2) || 0,
+    site_saturation_level: p.site_saturation_level || "MEDIUM",
+    financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
+    density_band: p.density_band || "",
+    risk_adjusted: Number(p.risk_adjusted) || 0,
+    feasibility_posture: p.feasibility_posture || "BALANCED",
+    scenario_A_role: p.scenario_A_role || "",
+    scenario_B_role: p.scenario_B_role || "",
+    scenario_C_role: p.scenario_C_role || "",
+    budget_range: Number(p.budget_range) || 0,
+    budget_range_raw: String(p.budget_range || ""),
+    budget_band: p.budget_band || "",
+    budget_tension: p.budget_tension || 0,
+    standing_level: p.standing_level || "STANDARD",
+    target_units: Number(p.target_units) || 0,
+    rent_score: Number(p.rent_score) || 0,
+    capacity_score: Number(p.capacity_score) || 0,
+    mix_score: Number(p.mix_score) || 0,
+    phase_score: Number(p.phase_score) || 0,
+    risk_score: Number(p.risk_score) || 0,
+    density_pressure_factor: Number(p.density_pressure_factor) || 1,
+    driver_intensity: p.driver_intensity || "MEDIUM",
+    strategic_position: p.strategic_position || "",
+    layout_mode: p.layout_mode || "SUPERPOSE",
+    commerce_depth_m: Number(p.commerce_depth_m) || 6,
+    retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
+    // v74.30 PUSH 11 : injecter contraintes specifiques du lead
+    _leadConstraints: parseLeadConstraints(p),
+  });
+  // v74.30: applyScenarioOverrides est devenu un alias du framework, idempotent.
+  applyScenarioOverrides(scenarios, p);
   // Step 2: Flatten scenario data (reuse existing flatten logic)
   const diag = scenarios.diagnostic || {};
   const comp = diag.comparatif || {};
@@ -10038,9 +10051,52 @@ app.post("/generate-pptx", async (req, res) => {
   // v74.35 PUSH 19 : re-merge lead-specific overrides depuis PIPELINE
   await mergeLeadOverridesFromPipeline(p);
   try {
-    // Step 1: v12 — résultat moteur unique (relu si les entrées n'ont pas changé depuis 8D)
-    const { scenarios, fromStore } = await getOrComputeScenarioSet(p);
-    console.log(`[PPTX] scénarios ${fromStore ? "relus (source de vérité v12)" : "calculés"}`);
+    // Step 1: Compute scenarios
+    const scenarios = computeSmartScenarios({
+      site_area: Number(p.site_area),
+      envelope_w: Number(p.envelope_w),
+      envelope_d: Number(p.envelope_d),
+      envelope_area: Number(p.envelope_area) || undefined,
+      zoning_type: p.zoning_type || "URBAIN",
+      floor_height: Number(p.floor_height) || 3.2,
+      primary_driver: p.primary_driver || "MAX_CAPACITE",
+      max_floors: Number(p.max_floors) || 99,
+      max_height_m: Number(p.max_height_m) || 99,
+      program_main: p.program_main || p.project_type || "",
+      target_surface_m2: Number(p.target_surface_m2) || 0,
+      site_saturation_level: p.site_saturation_level || "MEDIUM",
+      financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
+      density_band: p.density_band || "",
+      risk_adjusted: Number(p.risk_adjusted) || 0,
+      feasibility_posture: p.feasibility_posture || "BALANCED",
+      scenario_A_role: p.scenario_A_role || "",
+      scenario_B_role: p.scenario_B_role || "",
+      scenario_C_role: p.scenario_C_role || "",
+      budget_range: Number(p.budget_range) || 0,
+      budget_range_raw: String(p.budget_range || ""),
+      budget_band: p.budget_band || "",
+      budget_tension: p.budget_tension || 0,
+      standing_level: p.standing_level || "STANDARD",
+      target_units: Number(p.target_units) || 0,
+      rent_score: Number(p.rent_score) || 0,
+      capacity_score: Number(p.capacity_score) || 0,
+      mix_score: Number(p.mix_score) || 0,
+      phase_score: Number(p.phase_score) || 0,
+      risk_score: Number(p.risk_score) || 0,
+      density_pressure_factor: Number(p.density_pressure_factor) || 1,
+      driver_intensity: p.driver_intensity || "MEDIUM",
+      strategic_position: p.strategic_position || "",
+      layout_mode: p.layout_mode || "SUPERPOSE",
+      commerce_depth_m: Number(p.commerce_depth_m) || 6,
+      retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
+      // v73.1.11: typology-driven fields (sinon fallback target_units → mauvais mix dans les textes)
+      input_typologies: p.input_typologies || "",
+      commerce_size_m2: Number(p.commerce_size_m2) || 0,
+      // v74.30 PUSH 11 : injecter contraintes specifiques du lead
+      _leadConstraints: parseLeadConstraints(p),
+    });
+    // v74.30: alias du framework, idempotent (safe).
+    applyScenarioOverrides(scenarios, p);
     // Step 2: Flatten + generate texts (same as /generate-texts)
     const diag = scenarios.diagnostic || {};
     const comp = diag.comparatif || {};
@@ -10656,254 +10712,6 @@ async function fetchLeadUnitsForPptx(leadRef) {
     return empty;
   }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// v12 — SOURCE DE VÉRITÉ PAR SCÉNARIO
-// Le moteur tourne une fois pour un jeu d'entrées donné ; son résultat est enregistré
-// (sb_scenario_sets) avec l'empreinte des entrées, et la suggestion normalisée de chaque
-// scénario (sb_scenarios.suggested). PPT et textes relisent ce résultat au lieu de relancer
-// le moteur. Les surcharges utilisateur (sb_scenarios.overrides) font partie des entrées.
-// Dégradation : si les tables v12 n'existent pas encore, calcul direct sans enregistrement.
-// ═══════════════════════════════════════════════════════════════════════════════
-let _v12TablesMissingLogged = false;
-function isMissingTableError(err) {
-  const m = String((err && (err.message || err.details)) || "");
-  return /does not exist|could not find the table|schema cache/i.test(m);
-}
-function logV12Missing(err) {
-  if (!_v12TablesMissingLogged) {
-    console.warn(`[V12] Tables v12 absentes (appliquer migration_v12_scenarios.sql) : ${err.message || err}`);
-    _v12TablesMissingLogged = true;
-  }
-}
-
-// À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.1";
-
-// Paramètres du moteur à partir d'un body lead (identique pour 8D, textes, PPT).
-function scenarioEngineInputs(p, costOverrides) {
-  return {
-    _engine_version: V12_ENGINE_VERSION,
-    site_area: Number(p.site_area),
-    envelope_w: Number(p.envelope_w),
-    envelope_d: Number(p.envelope_d),
-    envelope_area: Number(p.envelope_area) || undefined,
-    zoning_type: p.zoning_type || "URBAIN",
-    floor_height: Number(p.floor_height) || 3.2,
-    primary_driver: p.primary_driver || "MAX_CAPACITE",
-    max_floors: Number(p.max_floors) || 99,
-    max_height_m: Number(p.max_height_m) || 99,
-    program_main: p.program_main || p.project_type || "",
-    target_surface_m2: Number(p.target_surface_m2) || 0,
-    site_saturation_level: p.site_saturation_level || "MEDIUM",
-    financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
-    density_band: p.density_band || "",
-    risk_adjusted: Number(p.risk_adjusted) || 0,
-    feasibility_posture: p.feasibility_posture || "BALANCED",
-    scenario_A_role: p.scenario_A_role || "",
-    scenario_B_role: p.scenario_B_role || "",
-    scenario_C_role: p.scenario_C_role || "",
-    budget_range: Number(p.budget_range) || 0,
-    budget_range_raw: String(p.budget_range || ""),
-    budget_band: p.budget_band || "",
-    budget_tension: p.budget_tension || 0,
-    standing_level: p.standing_level || "STANDARD",
-    target_units: Number(p.target_units) || 0,
-    rent_score: Number(p.rent_score) || 0,
-    capacity_score: Number(p.capacity_score) || 0,
-    mix_score: Number(p.mix_score) || 0,
-    phase_score: Number(p.phase_score) || 0,
-    risk_score: Number(p.risk_score) || 0,
-    density_pressure_factor: Number(p.density_pressure_factor) || 1,
-    driver_intensity: p.driver_intensity || "MEDIUM",
-    strategic_position: p.strategic_position || "",
-    layout_mode: p.layout_mode || "SUPERPOSE",
-    commerce_depth_m: Number(p.commerce_depth_m) || 6,
-    retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
-    input_typologies: p.input_typologies || "",
-    commerce_size_m2: Number(p.commerce_size_m2) || 0,
-    _leadConstraints: parseLeadConstraints(p),
-    cost_per_m2_overrides: costOverrides || {},
-  };
-}
-
-async function loadScenarioRows(sb, ref) {
-  const out = {};
-  const { data, error } = await sb.from("sb_scenarios").select("*").eq("lead_ref", ref);
-  if (error) throw error;
-  for (const r of data || []) out[r.scenario] = r;
-  return out;
-}
-function costOverridesFromRows(rows) {
-  const out = {};
-  for (const k of ["A", "B", "C"]) {
-    const v = rows[k] && rows[k].overrides && rows[k].overrides.cost_per_m2 && rows[k].overrides.cost_per_m2.value;
-    if (Number(v) > 0) out[k] = Number(v);
-  }
-  return out;
-}
-// Vue « modèle » d'un scénario pour le studio (suggestion, surcharges, valeurs effectives, état).
-// engineScenario = scénario du calcul effectif (avec surcharges) : le studio affiche ses chiffres
-// sans rien recalculer lui-même.
-function scenarioModelView(letter, row, engineScenario) {
-  const role = ScenarioModel.roleOf(letter);
-  const suggested = (row && row.suggested) || null;
-  const overrides = (row && row.overrides) || {};
-  const e = engineScenario || null;
-  return {
-    scenario: letter,
-    role,
-    role_label: ScenarioModel.ROLE_LABEL_FR[role],
-    status: (row && row.status) || null,
-    revision: (row && row.revision) || 0,
-    suggested,
-    overrides,
-    effective: {
-      cost_per_m2: ScenarioModel.effective(overrides, "cost_per_m2", suggested && suggested.cost_per_m2),
-      engine: e ? {
-        sdp_m2: e.sdp_m2 || null, fp_m2: e.fp_m2 || null, levels: e.levels || null,
-        total_units: e.total_units || null, cost_per_m2: e.cost_per_m2 || null,
-        cost_total_fcfa: e.cost_total_fcfa || null, budget_fit: e.budget_fit || null,
-      } : null,
-    },
-    actual: (row && row.actual) || null,
-    analysis: (row && row.analysis) || null,
-    suggested_at: (row && row.suggested_at) || null,
-    validated_at: (row && row.validated_at) || null,
-  };
-}
-
-// Entrées de la suggestion BARLO pure : règles du site conservées (géométrie, réglementation),
-// réglages de conception de l'utilisateur retirés (overrides par scénario, coût/m² saisi).
-function suggestionOnlyInputs(inputs) {
-  const lc = inputs._leadConstraints || {};
-  const hasProgrammatic = !!(lc.programmatic && lc.programmatic.scenarios);
-  const hasCost = Object.keys(inputs.cost_per_m2_overrides || {}).length > 0;
-  if (!hasProgrammatic && !hasCost) return null;
-  return Object.assign({}, inputs, {
-    cost_per_m2_overrides: {},
-    _leadConstraints: Object.assign({}, lc, {
-      programmatic: {},
-      activeList: (lc.activeList || []).filter(x => !String(x).startsWith("scenarios forces")),
-    }),
-  });
-}
-
-async function saveScenarioSet(sb, ref, hash, inputs, scenarios, rows, suggestionScenarios) {
-  const now = new Date().toISOString();
-  const { error: setErr } = await sb.from("sb_scenario_sets").upsert({
-    lead_ref: ref, inputs_hash: hash, inputs, engine_result: scenarios, computed_at: now,
-  }, { onConflict: "lead_ref" });
-  if (setErr) throw setErr;
-  // Une requête par scénario : en upsert groupé, PostgREST met à NULL les colonnes absentes
-  // d'une ligne (on effacerait la suggestion d'un scénario inchangé).
-  for (const k of ["A", "B", "C"]) {
-    const sc = (suggestionScenarios || scenarios)[k];
-    if (!sc) continue;
-    const suggested = ScenarioModel.normalizeSuggestion(k, sc, {
-      site_area: inputs.site_area,
-      cost_per_m2: sc.cost_per_m2_suggested || null,
-    });
-    const prev = rows[k];
-    const changed = !prev || ScenarioModel.hashInputs(prev.suggested) !== ScenarioModel.hashInputs(suggested);
-    const row = { lead_ref: ref, scenario: k, role: suggested.role, updated_at: now };
-    if (changed) {
-      row.suggested = suggested;
-      row.suggested_at = now;
-      row.status = prev ? ScenarioModel.statusAfterNewSuggestion(prev.status) : ScenarioModel.STATUS.SUGGESTED;
-    }
-    const { error } = await sb.from("sb_scenarios").upsert(row, { onConflict: "lead_ref,scenario" });
-    if (error) throw error;
-  }
-}
-
-// Relit le résultat du moteur si les entrées n'ont pas changé, sinon recalcule et enregistre.
-// p = body lead (déjà fusionné avec les overrides PIPELINE). force = recalcul systématique.
-async function getOrComputeScenarioSet(p, { force = false } = {}) {
-  const ref = String(p.lead_id || p.barlo_code || p.lead_ref || "").trim();
-  const sb = getLeadUnitsSupabase();
-  let rows = {};
-  let storeOk = !!(sb && ref);
-  if (storeOk) {
-    try { rows = await loadScenarioRows(sb, ref); }
-    catch (e) { if (isMissingTableError(e)) { logV12Missing(e); storeOk = false; } else throw e; }
-  }
-  const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows));
-  const hash = ScenarioModel.hashInputs(inputs);
-  if (storeOk && !force) {
-    const { data, error } = await sb.from("sb_scenario_sets").select("inputs_hash, engine_result").eq("lead_ref", ref).maybeSingle();
-    if (error && !isMissingTableError(error)) throw error;
-    if (data && data.inputs_hash === hash && data.engine_result) {
-      console.log(`[V12] ${ref} : résultat moteur relu (empreinte ${hash})`);
-      return { scenarios: data.engine_result, fromStore: true, hash, rows, ref };
-    }
-  }
-  const scenarios = computeSmartScenarios(inputs);
-  applyScenarioOverrides(scenarios, p);
-  if (storeOk) {
-    try {
-      // La suggestion BARLO ne doit jamais contenir les réglages de l'utilisateur
-      const pure = suggestionOnlyInputs(inputs);
-      const suggestionScenarios = pure ? computeSmartScenarios(pure) : null;
-      await saveScenarioSet(sb, ref, hash, inputs, scenarios, rows, suggestionScenarios);
-      rows = await loadScenarioRows(sb, ref);
-      console.log(`[V12] ${ref} : résultat moteur calculé et enregistré (empreinte ${hash})`);
-    } catch (e) {
-      if (isMissingTableError(e)) logV12Missing(e); else console.error(`[V12] ${ref} : enregistrement échoué : ${e.message}`);
-    }
-  }
-  return { scenarios, fromStore: false, hash, rows, ref };
-}
-
-// Studio : synchronise (calcule si besoin) et renvoie les 3 modèles de scénario.
-app.post("/api/scenarios/:ref/sync", async (req, res) => {
-  const ref = String(req.params.ref || "").trim();
-  const p = Object.assign({}, req.body || {}, { lead_id: ref });
-  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
-    return res.status(400).json({ ok: false, error: "site_area, envelope_w, envelope_d obligatoires (body lead)" });
-  }
-  try {
-    await mergeLeadOverridesFromPipeline(p);
-    const r = await getOrComputeScenarioSet(p);
-    const models = {};
-    for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k]);
-    res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, models });
-  } catch (err) {
-    console.error(`[V12 SYNC] ${ref} : ${err.message}`);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// Surcharges utilisateur autorisées (valeur null = retour à la suggestion BARLO).
-const V12_OVERRIDE_KEYS = {
-  cost_per_m2: v => { const n = Number(v); if (!(n >= 50000 && n <= 5000000)) throw new Error("coût/m² attendu entre 50 000 et 5 000 000 FCFA"); return Math.round(n); },
-};
-app.post("/api/scenarios/:ref/:scn/override", async (req, res) => {
-  const ref = String(req.params.ref || "").trim();
-  const scn = String(req.params.scn || "").toUpperCase();
-  const { key, value } = req.body || {};
-  if (!["A", "B", "C"].includes(scn)) return res.status(400).json({ ok: false, error: "scénario A, B ou C" });
-  if (!V12_OVERRIDE_KEYS[key]) return res.status(400).json({ ok: false, error: `surcharge non gérée : ${key}` });
-  const sb = getLeadUnitsSupabase();
-  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
-  try {
-    const clean = (value === null || value === "" || value === undefined) ? null : V12_OVERRIDE_KEYS[key](value);
-    const rows = await loadScenarioRows(sb, ref);
-    const prev = rows[scn];
-    const overrides = ScenarioModel.setOverride(prev && prev.overrides, key, clean);
-    const row = {
-      lead_ref: ref, scenario: scn, role: ScenarioModel.roleOf(scn), overrides,
-      status: ScenarioModel.statusAfterEdit(prev && prev.status), updated_at: new Date().toISOString(),
-    };
-    const { error } = await sb.from("sb_scenarios").upsert(row, { onConflict: "lead_ref,scenario" });
-    if (error) throw error;
-    const after = await loadScenarioRows(sb, ref);
-    res.json({ ok: true, model: scenarioModelView(scn, after[scn]) });
-  } catch (err) {
-    if (isMissingTableError(err)) { logV12Missing(err); return res.status(503).json({ ok: false, error: "Tables v12 absentes : appliquer migration_v12_scenarios.sql" }); }
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
 
 // v75.2 — Parse un polygone GPS depuis site_polygon_points / site_polygon (string ou array)
 // Formats acceptés : "lat,lon;lat,lon;..." OU "lat,lon lat,lon ..." OU JSON array [[lat,lon], ...]

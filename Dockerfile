@@ -33,7 +33,6 @@ RUN npm install --production
 
 # Copy server + Python scripts + PPTX templates + Studio
 COPY server.js .
-COPY lib ./lib
 COPY generate_pptx.py .
 COPY generate_pptx_premium.py .
 COPY generate_charts.py .
