@@ -11229,6 +11229,29 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     });
   });
   const vertexGeoJSON = { type: "FeatureCollection", features: vertexFeatures };
+  // Étiquettes unités : Mapbox v2 pose les symboles au sol ; on les remonte à l'écran de la hauteur
+  // projetée du volume (sommet × sin(pitch) / mètres-par-pixel) pour qu'elles tiennent au-dessus du toit.
+  const MASSING_PITCH = 58;
+  const LABEL_SIZE = 15;
+  const metersPerPx = 78271.517 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
+  const labelFeatures = unitsData.map((u, i) => {
+    const n = u.polygonGeo.length;
+    return {
+      type: "Feature",
+      properties: { uid: `u${i}`, text: u.labelText || u.name || "" },
+      geometry: {
+        type: "Point",
+        coordinates: [u.polygonGeo.reduce((s, p) => s + p.lon, 0) / n, u.polygonGeo.reduce((s, p) => s + p.lat, 0) / n]
+      }
+    };
+  });
+  const labelGeoJSON = { type: "FeatureCollection", features: labelFeatures };
+  const labelOffsetExpr = ["match", ["get", "uid"]];
+  unitsData.forEach((u, i) => {
+    const liftPx = (u.topM || 3) * Math.sin(MASSING_PITCH * Math.PI / 180) / metersPerPx + 10;
+    labelOffsetExpr.push(`u${i}`, ["literal", [0, -liftPx / LABEL_SIZE]]);
+  });
+  labelOffsetExpr.push(["literal", [0, 0]]);
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
@@ -11331,6 +11354,27 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
         'circle-stroke-color': '#1a1a1a',
         'circle-stroke-width': 1.2,
         'circle-opacity': 0.95
+      }
+    });
+    // v11.37 : etiquette par unite (nom + R+X, pilotis, sous-sols, rez-de-jardin, parking, terrasse, balcons)
+    map.addSource('unit-labels', { type: 'geojson', data: ${JSON.stringify(labelGeoJSON)} });
+    map.addLayer({ id: 'unit-labels-text', type: 'symbol', source: 'unit-labels',
+      layout: {
+        'text-field': ['get', 'text'],
+        'text-size': ${LABEL_SIZE},
+        'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+        'text-anchor': 'bottom',
+        'text-offset': ${JSON.stringify(labelOffsetExpr)},
+        'text-justify': 'center',
+        'text-line-height': 1.25,
+        'text-max-width': 40,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true
+      },
+      paint: {
+        'text-color': '#1a1a1a',
+        'text-halo-color': '#ffffff',
+        'text-halo-width': 2.2
       }
     });
   });
@@ -11651,7 +11695,10 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
           hauteur_niveau: u.hauteur_niveau,
           niveau_depart_etage: u.niveau_depart_etage,
           altitude_base_m: u.altitude_base_m,
-          rez_jardin: !!u.rez_jardin
+          rez_jardin: !!u.rez_jardin,
+          parking_ss: !!u.parking_ss,
+          terrasse: !!u.terrasse,
+          balcon: !!u.balcon
         }
       }));
       console.log(`[REGEN-3D] ${rows.length} unités LIVE (source RAM cockpit — reflète éditions non-validées)`);
@@ -11752,6 +11799,16 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       const postsGeo = pilotisOn
         ? pilotisPostsM(polyM).map(sq => sq.map(p => fromM_studio(p.x, p.y, cLat, cLon)))
         : [];
+      // Étiquette affichée au-dessus du volume : nom + réglages non visibles en 3D (sous-sols, parking...)
+      const tags = [levels > 1 ? `R+${levels - 1}` : "RDC"];
+      if (pilotisOn) tags.push("pilotis");
+      const sousSols = Math.max(0, Math.round(Number(fp.sous_sols) || 0));
+      if (sousSols > 0) tags.push(`${sousSols} SS`);
+      if (fp.rez_jardin) tags.push("rez-de-jardin");
+      if (fp.parking_ss) tags.push("parking");
+      if (fp.terrasse) tags.push("terrasse");
+      if (fp.balcon) tags.push("balcons");
+      const labelText = `${row.unit_name || row.unit_type || "Unité"}\n${tags.join(" · ")}`;
       unitsData.push({
         id: row.unit_index,
         name: row.unit_name || `Unit ${row.unit_index}`,
@@ -11761,6 +11818,7 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         topM,
         groundM,
         postsGeo,
+        labelText,
         floors: levels,
         colorHex: colorByType(row.unit_type)
       });
@@ -11856,7 +11914,7 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       res.json({
         ok: true, lead_ref, scenario: scen,
         units_rendered: unitsData.length, units_rejected: rejected.length,
-        units_geometry: unitsData.map(u => ({ name: u.name, ground_m: u.groundM, base_m: u.baseM, top_m: u.topM, levels: u.floors, poteaux: (u.postsGeo || []).length })),
+        units_geometry: unitsData.map(u => ({ name: u.name, ground_m: u.groundM, base_m: u.baseM, top_m: u.topM, levels: u.floors, poteaux: (u.postsGeo || []).length, label: u.labelText })),
         parcel_vertices: parcelCoords.length,
         zoom_used: zoom,
         image_url: publicUrl,

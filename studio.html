@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.36-PILOTIS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.37-ETIQUETTES</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6732,7 +6732,10 @@ async function regenMassing3D(label, hiddenIds, hiddenLabels) {
             hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
             niveau_depart_etage: u.niveau_depart_etage != null ? Number(u.niveau_depart_etage) : null,
             altitude_base_m: u.altitude_base_m != null ? Number(u.altitude_base_m) : null,
-            rez_jardin: !!u.rez_jardin
+            rez_jardin: !!u.rez_jardin,
+            parking_ss: !!u.parking_ss,
+            terrasse: !!u.terrasse,
+            balcon: !!u.balcon
         }));
         // Envoie aussi le polygone parcelle GPS pour éviter la relecture polygon_drafts
         const parcelGeo = (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null;
