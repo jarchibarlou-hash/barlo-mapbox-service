@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.34-LEVELS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.35-SHAPES</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1407,6 +1407,19 @@ const SHAPE_TYPES = [
     { value: "U",         label: "U Cour",      generator: shapeUPredefined }
 ];
 
+// Les générateurs de formes produisent {x_m,y_m} centrés sur (0,0) ; le modèle v9 attend {x,y} absolus.
+function isLegacyLocalPolygon(poly) {
+    return Array.isArray(poly) && poly.length > 0 && poly[0].x === undefined && poly[0].x_m !== undefined;
+}
+function localShapeToAbsoluteM(localPts, cx, cy, rotDeg) {
+    const r = (rotDeg || 0) * Math.PI / 180;
+    const c = Math.cos(r), s = Math.sin(r);
+    return localPts.map(p => {
+        const lx = Number(p.x_m), ly = Number(p.y_m);
+        return { x: cx + lx * c - ly * s, y: cy + lx * s + ly * c };
+    });
+}
+
 // v75.8.11 — Applique une forme prédéfinie à une unité
 function applyShapeToUnit(label, idx, shapeType) {
     const u = (cockpitState.scenarios[label].units || [])[idx];
@@ -1414,13 +1427,20 @@ function applyShapeToUnit(label, idx, shapeType) {
     const shape = SHAPE_TYPES.find(s => s.value === shapeType);
     if (!shape) return;
     const area = Math.max(4, Number(u.unit_size_m2) || 20);
+    // v11.35 — la nouvelle forme reste centrée là où était l'unité
+    const cur = polygonCentroidM(unitPolygonM(u));
+    const cx = isFinite(cur.x) ? cur.x : (Number(u.offset_x_m) || 0);
+    const cy = isFinite(cur.y) ? cur.y : (Number(u.offset_y_m) || 0);
+    u.offset_x_m = cx;
+    u.offset_y_m = cy;
     if (shapeType === "rectangle") {
-        // Rectangle : reset polygon → forme rect standard, respecte shape_mode
+        // Rectangle : reset polygon → rect standard reconstruit à offset_x_m/offset_y_m
         u.polygon = null;
         u.shape_type = "rectangle";
     } else {
-        u.polygon = shape.generator(area);
+        u.polygon = localShapeToAbsoluteM(shape.generator(area), cx, cy, 0);
         u.shape_type = shapeType;
+        u.rotation_deg = 0;
     }
     // Reset dimensions rect custom
     u.width_m = null;
@@ -1522,10 +1542,10 @@ function adaptUnitToCornerLShape(label, idx) {
     // Génère L polygone, angle vers l'intérieur du coin
     const lShape = generateLShape(areaM2, corner.angleInternalRad, 0.6);
     if (!lShape) return;
-    u.polygon = lShape;
     // Positionne le centroïde du L à mi-chemin entre le coin et le centroïde parcelle
     u.offset_x_m = corner.cornerX_m * 0.55;
     u.offset_y_m = corner.cornerY_m * 0.55;
+    u.polygon = localShapeToAbsoluteM(lShape, u.offset_x_m, u.offset_y_m, 0);
     u.rotation_deg = 0;   // rotation embarquée dans le polygone
     u.width_m = null;     // ignore width_m/height_m si polygon défini
     u.height_m = null;
@@ -1948,6 +1968,9 @@ function findSafeUnitDistance(cxSvg, cySvg, sectorRadDeg, maxDist, uW, uH, rotDe
 // ═══════════════════════════════════════════════════════════════════════════════
 function unitPolygonM(u) {
     if (u.polygon && u.polygon.length >= 3) {
+        if (isLegacyLocalPolygon(u.polygon)) {
+            return localShapeToAbsoluteM(u.polygon, Number(u.offset_x_m) || 0, Number(u.offset_y_m) || 0, u.rotation_deg);
+        }
         return u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) }));
     }
     const areaM2 = Math.max(4, Number(u.unit_size_m2) || 20);
@@ -1997,6 +2020,11 @@ function pxDeltaToM(dxPx, dyPx, scale) {
 }
 // Garantit qu'une unité a u.polygon défini : matérialise depuis rect si besoin
 function ensureUnitPolygon(u) {
+    // Formes enregistrées dans l'ancien format local {x_m,y_m} → converties en absolu {x,y}
+    if (isLegacyLocalPolygon(u.polygon)) {
+        u.polygon = unitPolygonM(u);
+        u.rotation_deg = 0;
+    }
     if (!u.polygon || u.polygon.length < 3) {
         u.polygon = unitPolygonM(u);
         // On garde W/H/rot/offset comme reliques pour compat, mais polygon est now la vérité
