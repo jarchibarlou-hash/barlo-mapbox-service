@@ -1972,6 +1972,148 @@ function refreshBudgetFit(sc, range) {
   sc.cost_final_fcfa = sc.cost_total_fcfa + p2;
   sc.final_budget_fit = p2 ? ScenarioRules.budgetStatus(Math.round(sc.cost_final_fcfa / target), range) : sc.budget_fit;
 }
+// ═══ v12.11 — SCORING DES SCÉNARIOS sur leur contenu RÉEL ═══
+// Mêmes 7 critères et mêmes poids qu'avant (décision de Jeremy), mais chacun mesure le scénario
+// tel qu'il est (réglages et géométrie validée compris), plus jamais sa seule lettre A/B/C.
+const SCORE_WEIGHTS_V12 = Object.freeze({
+  budget_fit: 0.25, risk_alignment: 0.20, cos_conformity: 0.12, capacity_adequacy: 0.13,
+  cost_efficiency: 0.12, standing_match: 0.08, phase_flexibility: 0.10,
+});
+const clamp01 = x => Math.max(0, Math.min(1, x));
+function standingGridKey(standing) {
+  const s = String(standing || "").toUpperCase();
+  if (/PREMIUM|TRES|LUXE/.test(s)) return "PREMIUM";
+  if (/HAUT|CONFORT/.test(s)) return "HAUT";
+  if (/ECO|BAS/.test(s)) return "ECONOMIQUE";
+  return "STANDARD";
+}
+// Risque propre au scénario (0 = faible, 1 = élevé) : budget, hauteur, conformité réglementaire
+function scenarioRiskV12(sc) {
+  const rBudget = { DANS_BUDGET: 0, BUDGET_TENDU: 0.5, HORS_BUDGET: 1 }[sc.budget_fit] ?? 0.3;
+  const lv = Number(sc.levels) || 1;
+  const rHeight = lv <= 2 ? 0 : lv === 3 ? 0.3 : lv === 4 ? 0.6 : 1;
+  const geoErrors = (sc.geometry_checks_v12 || []).filter(c => c.level === "error").length;
+  const rReg = (geoErrors > 0 || sc.cos_compliance === "AMBITIEUX_HORS_COS") ? 1 : (Number(sc.cos_ratio_pct) > 90 ? 0.5 : 0);
+  return { total: 0.5 * rBudget + 0.25 * rHeight + 0.25 * rReg, budget: rBudget, height: rHeight, reg: rReg, geoErrors };
+}
+function scoreScenariosV12(rr, ctx) {
+  const W = SCORE_WEIGHTS_V12;
+  const posture = String(ctx.feasibility_posture || "BALANCED").toUpperCase();
+  const prudent = /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(posture);
+  const ambitious = /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(posture);
+  const postureFr = prudent ? "prudente" : ambitious ? "ambitieuse" : "equilibree";
+  const target = Math.max(1, Number(ctx.target_units) || 1);
+  const stdKey = standingGridKey(ctx.standing_level);
+  const phaseSc = Number(ctx.phase_score) || 0;
+  const labels = ["A", "B", "C"].filter(l => rr[l] && !rr[l].unsupported);
+  const cpu = sc => (Number(sc.cost_total_fcfa || sc.estimated_cost) || 0) / Math.max(1, Number(sc.total_units) || 1);
+  const cpus = labels.map(l => cpu(rr[l]));
+  const minCpu = Math.min(...cpus), maxCpu = Math.max(...cpus);
+  const M = v => `${Math.round(v / 1e6)}M`;
+  // Tension budgétaire réelle : le programme du client (A) tient-il dans sa fourchette ?
+  // Sans tension, l'efficacité coût ne départage pas (C est toujours le moins cher par construction).
+  const refFit = rr.A && !rr.A.unsupported ? rr.A.budget_fit : null;
+  const tension = { DANS_BUDGET: 0, BUDGET_TENDU: 0.5, HORS_BUDGET: 1 }[refFit] ?? 0.5;
+  for (const label of labels) {
+    const sc = rr[label];
+    // 1. BUDGET (25 %) — position dans la fourchette, réserve du rôle comprise
+    let budget = 0.5;
+    if (sc.budget_fit === "DANS_BUDGET") budget = 1;
+    else if (sc.budget_fit === "BUDGET_TENDU") budget = 0.6;
+    else if (sc.budget_fit === "HORS_BUDGET") budget = ambitious ? 0.35 : prudent ? 0 : 0.15;
+    const explBudget = sc.budget_fit === "DANS_BUDGET" ? "Tient dans le bas de votre fourchette budgetaire, reserve pour imprevus comprise."
+      : sc.budget_fit === "BUDGET_TENDU" ? "Tient seulement si vous vous placez dans le haut de votre fourchette budgetaire."
+      : sc.budget_fit === "HORS_BUDGET" ? `Au-dessus de votre fourchette${sc.budget_gap_pct > 0 ? ` de ${sc.budget_gap_pct} %` : ""} : financement complementaire, phasage ou programme a revoir.`
+      : "Budget non renseigne : critere neutre.";
+    // 2. ALIGNEMENT RISQUE (20 %) — risque réel du scénario face à la posture du client
+    const risk = scenarioRiskV12(sc);
+    const riskAlign = clamp01(prudent ? 1 - risk.total : ambitious ? 1 - Math.max(0, risk.total - 0.6) * 1.5 : 1 - Math.max(0, risk.total - 0.3) * 1.2);
+    const riskLevel = risk.total < 0.25 ? "faible" : risk.total < 0.55 ? "modere" : "eleve";
+    const riskWhy = [risk.budget >= 0.5 ? "budget" : "", risk.height >= 0.3 ? `hauteur R+${Math.max(0, (Number(sc.levels) || 1) - 1)}` : "", risk.reg >= 0.5 ? "conformite reglementaire" : ""].filter(Boolean).join(", ");
+    const explRisk = `Risque ${riskLevel}${riskWhy ? ` (${riskWhy})` : ""} : ${riskAlign >= 0.8 ? "adapte" : riskAlign >= 0.5 ? "acceptable" : "trop eleve"} pour une posture ${postureFr}.`;
+    // 3. CONFORMITÉ (12 %) — COS (occupation au sol), retraits, superpositions
+    const overBuildable = sc.sdp_limits_v12 && sc.sdp_limits_v12.buildable_area != null && !sc._v12_validated
+      && Number(sc.fp_m2) > Number(sc.sdp_limits_v12.buildable_area) + 0.5;
+    let conform = 1;
+    if (risk.geoErrors > 0 || sc.cos_compliance === "AMBITIEUX_HORS_COS" || overBuildable) conform = 0.1;
+    else if (Number(sc.cos_ratio_pct) > 90) conform = 0.8;
+    const explConform = conform >= 0.9 ? "Conforme : COS (occupation au sol) et retraits respectes."
+      : conform >= 0.5 ? "Conforme, mais emprise au sol proche du maximum autorise par le COS."
+      : risk.geoErrors > 0 ? `Non conforme en l'etat : ${risk.geoErrors} point(s) de la geometrie validee a corriger (retraits, superpositions ou COS).`
+      : overBuildable ? "Emprise au sol superieure a la zone constructible (retraits) : a revoir."
+      : "Depassement du COS (occupation au sol) : risque de refus de permis.";
+    // 4. CAPACITÉ (13 %) — unités livrées face au besoin ; celles de la phase 2 (prévues, pas livrées)
+    //    comptent pour moitié
+    const p2 = sc.phase_2_v12;
+    const p2Units = p2 ? (p2.logements || []).reduce((s, t) => s + (Number(t.count) || 0), 0) + (Number(p2.commerce) || 0) : 0;
+    const units = (Number(sc.total_units) || 0) + p2Units;
+    const ratio = ((Number(sc.total_units) || 0) + 0.5 * p2Units) / target;
+    let capacity;
+    if (ratio >= 0.85 && ratio <= 1.20) capacity = 1 - Math.abs(ratio - 1) * 0.5;
+    else if (ratio >= 0.70 && ratio < 0.85) capacity = 0.7 - (0.85 - ratio) * 2;
+    else if (ratio > 1.20 && ratio <= 1.50) capacity = 0.7 - (ratio - 1.20) * 1.5;
+    else capacity = Math.max(0, 0.3 - Math.abs(ratio - 1) * 0.2);
+    const explCapacity = `${units} unite(s) pour un besoin de ${target}${p2Units ? ` (dont ${p2Units} prevue(s) en phase 2, comptee(s) pour moitie)` : ""} : ${capacity >= 0.9 ? "correspond au besoin" : ratio < 1 ? "en dessous du besoin" : "au-dessus du besoin"}.`;
+    // 5. EFFICACITÉ COÛT (12 %) — coût des travaux par unité, comparé aux autres scénarios, pondéré par
+    //    la tension budgétaire réelle (neutre quand le programme du client tient dans le budget)
+    const c = cpu(sc);
+    const rawEff = maxCpu > minCpu ? 1 - 0.7 * (c - minCpu) / (maxCpu - minCpu) : 0.85;
+    const costEff = 0.7 + (rawEff - 0.7) * tension;
+    const explCost = `${M(c)} FCFA de travaux par unite : ${rawEff >= 0.95 ? "le plus bas des 3 scenarios" : rawEff <= 0.35 ? "le plus eleve des 3 scenarios" : "intermediaire"}`
+      + (tension === 0 ? " (peu determinant : votre budget couvre le programme)." : ".");
+    // 6. STANDING (8 %) — surfaces réelles des logements face à la grille du standing visé
+    const logts = ScenarioModel.parseUnitMixDetail(sc.unit_mix_detail).filter(u => u.type in UNIT_SIZES_V73 && u.type !== "COMMERCE");
+    let sizeRatio = null;
+    if (logts.length) {
+      const num = logts.reduce((s, u) => s + u.count * u.size_m2, 0);
+      const den = logts.reduce((s, u) => s + u.count * (UNIT_SIZES_V73[u.type][stdKey] || UNIT_SIZES_V73[u.type].STANDARD), 0);
+      sizeRatio = den > 0 ? num / den : null;
+    }
+    let standing = 0.7;
+    if (sizeRatio != null) standing = stdKey === "ECONOMIQUE"
+      ? (sizeRatio >= 0.8 ? 1 : sizeRatio >= 0.7 ? 0.7 : 0.4)
+      : (sizeRatio >= 0.95 ? 1 : sizeRatio >= 0.85 ? 0.8 : sizeRatio >= 0.75 ? 0.6 : 0.4);
+    const explStanding = sizeRatio == null ? "Pas de logement a comparer : critere neutre."
+      : `Surfaces des logements a ${Math.round(sizeRatio * 100)} % de la grille ${String(ctx.standing_level || "").toLowerCase()} : ${standing >= 0.9 ? "coherent avec le standing vise" : standing >= 0.6 ? "un peu compactes pour ce standing" : "trop compactes pour ce standing"}.`;
+    // 7. PHASAGE (10 %) — phasage prévu, ou construction par niveaux possible
+    const lv = Number(sc.levels) || 1;
+    let phase = p2 ? 1 : lv >= 2 ? 0.7 : 0.5;
+    phase = phase * (0.5 + phaseSc * 0.5) + (1 - phase) * (1 - phaseSc) * 0.3;
+    const explPhase = p2 ? "Phasage prevu : phase 1 financee, phase 2 anticipee dans la structure."
+      : lv >= 2 ? "Construction par niveaux possible (surelevation a anticiper des les fondations)."
+      : "Batiment de plain-pied : peu de marge de phasage.";
+    const parts = { budget_fit: [budget, explBudget], risk_alignment: [riskAlign, explRisk], cos_conformity: [conform, explConform],
+      capacity_adequacy: [capacity, explCapacity], cost_efficiency: [costEff, explCost], standing_match: [standing, explStanding], phase_flexibility: [phase, explPhase] };
+    let total = 0;
+    const detail = {};
+    for (const [k, [s, expl]] of Object.entries(parts)) {
+      const sClamped = clamp01(s);
+      total += sClamped * W[k];
+      detail[k] = { score: Math.round(sClamped * 100) / 100, poids: W[k], contribution: Math.round(sClamped * W[k] * 1000) / 1000, explication: expl };
+    }
+    detail.total = Math.round(total * 1000) / 1000;
+    sc.recommendation_score = detail.total;
+    sc.score_detail = detail;
+    sc.risque_v12 = { niveau: riskLevel, total: Math.round(risk.total * 100) / 100 };
+  }
+}
+// Meilleur score ; à égalité (< 0,5 point), l'ordre de préférence suit la posture du client
+// (prudente : C, B, A ; ambitieuse : A, B, C ; équilibrée : B, A, C) — jamais l'ordre alphabétique.
+function pickRecommendedV12(rr, posture) {
+  const p = String(posture || "").toUpperCase();
+  const order = /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(p) ? ["C", "B", "A"]
+    : /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(p) ? ["A", "B", "C"] : ["B", "A", "C"];
+  let best = null;
+  for (const l of order) {
+    const sc = rr[l];
+    if (!sc || sc.unsupported) continue;
+    if (!best || (Number(sc.recommendation_score) || 0) > (Number(rr[best].recommendation_score) || 0) + 0.005) best = l;
+  }
+  best = best || "A";
+  for (const l of ["A", "B", "C"]) if (rr[l]) rr[l].recommended = l === best;
+  return best;
+}
+
 // Fourchette de budget du client, telle que saisie : « 33 – 66 M FCFA » (jamais une seule borne)
 function budgetRangeLabel(raw) {
   const r = ScenarioRules.parseBudgetRange(raw);
@@ -4698,179 +4840,24 @@ function computeSmartScenarios({
   // ══════════════════════════════════════════════════════════════════════════════
   // Recommendation weights: Budget is #1 (30%), then risk alignment (20%), COS (15%),
   // capacity adequacy (15%), standing (10%), phase (10%)
-  const scoreWeights_v57_5 = {
-    budget_fit: 0.25,          // Budget compatibility
-    risk_alignment: 0.20,      // Posture-scenario alignment
-    cos_conformity: 0.12,      // COS compliance
-    capacity_adequacy: 0.13,   // Target units adequacy
-    cost_efficiency: 0.12,     // Quand budget serré, le moins cher gagne
-    standing_match: 0.08,      // Standing compatibility
-    phase_flexibility: 0.10,   // Phase compatibility
-  };
-  for (const label of ["A", "B", "C"]) {
-    const sc = r[label];
-    let score = 0;
-    // 1. BUDGET FIT (0.30): Favor scenarios within budget
-    // MAIS : un client AMBITIEUX tolère plus de dépassement qu'un PRUDENT
-    let budgetScore = 0;
-    if (sc.budget_fit === "DANS_BUDGET") budgetScore = 1.0;
-    else if (sc.budget_fit === "BUDGET_TENDU") budgetScore = 0.6;
-    else if (sc.budget_fit === "HORS_BUDGET") {
-      // AMBITIEUX : le hors-budget est un signal, pas un veto
-      if (/AMBITIEUX|OFFENSIVE?|AGGRESSIVE/i.test(feasibility_posture)) budgetScore = 0.35;
-      else if (/PRUDENT|CONSERVATIVE|DEFENSIVE?/i.test(feasibility_posture)) budgetScore = 0.0;
-      else budgetScore = 0.15;
-    }
-    else budgetScore = 0.5; // N/A
-    score += budgetScore * scoreWeights_v57_5.budget_fit;
-    // 2. RISK ALIGNMENT (0.20): Match scenario risk to client posture
-    // PRUDENT clients should NOT get risky (high-capacity) scenarios
-    // AMBITIEUX clients can take more risk
-    let riskAlignScore = 0.5;
-    if (/PRUDENT|CONSERVATIVE|DEFENSIVE?/i.test(feasibility_posture)) {
-      // PRUDENT : préfère C (conservateur) ou B (équilibre), pénalise A (trop risqué)
-      riskAlignScore = label === "C" ? 1.0 : label === "B" ? 0.85 : label === "A" ? 0.2 : 0.5;
-    } else if (/AMBITIEUX|OFFENSIVE?|AGGRESSIVE/i.test(feasibility_posture)) {
-      // AMBITIEUX : préfère A (maximise), tolère B, pénalise C (trop timide)
-      riskAlignScore = label === "A" ? 1.0 : label === "B" ? 0.6 : label === "C" ? 0.15 : 0.5;
-    } else {
-      // EQUILIBRE/STANDARD : préfère B, acceptable A et C
-      riskAlignScore = label === "B" ? 1.0 : label === "A" ? 0.65 : label === "C" ? 0.55 : 0.5;
-    }
-    score += riskAlignScore * scoreWeights_v57_5.risk_alignment;
-    // 3. COS CONFORMITY (0.15): Penalize HORS_COS scenarios
-    const cosScore = sc.cos_compliance === "CONFORME" ? 1.0 : sc.cos_compliance === "DEROGATION_POSSIBLE" ? 0.5 : 0.1;
-    score += cosScore * scoreWeights_v57_5.cos_conformity;
-    // 4. CAPACITY ADEQUACY (0.15): Measure how CLOSE to target, not how BIG
-    // Oversizing (50% over target) is as bad as undersizing (30% under target)
-    const targetUnits = Math.max(1, target_units || 1);
-    const ratio = sc.total_units / targetUnits;
-    let capAdequacyScore = 0;
-    if (ratio >= 0.85 && ratio <= 1.20) {
-      // Ideal: 85-120% of target
-      capAdequacyScore = 1.0 - Math.abs(ratio - 1.0) * 0.5;
-    } else if (ratio >= 0.70 && ratio < 0.85) {
-      // Acceptable undersizing: 70-85%
-      capAdequacyScore = 0.7 - (0.85 - ratio) * 2;
-    } else if (ratio > 1.20 && ratio <= 1.50) {
-      // Acceptable oversizing: 120-150%
-      capAdequacyScore = 0.7 - (ratio - 1.20) * 1.5;
-    } else {
-      // Too far from target
-      capAdequacyScore = Math.max(0, 0.3 - Math.abs(ratio - 1.0) * 0.2);
-    }
-    score += capAdequacyScore * scoreWeights_v57_5.capacity_adequacy;
-    // 5. COST EFFICIENCY (0.12): Quand budget contraint, favorise le moins cher
-    // C'est le tiebreaker clé : si tout est HORS_BUDGET, C est le moins douloureux
-    let costEffScore = 0.5;
-    if (budgetPressure > 0.5) {
-      // Budget serré : le moins cher gagne
-      const costs = { A: r.A.cost_total_fcfa || r.A.estimated_cost, B: r.B.cost_total_fcfa || r.B.estimated_cost, C: r.C.cost_total_fcfa || r.C.estimated_cost };
-      const minCost = Math.min(costs.A, costs.B, costs.C);
-      const maxCost = Math.max(costs.A, costs.B, costs.C);
-      const range = maxCost - minCost || 1;
-      costEffScore = 1.0 - (((sc.cost_total_fcfa || sc.estimated_cost) - minCost) / range);
-    } else {
-      // Budget confortable : l'efficacité coût n'est pas un critère fort
-      costEffScore = 0.7; // neutre
-    }
-    score += costEffScore * scoreWeights_v57_5.cost_efficiency;
-    // 6. STANDING MATCH (0.08): Standing compatibility
-    // Le standing (PREMIUM/STD/ECO) ne dépend PAS du scénario A/B/C — il s'applique
-    // aux 3. Le score reflète si le volume bâti est cohérent avec le standing visé.
-    // PREMIUM veut de l'espace (A), ECO veut de l'efficacité (C compact).
-    let standScore = 0.7; // base neutre
-    if (/PREMIUM|HAUT/i.test(standing_level)) {
-      standScore = label === "A" ? 1.0 : label === "B" ? 0.75 : 0.5;
-    } else if (/ECO/i.test(standing_level)) {
-      standScore = label === "C" ? 1.0 : label === "B" ? 0.75 : 0.5;
-    } else {
-      // STANDARD : tous les scénarios sont compatibles, léger avantage B
-      standScore = label === "B" ? 0.85 : label === "A" ? 0.75 : label === "C" ? 0.75 : 0.7;
-    }
-    score += standScore * scoreWeights_v57_5.standing_match;
-    // 7. PHASE FLEXIBILITY (0.10): Phasability
-    // C est le plus phasable (compact, évolutif), A le moins (gros investissement d'un coup)
-    let phaseScore = 0.6;
-    if (label === "C") phaseScore = 1.0;
-    else if (label === "B") phaseScore = 0.7;
-    else phaseScore = 0.4;
-    // Modulé par le phase_score client (haut = veut du phasage)
-    phaseScore = phaseScore * (0.5 + phaseSc * 0.5) + (1 - phaseScore) * (1 - phaseSc) * 0.3;
-    score += phaseScore * scoreWeights_v57_5.phase_flexibility;
-    sc.recommendation_score = Math.round(score * 1000) / 1000;
-    // v57.8: décomposition granulaire du scoring + texte explicatif par critère
-    // Chaque critère a un score, un poids, sa contribution, ET un texte conseil actionnable
-    function explBudget(s, fit) {
-      if (s >= 0.9) return "Le cout s'inscrit dans votre budget — aucune contrainte financiere.";
-      if (s >= 0.6) return "Budget tendu mais tenable. Levier : passer au standing inferieur ou reduire de 1 niveau pour gagner ~15%.";
-      if (s >= 0.3) return "Depassement budgetaire. Leviers : reduire le programme, baisser le standing, ou phaser la construction pour etaler l'investissement.";
-      return "Hors budget. Ce scenario necessite un financement complementaire ou une reduction significative du programme.";
-    }
-    function explRisk(s, posture) {
-      if (s >= 0.9) return "Parfaite adequation entre le niveau de risque du scenario et votre posture " + posture.toLowerCase() + ".";
-      if (s >= 0.6) return "Risque acceptable pour votre profil. Le scenario est legerement plus " + (s < 0.7 ? "ambitieux" : "prudent") + " que votre posture ideale.";
-      return "Decalage entre votre posture " + posture.toLowerCase() + " et le niveau de risque de ce scenario. Envisagez un scenario plus " + (/PRUDENT/i.test(posture) ? "conservateur" : "ambitieux") + ".";
-    }
-    function explCos(s) {
-      if (s >= 0.9) return "Projet conforme au COS reglementaire — pas de risque de refus de permis.";
-      if (s >= 0.5) return "Derogation possible mais a argumenter aupres de la mairie. Prevoyez un delai supplementaire pour l'instruction.";
-      return "Depassement significatif du COS — risque de refus de permis. Reduisez le nombre de niveaux.";
-    }
-    function explCapacity(s, ratio) {
-      if (s >= 0.9) return "Le nombre d'unites correspond precisement a votre besoin.";
-      if (ratio > 1.2) return "Surdimensionnement de " + Math.round((ratio - 1) * 100) + "% par rapport a votre cible. Vous construisez plus que necessaire — verifiez que la demande locative justifie ce surplus.";
-      if (ratio < 0.8) return "Le terrain ne permet que " + Math.round(ratio * 100) + "% de votre cible. Leviers : augmenter le nombre de niveaux, reduire les surfaces unitaires, ou revoir le programme a la baisse.";
-      return "Proche de votre cible — bon dimensionnement du programme.";
-    }
-    function explCostEff(s) {
-      if (s >= 0.8) return "Ce scenario offre le meilleur rapport surface/cout parmi les 3 options.";
-      if (s >= 0.5) return "Rapport cout/surface intermediaire. Les alternatives offrent un meilleur ratio.";
-      return "Le scenario le plus couteux par m² construit. Si le budget est une contrainte, privilegiez une alternative plus compacte.";
-    }
-    function explStanding(s, standing) {
-      if (s >= 0.9) return "Le volume et la qualite du scenario sont en parfaite coherence avec le standing " + standing + " vise.";
-      if (s >= 0.6) return "Coherence acceptable entre le volume construit et le standing " + standing + ".";
-      return "Decalage : le volume construit n'est pas optimal pour du " + standing + ". Un standing " + (/PREMIUM/i.test(standing) ? "STANDARD" : "superieur") + " serait plus coherent avec ce scenario.";
-    }
-    function explPhase(s) {
-      if (s >= 0.8) return "Scenario facilement phasable — vous pouvez construire par tranches et etaler l'investissement.";
-      if (s >= 0.5) return "Phasage possible mais moins flexible. La structure doit etre concue des le depart pour la totalite.";
-      return "Scenario peu phasable — l'investissement doit etre mobilise en une seule fois. Si le phasage est important, privilegiez un scenario plus compact.";
-    }
-    const targetRatio = sc.total_units / Math.max(1, target_units || 1);
-    sc.score_detail = {
-      budget_fit:        { score: Math.round(budgetScore * 100) / 100, poids: scoreWeights_v57_5.budget_fit, contribution: Math.round(budgetScore * scoreWeights_v57_5.budget_fit * 1000) / 1000, explication: explBudget(budgetScore, sc.budget_fit) },
-      risk_alignment:    { score: Math.round(riskAlignScore * 100) / 100, poids: scoreWeights_v57_5.risk_alignment, contribution: Math.round(riskAlignScore * scoreWeights_v57_5.risk_alignment * 1000) / 1000, explication: explRisk(riskAlignScore, feasibility_posture) },
-      cos_conformity:    { score: Math.round(cosScore * 100) / 100, poids: scoreWeights_v57_5.cos_conformity, contribution: Math.round(cosScore * scoreWeights_v57_5.cos_conformity * 1000) / 1000, explication: explCos(cosScore) },
-      capacity_adequacy: { score: Math.round(capAdequacyScore * 100) / 100, poids: scoreWeights_v57_5.capacity_adequacy, contribution: Math.round(capAdequacyScore * scoreWeights_v57_5.capacity_adequacy * 1000) / 1000, explication: explCapacity(capAdequacyScore, targetRatio) },
-      cost_efficiency:   { score: Math.round(costEffScore * 100) / 100, poids: scoreWeights_v57_5.cost_efficiency, contribution: Math.round(costEffScore * scoreWeights_v57_5.cost_efficiency * 1000) / 1000, explication: explCostEff(costEffScore) },
-      standing_match:    { score: Math.round(standScore * 100) / 100, poids: scoreWeights_v57_5.standing_match, contribution: Math.round(standScore * scoreWeights_v57_5.standing_match * 1000) / 1000, explication: explStanding(standScore, standing_level) },
-      phase_flexibility: { score: Math.round(phaseScore * 100) / 100, poids: scoreWeights_v57_5.phase_flexibility, contribution: Math.round(phaseScore * scoreWeights_v57_5.phase_flexibility * 1000) / 1000, explication: explPhase(phaseScore) },
-      total: Math.round(score * 1000) / 1000,
-    };
+  // v12.11 — scoring sur le contenu réel des scénarios (mêmes 7 critères et poids, cf. scoreScenariosV12).
+  // Calculé ici sur la suggestion, puis recalculé après les réglages et géométries validées (fin de fonction).
+  const scoreCtxV12 = { feasibility_posture, target_units, standing_level, phase_score: phaseSc };
+  scoreScenariosV12(r, scoreCtxV12);
+  // Find best scenario (v12.11 : même règle avant et après réglages / géométries validées)
+  let recommended = pickRecommendedV12(r, feasibility_posture);
+  function recommendationReasonV12(rec) {
+    const recSc = r[rec];
+    const reasons = [];
+    if (recSc.budget_fit === "DANS_BUDGET") reasons.push("tient dans le bas de la fourchette budgetaire");
+    else if (recSc.budget_fit === "BUDGET_TENDU") reasons.push("tient dans le haut de la fourchette budgetaire");
+    if (recSc.cos_compliance === "CONFORME" && !(recSc.geometry_checks_v12 || []).some(c => c.level === "error")) reasons.push("conforme (COS et retraits)");
+    if (recSc.phase_2_v12) reasons.push("phasage prevu");
+    const units = Number(recSc.total_units) || 0;
+    if (units >= target_units * 0.85 && units <= target_units * 1.20) reasons.push("proche du besoin exprime");
+    return reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
   }
-  // Find best scenario
-  let recommended = "A";
-  if (r.B.recommendation_score > r[recommended].recommendation_score) recommended = "B";
-  if (r.C.recommendation_score > r[recommended].recommendation_score) recommended = "C";
-  r.A.recommended = recommended === "A";
-  r.B.recommended = recommended === "B";
-  r.C.recommended = recommended === "C";
-  // Generate client-centric recommendation reason
-  const recSc = r[recommended];
-  const reasons = [];
-  if (budgetPressure > 0.6) {
-    reasons.push("optimise pour contrainte budgetaire");
-  } else if (recSc.budget_fit === "DANS_BUDGET") {
-    reasons.push("respecte le budget client");
-  }
-  if (recSc.cos_compliance === "CONFORME") reasons.push("conforme au COS");
-  if (feasibility_posture === "PRUDENT" && recommended === "B") reasons.push("equilibre entre ambitieux et prudent");
-  if (feasibility_posture === "PRUDENT" && recommended === "C") reasons.push("approche conservative, risque maitrise");
-  if (feasibility_posture === "AMBITIEUX" && recommended === "A") reasons.push("maximise la capacite");
-  if (recSc.total_units >= target_units * 0.85 && recSc.total_units <= target_units * 1.20) reasons.push("proche du besoin exprime");
-  const recommendation_reason = reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
+  let recommendation_reason = recommendationReasonV12(recommended);
   const meta = {
     engine_version: "57.20",
     mode: isProgramDriven ? "PROGRAM_DRIVEN" : "REGULATION_DRIVEN",
@@ -4888,6 +4875,51 @@ function computeSmartScenarios({
     recommended_scenario: recommended,
     recommendation_reason,
   };
+  // v12.11 — comparatif A/B/C en fonction : reconstruit après réglages et géométries validées
+  function buildComparatifV12() {
+    const compA = extractComparatif(r.A);
+    const compB = extractComparatif(r.B);
+    const compC = extractComparatif(r.C);
+    // v57.7: Deltas entre scénarios (Δ B vs A, Δ C vs A, Δ C vs B)
+    function computeDeltas(ref, alt, refLabel, altLabel) {
+      const dSdp = alt.sdp_m2 - ref.sdp_m2;
+      const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
+      // v57.9: valeur marginale = coût de chaque m² supplémentaire entre les 2 scénarios
+      const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
+      const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
+      // Si valeur marginale < coût/m² moyen = bon deal, sinon surcoût
+      const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
+      return {
+        label: `${altLabel} vs ${refLabel}`,
+        delta_sdp_m2: dSdp,
+        delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
+        delta_unites: alt.unites - ref.unites,
+        delta_cout_fcfa: dCout,
+        delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
+        delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
+        delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
+        // v57.9: valeur marginale
+        valeur_marginale_fcfa_par_m2: valeurMarginale,
+        marginale_favorable: marginaleFavorable,
+        commentaire: dSdp < 0
+          ? `${altLabel} coute ${Math.abs(Math.round(dCout / ref.cout_total_fcfa * 100))}% de moins que ${refLabel} pour ${Math.abs(Math.round(dSdp / ref.sdp_m2 * 100))}% de surface en moins`
+          : `${altLabel} offre ${Math.round(dSdp / ref.sdp_m2 * 100)}% de surface en plus pour ${Math.round(dCout / ref.cout_total_fcfa * 100)}% de cout supplementaire`,
+        conseil_marginale: dSdp > 0 && marginaleFavorable
+          ? `Chaque m² supplementaire de ${refLabel} a ${altLabel} coute ${Math.round(valeurMarginale / 1000)}k FCFA — inferieur au cout moyen (${Math.round(coutM2Ref / 1000)}k/m²), l'investissement supplementaire est rentable.`
+          : dSdp > 0
+          ? `Chaque m² supplementaire coute ${Math.round(valeurMarginale / 1000)}k FCFA — superieur au cout moyen (${Math.round(coutM2Ref / 1000)}k/m²), rendement decroissant.`
+          : `L'economie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifie.`,
+      };
+    }
+    return {
+      A: compA, B: compB, C: compC,
+      deltas: {
+        B_vs_A: computeDeltas(compA, compB, "A", "B"),
+        C_vs_A: computeDeltas(compA, compC, "A", "C"),
+        C_vs_B: computeDeltas(compB, compC, "B", "C"),
+      },
+    };
+  }
   // ── v57.6 DIAGNOSTIC COMPARISON TABLE ──
   const diagnostic = {
     // Client profile echo
@@ -4918,50 +4950,7 @@ function computeSmartScenarios({
       zone_constructible_m2: Math.round(empriseConstructible),
     },
     // A vs B vs C comparison + deltas
-    comparatif: (() => {
-      const compA = extractComparatif(r.A);
-      const compB = extractComparatif(r.B);
-      const compC = extractComparatif(r.C);
-      // v57.7: Deltas entre scénarios (Δ B vs A, Δ C vs A, Δ C vs B)
-      function computeDeltas(ref, alt, refLabel, altLabel) {
-        const dSdp = alt.sdp_m2 - ref.sdp_m2;
-        const dCout = alt.cout_total_fcfa - ref.cout_total_fcfa;
-        // v57.9: valeur marginale = coût de chaque m² supplémentaire entre les 2 scénarios
-        const valeurMarginale = dSdp !== 0 ? Math.round(Math.abs(dCout / dSdp)) : 0;
-        const coutM2Ref = ref.sdp_m2 > 0 ? Math.round(ref.cout_total_fcfa / ref.sdp_m2) : 0;
-        // Si valeur marginale < coût/m² moyen = bon deal, sinon surcoût
-        const marginaleFavorable = valeurMarginale > 0 && valeurMarginale < coutM2Ref * 1.1;
-        return {
-          label: `${altLabel} vs ${refLabel}`,
-          delta_sdp_m2: dSdp,
-          delta_sdp_pct: ref.sdp_m2 > 0 ? Math.round(dSdp / ref.sdp_m2 * 100) : 0,
-          delta_unites: alt.unites - ref.unites,
-          delta_cout_fcfa: dCout,
-          delta_cout_pct: ref.cout_total_fcfa > 0 ? Math.round(dCout / ref.cout_total_fcfa * 100) : 0,
-          delta_surface_hab_m2: alt.surface_habitable_m2 - ref.surface_habitable_m2,
-          delta_sol_libre_m2: alt.sol_libre_m2 - ref.sol_libre_m2,
-          // v57.9: valeur marginale
-          valeur_marginale_fcfa_par_m2: valeurMarginale,
-          marginale_favorable: marginaleFavorable,
-          commentaire: dSdp < 0
-            ? `${altLabel} coute ${Math.abs(Math.round(dCout / ref.cout_total_fcfa * 100))}% de moins que ${refLabel} pour ${Math.abs(Math.round(dSdp / ref.sdp_m2 * 100))}% de surface en moins`
-            : `${altLabel} offre ${Math.round(dSdp / ref.sdp_m2 * 100)}% de surface en plus pour ${Math.round(dCout / ref.cout_total_fcfa * 100)}% de cout supplementaire`,
-          conseil_marginale: dSdp > 0 && marginaleFavorable
-            ? `Chaque m² supplementaire de ${refLabel} a ${altLabel} coute ${Math.round(valeurMarginale / 1000)}k FCFA — inferieur au cout moyen (${Math.round(coutM2Ref / 1000)}k/m²), l'investissement supplementaire est rentable.`
-            : dSdp > 0
-            ? `Chaque m² supplementaire coute ${Math.round(valeurMarginale / 1000)}k FCFA — superieur au cout moyen (${Math.round(coutM2Ref / 1000)}k/m²), rendement decroissant.`
-            : `L'economie est de ${Math.round(Math.abs(valeurMarginale) / 1000)}k FCFA par m² sacrifie.`,
-        };
-      }
-      return {
-        A: compA, B: compB, C: compC,
-        deltas: {
-          B_vs_A: computeDeltas(compA, compB, "A", "B"),
-          C_vs_A: computeDeltas(compA, compC, "A", "C"),
-          C_vs_B: computeDeltas(compB, compC, "B", "C"),
-        },
-      };
-    })(),
+    comparatif: buildComparatifV12(),
     // Narrative recommendation
     recommandation: {
       scenario: recommended,
@@ -5024,6 +5013,26 @@ function computeSmartScenarios({
       console.log(`│ [PUSH11] Apres contraintes: A=${_scenarios.A.fp_m2}m²×${_scenarios.A.levels}niv=${_scenarios.A.sdp_m2}m² | B=${_scenarios.B.fp_m2}m²×${_scenarios.B.levels}niv=${_scenarios.B.sdp_m2}m² | C=${_scenarios.C.fp_m2}m²×${_scenarios.C.levels}niv=${_scenarios.C.sdp_m2}m²`);
     }
   }
+  // v12.11 — score, recommandation, comparatif et phasage recalculés APRÈS les réglages de Jeremy et
+  // ses géométries validées (avant : calculés sur la suggestion seule, donc hors sujet dès qu'il dessinait).
+  scoreScenariosV12(_scenarios, scoreCtxV12);
+  const recommendedFinal = pickRecommendedV12(_scenarios, feasibility_posture);
+  if (recommendedFinal !== recommended) console.log(`│ v12.11 recommandation : ${recommended} → ${recommendedFinal} (après réglages / géométries validées)`);
+  recommended = recommendedFinal;
+  recommendation_reason = recommendationReasonV12(recommended);
+  meta.recommended_scenario = recommended;
+  meta.recommendation_reason = recommendation_reason;
+  diagnostic.comparatif = buildComparatifV12();
+  diagnostic.recommandation = {
+    scenario: recommended,
+    score: r[recommended].recommendation_score,
+    score_detail: r[recommended].score_detail || {},
+    narrative: generateRecommendationNarrative(recommended, r, {
+      feasibility_posture, budgetPressure, budgetMax, target_units,
+      standing_level, site_area, program_main
+    }),
+  };
+  diagnostic.strategie_phasage = generatePhasingStrategy(recommended, r, { program_main, target_units, site_area });
   return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band, _v12_program_driven: !!isProgramDriven, _site_v12: _siteV12 };
 }
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5330,6 +5339,7 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       if (ov.from_actual) {
         sc._v12_validated = true;
         sc.phase_2_v12 = null;
+        sc.geometry_checks_v12 = ov.checks || [];
         if (ov.sous_sols_m2 > 0 && typeof sc.cost_total_fcfa === "number") {
           sc.cost_total_fcfa += Math.round(ov.sous_sols_m2 * (Number(sc.cost_per_m2) || 0) * 1.05);
           sc.sous_sols_m2 = Math.round(ov.sous_sols_m2);
@@ -10938,7 +10948,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.10";
+const V12_ENGINE_VERSION = "12.11";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -10959,6 +10969,8 @@ function actualToScenarioOverride(actual) {
     units: Number(actual.units_count) || 0,
     units_detail: (actual.units || []).map(u => ({ type: u.type, size_m2: Math.round(Number(u.area_m2) || 0) })),
     sous_sols_m2: Number(actual.sous_sols_m2) || 0,
+    // contrôles de la géométrie (retraits, superpositions, COS) : pris en compte par le scoring
+    checks: (actual.checks || []).map(c => ({ code: c.code, level: c.level, message: c.message })),
     from_actual: true,
   };
 }
@@ -11091,6 +11103,10 @@ function scenarioModelView(letter, row, engineScenario, siteArea, lead) {
         budget_min_fcfa: e.budget_min_fcfa || null, budget_max_fcfa: e.budget_max_fcfa || null,
         budget_open_ended: !!e.budget_open_ended,
         cost_final_fcfa: e.cost_final_fcfa || null, final_budget_fit: e.final_budget_fit || null,
+        // v12.11 — score (7 critères sur le contenu réel) et recommandation du moteur
+        score: e.recommendation_score != null ? Math.round(e.recommendation_score * 100) : null,
+        score_detail: e.score_detail || null,
+        recommended: !!e.recommended,
         unit_mix_detail: e.unit_mix_detail || null,
         // COS (vocabulaire de Jeremy) = occupation au sol : emprise au sol / terrain, et part de l'emprise permise
         cos: site > 0 && (e.emprise_sol_m2 || e.fp_m2) ? Math.round(((e.emprise_sol_m2 || e.fp_m2) / site) * 1000) / 1000 : null,

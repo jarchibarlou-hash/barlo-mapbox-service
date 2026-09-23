@@ -179,6 +179,8 @@
         .v12-kpi .s{font-size:.55rem;color:var(--text2)}
         .v12-kpi.user .v,.v12-kpi.user input{color:var(--amber)}
         .v12-kpi.warn .v{color:var(--brick2)}
+        .v12-score{font-size:.6rem;font-weight:700;padding:.1rem .45rem;border-radius:10px;border:1px solid var(--border);color:var(--text2);cursor:help;margin-left:auto;margin-right:.4rem}
+        .v12-score.rec{color:#0B1120;background:var(--amber);border-color:var(--amber)}
         .v12-kpi input{width:96px;padding:.15rem .3rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.74rem;font-weight:700}
         .v12-kpi input:focus{outline:none;border-color:var(--amber)}
         .c-scn-tab .v12-tabstate{font-size:.55rem;font-weight:700;margin-left:.3rem}
@@ -405,7 +407,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.10-PPT-VALIDE</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.11-SCORING</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6078,6 +6080,7 @@ function renderV12Strip(L) {
     el.innerHTML = `
       <div class="v12-head">
         <span class="v12-role">${L} · ${esc(m.role_label)}</span>
+        ${v12ScoreBadge(eng)}
         <span class="v12-status s-${escAttr(m.status || "")}">${esc(statusTxt)}</span>
       </div>
       <div class="v12-kpis">
@@ -6134,6 +6137,18 @@ function renderV12Strip(L) {
         tabState.textContent = icon;
         tabState.title = m.status ? (V12_STATUS_LABEL[m.status] || "") : "";
     }
+}
+
+// v12.11 — Score du moteur (7 critères mesurés sur le contenu réel) + recommandation ; détail au survol
+const V12_CRITERIA_LABEL = { budget_fit: "Budget", risk_alignment: "Risque / posture", cos_conformity: "Conformité (COS, retraits)",
+    capacity_adequacy: "Capacité", cost_efficiency: "Efficacité coût", standing_match: "Standing", phase_flexibility: "Phasage" };
+function v12ScoreBadge(eng) {
+    if (eng.score == null) return "";
+    const d = eng.score_detail || {};
+    const lines = Object.keys(V12_CRITERIA_LABEL).filter(k => d[k]).map(k =>
+        `${V12_CRITERIA_LABEL[k]} (${Math.round(d[k].poids * 100)} %) : ${Math.round(d[k].score * 100)}/100 — ${d[k].explication}`);
+    const tip = `Score sur 100, 7 critères mesurés sur le contenu réel du scénario :\n${lines.join("\n")}`;
+    return `<span class="v12-score${eng.recommended ? " rec" : ""}" title="${escAttr(tip)}">${eng.recommended ? "★ Recommandé · " : ""}${eng.score}/100</span>`;
 }
 
 // v12.9 — Chiffres affichés : ceux de la géométrie VALIDÉE s'il y en a une (dessinée dans le cockpit),
