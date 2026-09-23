@@ -4341,7 +4341,7 @@ function computeSmartScenarios({
       const finVRD = moisCourant + dureeVRD;
       calendrier.push({ jalon: "Reception + livraison", mois: `M${Math.round(finVRD)}`, cout_cumule_pct: 100 });
       parts.push(`M${moisCourant}-M${Math.round(finVRD)} — VRD + amenagements exterieurs + reception : ${dureeVRD} mois | ${Math.round(totalCost * 0.10 / 1e6)}M FCFA (10%).`);
-      parts.push(`\nBUDGET GLOBAL — Construction : ${Math.round(totalCost / 1e6)}M FCFA + Honoraires architecte : ${Math.round(honoraires / 1e6)}M FCFA = ${Math.round(globalCost / 1e6)}M FCFA TTC. Le projet compact simplifie la gestion du chantier.`);
+      parts.push(`\nCOUT DES TRAVAUX — ${Math.round(totalCost / 1e6)}M FCFA. Honoraires d'architecte (environ ${Math.round(honoraires / 1e6)}M FCFA), etudes, permis et assurances sont a prevoir en plus. Le projet compact simplifie la gestion du chantier.`);
       return {
         text: parts.join("\n"),
         calendrier,
@@ -4412,7 +4412,7 @@ function computeSmartScenarios({
       }
     }
     parts.push(`\nSTRATEGIE STRUCTURELLE — Fondations et poteaux dimensionnes des la phase 1 pour ${recSc.levels} niveaux. Surcoût de renforcement initial : +8-12% sur les fondations, compense par l'economie sur la mobilisation de chantier.`);
-    parts.push(`BUDGET GLOBAL — Construction : ${Math.round(totalCost / 1e6)}M FCFA + Honoraires architecte : ${Math.round(honoraires / 1e6)}M FCFA = ${Math.round(globalCost / 1e6)}M FCFA TTC.`);
+    parts.push(`COUT DES TRAVAUX — ${Math.round(totalCost / 1e6)}M FCFA. Honoraires d'architecte (environ ${Math.round(honoraires / 1e6)}M FCFA), etudes, permis et assurances sont a prevoir en plus.`);
     return {
       text: parts.join("\n"),
       calendrier,
@@ -4534,22 +4534,16 @@ function computeSmartScenarios({
     espaceLine.push(`Qualite : ${espDet.qualite || "N/A"} — ${espDet.description || ""}`);
     extParts.push(`Espaces exterieurs : ${espaceLine.join(". ")}`);
     parts.push(`◆ STATIONNEMENT ET ESPACES EXTERIEURS — ${extParts.join(". ")}.`);
-    // ── 3. COUT GLOBAL DU PROJET (construction + honoraires fourchette + frais + solaire) ──
+    // ── 3. COUT DES TRAVAUX (v12.8 — décision de Jeremy : le scénario ne chiffre que les travaux ;
+    //    honoraires, études, permis et assurances sont présentés à part, « à prévoir en plus ») ──
     const cout = [];
     const vent = sc.cout_ventilation || {};
-    const globalM = vent.cout_global_projet_fcfa ? Math.round(vent.cout_global_projet_fcfa / 1e6) : costM;
     const honoObj = vent.honoraires_architecte || {};
     const honoBasM = Math.round((honoObj.bas_fcfa || 0) / 1e6);
     const honoHautM = Math.round((honoObj.haut_fcfa || 0) / 1e6);
-    const honoMedianM = Math.round((honoObj.median_fcfa || 0) / 1e6);
-    const fraisAnnM = vent.frais_annexes ? Math.round(vent.frais_annexes.total_frais_annexes_fcfa / 1e6) : 0;
     const malusSolaireM = vent.malus_orientation_solaire_fcfa ? Math.round(vent.malus_orientation_solaire_fcfa / 1e6) : 0;
-    cout.push(`Cout global du projet estime : ${globalM}M FCFA`);
-    let honoText = `honoraires architecte ${honoMedianM}M (fourchette ${honoBasM}M a ${honoHautM}M, soit ${honoObj.taux_bas_pct || 0}% a ${honoObj.taux_haut_pct || 0}% — bareme degressif)`;
-    cout.push(`dont construction ${costM}M (fourchette ${costBas}M a ${costHaut}M), ${honoText}, frais annexes ${fraisAnnM}M (permis, assurance DO, BET, imprevus)`);
-    if (malusSolaireM > 0) {
-      cout.push(`Surcoût orientation solaire : +${malusSolaireM}M FCFA (protection facades Ouest, climatisation renforcee)`);
-    }
+    cout.push(`Cout des travaux estime : ${costM}M FCFA (fourchette ${costBas}M a ${costHaut}M, construction et VRD)`);
+    cout.push(`A prevoir en plus, hors cout des travaux : honoraires d'architecte (${honoBasM}M a ${honoHautM}M FCFA), etudes techniques, permis et assurances`);
     if (vent.gros_oeuvre_fcfa) {
       cout.push(`Ventilation construction : gros oeuvre ${Math.round(vent.gros_oeuvre_fcfa / 1e6)}M (55%), second oeuvre ${Math.round(vent.second_oeuvre_fcfa / 1e6)}M (25%), lots techniques ${Math.round(vent.lots_techniques_fcfa / 1e6)}M (15%), VRD ${Math.round(vent.vrd_fcfa / 1e6)}M`);
     }
@@ -4562,13 +4556,13 @@ function computeSmartScenarios({
       cout.push(`Ce montant suppose de vous placer dans le haut de votre fourchette budgetaire`);
     } else if (sc.budget_fit === "HORS_BUDGET" && budgetMaxCtx > 0) {
       const dep = Math.round(((sc.budget_needed_fcfa || sc.cost_total_fcfa || sc.estimated_cost) - budgetMaxCtx) / 1e6);
-      cout.push(`Depassement de ${dep}M FCFA au-dessus du haut de votre fourchette. Cout global tout compris : ${globalM}M FCFA`);
+      cout.push(`Depassement de ${dep}M FCFA au-dessus du haut de votre fourchette, sur le seul cout des travaux`);
     }
     if (sc.phase_2_v12 && sc.phase_2_v12.cost_fcfa) {
       cout.push(`Phase 2 prevue : ${Math.round(sc.phase_2_v12.cost_fcfa / 1e6)}M FCFA aux prix actuels, soit un cout final de ${Math.round((sc.cost_final_fcfa || 0) / 1e6)}M FCFA pour le projet complet`);
     }
     cout.push(`Duree estimee du chantier : ${sc.duree_chantier_mois || "N/A"} mois`);
-    parts.push(`◆ BUDGET GLOBAL DU PROJET — ${cout.join(". ")}.`);
+    parts.push(`◆ COUT DES TRAVAUX — ${cout.join(". ")}.`);
     // ── 4. ALTERNATIVES avec deltas chiffrés ──
     const others = ["A","B","C"].filter(l => l !== recommended);
     const comparaison = [];
@@ -9591,10 +9585,10 @@ MEME STRUCTURE QUE scenario_A_summary_text, en utilisant les variables C_* (C_fp
 --- scenario_A_financial_text ---
 STRUCTURE OBLIGATOIRE :
 PARA 1: "Pour un standing {standing_level} a {city}, le cout de construction au m2 de SDP se situerait aux alentours de {A_cost_m2}. Ce positionnement [qualificatif marche local]."
-PARA 2: "Le raisonnement de cout s'articule ainsi :\\n- SDP totale : {A_sdp} m2\\n- Cout estime au m2 : {A_cost_m2}\\n- Cout total estime : environ {A_cost_total}"
+PARA 2: "Le raisonnement de cout s'articule ainsi :\\n- SDP totale : {A_sdp} m2\\n- Cout estime au m2 : {A_cost_m2}\\n- Cout des travaux estime : environ {A_cost_total}"
 PARA 3: "Ventilation previsionnelle des travaux :\\n- Gros oeuvre et structure : {A_ventil_go} FCFA ({A_ventil_go_pct})\\n- Second oeuvre et finitions : {A_ventil_so} FCFA ({A_ventil_so_pct})\\n- Lots techniques (electricite, plomberie, CVC) : {A_ventil_lt} FCFA ({A_ventil_lt_pct})\\n- VRD et amenagements exterieurs : {A_ventil_vrd} FCFA ({A_ventil_vrd_pct})"
-PARA 4: "La fourchette budgetaire globale se situerait {A_fourchette_text}."
-PARA 5: "Honoraires de maitrise d'oeuvre : entre {A_hono_bas_M}M et {A_hono_haut_M}M FCFA ({A_hono_taux_bas} a {A_hono_taux_haut})."
+PARA 4: "La fourchette du cout des travaux se situerait {A_fourchette_text}."
+PARA 5: "A prevoir en plus du cout des travaux : honoraires de maitrise d'oeuvre entre {A_hono_bas_M}M et {A_hono_haut_M}M FCFA ({A_hono_taux_bas} a {A_hono_taux_haut}), ainsi que les etudes, le permis et les assurances (detailles plus loin)."
 PARA 6: "- Enveloppe budgetaire du client : environ {budget_fcfa}\\n- Position budgetaire : {A_budget_fit}\\n- Ratio cout par unite : environ {A_cost_unit}/unite"
 --- scenario_B_financial_text ---
 MEME STRUCTURE QUE scenario_A_financial_text, avec variables B_* (B_ventil_go, B_ventil_go_pct, B_ventil_so, B_ventil_so_pct, B_ventil_lt, B_ventil_lt_pct, B_ventil_vrd, B_ventil_vrd_pct, B_cost_total, B_cost_m2, B_sdp, B_fourchette_text, B_hono_bas_M, B_hono_haut_M, B_hono_taux_bas, B_hono_taux_haut, B_budget_fit, B_cost_unit). Mentionner la comparaison avec A. Utilise {budget_fcfa} pour le budget.
@@ -9629,8 +9623,8 @@ PARA 4: "Delais caches a anticiper : obtention du permis (2-4 mois), etude geote
 --- invisible_financial_text ---
 STRUCTURE OBLIGATOIRE (texte dense pour slide 17 col 2 et slide 18 col 2) :
 Ce texte sera utilise DEUX FOIS (slide 17 et slide 18). Redige-le pour la slide 18 (budget detaille).
-PARA 1: "Le budget du Scenario {rec_scenario} s'etablit a environ {rec_cost_total}, a comparer au budget initial de {budget_fcfa}. L'ecart est gerable avec une optimisation rigoureuse."
-PARA 2: "Frais complementaires a anticiper :\\n- Honoraires d'architecte : entre {rec_hono_bas}M et {rec_hono_haut}M FCFA ({rec_hono_taux_bas} a {rec_hono_taux_haut})\\n- Frais de permis de construire et taxes : environ 1 a 2 % du montant des travaux\\n- Etudes geotechniques : entre 300 000 et 500 000 FCFA\\n- Frais de notaire et administratifs : variables\\n- Assurance dommage-ouvrage : recommandee, environ 2 % du cout travaux"
+PARA 1: "Le cout des travaux du Scenario {rec_scenario} s'etablit a environ {rec_cost_total}, a comparer a votre fourchette budgetaire de {budget_fcfa}."
+PARA 2: "Frais complementaires a anticiper, en plus du cout des travaux :\\n- Honoraires d'architecte : entre {rec_hono_bas}M et {rec_hono_haut}M FCFA ({rec_hono_taux_bas} a {rec_hono_taux_haut})\\n- Frais de permis de construire et taxes : environ 1 a 2 % du montant des travaux\\n- Etudes geotechniques : entre 300 000 et 500 000 FCFA\\n- Frais de notaire et administratifs : variables\\n- Assurance dommage-ouvrage : recommandee, environ 2 % du cout travaux"
 PARA 3: "Budgetiser l'ensemble de ces postes en amont est imperatif pour eviter toute derive financiere."
 --- invisible_strategic_text ---
 STRUCTURE OBLIGATOIRE (phasage financier pour slide 17 col 3 et slide 18 col 3) :
