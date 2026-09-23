@@ -5325,6 +5325,31 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       if (typeof sc.cost_total_fcfa === "number") {
         sc.cost_total_fcfa = Math.round(oldCost * sdpScale);
       }
+      // v12.10 — géométrie validée : elle remplace le phasage suggéré ; les sous-sols dessinés
+      // s'ajoutent au coût des travaux (au coût/m² du scénario, VRD compris)
+      if (ov.from_actual) {
+        sc._v12_validated = true;
+        sc.phase_2_v12 = null;
+        if (ov.sous_sols_m2 > 0 && typeof sc.cost_total_fcfa === "number") {
+          sc.cost_total_fcfa += Math.round(ov.sous_sols_m2 * (Number(sc.cost_per_m2) || 0) * 1.05);
+          sc.sous_sols_m2 = Math.round(ov.sous_sols_m2);
+        }
+      }
+      // v12.10 — ventilation par lot et honoraires suivent le nouveau coût des travaux
+      // (sinon le PPT afficherait des lots dont la somme ne fait pas le total)
+      if (sc.cout_ventilation && oldCost > 0 && typeof sc.cost_total_fcfa === "number") {
+        const kCost = sc.cost_total_fcfa / oldCost;
+        const cv = sc.cout_ventilation;
+        for (const key of ["gros_oeuvre_fcfa", "second_oeuvre_fcfa", "lots_techniques_fcfa", "amenagements_ext_fcfa", "vrd_fcfa"]) {
+          if (typeof cv[key] === "number") cv[key] = Math.round(cv[key] * kCost);
+        }
+        cv.sous_total_construction_fcfa = sc.cost_total_fcfa;
+        const h = calcHonorairesDegressifs(sc.cost_total_fcfa);
+        const pct = x => sc.cost_total_fcfa > 0 ? Math.round(x / sc.cost_total_fcfa * 10000) / 100 : 0;
+        cv.honoraires_architecte = { bas_fcfa: h.bas, median_fcfa: h.median, haut_fcfa: h.haut, taux_bas_pct: pct(h.bas), taux_median_pct: pct(h.median), taux_haut_pct: pct(h.haut) };
+        sc.honoraires_architecte_fcfa = h.median;
+      }
+      if (typeof sc.estimated_cost === "number") sc.estimated_cost = sc.cost_total_fcfa;
       if (typeof sc.cost_per_unit === "number" && sc.total_units > 0) {
         sc.cost_per_unit = Math.round(sc.cost_total_fcfa / sc.total_units);
       }
@@ -10684,8 +10709,12 @@ app.post("/generate-pptx-premium", async (req, res) => {
   // Re-merge lead overrides depuis PIPELINE (Push 19)
   await mergeLeadOverridesFromPipeline(p);
   try {
-    // Step 1 : compute scenarios + flat (meme logique que /generate-pptx)
-    const scenarios = computeSmartScenarios({
+    // Step 1 : v12.10 — même résultat moteur que /generate-pptx et le cockpit (géométries validées
+    // comprises) ; l'ancien calcul autonome ci-dessous n'est plus qu'un repli si le magasin est absent.
+    const scenarios = (await getOrComputeScenarioSet(p).then(r => r.scenarios).catch(e => {
+      console.warn(`[PPTX-PREMIUM] résultat v12 indisponible, calcul autonome : ${e.message}`);
+      return null;
+    })) || computeSmartScenarios({
       site_area: Number(p.site_area), envelope_w: Number(p.envelope_w), envelope_d: Number(p.envelope_d),
       envelope_area: Number(p.envelope_area) || undefined,
       zoning_type: p.zoning_type || "URBAIN", floor_height: Number(p.floor_height) || 3.2,
@@ -10711,7 +10740,8 @@ app.post("/generate-pptx-premium", async (req, res) => {
       input_typologies: p.input_typologies || "", commerce_size_m2: Number(p.commerce_size_m2) || 0,
       _leadConstraints: parseLeadConstraints(p),
     });
-    applyScenarioOverrides(scenarios, p);
+    // (plus de seconde application des réglages PIPELINE : le moteur les applique déjà, et elle
+    //  écraserait la géométrie validée)
     // Step 2 : build flat (meme structure que /generate-pptx)
     const diag = scenarios.diagnostic || {};
     const sA = scenarios.A || {};
@@ -10908,7 +10938,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.7";
+const V12_ENGINE_VERSION = "12.10";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -10918,8 +10948,34 @@ function engineSegments(leadRules) {
   return segs.map(s => ({ index: Number(s.index), type: s.type, retrait_m: Number(s.retrait_m) }));
 }
 
+// v12.10 — Géométrie validée d'un scénario → réglage du moteur, prioritaire sur les anciennes saisies
+// PIPELINE de ce scénario : emprise, niveaux, SDP, unités réelles (types et surfaces), sous-sols.
+// Le moteur en déduit coûts, ventilation, COS et budget ; le PPT et les textes lisent ce résultat.
+function actualToScenarioOverride(actual) {
+  return {
+    fp: Number(actual.emprise_sol_m2) || 0,
+    levels: Number(actual.levels_max) || 0,
+    target_sdp: Number(actual.sdp_m2) || 0,
+    units: Number(actual.units_count) || 0,
+    units_detail: (actual.units || []).map(u => ({ type: u.type, size_m2: Math.round(Number(u.area_m2) || 0) })),
+    sous_sols_m2: Number(actual.sous_sols_m2) || 0,
+    from_actual: true,
+  };
+}
+function leadConstraintsWithActual(p, rows) {
+  const lc = parseLeadConstraints(p);
+  const validated = ["A", "B", "C"].filter(k => rows && rows[k] && rows[k].actual && Number(rows[k].actual.units_count) > 0);
+  if (!validated.length) return lc;
+  lc.programmatic = lc.programmatic || {};
+  lc.programmatic.scenarios = Object.assign({}, lc.programmatic.scenarios || {});
+  for (const k of validated) lc.programmatic.scenarios[k] = actualToScenarioOverride(rows[k].actual);
+  lc.isEmpty = false;
+  lc.activeList = (lc.activeList || []).concat([`geometrie validee : scenario(s) ${validated.join(", ")}`]);
+  return lc;
+}
+
 // Paramètres du moteur à partir d'un body lead (identique pour 8D, textes, PPT).
-function scenarioEngineInputs(p, costOverrides, leadRules) {
+function scenarioEngineInputs(p, costOverrides, leadRules, rows) {
   return {
     _engine_version: V12_ENGINE_VERSION,
     site_polygon: String(p.site_polygon || p.site_polygon_points || ""),
@@ -10962,7 +11018,7 @@ function scenarioEngineInputs(p, costOverrides, leadRules) {
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
     input_typologies: p.input_typologies || "",
     commerce_size_m2: Number(p.commerce_size_m2) || 0,
-    _leadConstraints: parseLeadConstraints(p),
+    _leadConstraints: leadConstraintsWithActual(p, rows),
     cost_per_m2_overrides: costOverrides || {},
   };
 }
@@ -11067,7 +11123,7 @@ function suggestionOnlyInputs(inputs) {
     cost_per_m2_overrides: {},
     _leadConstraints: Object.assign({}, lc, {
       programmatic: {},
-      activeList: (lc.activeList || []).filter(x => !String(x).startsWith("scenarios forces")),
+      activeList: (lc.activeList || []).filter(x => !String(x).startsWith("scenarios forces") && !String(x).startsWith("geometrie validee")),
     }),
   });
 }
@@ -11118,7 +11174,7 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
     try { leadRules = await loadLeadRules(sb, ref); }
     catch (e) { console.warn(`[V12] ${ref} : règles du terrain illisibles, règle par défaut : ${e.message}`); }
   }
-  const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows), leadRules);
+  const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows), leadRules, rows);
   const hash = ScenarioModel.hashInputs(inputs);
   const site = siteSummary(inputs);
   if (storeOk && !force) {
@@ -11129,8 +11185,10 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
       return { scenarios: data.engine_result, fromStore: true, hash, rows, ref, storeError: null, site };
     }
   }
+  // Les contraintes du lead (réglages PIPELINE + géométries validées) sont appliquées UNE fois, par le
+  // moteur lui-même (inputs._leadConstraints). v12.10 : plus de seconde application des réglages
+  // PIPELINE ici — elle écrasait la géométrie validée par les anciennes saisies (ex. emprise 180 m²).
   const scenarios = computeSmartScenarios(inputs);
-  applyScenarioOverrides(scenarios, p);
   if (storeOk) {
     try {
       // La suggestion BARLO ne doit jamais contenir les réglages de l'utilisateur
