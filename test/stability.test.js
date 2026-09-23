@@ -51,6 +51,17 @@ test("client Supabase créé une seule fois et partagé", () => {
   assert.equal(S.requireSupabase(), a);
 });
 
+test("type de clé Supabase détecté sans exposer la clé", () => {
+  const S = loadServer(["supabaseKeyKind"]);
+  const jwt = role => ["eyJhbGciOiJIUzI1NiJ9", Buffer.from(JSON.stringify({ role })).toString("base64url"), "signature"].join(".");
+  assert.equal(S.supabaseKeyKind(jwt("anon")), "anon");
+  assert.equal(S.supabaseKeyKind(jwt("service_role")), "service_role");
+  assert.equal(S.supabaseKeyKind("sb_secret_abc123"), "secret (serveur)");
+  assert.equal(S.supabaseKeyKind("sb_publishable_abc123"), "publishable (publique)");
+  assert.equal(S.supabaseKeyKind(""), "absente");
+  assert.equal(S.supabaseKeyKind("n'importe quoi"), "inconnue");
+});
+
 test("version d'un paquet installé lue correctement, « ? » si absent", () => {
   const S = loadServer(EXPORTS);
   assert.equal(S.installedVersion("paquet-inexistant-barlo"), "?");

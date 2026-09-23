@@ -88,6 +88,21 @@ function getSupabaseAdmin() {
   }
   return _supabaseClient;
 }
+// Type de la clé Supabase configurée, sans jamais exposer la clé elle-même :
+// rôle inscrit dans une clé JWT (anon / service_role) ou préfixe des nouvelles clés.
+function supabaseKeyKind(key) {
+  if (!key) return "absente";
+  if (key.startsWith("sb_secret_")) return "secret (serveur)";
+  if (key.startsWith("sb_publishable_")) return "publishable (publique)";
+  const parts = key.split(".");
+  if (parts.length === 3) {
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+      return payload.role ? String(payload.role) : "jwt sans rôle";
+    } catch (_) { /* pas un JWT lisible */ }
+  }
+  return "inconnue";
+}
 function requireSupabase() {
   const sb = getSupabaseAdmin();
   if (!sb) throw Object.assign(new Error(`Supabase indisponible : ${_supabaseInitError}`), { status: 503 });
@@ -270,6 +285,7 @@ app.get("/health", (req, res) => {
     ok: true, engine: "browserless-mapbox-gl-3d", version: "73.6.0-apps-script",
     node: process.version,
     supabase: sb ? "ok" : `indisponible (${_supabaseInitError})`,
+    supabase_key_role: supabaseKeyKind(SUPABASE_SERVICE_ROLE_KEY),
     deps: {
       "@supabase/supabase-js": installedVersion("@supabase/supabase-js"),
       "puppeteer-core": installedVersion("puppeteer-core"),
@@ -12264,7 +12280,7 @@ app.listen(PORT, () => {
   // pas à la première requête d'un utilisateur.
   const sbCheck = getSupabaseAdmin();
   console.log(`Node ${process.version} | supabase-js ${installedVersion("@supabase/supabase-js")} | puppeteer-core ${installedVersion("puppeteer-core")} | express ${installedVersion("express")}`);
-  console.log(`Client Supabase : ${sbCheck ? "OK" : "INDISPONIBLE — " + _supabaseInitError}`);
+  console.log(`Client Supabase : ${sbCheck ? "OK" : "INDISPONIBLE — " + _supabaseInitError} | type de clé : ${supabaseKeyKind(SUPABASE_SERVICE_ROLE_KEY)}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
