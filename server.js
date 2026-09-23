@@ -6,6 +6,40 @@ const FormData = require("form-data");
 const fetch = require("node-fetch");
 const turf = require("@turf/turf");
 const app = express();
+
+// ═══ STABILITÉ — une erreur dans une requête ne doit jamais faire tomber le serveur ═══
+// Express 4 ne rattrape pas les erreurs des routes async : une promesse rejetée
+// devenait une « unhandled rejection » qui arrêtait tout le processus (incident du 23/09/2026).
+// Chaque route est enveloppée : toute erreur (sync ou async) part vers le gestionnaire
+// d'erreurs final, qui répond en JSON 500.
+function wrapRouteHandler(handler) {
+  if (typeof handler !== "function" || handler.length === 4) return handler;
+  return function wrappedRoute(req, res, next) {
+    try {
+      const out = handler.call(this, req, res, next);
+      // Promesse : on renvoie uniquement la version rattrapée (jamais la promesse rejetée d'origine)
+      if (out && typeof out.then === "function") return out.then(undefined, next);
+      return out;
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+for (const method of ["get", "post", "put", "delete", "patch", "all"]) {
+  const original = app[method].bind(app);
+  app[method] = function (path, ...handlers) {
+    if (handlers.length === 0) return original(path); // app.get("réglage") : lecture de configuration
+    return original(path, ...handlers.map(wrapRouteHandler));
+  };
+}
+process.on("unhandledRejection", (reason) => {
+  console.error(`[ALERTE] Promesse rejetée non gérée (serveur maintenu) : ${(reason && reason.stack) || reason}`);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`[FATAL] Exception non gérée : ${(err && err.stack) || err}`);
+  process.exit(1);
+});
+
 // v72.160: CORS — allow BARLO Diagnostic Studio (Netlify) and any origin
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -23,6 +57,56 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const MAPBOX_TOKEN = process.env.MAPBOX_TOKEN;
 const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// ═══ SUPABASE — client unique, créé une seule fois, jamais fatal ═══
+// Le transport WebSocket est fourni explicitement (paquet "ws") : sans lui, les versions
+// récentes de supabase-js lèvent une erreur sur Node 20 à la création du client.
+// Si la création échoue malgré tout, les routes concernées répondent une erreur claire
+// (requireSupabase) au lieu d'arrêter le serveur.
+let _supabaseClient = null;
+let _supabaseInitError = null;
+let _supabaseInitTried = false;
+function getSupabaseAdmin() {
+  if (_supabaseClient || _supabaseInitTried) return _supabaseClient;
+  _supabaseInitTried = true;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    _supabaseInitError = "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant";
+    return null;
+  }
+  try {
+    const WebSocketImpl = typeof globalThis.WebSocket === "function" ? globalThis.WebSocket : require("ws");
+    _supabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      realtime: { transport: WebSocketImpl },
+    });
+  } catch (err) {
+    _supabaseInitError = err.message;
+    console.error(`[SUPABASE] Création du client impossible : ${err.message}`);
+  }
+  return _supabaseClient;
+}
+function requireSupabase() {
+  const sb = getSupabaseAdmin();
+  if (!sb) throw Object.assign(new Error(`Supabase indisponible : ${_supabaseInitError}`), { status: 503 });
+  return sb;
+}
+// Versions réellement installées (affichées par /health et au démarrage)
+function installedVersion(pkg) {
+  try { return require(`${pkg}/package.json`).version; } catch (_) { /* package.json non exporté */ }
+  try {
+    const nodePath = require("path"), nodeFs = require("fs");
+    let dir = nodePath.dirname(require.resolve(pkg));
+    for (let i = 0; i < 8; i++) {
+      const f = nodePath.join(dir, "package.json");
+      if (nodeFs.existsSync(f)) {
+        const j = JSON.parse(nodeFs.readFileSync(f, "utf8"));
+        if (j.name === pkg) return j.version;
+      }
+      dir = nodePath.dirname(dir);
+    }
+  } catch (_) { /* paquet absent */ }
+  return "?";
+}
 // ═══════════════════════════════════════════════════════════════════════════════
 // v72.34: ROBUST AI POLISH ENGINE — stable, retries, model fallback, timeout
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -177,7 +261,20 @@ async function resizeForPolish(pngBuf, maxDim) {
   console.log(`[POLISH-RESIZE] ${w}×${h} → ${nw}×${nh} (scale=${scale.toFixed(3)})`);
   return { buf: c.toBuffer("image/png"), w: nw, h: nh };
 }
-app.get("/health", (req, res) => res.json({ ok: true, engine: "browserless-mapbox-gl-3d", version: "73.6.0-apps-script" }));
+app.get("/health", (req, res) => {
+  const sb = getSupabaseAdmin();
+  res.json({
+    ok: true, engine: "browserless-mapbox-gl-3d", version: "73.6.0-apps-script",
+    node: process.version,
+    supabase: sb ? "ok" : `indisponible (${_supabaseInitError})`,
+    deps: {
+      "@supabase/supabase-js": installedVersion("@supabase/supabase-js"),
+      "puppeteer-core": installedVersion("puppeteer-core"),
+      express: installedVersion("express"),
+      ws: installedVersion("ws"),
+    },
+  });
+});
 // ─── PWA MANIFEST + ICONS (Push 23) ──────────────────────────────────────────
 // Permet au navigateur Chrome/Edge/Brave d'installer le studio comme une
 // application desktop avec icone et fenetre dediee.
@@ -7444,7 +7541,7 @@ app.post("/generate", async (req, res) => {
             width: 1280, height: 1280
           });
         }
-        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const sb = requireSupabase();
         const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
         const UPLOAD_TS = Date.now();
         const basePath = `hektar/${String(lead_id).trim()}_${slug}/${effectiveSlideName}_${UPLOAD_TS}.png`;
@@ -7523,7 +7620,7 @@ app.post("/generate", async (req, res) => {
     drawLegendCompass(ctx, W, H, { site_area: Number(site_area), bearing, setback_front: Number(setback_front), setback_side: Number(setback_side), setback_back: Number(setback_back), parcelScreenPts, envelopeScreenPts, frontEdgeIndex });
     drawSolarArc(ctx, W, H, { bearing });
     const png = canvas.toBuffer("image/png");
-    const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const sb = requireSupabase();
     const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
     const UPLOAD_TS = Date.now();
     const basePath = `hektar/${String(lead_id).trim()}_${slug}/${slide_name}_${UPLOAD_TS}.png`;
@@ -8192,7 +8289,7 @@ app.post("/generate-massing", async (req, res) => {
     // et selectionne un gap_m par scenario si fourni.
     lead_constraints: parseLeadConstraints(req.body),
   });
-  const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const sb = requireSupabase();
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
   const folder = `hektar/${String(lead_id).trim()}_${slug}`;
     const UPLOAD_TS = Date.now();
@@ -10631,9 +10728,9 @@ app.post("/generate-pptx-premium", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Supabase helper : client sécurisé pour sb_lead_units (utilise SERVICE_ROLE_KEY)
+// Client unique partagé (cf. getSupabaseAdmin) : null si Supabase est indisponible, jamais d'exception.
 function getLeadUnitsSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  return getSupabaseAdmin();
 }
 
 // v75.2 / v11.8-P0.3 — Lit sb_lead_units + footprint_json et retourne { A:[], B:[], C:[] }
@@ -11959,8 +12056,21 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
   }
 });
 
+// Gestionnaire d'erreurs final : toute erreur de route répond en JSON (plus de page HTML ni d'arrêt du serveur)
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  console.error(`[ERREUR ${req.method} ${req.originalUrl}] ${status} : ${(err && err.stack) || err}`);
+  if (res.headersSent) return next(err);
+  res.status(status).json({ ok: false, error: err.message || String(err) });
+});
+
 app.listen(PORT, () => {
   console.log(`BARLO v11.11-3D-SYNC on port ${PORT}`);
+  // Auto-contrôle au démarrage : un problème de dépendance apparaît dans les logs du déploiement,
+  // pas à la première requête d'un utilisateur.
+  const sbCheck = getSupabaseAdmin();
+  console.log(`Node ${process.version} | supabase-js ${installedVersion("@supabase/supabase-js")} | puppeteer-core ${installedVersion("puppeteer-core")} | express ${installedVersion("express")}`);
+  console.log(`Client Supabase : ${sbCheck ? "OK" : "INDISPONIBLE — " + _supabaseInitError}`);
   console.log(`Browserless: ${BROWSERLESS_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Mapbox:      ${MAPBOX_TOKEN ? "OK" : "MISSING"}`);
   console.log(`OpenAI:      ${OPENAI_API_KEY ? "OK" : "MISSING"} (polish model: ${POLISH_MODEL})`);
