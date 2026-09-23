@@ -1165,7 +1165,8 @@ function updateSegment(idx, field, val) {
     ["A","B","C"].forEach(l => renderParcelSvg(l));
     updateConstraintsCount();
     renderSegmentsSummary();
-    scheduleSaveSegments();
+    // Champ vidé pour retaper une valeur : aperçu à 0 m, mais rien d'enregistré
+    if (!(field === "retrait_m" && String(val).trim() === "")) scheduleSaveSegments();
 }
 
 function resetSegmentsToMoteur() {
@@ -6120,7 +6121,15 @@ function v12RulesLine(m) {
     } else if (m.role !== "CLIENT_INTENT") {
         parts.push(eng.infeasible ? "Aucune réduction possible (programme déjà minimal)" : "Programme du client conservé");
     }
-    const warn = eng.infeasible ? `<span style="color:var(--brick2);font-weight:700">⚠ Le programme ne tient pas dans les limites de ce scénario, même réduit.</span> ` : "";
+    let warn = eng.infeasible ? `<span style="color:var(--brick2);font-weight:700">⚠ Le programme ne tient pas dans les limites de ce scénario, même réduit.</span> ` : "";
+    // v12.4 — Emprise retenue vs zone constructible réelle : signalé, jamais corrigé à ta place
+    const fp = Number(eng.fp_m2) || 0;
+    const fr = n => Number(n).toLocaleString("fr-FR");
+    if (L.buildable_area != null && fp > L.buildable_area) {
+        warn += `<span style="color:var(--brick2);font-weight:700">⚠ Emprise ${fr(fp)} m² &gt; zone constructible ${fr(L.buildable_area)} m² : à revoir (retraits, niveaux ou forme).</span> `;
+    } else if (L.emprise_max && fp > L.emprise_max) {
+        warn += `<span style="color:var(--amber);font-weight:700">⚠ Emprise ${fr(fp)} m² au-delà de la marge de ce scénario (${fr(L.emprise_max)} m² max).</span> `;
+    }
     return `<div class="c-hint" style="margin-top:.4rem" title="Règles du rôle : hypothèses BARLO modifiables">${warn}${esc(parts.join(" · "))}</div>`;
 }
 
