@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.33-CUSTOM-LAYER</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.34-LEVELS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -5910,9 +5910,10 @@ function toggleUnitDetails(label, idx) {
 function updateUnitDetail(label, idx, field, val) {
     const u = (cockpitState.scenarios[label].units || [])[idx];
     if (!u) return;
-    if (field === "pilotis" || field === "parking_ss" || field === "terrasse" || field === "balcon") {
+    // v11.34 — rez_jardin ajoute aux checkboxes ; hauteur_niveau/altitude_base_m/niveau_depart_etage aux nombres
+    if (field === "pilotis" || field === "parking_ss" || field === "terrasse" || field === "balcon" || field === "rez_jardin") {
         u[field] = !!val;
-    } else if (field === "etages_unit" || field === "sous_sols") {
+    } else if (field === "etages_unit" || field === "sous_sols" || field === "hauteur_niveau" || field === "altitude_base_m" || field === "niveau_depart_etage") {
         u[field] = val === "" ? null : Number(val);
     } else {
         u[field] = val;
@@ -5947,7 +5948,17 @@ function renderUnitsTable(label) {
               <label class="stacked">Sous-sols
                 <input type="number" min="0" max="3" step="1" value="${u.sous_sols != null ? u.sous_sols : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'sous_sols',this.value)">
               </label>
+              <label class="stacked">Hauteur d'un niveau (m)
+                <input type="number" min="2" max="10" step="0.1" value="${u.hauteur_niveau != null ? u.hauteur_niveau : ""}" placeholder="3" oninput="updateUnitDetail('${label}',${i},'hauteur_niveau',this.value)">
+              </label>
+              <label class="stacked">Étage de départ (0=RDC)
+                <input type="number" min="-3" max="20" step="1" value="${u.niveau_depart_etage != null ? u.niveau_depart_etage : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'niveau_depart_etage',this.value)">
+              </label>
+              <label class="stacked">Altitude base (m, override)
+                <input type="number" step="0.1" value="${u.altitude_base_m != null ? u.altitude_base_m : ""}" placeholder="auto" oninput="updateUnitDetail('${label}',${i},'altitude_base_m',this.value)">
+              </label>
               <label><input type="checkbox" ${u.pilotis?"checked":""} onchange="updateUnitDetail('${label}',${i},'pilotis',this.checked)"> Pilotis (RDC surélevé)</label>
+              <label><input type="checkbox" ${u.rez_jardin?"checked":""} onchange="updateUnitDetail('${label}',${i},'rez_jardin',this.checked)"> Rez-de-jardin</label>
               <label><input type="checkbox" ${u.parking_ss?"checked":""} onchange="updateUnitDetail('${label}',${i},'parking_ss',this.checked)"> Parking sous-sol</label>
               <label><input type="checkbox" ${u.terrasse?"checked":""} onchange="updateUnitDetail('${label}',${i},'terrasse',this.checked)"> Terrasse accessible</label>
               <label><input type="checkbox" ${u.balcon?"checked":""} onchange="updateUnitDetail('${label}',${i},'balcon',this.checked)"> Balcon(s)</label>
@@ -6632,7 +6643,12 @@ async function validateScenarioImplantation(label) {
             terrasse: !!u.terrasse,
             balcon: !!u.balcon,
             parking_ss: !!u.parking_ss,
-            notes_tech: u.notes_tech || ""
+            notes_tech: u.notes_tech || "",
+            // v11.34 — hauteur/altitude custom
+            hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
+            altitude_base_m: u.altitude_base_m != null ? Number(u.altitude_base_m) : null,
+            niveau_depart_etage: u.niveau_depart_etage != null ? Number(u.niveau_depart_etage) : null,
+            rez_jardin: !!u.rez_jardin
         }));
     }
     try {
@@ -7505,7 +7521,12 @@ function populateCockpitFromLead(L, units) {
                 terrasse: !!u.terrasse,
                 balcon: !!u.balcon,
                 parking_ss: !!u.parking_ss,
-                notes_tech: u.notes_tech || ""
+                notes_tech: u.notes_tech || "",
+                // v11.34 — hauteur/altitude custom (restaurees depuis footprint_json)
+                hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
+                altitude_base_m: u.altitude_base_m != null ? Number(u.altitude_base_m) : null,
+                niveau_depart_etage: u.niveau_depart_etage != null ? Number(u.niveau_depart_etage) : null,
+                rez_jardin: !!u.rez_jardin
             }));
         } else {
             s.units = defaultUnitsFromMoteur(label);

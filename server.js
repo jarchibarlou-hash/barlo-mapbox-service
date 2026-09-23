@@ -10808,7 +10808,9 @@ app.post("/api/lead-units/:ref", async (req, res) => {
       "polygon", "offset_x_m", "offset_y_m", "rotation_deg",
       "width_m", "height_m", "shape_mode", "shape_type",
       "pilotis", "sous_sols", "etages_unit", "terrasse", "balcon",
-      "parking_ss", "notes_tech", "level"
+      "parking_ss", "notes_tech", "level",
+      // v11.34 — hauteur/altitude custom par unite
+      "hauteur_niveau", "altitude_base_m", "niveau_depart_etage", "rez_jardin"
     ];
     let hasAny = false;
     for (const k of geomKeys) {
@@ -11142,7 +11144,8 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       name: u.name || `unit_${i}`,
       unit_type: u.type || "AUTRE",
       height: u.heightM || 6,
-      base: 0,
+      // v11.34 — base peut etre negative (sous-sol) ou positive (pilotis / niveau custom)
+      base: (u.baseM != null && !isNaN(u.baseM)) ? u.baseM : 0,
       color: u.colorHex || "#7098c8"
     },
     geometry: {
@@ -11660,15 +11663,31 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         const ym = p.y_m != null ? p.y_m : p.y;
         return fromM_studio(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
       });
+      // v11.34 — hauteur d'un niveau customisable (defaut 3m) + altitude base override
+      const fh = Number(fp.hauteur_niveau) > 0 ? Number(fp.hauteur_niveau) : 3;
       const etages = Number(fp.etages_unit) || 1;
-      const pilotisH = fp.pilotis ? 3 : 0;
-      const heightM = etages * 3 + pilotisH;
+      const pilotisOn = !!fp.pilotis;
+      const sousSols = Number(fp.sous_sols) || 0;
+      // Hauteur totale du volume rendu = tous les niveaux (pilotis + etages + sous-sols)
+      const heightM = (etages * fh) + (pilotisOn ? fh : 0) + (sousSols * fh);
+      // Base : priorite altitude_base_m > niveau_depart_etage > pilotis surelevation > sous-sols enterres > 0
+      let baseM;
+      if (fp.altitude_base_m != null && fp.altitude_base_m !== "") {
+        baseM = Number(fp.altitude_base_m);
+      } else if (fp.niveau_depart_etage != null && fp.niveau_depart_etage !== "" && Number(fp.niveau_depart_etage) !== 0) {
+        baseM = Number(fp.niveau_depart_etage) * fh;
+      } else if (sousSols > 0) {
+        baseM = -sousSols * fh;  // volume descend sous le sol
+      } else {
+        baseM = 0;
+      }
       unitsData.push({
         id: row.unit_index,
         name: row.unit_name || `Unit ${row.unit_index}`,
         type: row.unit_type,
         polygonGeo,
         heightM,
+        baseM,
         floors: etages,
         colorHex: colorByType(row.unit_type)
       });
