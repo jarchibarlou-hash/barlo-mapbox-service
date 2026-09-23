@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.35-SHAPES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.36-PILOTIS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6725,8 +6725,14 @@ async function regenMassing3D(label, hiddenIds, hiddenLabels) {
             unit_name: u.unit_name || "",
             unit_size_m2: Number(u.unit_size_m2) || 0,
             polygon: u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) })),
-            etages_unit: u.etages_unit != null ? Number(u.etages_unit) : 1,
-            pilotis: !!u.pilotis
+            // R+X de l'unité ; vide → R+X du scénario
+            etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : (Number(s.levels) || 0),
+            pilotis: !!u.pilotis,
+            sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
+            hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
+            niveau_depart_etage: u.niveau_depart_etage != null ? Number(u.niveau_depart_etage) : null,
+            altitude_base_m: u.altitude_base_m != null ? Number(u.altitude_base_m) : null,
+            rez_jardin: !!u.rez_jardin
         }));
         // Envoie aussi le polygone parcelle GPS pour éviter la relecture polygon_drafts
         const parcelGeo = (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null;

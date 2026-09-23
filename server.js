@@ -11102,6 +11102,61 @@ function polygonCentroidStudio(coords) {
   return { lat: meanLat, lon: meanLon };
 }
 
+// Poteaux de pilotis (mètres locaux) : un à chaque angle marqué + le long des arêtes tous les ~4 m max,
+// rentrés perpendiculairement aux murs (fonctionne aussi sur les angles rentrants d'un L/T/U).
+// Une forme courbe (cercle) sans angle est parcourue d'un seul tenant.
+function pilotisPostsM(poly, maxSpacing = 4, inset = 0.4, size = 0.4) {
+  const n = poly.length;
+  if (n < 3) return [];
+  let area2 = 0;
+  for (let i = 0; i < n; i++) { const p = poly[i], q = poly[(i + 1) % n]; area2 += p.x * q.y - q.x * p.y; }
+  const inward = (p, q) => {
+    const dx = q.x - p.x, dy = q.y - p.y, L = Math.hypot(dx, dy) || 1;
+    return area2 > 0 ? { x: -dy / L, y: dx / L } : { x: dy / L, y: -dx / L };
+  };
+  const cornerIdx = [];
+  for (let i = 0; i < n; i++) {
+    const a = poly[(i - 1 + n) % n], p = poly[i], b = poly[(i + 1) % n];
+    const v1x = p.x - a.x, v1y = p.y - a.y, v2x = b.x - p.x, v2y = b.y - p.y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) continue;
+    if ((v1x * v2x + v1y * v2y) / (l1 * l2) < Math.cos(25 * Math.PI / 180)) cornerIdx.push(i);
+  }
+  const stops = cornerIdx.length ? cornerIdx : [0];
+  const pts = [];
+  for (let k = 0; k < stops.length; k++) {
+    const from = stops[k];
+    const to = stops.length === 1 ? from + n : (k + 1 < stops.length ? stops[k + 1] : stops[0] + n);
+    const segs = [];
+    let len = 0;
+    for (let i = from; i < to; i++) {
+      const p = poly[i % n], q = poly[(i + 1) % n];
+      const L = Math.hypot(q.x - p.x, q.y - p.y);
+      segs.push({ p, q, L, start: len });
+      len += L;
+    }
+    if (len < 1e-6) continue;
+    // j = 0 est l'angle de départ ; l'angle d'arrivée est le départ du parcours suivant
+    const count = Math.max(1, Math.ceil(len / maxSpacing));
+    for (let j = 0; j < count; j++) {
+      const d = (len * j) / count;
+      const s = segs.find(sg => d <= sg.start + sg.L + 1e-9) || segs[segs.length - 1];
+      const t = s.L > 0 ? (d - s.start) / s.L : 0;
+      const nSeg = inward(s.p, s.q);
+      let off = { x: nSeg.x * inset, y: nSeg.y * inset };
+      if (j === 0 && cornerIdx.length) {
+        // Angle : à distance inset des deux murs qui s'y rejoignent (plafonné pour les angles très aigus)
+        const nPrev = inward(poly[(from - 1 + n) % n], poly[from % n]);
+        const k = inset / Math.max(0.2, 1 + nPrev.x * nSeg.x + nPrev.y * nSeg.y);
+        off = { x: (nPrev.x + nSeg.x) * k, y: (nPrev.y + nSeg.y) * k };
+      }
+      pts.push({ x: s.p.x + (s.q.x - s.p.x) * t + off.x, y: s.p.y + (s.q.y - s.p.y) * t + off.y });
+    }
+  }
+  const h = size / 2;
+  return pts.map(p => [{ x: p.x - h, y: p.y - h }, { x: p.x + h, y: p.y - h }, { x: p.x + h, y: p.y + h }, { x: p.x - h, y: p.y + h }]);
+}
+
 // v11.12 — Calcul auto du zoom Mapbox depuis la diagonale bbox de la parcelle.
 // Cible : parcelle occupe ~40% du viewport (zoomé de près pour voir les unités).
 function autoZoomForParcel(parcelCoords, cLat) {
@@ -11121,7 +11176,7 @@ function autoZoomForParcel(parcelCoords, cLat) {
 // HTML Mapbox rendant N unités extrudées + parcelle en overlay
 // hiddenBuildingIds : array optionnel d'IDs Mapbox composite/building à masquer (choix user)
 function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken, hiddenBuildingIds, hiddenBuildingLabels) {
-  // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], heightM, colorHex, floors }
+  // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], baseM, topM, groundM, postsGeo, colorHex, floors }
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] }
@@ -11137,22 +11192,30 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
   } catch (e) {
     console.warn("[REGEN-3D] turf.buffer failed, fallback sur parcelle brute:", e.message);
   }
-  const unitsFeatures = unitsData.map((u, i) => ({
-    type: "Feature",
-    properties: {
-      id: u.id || i,
-      name: u.name || `unit_${i}`,
-      unit_type: u.type || "AUTRE",
-      height: u.heightM || 6,
-      // v11.34 — base peut etre negative (sous-sol) ou positive (pilotis / niveau custom)
-      base: (u.baseM != null && !isNaN(u.baseM)) ? u.baseM : 0,
-      color: u.colorHex || "#7098c8"
-    },
-    geometry: {
-      type: "Polygon",
-      coordinates: [[...u.polygonGeo.map(p => [p.lon, p.lat]), [u.polygonGeo[0].lon, u.polygonGeo[0].lat]]]
-    }
-  }));
+  // Mapbox : fill-extrusion-height = altitude du SOMMET (pas une épaisseur), fill-extrusion-base = altitude du dessous
+  const ring = (pts) => [[...pts.map(p => [p.lon, p.lat]), [pts[0].lon, pts[0].lat]]];
+  const unitsFeatures = [];
+  unitsData.forEach((u, i) => {
+    unitsFeatures.push({
+      type: "Feature",
+      properties: {
+        id: u.id || i,
+        name: u.name || `unit_${i}`,
+        unit_type: u.type || "AUTRE",
+        height: u.topM || 3,
+        base: u.baseM || 0,
+        color: u.colorHex || "#7098c8"
+      },
+      geometry: { type: "Polygon", coordinates: ring(u.polygonGeo) }
+    });
+    (u.postsGeo || []).forEach((sq, k) => {
+      unitsFeatures.push({
+        type: "Feature",
+        properties: { id: `${u.id || i}_poteau_${k}`, name: "poteau", unit_type: "POTEAU", height: u.baseM, base: u.groundM || 0, color: "#5f5f5f" },
+        geometry: { type: "Polygon", coordinates: ring(sq) }
+      });
+    });
+  });
   const unitsGeoJSON = { type: "FeatureCollection", features: unitsFeatures };
   // Collecte tous les vertices pour les afficher comme cercles (repères sommets)
   const vertexFeatures = [];
@@ -11582,8 +11645,13 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         unit_size_m2: u.unit_size_m2,
         footprint_json: {
           polygon: u.polygon,
-          etages_unit: u.etages_unit != null ? u.etages_unit : 1,
-          pilotis: !!u.pilotis
+          etages_unit: u.etages_unit != null ? u.etages_unit : 0,
+          pilotis: !!u.pilotis,
+          sous_sols: u.sous_sols,
+          hauteur_niveau: u.hauteur_niveau,
+          niveau_depart_etage: u.niveau_depart_etage,
+          altitude_base_m: u.altitude_base_m,
+          rez_jardin: !!u.rez_jardin
         }
       }));
       console.log(`[REGEN-3D] ${rows.length} unités LIVE (source RAM cockpit — reflète éditions non-validées)`);
@@ -11663,34 +11731,40 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         const ym = p.y_m != null ? p.y_m : p.y;
         return fromM_studio(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
       });
-      // v11.34 — hauteur d'un niveau customisable (defaut 3m) + altitude base override
+      // v11.36 — Étages = R+X (R+0 = 1 niveau). Pilotis = poteaux d'un niveau de haut, le volume se pose dessus.
+      // Sous-sols enterrés : invisibles en vue aérienne (Mapbox ne rend rien sous le sol).
       const fh = Number(fp.hauteur_niveau) > 0 ? Number(fp.hauteur_niveau) : 3;
-      const etages = Number(fp.etages_unit) || 1;
+      const levels = Math.max(0, Number(fp.etages_unit) || 0) + 1;
       const pilotisOn = !!fp.pilotis;
-      const sousSols = Number(fp.sous_sols) || 0;
-      // Hauteur totale du volume rendu = tous les niveaux (pilotis + etages + sous-sols)
-      const heightM = (etages * fh) + (pilotisOn ? fh : 0) + (sousSols * fh);
-      // Base : priorite altitude_base_m > niveau_depart_etage > pilotis surelevation > sous-sols enterres > 0
-      let baseM;
-      if (fp.altitude_base_m != null && fp.altitude_base_m !== "") {
-        baseM = Number(fp.altitude_base_m);
-      } else if (fp.niveau_depart_etage != null && fp.niveau_depart_etage !== "" && Number(fp.niveau_depart_etage) !== 0) {
-        baseM = Number(fp.niveau_depart_etage) * fh;
-      } else if (sousSols > 0) {
-        baseM = -sousSols * fh;  // volume descend sous le sol
-      } else {
-        baseM = 0;
+      let groundM = 0;
+      if (fp.altitude_base_m != null && fp.altitude_base_m !== "" && !isNaN(Number(fp.altitude_base_m))) {
+        groundM = Number(fp.altitude_base_m);
+      } else if (fp.niveau_depart_etage != null && fp.niveau_depart_etage !== "" && !isNaN(Number(fp.niveau_depart_etage))) {
+        groundM = Number(fp.niveau_depart_etage) * fh;
       }
+      groundM = Math.max(0, groundM);
+      const baseM = groundM + (pilotisOn ? fh : 0);
+      const topM = baseM + levels * fh;
+      const polyM = fp.polygon.map(p => ({
+        x: Number(p.x_m != null ? p.x_m : p.x) || 0,
+        y: Number(p.y_m != null ? p.y_m : p.y) || 0
+      }));
+      const postsGeo = pilotisOn
+        ? pilotisPostsM(polyM).map(sq => sq.map(p => fromM_studio(p.x, p.y, cLat, cLon)))
+        : [];
       unitsData.push({
         id: row.unit_index,
         name: row.unit_name || `Unit ${row.unit_index}`,
         type: row.unit_type,
         polygonGeo,
-        heightM,
         baseM,
-        floors: etages,
+        topM,
+        groundM,
+        postsGeo,
+        floors: levels,
         colorHex: colorByType(row.unit_type)
       });
+      console.log(`[REGEN-3D] ${row.unit_name || row.unit_index} : sol=${groundM}m pilotis=${pilotisOn ? fh + "m (" + postsGeo.length + " poteaux)" : "non"} volume ${baseM}→${topM}m (${levels} niv × ${fh}m)`);
     }
     console.log(`[REGEN-3D] ${unitsData.length} unités converties GPS, ${rejected.length} rejetées`);
     if (unitsData.length === 0) {
