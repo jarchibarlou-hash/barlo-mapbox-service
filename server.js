@@ -10878,11 +10878,12 @@ function costOverridesFromRows(rows) {
 // Vue « modèle » d'un scénario pour le studio (suggestion, surcharges, valeurs effectives, état).
 // engineScenario = scénario du calcul effectif (avec surcharges) : le studio affiche ses chiffres
 // sans rien recalculer lui-même.
-function scenarioModelView(letter, row, engineScenario) {
+function scenarioModelView(letter, row, engineScenario, siteArea) {
   const role = ScenarioModel.roleOf(letter);
   const suggested = (row && row.suggested) || null;
   const overrides = (row && row.overrides) || {};
   const e = engineScenario || null;
+  const site = Number(siteArea) || 0;
   return {
     scenario: letter,
     role,
@@ -10898,6 +10899,7 @@ function scenarioModelView(letter, row, engineScenario) {
         total_units: e.total_units || null, cost_per_m2: e.cost_per_m2 || null,
         cost_total_fcfa: e.cost_total_fcfa || null, budget_fit: e.budget_fit || null,
         unit_mix_detail: e.unit_mix_detail || null,
+        cos: site > 0 && e.sdp_m2 ? Math.round((e.sdp_m2 / site) * 1000) / 1000 : null,
         // Règles du rôle : limites, adaptations du programme, programme impossible à tenir
         limits: e.sdp_limits_v12 || null,
         adaptations: e.adaptations_v12 || [],
@@ -11007,7 +11009,7 @@ app.post("/api/scenarios/:ref/sync", async (req, res) => {
     await mergeLeadOverridesFromPipeline(p);
     const r = await getOrComputeScenarioSet(p);
     const models = {};
-    for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k]);
+    for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k], p.site_area);
     res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, store_error: r.storeError || null, models });
   } catch (err) {
     console.error(`[V12 SYNC] ${ref} : ${err.message}`);

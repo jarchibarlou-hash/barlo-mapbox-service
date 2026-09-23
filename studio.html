@@ -6002,8 +6002,8 @@ function renderV12Strip(L) {
         ${kpi("SDP", `${num(eng.sdp_m2 ?? v(s.sdp_m2))} m²`, `BARLO ${num(v(s.sdp_m2))} m²`, tip(s.sdp_m2))}
         ${kpi("Emprise", `${num(eng.fp_m2 ?? v(s.footprint_m2))} m²`, `BARLO ${num(v(s.footprint_m2))} m²`, tip(s.footprint_m2))}
         ${kpi("Niveaux", levelsTxt(eng.levels ?? v(s.levels)), `BARLO ${levelsTxt(v(s.levels))}`, tip(s.levels))}
-        ${kpi("Unités", num(eng.total_units ?? s.total_units), s.unit_mix_detail ? esc(s.unit_mix_detail) : "", "")}
-        ${kpi("COS", v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—", "SDP / terrain", tip(s.cos))}
+        ${kpi("Unités", num(eng.total_units ?? s.total_units), `BARLO ${num(s.total_units)}`, s.unit_mix_detail ? `Suggestion BARLO : ${s.unit_mix_detail}${eng.unit_mix_detail ? " — Actuel : " + eng.unit_mix_detail : ""}` : "")}
+        ${kpi("COS", eng.cos != null ? Number(eng.cos).toFixed(2) : (v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—"), `BARLO ${v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—"}`, "SDP / surface du terrain")}
         <label class="v12-kpi ${cost.source === "USER_OVERRIDE" ? "user" : ""}" title="${escAttr(`Suggestion BARLO : ${num(sugCost)} FCFA/m² (${tip(s.cost_per_m2)}). Saisis ta valeur ; vide = retour à la suggestion.`)}">
           <span class="k">Coût/m² ${cost.source === "USER_OVERRIDE" ? "· ta saisie" : ""}</span>
           <input type="text" inputmode="numeric" value="${escAttr(costOv)}" placeholder="${escAttr(sugCost != null ? sugCost : "")}"
@@ -6034,7 +6034,7 @@ function v12RulesLine(m) {
         const txt = ad.map(a => a.kind === "DOWNGRADE" ? `${a.from} → ${a.to}` : a.kind === "REMOVE_UNIT" ? `− 1 ${a.type}` : "− 1 commerce");
         parts.push(`Programme adapté (${V12_LIMIT_LABEL[ad[0].reason] || ad[0].reason}) : ${txt.join(", ")}`);
     } else if (m.role !== "CLIENT_INTENT") {
-        parts.push("Programme du client conservé");
+        parts.push(eng.infeasible ? "Aucune réduction possible (programme déjà minimal)" : "Programme du client conservé");
     }
     const warn = eng.infeasible ? `<span style="color:var(--brick2);font-weight:700">⚠ Le programme ne tient pas dans les limites de ce scénario, même réduit.</span> ` : "";
     return `<div class="c-hint" style="margin-top:.4rem" title="Règles du rôle : hypothèses BARLO modifiables">${warn}${esc(parts.join(" · "))}</div>`;
