@@ -7,6 +7,7 @@ const fetch = require("node-fetch");
 const turf = require("@turf/turf");
 const ScenarioModel = require("./lib/scenario-model");
 const ScenarioRules = require("./lib/scenario-rules");
+const SiteGeometry = require("./lib/site-geometry");
 const app = express();
 
 // ═══ STABILITÉ — une erreur dans une requête ne doit jamais faire tomber le serveur ═══
@@ -3036,6 +3037,8 @@ function computeProgramDrivenScenarioV73(params) {
     cost_per_m2 = 0,      // coût/m² effectif du scénario (grille du rôle ou saisie utilisateur)
     role_rules = null,    // règles de rôle surchargées pour ce lead (sinon valeurs par défaut)
     max_fp_m2 = 0,        // emprise maximale saisie pour ce lead (plafond, jamais une cible)
+    site_polygon = "",    // parcelle GPS "lat,lon|…" : zone constructible réelle si fournie
+    site_segments = null, // retraits par côté réglés dans le cockpit (sinon règle 5 m rue / 3 m ailleurs)
   } = params;
   // 1. CLASSIFIER
   const programType = classifyProgramTypeV73(program_main);
@@ -3111,10 +3114,13 @@ function computeProgramDrivenScenarioV73(params) {
   // limite l'impose (coût/m² du rôle × budget, COS, capacité) ; chaque adaptation est tracée.
   const roleV12 = ScenarioModel.roleOf(label);
   const rulesV12 = Object.assign({}, ScenarioRules.DEFAULT_RULES[roleV12], (role_rules && role_rules[roleV12]) || {});
+  // Zone constructible réelle : parcelle − retraits de chaque côté − retrait renforcé du rôle
+  const siteV12 = site_polygon ? SiteGeometry.siteBuildable(site_polygon, site_segments, rulesV12.setback_extra_m) : null;
   const limitsV12 = ScenarioRules.scenarioSdpLimits({
     rules: rulesV12, site_area, ces, cos_regl, envelope_w, envelope_d,
     levels_min: levelsMin, levels_max: levelsMaxRaisonnable, budget_fcfa, cost_per_m2,
     max_fp: max_fp_m2,
+    buildable_area: siteV12 ? siteV12.buildable_area_m2 : undefined,
   });
   const clientProgramV12 = { logements: typologiesA_logements.map(t => ({ type: t.type, count: t.count })), commerce: commerceCountA };
   const sdpOfProgramV12 = pr => computeSdpFromMixV73(pr.logements, pr.commerce, standing_level).sdp_total;
@@ -3232,6 +3238,9 @@ function computeProgramDrivenScenarioV73(params) {
       budget: isFinite(limitsV12.limits.budget) ? Math.round(limitsV12.limits.budget) : null,
       emprise_max: Math.round(limitsV12.emprise_max),
       levels_cap: limitsV12.levels_cap,
+      buildable_area: limitsV12.buildable_area,     // zone constructible réelle (null = enveloppe estimée)
+      emprise_source: limitsV12.emprise_source,
+      has_street: siteV12 ? !!siteV12.has_street : null,
     },
     adaptations_v12: adaptationsV12,
     infeasible_v12: infeasibleV12,
@@ -3273,6 +3282,9 @@ function computeSmartScenarios({
   cost_per_m2_overrides = {},
   // v12 : règles de rôle surchargées pour ce lead ({ PRUDENT: { cos_usage_max: 0.8 } }), sinon défauts
   role_rules = null,
+  // v12.4 : parcelle GPS + retraits par côté du cockpit → zone constructible réelle par rôle
+  site_polygon = "",
+  site_segments = null,
 }) {
   // v56.3 FIX DÉFINITIF: max_fp = CES × site_area UNIQUEMENT.
   // Les envelope_w/d de la Sheet sont souvent FAUX (dérivés de l'aire polygonale
@@ -3587,6 +3599,8 @@ function computeSmartScenarios({
       role_rules,
       max_fp_m2: (arguments[0] && arguments[0]._leadConstraints && arguments[0]._leadConstraints.geometry
         && Number(arguments[0]._leadConstraints.geometry.max_fp_m2)) || 0,
+      site_polygon,
+      site_segments,
     });
     // ── Si type non supporté → retourner un message d'erreur lisible ──────────
     if (v73Result.isUnsupported) {
@@ -10811,12 +10825,22 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.2";
+const V12_ENGINE_VERSION = "12.4";
+
+// Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
+// qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
+function engineSegments(leadRules) {
+  const segs = leadRules && Array.isArray(leadRules.segments) ? leadRules.segments : null;
+  if (!segs || segs.length < 3) return null;
+  return segs.map(s => ({ index: Number(s.index), type: s.type, retrait_m: Number(s.retrait_m) }));
+}
 
 // Paramètres du moteur à partir d'un body lead (identique pour 8D, textes, PPT).
-function scenarioEngineInputs(p, costOverrides) {
+function scenarioEngineInputs(p, costOverrides, leadRules) {
   return {
     _engine_version: V12_ENGINE_VERSION,
+    site_polygon: String(p.site_polygon || p.site_polygon_points || ""),
+    site_segments: engineSegments(leadRules),
     site_area: Number(p.site_area),
     envelope_w: Number(p.envelope_w),
     envelope_d: Number(p.envelope_d),
@@ -10857,6 +10881,28 @@ function scenarioEngineInputs(p, costOverrides) {
     commerce_size_m2: Number(p.commerce_size_m2) || 0,
     _leadConstraints: parseLeadConstraints(p),
     cost_per_m2_overrides: costOverrides || {},
+  };
+}
+
+// Règles du terrain d'un lead : { segments:[{index,type,retrait_m}], segments_at, … } ou {}
+async function loadLeadRules(sb, ref) {
+  const { data, error } = await sb.from("sb_lead_rules").select("rules, updated_at").eq("lead_ref", ref).maybeSingle();
+  if (error) throw error;
+  return (data && data.rules) || {};
+}
+
+// Zone constructible du lead telle que le moteur la voit (sans marge de rôle)
+function siteSummary(inputs) {
+  const s = inputs.site_polygon ? SiteGeometry.siteBuildable(inputs.site_polygon, inputs.site_segments, 0) : null;
+  if (!s) return null;
+  const segsUsed = !!(inputs.site_segments && inputs.site_segments.length === s.segments_count);
+  return {
+    parcel_area_m2: s.parcel_area_m2,
+    buildable_area_m2: s.buildable_area_m2,
+    retraits_m: s.retraits,
+    has_street: segsUsed && s.has_street,
+    source: segsUsed ? "USER_OVERRIDE" : "BARLO_RULE",
+    rule: SiteGeometry.SETBACK_RULE_NOTE,
   };
 }
 
@@ -10966,18 +11012,25 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
   let rows = {};
   let storeOk = !!(sb && ref);
   let storeError = !sb ? "client Supabase indisponible" : (!ref ? "référence lead absente" : null);
+  let leadRules = {};
   if (storeOk) {
     try { rows = await loadScenarioRows(sb, ref); }
     catch (e) { if (isMissingTableError(e)) { logV12Missing(e); storeOk = false; storeError = e.message; } else throw e; }
   }
-  const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows));
+  if (storeOk) {
+    // Retraits du cockpit : à défaut, règle BARLO (le calcul reste possible, l'empreinte le distingue)
+    try { leadRules = await loadLeadRules(sb, ref); }
+    catch (e) { console.warn(`[V12] ${ref} : règles du terrain illisibles, règle par défaut : ${e.message}`); }
+  }
+  const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows), leadRules);
   const hash = ScenarioModel.hashInputs(inputs);
+  const site = siteSummary(inputs);
   if (storeOk && !force) {
     const { data, error } = await sb.from("sb_scenario_sets").select("inputs_hash, engine_result").eq("lead_ref", ref).maybeSingle();
     if (error && !isMissingTableError(error)) throw error;
     if (data && data.inputs_hash === hash && data.engine_result) {
       console.log(`[V12] ${ref} : résultat moteur relu (empreinte ${hash})`);
-      return { scenarios: data.engine_result, fromStore: true, hash, rows, ref, storeError: null };
+      return { scenarios: data.engine_result, fromStore: true, hash, rows, ref, storeError: null, site };
     }
   }
   const scenarios = computeSmartScenarios(inputs);
@@ -10995,7 +11048,7 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
       if (isMissingTableError(e)) logV12Missing(e); else console.error(`[V12] ${ref} : enregistrement échoué : ${e.message}`);
     }
   }
-  return { scenarios, fromStore: false, hash, rows, ref, storeError };
+  return { scenarios, fromStore: false, hash, rows, ref, storeError, site };
 }
 
 // Studio : synchronise (calcule si besoin) et renvoie les 3 modèles de scénario.
@@ -11010,9 +11063,54 @@ app.post("/api/scenarios/:ref/sync", async (req, res) => {
     const r = await getOrComputeScenarioSet(p);
     const models = {};
     for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k], p.site_area);
-    res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, store_error: r.storeError || null, models });
+    res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, store_error: r.storeError || null, site: r.site || null, models });
   } catch (err) {
     console.error(`[V12 SYNC] ${ref} : ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Règles du terrain (retraits par côté) : réglées dans le cockpit, source unique de la zone
+// constructible pour le moteur, le cockpit et le PPT. Sans réglage : 5 m rue, 3 m ailleurs.
+function cleanSiteSegments(raw) {
+  if (!Array.isArray(raw) || raw.length < 3 || raw.length > 64) throw new Error("segments attendus : une entrée par côté de la parcelle");
+  return raw.map((s, i) => {
+    const type = String((s && s.type) || "libre").toLowerCase();
+    if (!(type in SiteGeometry.SETBACK_BY_TYPE)) throw new Error(`type de côté inconnu : ${s.type}`);
+    const hasValue = s.retrait_m !== "" && s.retrait_m !== null && s.retrait_m !== undefined;
+    const r = hasValue ? Number(s.retrait_m) : SiteGeometry.SETBACK_BY_TYPE[type];
+    if (!(r >= 0 && r <= 50)) throw new Error(`retrait du côté ${i + 1} attendu entre 0 et 50 m`);
+    return { index: i, type, retrait_m: Math.round(r * 100) / 100 };
+  });
+}
+app.get("/api/lead-rules/:ref", async (req, res) => {
+  const ref = String(req.params.ref || "").trim();
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  try {
+    const rules = await loadLeadRules(sb, ref);
+    res.json({ ok: true, ref, rules, setback_by_type: SiteGeometry.SETBACK_BY_TYPE, rule: SiteGeometry.SETBACK_RULE_NOTE });
+  } catch (err) {
+    if (isMissingTableError(err)) { logV12Missing(err); return res.status(503).json({ ok: false, error: "Tables v12 absentes : appliquer migration_v12_scenarios.sql" }); }
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+app.post("/api/lead-rules/:ref/segments", async (req, res) => {
+  const ref = String(req.params.ref || "").trim();
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  let segments;
+  try { segments = cleanSiteSegments((req.body || {}).segments); }
+  catch (err) { return res.status(400).json({ ok: false, error: err.message }); }
+  try {
+    const prev = await loadLeadRules(sb, ref);
+    const now = new Date().toISOString();
+    const rules = Object.assign({}, prev, { segments, segments_source: "USER_OVERRIDE", segments_at: now });
+    const { error } = await sb.from("sb_lead_rules").upsert({ lead_ref: ref, rules, updated_at: now }, { onConflict: "lead_ref" });
+    if (error) throw error;
+    res.json({ ok: true, ref, segments });
+  } catch (err) {
+    if (isMissingTableError(err)) { logV12Missing(err); return res.status(503).json({ ok: false, error: "Tables v12 absentes : appliquer migration_v12_scenarios.sql" }); }
     res.status(500).json({ ok: false, error: err.message });
   }
 });

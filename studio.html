@@ -12,6 +12,7 @@
     <meta name="application-name" content="BARLO Studio">
     <meta name="apple-mobile-web-app-title" content="BARLO Studio">
     <script src="/lib/scenario-model.js"></script>
+    <script src="/lib/site-geometry.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap');
         *{margin:0;padding:0;box-sizing:border-box}
@@ -403,7 +404,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.3-REGLES-ABC</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.4-RETRAITS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -575,11 +576,13 @@ let cockpitState = {
 };
 
 // v75.3.1 — Types de segment (utilisés pour le tableau + tooltip)
+// v12.4 — Règle de Jeremy : 5 m côté rue, 3 m ailleurs, 0 m côté mitoyen (lib/site-geometry.js)
+const SETBACK_BY_TYPE = (window.BarloSiteGeometry && BarloSiteGeometry.SETBACK_BY_TYPE) || { rue: 5, libre: 3, fond: 3, mitoyen: 0 };
 const SEGMENT_TYPES = [
-    { value: "libre",   label: "Libre" },
-    { value: "rue",     label: "Rue" },
-    { value: "mitoyen", label: "Mitoyen" },
-    { value: "fond",    label: "Fond de parcelle" }
+    { value: "libre",   label: `Libre (${SETBACK_BY_TYPE.libre} m)` },
+    { value: "rue",     label: `Rue (${SETBACK_BY_TYPE.rue} m)` },
+    { value: "mitoyen", label: `Mitoyen (${SETBACK_BY_TYPE.mitoyen} m)` },
+    { value: "fond",    label: `Fond de parcelle (${SETBACK_BY_TYPE.fond} m)` }
 ];
 
 // v75.3.1 — Labels alphabétiques pour les sommets (A, B, C, …, Z, AA, AB, …)
@@ -680,6 +683,7 @@ async function loadPipelineData(ref) {
         currentBody8D=leadRes.body8D; currentDisplay=leadRes.display||{};
         const combined = {...leadRes.body8D, ...leadRes.display, _ref: ref};
         renderDetail(combined);
+        await loadSiteRules();
         populateCockpitFromLead(combined, (unitsRes && unitsRes.units) || {A:[],B:[],C:[]});
         $("generateBtn").disabled=false; hideLoader(); showDetail();
         syncScenarioModels();
@@ -734,6 +738,7 @@ async function processLead() {
         leadProcessed=true; currentBody8D=d.body8D; currentDisplay=d.display||{};
         const combined = {...d.body8D, ...d.display, _ref: d.ref};
         renderDetail(combined);
+        await loadSiteRules();
         populateCockpitFromLead(combined, {A: cockpitState.scenarios.A.units, B: cockpitState.scenarios.B.units, C: cockpitState.scenarios.C.units});
         syncScenarioModels();
         btn.disabled=false; btn.textContent="↻ Retraiter (8A→8F)";
@@ -1028,18 +1033,23 @@ function ensureSegments(polygonLatLon) {
         const dy = (p2.lat - p1.lat) * Math.PI / 180 * R;
         lengths.push(Math.hypot(dx, dy));
     }
-    // Retrait par défaut (moteur ou 3m)
-    const defaultRetrait = Number((currentBody8D||{}).setback_side) || 3;
     if (cockpitState.segments.length !== N) {
-        // Reset complet : tous les segments prennent le retrait moteur par défaut, type "libre"
+        // v12.4 — Retraits enregistrés du lead (Supabase) ; sinon règle BARLO : tout « libre » à 3 m
+        // tant que la façade rue et les mitoyennetés ne sont pas indiquées.
+        const saved = cockpitState._savedSegments;
+        const useSaved = Array.isArray(saved) && saved.length === N;
+        cockpitState._segmentsSource = useSaved ? "USER_OVERRIDE" : "BARLO_RULE";
+        cockpitState._segmentsMismatch = Array.isArray(saved) && saved.length > 0 && !useSaved;
         cockpitState.segments = [];
         for (let i = 0; i < N; i++) {
+            const sv = useSaved ? saved[i] : null;
+            const type = (sv && SETBACK_BY_TYPE[sv.type] !== undefined) ? sv.type : "libre";
             cockpitState.segments.push({
                 index: i,
                 from: vertexLabel(i),
                 to: vertexLabel((i + 1) % N),
-                retrait_m: defaultRetrait,
-                type: "libre",
+                retrait_m: sv && Number(sv.retrait_m) >= 0 ? Number(sv.retrait_m) : SETBACK_BY_TYPE[type],
+                type,
                 length_m: Math.round(lengths[i])
             });
         }
@@ -1073,32 +1083,97 @@ function renderSegmentsTable() {
         </tr>
     `).join("");
     tbody.innerHTML = `
+        <div id="cSegmentsSummary" class="c-hint" style="margin-bottom:.4rem"></div>
         <table class="c-segments-table">
           <thead>
             <tr><th style="width:52px;text-align:center">Segment</th><th style="width:78px">Retrait (m)</th><th>Type</th><th style="width:52px;text-align:right">Long.</th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
-        <button class="c-btn-reset-segments" onclick="resetSegmentsToMoteur()">🔄 Réinitialiser aux retraits du moteur</button>
+        <button class="c-btn-reset-segments" onclick="resetSegmentsToMoteur()" title="Garde le type de chaque côté et remet le retrait de la règle : ${SETBACK_BY_TYPE.rue} m rue, ${SETBACK_BY_TYPE.libre} m libre/fond, ${SETBACK_BY_TYPE.mitoyen} m mitoyen">🔄 Retraits de la règle BARLO selon le type</button>
     `;
+    renderSegmentsSummary();
+}
+
+// v12.4 — Zone constructible réelle (même calcul que le moteur) + source des retraits
+function renderSegmentsSummary() {
+    const el = $("cSegmentsSummary");
+    if (!el) return;
+    const poly = currentBody8D && currentBody8D.site_polygon;
+    const segs = cockpitState.segments || [];
+    const s = (poly && window.BarloSiteGeometry) ? BarloSiteGeometry.siteBuildable(poly, segs, 0) : null;
+    const parts = [];
+    if (s) parts.push(`<b>Zone constructible : ${s.buildable_area_m2.toLocaleString("fr-FR")} m²</b> sur ${s.parcel_area_m2.toLocaleString("fr-FR")} m² de parcelle`);
+    parts.push(cockpitState._segmentsSource === "USER_OVERRIDE"
+        ? "retraits : tes réglages (enregistrés)"
+        : `retraits : règle BARLO (${SETBACK_BY_TYPE.rue} m rue, ${SETBACK_BY_TYPE.libre} m ailleurs, ${SETBACK_BY_TYPE.mitoyen} m mitoyen)`);
+    let warn = "";
+    if (cockpitState._segmentsMismatch) warn += `<div style="color:var(--amber)">⚠ La parcelle a changé de nombre de côtés : tes retraits enregistrés ne s'appliquent plus, règle par défaut en attendant.</div>`;
+    if (!segs.some(x => x.type === "rue")) warn += `<div style="color:var(--amber)">⚠ Côté rue non indiqué : ${SETBACK_BY_TYPE.libre} m partout. Choisis « Rue » sur la façade (${SETBACK_BY_TYPE.rue} m).</div>`;
+    el.innerHTML = parts.join(" · ") + warn;
+}
+
+async function loadSiteRules() {
+    cockpitState._savedSegments = null;
+    const ref = v12Ref();
+    if (!ref) return;
+    try {
+        const r = await fetch(`${API}/api/lead-rules/${encodeURIComponent(ref)}`);
+        const d = await r.json();
+        if (r.ok && d.ok && d.rules && Array.isArray(d.rules.segments)) cockpitState._savedSegments = d.rules.segments;
+    } catch (e) { console.warn("[V12] règles du terrain :", e.message); }
+}
+
+let _segmentsSaveTimer = null;
+function scheduleSaveSegments() {
+    clearTimeout(_segmentsSaveTimer);
+    _segmentsSaveTimer = setTimeout(saveSegments, 800);
+}
+async function saveSegments() {
+    const ref = v12Ref();
+    const segs = cockpitState.segments || [];
+    if (!ref || segs.length < 3) return;
+    try {
+        const r = await fetch(`${API}/api/lead-rules/${encodeURIComponent(ref)}/segments`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ segments: segs.map(s => ({ type: s.type, retrait_m: s.retrait_m })) })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        cockpitState._savedSegments = d.segments;
+        cockpitState._segmentsSource = "USER_OVERRIDE";
+        cockpitState._segmentsMismatch = false;
+        renderSegmentsSummary();
+        await syncScenarioModels();   // le moteur relit les retraits : limites A/B/C mises à jour
+    } catch (e) {
+        showToast(`Retraits non enregistrés : ${e.message}`, true);
+    }
 }
 
 function updateSegment(idx, field, val) {
     const s = (cockpitState.segments || [])[idx];
     if (!s) return;
-    if (field === "retrait_m") s.retrait_m = Number(val) || 0;
+    if (field === "retrait_m") s.retrait_m = Math.max(0, Number(val) || 0);
+    else if (field === "type") {
+        // Le type fixe le retrait de la règle (rue 5 m, mitoyen 0 m, sinon 3 m) ; ajustable ensuite
+        s.type = val;
+        if (SETBACK_BY_TYPE[val] !== undefined) s.retrait_m = SETBACK_BY_TYPE[val];
+        renderSegmentsTable();
+    }
     else s[field] = val;
     // Re-render les 3 previews (les retraits changent visuellement)
     ["A","B","C"].forEach(l => renderParcelSvg(l));
     updateConstraintsCount();
+    renderSegmentsSummary();
+    scheduleSaveSegments();
 }
 
 function resetSegmentsToMoteur() {
-    const defaultRetrait = Number((currentBody8D||{}).setback_side) || 3;
-    cockpitState.segments.forEach(s => { s.retrait_m = defaultRetrait; s.type = "libre"; });
+    cockpitState.segments.forEach(s => { s.retrait_m = SETBACK_BY_TYPE[s.type] ?? SETBACK_BY_TYPE.libre; });
     renderSegmentsTable();
     ["A","B","C"].forEach(l => renderParcelSvg(l));
-    showToast("Retraits par segment réinitialisés aux valeurs moteur");
+    scheduleSaveSegments();
+    showToast("Retraits remis à la règle BARLO selon le type de chaque côté");
 }
 
 // ═══ v75.8.1 — CLIP POLYGON (Sutherland-Hodgman) : intersection subject × clipper convexe ═══
@@ -3500,10 +3575,12 @@ BARLO.site.analyzeParcel = function(parcelPtsM, segments) {
     // Arête la plus longue = axe dominant potentiel
     const longestEdge = edges.reduce((a, b) => b.len > a.len ? b : a, edges[0]);
     const dominantAxisDeg = longestEdge.angleDeg;
-    // Buildable polygonal réel : intersection des half-planes offsettés vers l'intérieur
-    // pour CHAQUE arête selon son retrait individuel.
+    // v12.4 — Zone constructible : même calcul que le moteur (lib/site-geometry.js, juste sur
+    // parcelle concave). Repli : ancienne intersection de demi-plans (sous-estime les angles rentrants).
     let buildable = parcelPtsM.slice();
-    edges.forEach(e => {
+    if (window.BarloSiteGeometry) {
+        buildable = BarloSiteGeometry.buildablePolygon(parcelPtsM, edges.map(e => e.retraitM), 0);
+    } else edges.forEach(e => {
         if (e.retraitM <= 0) return;
         // Normale sortante brute (rot 90° CCW du vecteur AB)
         const ex = e.p2.x - e.p1.x, ey = e.p2.y - e.p1.y;
@@ -6001,6 +6078,13 @@ function renderV12Strip(L) {
       <div class="v12-kpis">
         ${kpi("SDP", `${num(eng.sdp_m2 ?? v(s.sdp_m2))} m²`, `BARLO ${num(v(s.sdp_m2))} m²`, tip(s.sdp_m2))}
         ${kpi("Emprise", `${num(eng.fp_m2 ?? v(s.footprint_m2))} m²`, `BARLO ${num(v(s.footprint_m2))} m²`, tip(s.footprint_m2))}
+        ${(() => {
+            const lim = eng.limits || {};
+            if (lim.buildable_area == null) return kpi("Zone constr.", "—", "estimée (enveloppe)", "Pas de polygone de parcelle : emprise estimée depuis largeur × profondeur");
+            const extra = (eng.rules && Number(eng.rules.setback_extra_m)) || 0;
+            return kpi("Zone constr.", `${num(lim.buildable_area)} m²`, extra > 0 ? `retraits +${extra} m (${esc(m.role_label)})` : "parcelle − retraits",
+                `Parcelle moins les retraits de chaque côté (tableau des segments)${extra > 0 ? `, plus ${extra} m de marge pour ce scénario (hypothèse BARLO)` : ""}. Emprise max retenue : ${num(lim.emprise_max)} m².`);
+        })()}
         ${kpi("Niveaux", levelsTxt(eng.levels ?? v(s.levels)), `BARLO ${levelsTxt(v(s.levels))}`, tip(s.levels))}
         ${kpi("Unités", num(eng.total_units ?? s.total_units), `BARLO ${num(s.total_units)}`, s.unit_mix_detail ? `Suggestion BARLO : ${s.unit_mix_detail}${eng.unit_mix_detail ? " — Actuel : " + eng.unit_mix_detail : ""}` : "")}
         ${kpi("COS", eng.cos != null ? Number(eng.cos).toFixed(2) : (v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—"), `BARLO ${v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—"}`, "SDP / surface du terrain")}
