@@ -10921,9 +10921,10 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
   const sb = getLeadUnitsSupabase();
   let rows = {};
   let storeOk = !!(sb && ref);
+  let storeError = !sb ? "client Supabase indisponible" : (!ref ? "référence lead absente" : null);
   if (storeOk) {
     try { rows = await loadScenarioRows(sb, ref); }
-    catch (e) { if (isMissingTableError(e)) { logV12Missing(e); storeOk = false; } else throw e; }
+    catch (e) { if (isMissingTableError(e)) { logV12Missing(e); storeOk = false; storeError = e.message; } else throw e; }
   }
   const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows));
   const hash = ScenarioModel.hashInputs(inputs);
@@ -10932,7 +10933,7 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
     if (error && !isMissingTableError(error)) throw error;
     if (data && data.inputs_hash === hash && data.engine_result) {
       console.log(`[V12] ${ref} : résultat moteur relu (empreinte ${hash})`);
-      return { scenarios: data.engine_result, fromStore: true, hash, rows, ref };
+      return { scenarios: data.engine_result, fromStore: true, hash, rows, ref, storeError: null };
     }
   }
   const scenarios = computeSmartScenarios(inputs);
@@ -10946,10 +10947,11 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
       rows = await loadScenarioRows(sb, ref);
       console.log(`[V12] ${ref} : résultat moteur calculé et enregistré (empreinte ${hash})`);
     } catch (e) {
+      storeError = e.message;
       if (isMissingTableError(e)) logV12Missing(e); else console.error(`[V12] ${ref} : enregistrement échoué : ${e.message}`);
     }
   }
-  return { scenarios, fromStore: false, hash, rows, ref };
+  return { scenarios, fromStore: false, hash, rows, ref, storeError };
 }
 
 // Studio : synchronise (calcule si besoin) et renvoie les 3 modèles de scénario.
@@ -10964,7 +10966,7 @@ app.post("/api/scenarios/:ref/sync", async (req, res) => {
     const r = await getOrComputeScenarioSet(p);
     const models = {};
     for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k]);
-    res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, models });
+    res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, store_error: r.storeError || null, models });
   } catch (err) {
     console.error(`[V12 SYNC] ${ref} : ${err.message}`);
     res.status(500).json({ ok: false, error: err.message });
