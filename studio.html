@@ -11,6 +11,7 @@
     <meta name="theme-color" content="#1d3a2a">
     <meta name="application-name" content="BARLO Studio">
     <meta name="apple-mobile-web-app-title" content="BARLO Studio">
+    <script src="/lib/scenario-model.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700;800&display=swap');
         *{margin:0;padding:0;box-sizing:border-box}
@@ -161,6 +162,24 @@
         .c-btn-auto-place:hover{background:rgba(212,133,14,.15)}
         .c-btn-reset-moteur{color:var(--text2);margin-left:auto}
         .c-btn-reset-moteur:hover{color:var(--text)}
+
+        /* v12 — bandeau scénario : rôle, état, suggestion BARLO vs valeur effective */
+        .v12-strip{background:#0f1a30;border:1px solid var(--border);border-radius:8px;padding:.6rem .8rem;margin-bottom:.8rem}
+        .v12-head{display:flex;align-items:center;gap:.6rem;margin-bottom:.45rem}
+        .v12-role{font-weight:800;font-size:.8rem}
+        .v12-status{font-size:.6rem;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--navy);color:var(--text2);border:1px solid var(--border)}
+        .v12-status.s-EDITING{color:var(--amber);border-color:var(--amber)}
+        .v12-status.s-VALIDATED,.v12-status.s-ANALYZED{color:#4ade80;border-color:var(--forest)}
+        .v12-status.s-OUTDATED{color:var(--brick2);border-color:var(--brick)}
+        .v12-kpis{display:flex;flex-wrap:wrap;gap:.35rem .9rem}
+        .v12-kpi{display:flex;flex-direction:column;min-width:78px}
+        .v12-kpi .k{font-size:.55rem;color:var(--text2);text-transform:uppercase;letter-spacing:.4px}
+        .v12-kpi .v{font-family:'JetBrains Mono',monospace;font-size:.78rem;font-weight:700}
+        .v12-kpi .s{font-size:.55rem;color:var(--text2)}
+        .v12-kpi.user .v,.v12-kpi.user input{color:var(--amber)}
+        .v12-kpi input{width:96px;padding:.15rem .3rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.74rem;font-weight:700}
+        .v12-kpi input:focus{outline:none;border-color:var(--amber)}
+        .c-scn-tab .v12-tabstate{font-size:.55rem;font-weight:700;margin-left:.3rem}
 
         /* Section globale */
         .c-global-section{background:var(--card2);border:1px dashed var(--border);border-radius:7px;padding:.9rem;margin-bottom:.9rem}
@@ -384,7 +403,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.0-P0</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.1-SCENARIOS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -448,15 +467,15 @@
                     <!-- v6.2.1 : Rollback tabs A/B/C (1 scénario à la fois) -->
                     <div class="c-scn-tabs">
                         <button class="c-scn-tab active" data-tab="A" onclick="switchScenarioTab('A')" title="A — Intention client : traduction fidèle de la demande du client">
-                            <span>A · Intention client</span>
+                            <span>A · Intention client<span class="v12-tabstate" id="cTabStateA"></span></span>
                             <span class="c-badge-coh" id="cBadgeA" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
                         <button class="c-scn-tab" data-tab="B" onclick="switchScenarioTab('B')" title="B — Équilibre : l'essentiel de l'intention, avec une solution globalement plus équilibrée">
-                            <span>B · Équilibre</span>
+                            <span>B · Équilibre<span class="v12-tabstate" id="cTabStateB"></span></span>
                             <span class="c-badge-coh" id="cBadgeB" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
                         <button class="c-scn-tab" data-tab="C" onclick="switchScenarioTab('C')" title="C — Prudence : davantage de marge sur les contraintes, les coûts et les risques">
-                            <span>C · Prudence</span>
+                            <span>C · Prudence<span class="v12-tabstate" id="cTabStateC"></span></span>
                             <span class="c-badge-coh" id="cBadgeC" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
                     </div>
@@ -663,6 +682,7 @@ async function loadPipelineData(ref) {
         renderDetail(combined);
         populateCockpitFromLead(combined, (unitsRes && unitsRes.units) || {A:[],B:[],C:[]});
         $("generateBtn").disabled=false; hideLoader(); showDetail();
+        syncScenarioModels();
     } catch(e) { hideLoader(); showError(e.message); }
 }
 
@@ -715,6 +735,7 @@ async function processLead() {
         const combined = {...d.body8D, ...d.display, _ref: d.ref};
         renderDetail(combined);
         populateCockpitFromLead(combined, {A: cockpitState.scenarios.A.units, B: cockpitState.scenarios.B.units, C: cockpitState.scenarios.C.units});
+        syncScenarioModels();
         btn.disabled=false; btn.textContent="↻ Retraiter (8A→8F)";
         $("generateBtn").disabled=false; fetchAll();
     } catch(e) {
@@ -792,6 +813,7 @@ function renderScenarioPanels() {
 
 function scenarioPanelTemplate(L) {
     return `
+      <div class="v12-strip" id="cV12Strip${L}"><span class="c-hint">Scénario non synchronisé — charge un lead traité.</span></div>
       <div class="c-section">
         <h4>🏗️ Configuration du bloc <span class="c-hint">(pré-rempli par le moteur — modifie ce que tu juges pertinent)</span></h4>
         <div class="c-block-grid">
@@ -5926,6 +5948,93 @@ function switchScenarioTab(tab) {
     cockpitState.activeTab = tab;
     document.querySelectorAll(".c-scn-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
     document.querySelectorAll(".c-scn-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === tab));
+}
+
+// ═══ v12 — Modèles de scénario (source de vérité serveur : rôle, état, suggestion vs effectif) ═══
+let v12Models = null;
+const V12_STATUS_LABEL = { SUGGESTED: "Suggestion BARLO", EDITING: "En cours", VALIDATED: "Validé", OUTDATED: "Modifié, non analysé", ANALYZED: "Analysé" };
+const V12_SOURCE_LABEL = { USER_OVERRIDE: "ta saisie", BARLO_SUGGESTION: "suggestion BARLO", HYPOTHESIS: "hypothèse BARLO", GEOMETRY_CALCULATION: "calcul géométrique", REGULATORY_RULE: "règle", QUESTIONNAIRE: "questionnaire", UNKNOWN: "inconnu" };
+function escAttr(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function v12Ref() { return currentBody8D && (currentBody8D.lead_id || currentBody8D.barlo_code) || ""; }
+
+async function syncScenarioModels() {
+    const ref = v12Ref();
+    if (!ref || !currentBody8D) return;
+    try {
+        const r = await fetch(`${API}/api/scenarios/${encodeURIComponent(ref)}/sync`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(currentBody8D)
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        v12Models = d.models;
+        v12Models._persisted = d.persisted;
+        ["A", "B", "C"].forEach(renderV12Strip);
+    } catch (e) {
+        console.warn("[V12] synchronisation :", e.message);
+        ["A", "B", "C"].forEach(L => { const el = $(`cV12Strip${L}`); if (el) el.innerHTML = `<span class="c-hint">Scénarios non synchronisés : ${esc(e.message)}</span>`; });
+    }
+}
+
+function renderV12Strip(L) {
+    const el = $(`cV12Strip${L}`);
+    const m = v12Models && v12Models[L];
+    if (!el || !m) return;
+    const s = m.suggested || {};
+    const eng = (m.effective && m.effective.engine) || {};
+    const v = x => (x && x.value != null) ? x.value : null;
+    const num = n => (n == null || n === "") ? "—" : Number(n).toLocaleString("fr-FR");
+    const levelsTxt = n => n ? (n > 1 ? `R+${n - 1}` : "RDC") : "—";
+    const tip = x => x ? `${V12_SOURCE_LABEL[x.source] || x.source}${x.note ? " — " + x.note : ""}` : "";
+    const kpi = (k, val, sub, title, cls) =>
+        `<div class="v12-kpi ${cls || ""}" title="${escAttr(title || "")}"><span class="k">${k}</span><span class="v">${val}</span>${sub ? `<span class="s">${sub}</span>` : ""}</div>`;
+    const cost = m.effective.cost_per_m2 || {};
+    const costOv = m.overrides && m.overrides.cost_per_m2 ? m.overrides.cost_per_m2.value : "";
+    const sugCost = v(s.cost_per_m2);
+    const statusTxt = m.status ? (V12_STATUS_LABEL[m.status] || m.status) : (v12Models._persisted ? "—" : "Non enregistré (migration v12 à appliquer)");
+    el.innerHTML = `
+      <div class="v12-head">
+        <span class="v12-role">${L} · ${esc(m.role_label)}</span>
+        <span class="v12-status s-${escAttr(m.status || "")}">${esc(statusTxt)}</span>
+      </div>
+      <div class="v12-kpis">
+        ${kpi("SDP", `${num(eng.sdp_m2 ?? v(s.sdp_m2))} m²`, `BARLO ${num(v(s.sdp_m2))} m²`, tip(s.sdp_m2))}
+        ${kpi("Emprise", `${num(eng.fp_m2 ?? v(s.footprint_m2))} m²`, `BARLO ${num(v(s.footprint_m2))} m²`, tip(s.footprint_m2))}
+        ${kpi("Niveaux", levelsTxt(eng.levels ?? v(s.levels)), `BARLO ${levelsTxt(v(s.levels))}`, tip(s.levels))}
+        ${kpi("Unités", num(eng.total_units ?? s.total_units), s.unit_mix_detail ? esc(s.unit_mix_detail) : "", "")}
+        ${kpi("COS", v(s.cos) != null ? Number(v(s.cos)).toFixed(2) : "—", "SDP / terrain", tip(s.cos))}
+        <label class="v12-kpi ${cost.source === "USER_OVERRIDE" ? "user" : ""}" title="${escAttr(`Suggestion BARLO : ${num(sugCost)} FCFA/m² (${tip(s.cost_per_m2)}). Saisis ta valeur ; vide = retour à la suggestion.`)}">
+          <span class="k">Coût/m² ${cost.source === "USER_OVERRIDE" ? "· ta saisie" : ""}</span>
+          <input type="text" inputmode="numeric" value="${escAttr(costOv)}" placeholder="${escAttr(sugCost != null ? sugCost : "")}"
+                 onchange="saveV12Override('${L}','cost_per_m2',this.value)">
+          <span class="s">BARLO ${num(sugCost)} FCFA</span>
+        </label>
+        ${kpi("Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", eng.budget_fit ? esc(eng.budget_fit) : "", "Coût de construction estimé (SDP × coût/m² effectif, VRD compris)")}
+      </div>`;
+    const tabState = $(`cTabState${L}`);
+    if (tabState) {
+        const icon = { SUGGESTED: "", EDITING: " ●", VALIDATED: " ✓", ANALYZED: " ✓", OUTDATED: " ⚠" }[m.status] || "";
+        tabState.textContent = icon;
+        tabState.title = m.status ? (V12_STATUS_LABEL[m.status] || "") : "";
+    }
+}
+
+async function saveV12Override(L, key, raw) {
+    const ref = v12Ref();
+    if (!ref) return;
+    const cleaned = String(raw || "").replace(/[\s ]/g, "").replace(/fcfa/i, "");
+    const value = cleaned === "" ? null : Number(cleaned.replace(/k$/i, "000"));
+    if (value !== null && !(value > 0)) { showToast("Valeur invalide : saisis un nombre de FCFA/m² (ex : 400000)", true); return; }
+    try {
+        const r = await fetch(`${API}/api/scenarios/${encodeURIComponent(ref)}/${L}/override`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, value })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        showToast(value === null ? `Scénario ${L} : retour à la suggestion BARLO` : `Scénario ${L} : coût/m² enregistré (${value.toLocaleString("fr-FR")} FCFA)`);
+        await syncScenarioModels();
+    } catch (e) {
+        showToast(`Enregistrement impossible : ${e.message}`, true);
+    }
 }
 
 // v6.2.1/v6.6.0 — Table 7 colonnes avec accordion inline détails techniques
