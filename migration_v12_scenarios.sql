@@ -55,11 +55,12 @@ CREATE TABLE IF NOT EXISTS public.sb_scenario_sets (
   computed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Le serveur utilise la clé service_role (RLS contournée), comme pour sb_lead_units.
-ALTER TABLE public.sb_scenarios          DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.sb_scenario_revisions DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.sb_lead_rules         DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.sb_scenario_sets      DISABLE ROW LEVEL SECURITY;
+-- RLS activée sans règle : seule la clé service_role du serveur accède à ces tables
+-- (cf. migration_v12_securite_rls.sql et /health → supabase_key_role).
+ALTER TABLE public.sb_scenarios          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sb_scenario_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sb_lead_rules         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sb_scenario_sets      ENABLE ROW LEVEL SECURITY;
 
 COMMIT;
 

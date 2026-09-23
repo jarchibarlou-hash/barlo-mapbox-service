@@ -5968,6 +5968,7 @@ async function syncScenarioModels() {
         if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
         v12Models = d.models;
         v12Models._persisted = d.persisted;
+        v12Models._storeError = d.store_error || null;
         ["A", "B", "C"].forEach(renderV12Strip);
     } catch (e) {
         console.warn("[V12] synchronisation :", e.message);
@@ -5990,7 +5991,8 @@ function renderV12Strip(L) {
     const cost = m.effective.cost_per_m2 || {};
     const costOv = m.overrides && m.overrides.cost_per_m2 ? m.overrides.cost_per_m2.value : "";
     const sugCost = v(s.cost_per_m2);
-    const statusTxt = m.status ? (V12_STATUS_LABEL[m.status] || m.status) : (v12Models._persisted ? "—" : "Non enregistré (migration v12 à appliquer)");
+    const statusTxt = m.status ? (V12_STATUS_LABEL[m.status] || m.status)
+        : (v12Models._persisted ? "—" : `Non enregistré${v12Models._storeError ? " : " + v12Models._storeError : ""}`);
     el.innerHTML = `
       <div class="v12-head">
         <span class="v12-role">${L} · ${esc(m.role_label)}</span>
