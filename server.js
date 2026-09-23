@@ -11232,7 +11232,7 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
   // Étiquettes unités : Mapbox v2 pose les symboles au sol ; on les remonte à l'écran de la hauteur
   // projetée du volume (sommet × sin(pitch) / mètres-par-pixel) pour qu'elles tiennent au-dessus du toit.
   const MASSING_PITCH = 58;
-  const LABEL_SIZE = 15;
+  const LABEL_SIZE = 18;
   const metersPerPx = 78271.517 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
   const labelFeatures = unitsData.map((u, i) => {
     const n = u.polygonGeo.length;
