@@ -5,13 +5,15 @@ const R = require("../lib/scenario-rules");
 const SIZE = { T1: 30, T2: 45, T3: 65, T4: 80, T5: 95, COMMERCE: 50 };
 const sdpOf = p => (p.logements || []).reduce((s, t) => s + t.count * SIZE[t.type] * 1.15, 0) + (p.commerce || 0) * SIZE.COMMERCE;
 
-test("règles par défaut (Jeremy 23/09) : A intact, B réserve 10 %, C phasé réserve 20 %, sans marge de retrait", () => {
+test("règles par défaut (Jeremy 23/09) : A intact, B optimisé réserve 10 %, C compact phasé réserve 20 %", () => {
   const { CLIENT_INTENT: A, BALANCED: B, PRUDENT: C } = R.DEFAULT_RULES;
   assert.equal(A.adapt_program, false);
   assert.equal(A.budget_target, null);
-  assert.equal(B.adapt_program, true);
-  assert.equal(B.adapt_mode, "DOWNGRADE");
+  assert.deepEqual([A.surface_small, A.surface_large], [0, 0]);
+  assert.equal(B.adapt_program, false, "B garde le programme, le budget est comparé");
+  assert.deepEqual([B.surface_small, B.surface_large], [0.05, 0.10]);
   assert.equal(B.budget_target, 0.9);
+  assert.deepEqual([C.surface_small, C.surface_large], [0.10, 0.20]);
   assert.equal(C.adapt_mode, "PHASE_2");
   assert.equal(C.budget_target, 0.8);
   assert.equal(C.emprise_usage_max, 0.85);
@@ -32,20 +34,35 @@ test("COS = occupation au sol par zone : ville 60, périphérie 45, campagne 30"
   assert.equal(unknown.source, "HYPOTHESIS", "zone inconnue : signalée comme hypothèse");
 });
 
+test("grille de surfaces : réduction selon la typologie, plancher absolu, commerce inchangé", () => {
+  const { BALANCED: B, PRUDENT: C, CLIENT_INTENT: A } = R.DEFAULT_RULES;
+  assert.equal(R.unitSurface("T3", 65, A), 65);
+  assert.equal(R.unitSurface("T3", 65, B), 59, "T3 −10 %");
+  assert.equal(R.unitSurface("T3", 65, C), 52, "T3 −20 %");
+  assert.equal(R.unitSurface("T1", 30, B), 29, "T1 −5 % (arrondi)");
+  assert.equal(R.unitSurface("T1", 30, C), 27, "T1 −10 %");
+  assert.equal(R.unitSurface("T4", 80, C), 64);
+  assert.equal(R.unitSurface("T3", 60, C), 50, "jamais sous 50 m² pour un T3");
+  assert.equal(R.unitSurface("T1", 26, C), 25, "jamais sous 25 m² pour un T1");
+  assert.equal(R.unitSurface("T1", 22, C), 22, "grille déjà sous le minimum : inchangée, jamais agrandie");
+  assert.equal(R.unitSurface("COMMERCE", 50, C), 50, "commerce inchangé");
+});
+
 test("limites : la plus contraignante s'impose et est nommée ; plus de plafond de plancher inventé", () => {
   const base = { site_area: 250, ces: 0.6, envelope_w: 12, envelope_d: 18, levels_min: 2, levels_max: 4, cost_per_m2: 200000 };
+  const c = R.scenarioSdpLimits(Object.assign({}, base, { rules: R.DEFAULT_RULES.PRUDENT, budget_fcfa: 20000000 }));
+  assert.equal(c.binding, "budget");
+  assert.ok(Math.abs(c.sdp_max - 20000000 * 0.8 / (200000 * 1.05)) < 1e-6, "C : phase 1 dans 80 % du budget");
+  assert.equal(c.reserve_pct, 20);
+  assert.deepEqual(Object.keys(c.limits).sort(), ["budget", "capacity"], "pas de limite « COS plancher »");
   const b = R.scenarioSdpLimits(Object.assign({}, base, { rules: R.DEFAULT_RULES.BALANCED, budget_fcfa: 20000000 }));
-  assert.equal(b.binding, "budget");
-  assert.ok(Math.abs(b.sdp_max - 20000000 * 0.9 / (200000 * 1.05)) < 1e-6, "B garde 10 % de réserve");
+  assert.equal(b.limits.budget, Infinity, "B n'est pas dimensionné sur le budget (comparé seulement)");
   assert.equal(b.reserve_pct, 10);
-  assert.equal(b.reserve_fcfa, 2000000);
-  assert.deepEqual(Object.keys(b.limits).sort(), ["budget", "capacity"], "pas de limite « COS plancher »");
   const noBudget = R.scenarioSdpLimits(Object.assign({}, base, { rules: R.DEFAULT_RULES.BALANCED, budget_fcfa: 0 }));
   assert.equal(noBudget.limits.budget, Infinity, "budget inconnu : pas de limite inventée");
-  assert.equal(noBudget.reserve_pct, null);
-  const c = R.scenarioSdpLimits(Object.assign({}, base, { rules: R.DEFAULT_RULES.PRUDENT, budget_fcfa: 0 }));
-  assert.equal(c.levels_cap, 3, "plafond de niveaux C = raisonnable − 1");
-  assert.ok(Math.abs(c.emprise_max - noBudget.emprise_max * 0.85) < 1e-6, "C : 85 % de l'emprise permise");
+  const cNoBudget = R.scenarioSdpLimits(Object.assign({}, base, { rules: R.DEFAULT_RULES.PRUDENT, budget_fcfa: 0 }));
+  assert.equal(cNoBudget.levels_cap, 3, "plafond de niveaux C = raisonnable − 1");
+  assert.ok(Math.abs(cNoBudget.emprise_max - noBudget.emprise_max * 0.85) < 1e-6, "C : 85 % de l'emprise permise");
   const withBuildable = R.scenarioSdpLimits(Object.assign({}, base, { rules: R.DEFAULT_RULES.BALANCED, buildable_area: 74 }));
   assert.equal(withBuildable.emprise_max, 74, "min(COS 150 m², zone constructible 74 m²)");
   const derog = R.scenarioSdpLimits(Object.assign({}, base, { ces: 0, rules: R.DEFAULT_RULES.BALANCED, buildable_area: 200 }));

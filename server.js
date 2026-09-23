@@ -1958,6 +1958,18 @@ function groundOccupation(sc, siteArea, cosSol, groundOverride) {
     cos_compliance: (allowed <= 0 || ratio <= 1 + 1e-9) ? "CONFORME" : "AMBITIEUX_HORS_COS",
   };
 }
+// v12.6 — Comparaison au budget, réserve du rôle comprise, après toute modification du coût
+function refreshBudgetFit(sc, budgetMax) {
+  if (!sc || typeof sc.cost_total_fcfa !== "number") return;
+  const target = Number(sc.role_rules_v12 && sc.role_rules_v12.budget_target) || 1;
+  sc.budget_needed_fcfa = Math.round(sc.cost_total_fcfa / target);
+  sc.reserve_fcfa = sc.budget_needed_fcfa - sc.cost_total_fcfa;
+  const b = Number(budgetMax) || 0;
+  sc.budget_gap_pct = b > 0 ? Math.round((sc.budget_needed_fcfa / b - 1) * 100) : null;
+  sc.budget_fit = b > 0
+    ? (sc.budget_needed_fcfa <= b ? "DANS_BUDGET" : sc.budget_needed_fcfa <= b * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
+    : "N/A";
+}
 // Libellés textes/PPT dans le vocabulaire de Jeremy (COS = occupation au sol, jamais « 2,5 »)
 function cosSolLabel(siteDiag) {
   const s = siteDiag || {};
@@ -2887,7 +2899,8 @@ function buildMixC_logements_V73(typologiesA, typologiesB) {
   return [{ type: topType, count: nC }];
 }
 // ── CALCUL SDP DEPUIS UN MIX ──────────────────────────────────────────────────
-function computeSdpFromMixV73(logementsTypos, commerceCount, standing) {
+// v12.6 — sizeFn(type, tailleGrille) : surface du rôle (grille réduite pour B et C, cf. lib/scenario-rules.js)
+function computeSdpFromMixV73(logementsTypos, commerceCount, standing, sizeFn) {
   const std = String(standing || "ECONOMIQUE").toUpperCase();
   let sdpLogements = 0;
   let surfaceUtileLogements = 0;
@@ -2895,7 +2908,8 @@ function computeSdpFromMixV73(logementsTypos, commerceCount, standing) {
   for (const t of logementsTypos) {
     const sizeRow = UNIT_SIZES_V73[t.type];
     if (!sizeRow) continue;
-    const unitSize = sizeRow[std] || sizeRow.ECONOMIQUE || 65;
+    const gridSize = sizeRow[std] || sizeRow.ECONOMIQUE || 65;
+    const unitSize = sizeFn ? sizeFn(t.type, gridSize) : gridSize;
     surfaceUtileLogements += t.count * unitSize;
     sdpLogements += t.count * unitSize * CIRCULATION_COEFF_V73;
     nbLogements += t.count;
@@ -2918,7 +2932,7 @@ function computeSdpFromMixV73(logementsTypos, commerceCount, standing) {
     nb_commerces: commerceCount,
   };
 }
-function buildUnitMixDetailV73(logementsTypos, commerceCount, standing) {
+function buildUnitMixDetailV73(logementsTypos, commerceCount, standing, sizeFn) {
   const std = String(standing || "ECONOMIQUE").toUpperCase();
   const parts = [];
   if (commerceCount > 0) {
@@ -2928,7 +2942,8 @@ function buildUnitMixDetailV73(logementsTypos, commerceCount, standing) {
   for (const t of logementsTypos) {
     const sizeRow = UNIT_SIZES_V73[t.type];
     if (!sizeRow) continue;
-    const sz = sizeRow[std] || sizeRow.ECONOMIQUE;
+    const gridSize = sizeRow[std] || sizeRow.ECONOMIQUE;
+    const sz = sizeFn ? sizeFn(t.type, gridSize) : gridSize;
     parts.push(`${t.count}×${t.type}(${sz}m²)`);
   }
   return parts.join(" + ");
@@ -3147,7 +3162,9 @@ function computeProgramDrivenScenarioV73(params) {
     buildable_area: siteV12 ? siteV12.buildable_area_m2 : undefined,
   });
   const clientProgramV12 = { logements: typologiesA_logements.map(t => ({ type: t.type, count: t.count })), commerce: commerceCountA };
-  const sdpOfProgramV12 = pr => computeSdpFromMixV73(pr.logements, pr.commerce, standing_level).sdp_total;
+  // v12.6 — même programme dans A/B/C ; surfaces du rôle (B optimisé, C compact, plancher absolu)
+  const sizeOfRoleV12 = (type, gridSize) => ScenarioRules.unitSurface(type, gridSize, rulesV12);
+  const sdpOfProgramV12 = pr => computeSdpFromMixV73(pr.logements, pr.commerce, standing_level, sizeOfRoleV12).sdp_total;
   let scenarioProgramV12 = clientProgramV12, adaptationsV12 = [], infeasibleV12 = false, phase2V12 = null;
   if (rulesV12.adapt_program) {
     const fit = ScenarioRules.fitProgram(clientProgramV12, sdpOfProgramV12, limitsV12.sdp_max, limitsV12.binding, rulesV12.adapt_mode);
@@ -3159,7 +3176,7 @@ function computeProgramDrivenScenarioV73(params) {
   }
   const scenarioMix = scenarioProgramV12.logements;
   const scenarioCommerceCount = scenarioProgramV12.commerce;
-  const sdpData = computeSdpFromMixV73(scenarioMix, scenarioCommerceCount, standing_level);
+  const sdpData = computeSdpFromMixV73(scenarioMix, scenarioCommerceCount, standing_level, sizeOfRoleV12);
   const sdpTotal = sdpData.sdp_total;
   // 6. NIVEAUX & EMPRISE — plafonds du rôle (identiques à l'ancien calcul pour A)
   const empriseMaxAbsolue = limitsV12.emprise_max;
@@ -3227,7 +3244,7 @@ function computeProgramDrivenScenarioV73(params) {
     }
   }
   const heightM = Math.round(levels * floor_height * 10) / 10;
-  const unitMixDetail = buildUnitMixDetailV73(scenarioMix, scenarioCommerceCount, standing_level);
+  const unitMixDetail = buildUnitMixDetailV73(scenarioMix, scenarioCommerceCount, standing_level, sizeOfRoleV12);
   const unitMixObject = buildUnitMixObjectV73(scenarioMix, scenarioCommerceCount);
   const totalUnits = sdpData.nb_logements + sdpData.nb_commerces;
   return {
@@ -3780,8 +3797,12 @@ function computeSmartScenarios({
     const vrdCost = (sdp * 0.10) * (costPerM2 * 0.50);
     const estimatedCost = Math.round(constructionCost + vrdCost);
     // budgetMax is already computed before the loop
+    // v12.6 — comparaison au budget RÉSERVE COMPRISE (B 10 %, C 20 % ; A sans réserve) :
+    // budget nécessaire = coût / part utilisable du budget. Le budget est comparé, jamais imposé à A/B.
+    const budgetTargetV12 = Number(v73Result.role_rules_v12 && v73Result.role_rules_v12.budget_target) || 1;
+    const budgetNeededV12 = Math.round(estimatedCost / budgetTargetV12);
     const budgetFit = budgetMax > 0
-      ? (estimatedCost <= budgetMax ? "DANS_BUDGET" : estimatedCost <= budgetMax * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
+      ? (budgetNeededV12 <= budgetMax ? "DANS_BUDGET" : budgetNeededV12 <= budgetMax * 1.2 ? "BUDGET_TENDU" : "HORS_BUDGET")
       : "N/A";
     const freeGround = envelope_area - (fpRdc || fp); // espace libre au sol = enveloppe - empreinte RDC
     const parkingEst = hasPilotis ? Math.floor((fpRdc || fp) / PILOTIS_CONFIG.PARKING_SPOT_M2) : Math.floor(freeGround / PILOTIS_CONFIG.PARKING_SPOT_M2);
@@ -3898,6 +3919,10 @@ function computeSmartScenarios({
       cost_per_m2_source: costOverrideV12 > 0 ? ScenarioModel.SOURCE.USER_OVERRIDE : costSuggestionV12.source,
       cost_adjusted: costAdjusted,
       budget_fit: budgetFit,
+      // v12.6 — budget nécessaire réserve comprise et écart au budget du client (null si budget inconnu)
+      budget_needed_fcfa: budgetNeededV12,
+      reserve_fcfa: budgetNeededV12 - estimatedCost,
+      budget_gap_pct: budgetMax > 0 ? Math.round((budgetNeededV12 / budgetMax - 1) * 100) : null,
       // v57.0 CES-driven extras
       program_driven: isProgramDriven,
       program_key: programKey || "NONE",
@@ -4965,7 +4990,7 @@ function computeSmartScenarios({
   // on cap fp/sdp/units/mix en cascade. Sinon, no-op (isEmpty=true).
   // v12 : en mode programme, l'emprise maximale est déjà un plafond du dimensionnement
   // (lib/scenario-rules.js) ; le repère est porté par l'objet renvoyé pour les appels suivants.
-  const _siteV12 = { site_area: Number(site_area) || 0, cos_sol: ces };
+  const _siteV12 = { site_area: Number(site_area) || 0, cos_sol: ces, budget_fcfa: budgetMax || 0 };
   const _scenarios = { A: r.A, B: r.B, C: r.C, _v12_program_driven: !!isProgramDriven, _site_v12: _siteV12 };
   if (arguments[0] && arguments[0]._leadConstraints) {
     applyConstraintsToScenarios(_scenarios, arguments[0]._leadConstraints);
@@ -5211,8 +5236,11 @@ function applyConstraintsToScenarios(scenarios, constraints) {
           }
         }
         if (sc.unit_mix_detail) sc.unit_mix_detail = rescaleMixDetail(sc.unit_mix_detail, sdpScale);
-        // COS (occupation au sol) recalculé sur la nouvelle emprise
-        if (scenarios._site_v12) Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol));
+        // COS (occupation au sol) recalculé sur la nouvelle emprise, budget sur le nouveau coût
+        if (scenarios._site_v12) {
+          Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol));
+          refreshBudgetFit(sc, scenarios._site_v12.budget_fcfa);
+        }
         sc.fp_capped_by_constraint = true;
         sc.fp_original_m2 = oldFp;
         console.log(`│ [CONSTRAINTS] ${lbl}: fp ${oldFp}→${sc.fp_m2}m² | sdp ${oldSdp}→${sc.sdp_m2}m² | units ${Math.round(sc.total_units / sdpScale)}→${sc.total_units}`);
@@ -5287,6 +5315,7 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       // v12.5 — COS (occupation au sol) recalculé sur l'emprise saisie (même emprise à tous les niveaux)
       if (scenarios._site_v12) {
         Object.assign(sc, groundOccupation(sc, scenarios._site_v12.site_area, scenarios._site_v12.cos_sol, ov.fp > 0 ? sc.fp_m2 : 0));
+        refreshBudgetFit(sc, scenarios._site_v12.budget_fcfa);
       }
       // v75.1 — COS cible saisi pour ce scénario (occupation au sol, 0,60 ou 60) : conservé tel quel
       if (ov.cos > 0) {
@@ -8981,7 +9010,7 @@ function buildTemplateTexts(flat, scenarios) {
   // v74.18 — slide 3 : roles purs sans SDP (chiffres reveles dans les slides scenario detaillees)
   // v74.30 PUSH 11 — prefixer l'intro slide 3 par le bloc alerte si contraintes lead
   const constraintsAlertPrefix = flat._constraints_alert_text ? `${flat._constraints_alert_text}\n\n` : "";
-  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${f("A_units")} unités** en standing ${f("standing_level").toLowerCase()}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (part du terrain que le bâtiment peut couvrir) de **${f("site_cos_regl")}**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : tout le programme réalisé maintenant, dans votre budget, en gardant une réserve de 10 % pour les imprévus ; si nécessaire, certaines typologies sont réduites d'un cran.\n- **Scénario C — la prudence** : le même projet, sécurisé et réalisé en deux phases, avec une réserve de 20 % ; ce qui ne tient pas en phase 1 est prévu en phase 2, sans renoncer à vos typologies.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Emprise constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Enveloppe : **${f("envelope_w")} × ${f("envelope_d")} m**\n- Emprise au sol maximale (COS) : **${f("site_emprise_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${f("retrait_mitoyennete")}** côtés`;
+  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${f("A_units")} unités** en standing ${f("standing_level").toLowerCase()}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (part du terrain que le bâtiment peut couvrir) de **${f("site_cos_regl")}**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : le même programme en plans optimisés (surfaces réduites de 5 à 10 % selon la typologie), comparé à votre budget avec une réserve de 10 % pour les imprévus.\n- **Scénario C — la prudence** : le même programme en plans compacts (surfaces réduites de 10 à 20 %), avec une réserve de 20 % ; si le budget ne suffit pas, le projet est réalisé en deux phases, sans renoncer à vos typologies.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Emprise constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Enveloppe : **${f("envelope_w")} × ${f("envelope_d")} m**\n- Emprise au sol maximale (COS) : **${f("site_emprise_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${f("standing_level").toLowerCase()}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${f("retrait_mitoyennete")}** côtés`;
   texts.slide_3_programme_text = "";
   // ── SLIDE 4: Terrain ──
   // v74.14 — slide 4 : focus EMPRISE (déduit slide 3), sans COS/CES (déjà mentionnés)
@@ -10864,7 +10893,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.5";
+const V12_ENGINE_VERSION = "12.6";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -10983,6 +11012,8 @@ function scenarioModelView(letter, row, engineScenario, siteArea) {
         sdp_m2: e.sdp_m2 || null, fp_m2: e.fp_m2 || null, levels: e.levels || null,
         total_units: e.total_units || null, cost_per_m2: e.cost_per_m2 || null,
         cost_total_fcfa: e.cost_total_fcfa || null, budget_fit: e.budget_fit || null,
+        budget_needed_fcfa: e.budget_needed_fcfa || null, reserve_fcfa: e.reserve_fcfa || null,
+        budget_gap_pct: e.budget_gap_pct != null ? e.budget_gap_pct : null,
         unit_mix_detail: e.unit_mix_detail || null,
         // COS (vocabulaire de Jeremy) = occupation au sol : emprise au sol / terrain, et part de l'emprise permise
         cos: site > 0 && (e.emprise_sol_m2 || e.fp_m2) ? Math.round(((e.emprise_sol_m2 || e.fp_m2) / site) * 1000) / 1000 : null,

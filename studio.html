@@ -405,7 +405,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.5-COS-SOL</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.6-SURFACES</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6109,11 +6109,15 @@ function renderV12Strip(L) {
           <span class="s">BARLO ${num(sugCost)} FCFA</span>
         </label>
         ${(() => {
+            // Budget comparé réserve comprise (B 10 %, C 20 %, A sans réserve), jamais imposé à A/B
             const lim = eng.limits || {};
-            const reserve = lim.reserve_pct != null ? `réserve ${lim.reserve_pct} %${lim.reserve_fcfa ? " (" + fmtC(lim.reserve_fcfa) + ")" : ""}` : "";
-            const sub = [eng.budget_fit ? esc(eng.budget_fit) : "", reserve].filter(Boolean).join(" · ");
+            const gap = eng.budget_gap_pct;
+            const gapTxt = gap == null ? "" : gap <= 0 ? "dans le budget" : `budget +${gap} %`;
+            const need = eng.budget_needed_fcfa && lim.reserve_pct ? `besoin ${fmtC(eng.budget_needed_fcfa)} réserve ${lim.reserve_pct} % comprise` : "";
+            const sub = [gapTxt, need].filter(Boolean).join(" · ") || (eng.budget_fit ? esc(eng.budget_fit) : "");
             return kpi("Coût estimé", eng.cost_total_fcfa ? fmtC(eng.cost_total_fcfa) : "—", sub,
-                `Coût de construction estimé (SDP × coût/m² effectif, VRD compris).${lim.reserve_pct != null ? ` Le scénario garde ${lim.reserve_pct} % du budget pour les imprévus (hypothèse BARLO).` : m.role === "CLIENT_INTENT" ? " A n'est pas dimensionné sur le budget : l'écart éventuel est affiché tel quel." : ""}`);
+                `Coût de construction estimé (SDP × coût/m² effectif, VRD compris).${lim.reserve_pct ? ` Comparé au budget avec une réserve de ${lim.reserve_pct} % pour les imprévus.` : " Sans réserve : l'écart au budget est affiché tel quel."}`,
+                gap != null && gap > 0 ? "warn" : "");
         })()}
       </div>
       ${v12RulesLine(m)}`;
@@ -6135,6 +6139,12 @@ function v12RulesLine(m) {
     if (L.binding && L.sdp_max) parts.push(`Limite qui s'impose : ${V12_LIMIT_LABEL[L.binding] || L.binding} (${Number(L.sdp_max).toLocaleString("fr-FR")} m² de SDP max)`);
     const ad = (eng.adaptations || []).filter(a => a.kind !== "PHASE_2");
     const p2 = eng.phase_2;
+    // Grille de surfaces du rôle (même programme, surfaces optimisées/compactes, plancher absolu)
+    const R = eng.rules || {};
+    const pc = x => Math.round((Number(x) || 0) * 100);
+    if (pc(R.surface_small) || pc(R.surface_large)) {
+        parts.push(`Surfaces ${m.role === "PRUDENT" ? "compactes" : "optimisées"} : T1–T2 −${pc(R.surface_small)} %, T3–T5 −${pc(R.surface_large)} % (jamais sous le minimum par typologie)`);
+    }
     if (ad.length) {
         const txt = ad.map(a => a.kind === "DOWNGRADE" ? `${a.from} → ${a.to}` : a.kind === "REMOVE_UNIT" ? `− 1 ${a.type}` : "− 1 commerce");
         parts.push(`Programme adapté (${V12_LIMIT_LABEL[ad[0].reason] || ad[0].reason}) : ${txt.join(", ")}`);

@@ -52,34 +52,42 @@ test("la suggestion pure retire les réglages de l'utilisateur mais garde les r�
 
 const units = sc => (sc.client_program_v12 ? null : null, sc.total_units);
 
-test("règles de rôle : sans contrainte, B garde exactement le programme du client", () => {
+test("même programme dans A, B, C : B optimise les surfaces, le prix suit", () => {
   const lead = Object.assign({}, LEAD, { budget_range: "" });
   const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
-  assert.equal(r.B.unit_mix_detail, r.A.unit_mix_detail, "B n'est pas plus petit par principe");
+  assert.deepEqual(r.B.unit_mix, r.A.unit_mix, "mêmes unités (nombre et types)");
+  assert.deepEqual(r.C.unit_mix, r.A.unit_mix, "C aussi, quand rien ne l'oblige à phaser");
+  assert.match(r.A.unit_mix_detail, /T3\(65m²\)/, "A : grille économique");
+  assert.match(r.B.unit_mix_detail, /T3\(59m²\)/, "B : T3 −10 %");
+  assert.match(r.C.unit_mix_detail, /T3\(52m²\)/, "C : T3 −20 %");
+  assert.match(r.C.unit_mix_detail, /COMMERCE\(50m²\)/, "commerce inchangé");
   assert.equal(r.B.adaptations_v12.length, 0);
-  assert.equal(r.A.adaptations_v12.length, 0);
-  assert.ok(r.B.cost_total_fcfa < r.A.cost_total_fcfa, "même programme, coût/m² du rôle B plus bas");
-  assert.equal(r.B.sdp_limits_v12.budget, null, "budget inconnu : aucune limite inventée");
+  assert.ok(r.A.cost_total_fcfa > r.B.cost_total_fcfa && r.B.cost_total_fcfa > r.C.cost_total_fcfa, "A > B > C en coût");
+  assert.equal(r.B.budget_gap_pct, null, "budget inconnu : aucun écart inventé");
 });
 
-test("règles de rôle : budget serré → B et C s'adaptent (raison tracée), A jamais", () => {
+test("budget serré : A et B gardent tout le programme et affichent l'écart ; C phase le reste", () => {
   const lead = Object.assign({}, LEAD, { budget_range: "40 000 - 50 000 €", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
   const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
-  assert.equal(r.A.adaptations_v12.length, 0, "A = intention du client, jamais adaptée");
-  assert.ok(r.B.adaptations_v12.length > 0, "B adapté");
-  assert.ok(r.B.adaptations_v12.every(a => a.reason === "budget"), "raison = budget");
-  assert.equal(r.B.sdp_limits_v12.binding, "budget");
-  assert.equal(r.B.infeasible_v12, false);
-  assert.ok(r.B.sdp_m2 <= r.B.sdp_limits_v12.sdp_max + 1, "B tient dans son budget");
-  assert.ok(r.C.sdp_m2 <= r.C.sdp_limits_v12.sdp_max + 1, "C tient dans ses marges");
-  assert.ok(r.B.cost_total_fcfa < r.A.cost_total_fcfa);
+  assert.equal(r.A.total_units, 5);
+  assert.equal(r.B.total_units, 5, "B ne supprime plus d'unités");
+  assert.equal(r.A.adaptations_v12.length, 0);
+  assert.equal(r.B.adaptations_v12.length, 0);
+  assert.equal(r.B.budget_fit, "HORS_BUDGET", "l'écart est affiché, pas masqué");
+  assert.ok(r.B.budget_gap_pct > 0);
+  assert.equal(r.B.budget_needed_fcfa, Math.round(r.B.cost_total_fcfa / 0.9), "besoin = coût, réserve 10 % comprise");
+  assert.ok(r.C.adaptations_v12.length > 0 && r.C.adaptations_v12.every(a => a.kind === "PHASE_2"));
+  assert.equal(r.C.budget_fit, "DANS_BUDGET", "phase 1 de C dans le budget, réserve 20 % comprise");
+  const phase1 = r.C.total_units, phase2 = r.C.phase_2_v12.logements.reduce((s, t) => s + t.count, 0) + (r.C.phase_2_v12.commerce || 0);
+  assert.equal(phase1 + phase2, 5, "phase 1 + phase 2 = tout le programme");
 });
 
-test("règles de rôle : programme impossible dans le budget → signalé, jamais masqué", () => {
+test("programme impossible même phasé → signalé, jamais masqué", () => {
   const lead = Object.assign({}, LEAD, { budget_range: "10 000 - 20 000 €", input_typologies: "T3=3, T4=1, COMMERCE=1", target_units: 5 });
   const r = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}));
-  assert.equal(r.B.infeasible_v12, true);
+  assert.equal(r.C.infeasible_v12, true, "même la plus petite phase 1 dépasse le budget");
   assert.equal(r.A.infeasible_v12, false, "A n'est pas dimensionné sur le budget");
+  assert.equal(r.B.budget_fit, "HORS_BUDGET");
 });
 
 test("règles de rôle : C respecte son plafond de niveaux ; dérogation COS respectée", () => {
