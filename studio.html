@@ -384,7 +384,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v11.37-ETIQUETTES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.0-P0</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -427,7 +427,7 @@
             </div>
 
             <!-- ═══ v75.1 — Cockpit du diagnostic ═══ -->
-            <details class="constraints-panel" id="constraintsPanel">
+            <details class="constraints-panel" id="constraintsPanel" open>
                 <summary>
                     <span>⚙ Cockpit du diagnostic</span>
                     <span class="c-count-badge" id="cCountBadge">Aucune</span>
@@ -447,17 +447,17 @@
 
                     <!-- v6.2.1 : Rollback tabs A/B/C (1 scénario à la fois) -->
                     <div class="c-scn-tabs">
-                        <button class="c-scn-tab active" data-tab="A" onclick="switchScenarioTab('A')">
-                            <span>A · Intensification</span>
-                            <span class="c-badge-coh" id="cBadgeA">—</span>
+                        <button class="c-scn-tab active" data-tab="A" onclick="switchScenarioTab('A')" title="A — Intention client : traduction fidèle de la demande du client">
+                            <span>A · Intention client</span>
+                            <span class="c-badge-coh" id="cBadgeA" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
-                        <button class="c-scn-tab" data-tab="B" onclick="switchScenarioTab('B')">
+                        <button class="c-scn-tab" data-tab="B" onclick="switchScenarioTab('B')" title="B — Équilibre : l'essentiel de l'intention, avec une solution globalement plus équilibrée">
                             <span>B · Équilibre</span>
-                            <span class="c-badge-coh" id="cBadgeB">—</span>
+                            <span class="c-badge-coh" id="cBadgeB" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
-                        <button class="c-scn-tab" data-tab="C" onclick="switchScenarioTab('C')">
-                            <span>C · Prudent</span>
-                            <span class="c-badge-coh" id="cBadgeC">—</span>
+                        <button class="c-scn-tab" data-tab="C" onclick="switchScenarioTab('C')" title="C — Prudence : davantage de marge sur les contraintes, les coûts et les risques">
+                            <span>C · Prudence</span>
+                            <span class="c-badge-coh" id="cBadgeC" title="Surface du scénario rapportée au programme demandé par le client">—</span>
                         </button>
                     </div>
 
@@ -508,8 +508,9 @@
                         <button class="btn-c-save" onclick="saveConstraints()">✓ Enregistrer les contraintes</button>
                     </div>
                 </div>
-                <div class="c-saved-toast" id="cSavedToast">✓ Contraintes enregistrées</div>
             </details>
+            <!-- Hors du <details> : sinon invisible quand le cockpit est replié -->
+            <div class="c-saved-toast" id="cSavedToast">✓ Contraintes enregistrées</div>
 
             <div class="cards-grid">
                 <div class="card"><div class="card-title">Terrain & Localisation</div><div id="cardTerrain"></div></div>
@@ -774,8 +775,8 @@ function renderDetail(L) {
     $("cardZoning").innerHTML=dRows([["Zonage",L.zoning_type||"—"],["Driver",L.primary_driver||"—"],["COS",L.cos_ratio||"—"],["Retraits",`${L.setback_front||"—"}/${L.setback_side||"—"}/${L.setback_back||"—"} m`],["Enveloppe",`${fmt(L.envelope_w)}×${fmt(L.envelope_d)} m`]]);
     $("cardBudget").innerHTML=dRows([["Budget",L.budget_range||"—"],["Tension",L.budget_tension||"—"],["Standing",L.standing_level||"—"],["Position",L.strategic_position||"—"],["Recommandé",L.recommended_scenario_final||"—"]]);
     ["A","B","C"].forEach(s=>{const rec=(L.recommended_scenario_final||"").toUpperCase().includes(s);$(`scn${s}`).innerHTML=`${rec?'<div style="color:var(--forest);font-weight:700;font-size:.78rem;margin-bottom:.5rem">★ Recommandé</div>':''}<div style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem"><div>${dRows([["Rôle",L[`scenario_${s}_role`]||"—"],["Label",L[`scenario_${s}_label`]||"—"],["Emprise",fmt(L[`fp_${s}_m2`]," m²")],["Niveaux",L[`levels_${s}`]||"—"]])}</div><div>${dRows([["SDP",fmt(L[`sdp_${s}`]," m²")],["Coût",fmtC(L[`${s}_cost_total`])],["Unités",L[`total_units_${s}`]||"—"],["Rendement",L[`rendement_${s}`]?`${(Number(L[`rendement_${s}`])*100).toFixed(1)}%`:"—"]])}</div></div>`;});
-    const imgs=[{l:"Satellite",u:L.satellite_url},{l:"Axo",u:L.axo_url},{l:"Massing A",u:L.massing_A_url},{l:"Massing B",u:L.massing_B_url},{l:"Massing C",u:L.massing_C_url}].filter(i=>i.u);
-    $("cardImages").innerHTML=imgs.length?imgs.map(i=>`<div class="img-thumb"><img src="${i.u}" onerror="this.style.display='none'"><div class="cap">${i.l}</div></div>`).join(""):'<div style="color:var(--text2);font-size:.8rem">Images générées avec le PPTX</div>';
+    const imgs=[{l:"Satellite",u:L.satellite_url},{l:"Axo",u:L.axo_url},{l:"Massing A",u:L.massing_A_url,s:"A"},{l:"Massing B",u:L.massing_B_url,s:"B"},{l:"Massing C",u:L.massing_C_url,s:"C"}].filter(i=>i.u);
+    $("cardImages").innerHTML=imgs.length?imgs.map(i=>`<div class="img-thumb"><img src="${i.u}"${i.s?` data-massing-scn="${i.s}"`:""} onerror="this.style.display='none'"><div class="cap">${i.l}</div></div>`).join(""):'<div style="color:var(--text2);font-size:.8rem">Images générées avec le PPTX</div>';
 }
 
 // ═══ v75.3.1 — COCKPIT (retour tabs A/B/C) : rendu, collecte, sauvegarde ═══
@@ -4856,8 +4857,9 @@ function cmdOnMove(e) {
 // ─────── Clavier : ESC + Ctrl+Z / Ctrl+Y + raccourcis 2 lettres ───────
 let _cmdShortcutBuf = "", _cmdShortcutTs = 0;
 document.addEventListener("keydown", (e) => {
-    // v8.2.0 — Undo / Redo
-    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const inField = document.activeElement && ["INPUT","TEXTAREA","SELECT"].includes(document.activeElement.tagName);
+    // v8.2.0 — Undo / Redo du plan (dans un champ texte, Ctrl+Z reste l'annulation native du texte)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !inField) {
         const k = (e.key || "").toLowerCase();
         if (k === "z" && !e.shiftKey) { e.preventDefault(); historyUndo(); return; }
         if ((k === "y") || (k === "z" && e.shiftKey)) { e.preventDefault(); historyRedo(); return; }
@@ -5670,12 +5672,23 @@ function _cmdMoveExecute(pick, destPt) {
     if (!refs) return;
     const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
     if (!u) return;
-    const dx = destPt.x - pick.basePt.x;
-    const dy = destPt.y - pick.basePt.y;
+    const dxM = (destPt.x - pick.basePt.x) / refs.scale;
+    const dyM = -(destPt.y - pick.basePt.y) / refs.scale;
+    // Le polygone est la vérité géométrique : on le translate (offset seul = sans effet)
+    ensureUnitPolygon(u);
     commitUnitGeometry(pick.label, pick.unit_idx, {
-        offset_x_m: (u.offset_x_m || 0) + dx / refs.scale,
-        offset_y_m: (u.offset_y_m || 0) - dy / refs.scale
+        polygon: translatePolygonM(unitPolygonM(u), dxM, dyM),
+        offset_x_m: (u.offset_x_m || 0) + dxM,
+        offset_y_m: (u.offset_y_m || 0) + dyM
     });
+}
+// Applique une transformation en pixels SVG (identique à l'aperçu fantôme) au polygone de l'unité
+function _transformUnitPolygonPx(u, refs, fnPx) {
+    ensureUnitPolygon(u);
+    const px = polygonMToSvgPx(unitPolygonM(u), refs.cxSvg, refs.cySvg, refs.scale).map(fnPx);
+    const polyM = svgPxToPolygonM(px, refs.cxSvg, refs.cySvg, refs.scale);
+    const c = polygonCentroidM(polyM);
+    return { polygon: polyM, offset_x_m: c.x, offset_y_m: c.y };
 }
 function _cmdMoveGhost(pick, destPt) {
     const refs = _svgRefs[pick.label];
@@ -5703,7 +5716,9 @@ function _cmdCopyExecute(pick, destPt) {
     copy.unit_name = (src.unit_name || src.unit_type || "unit") + " (copie)";
     copy.offset_x_m = (src.offset_x_m || 0) + dx / refs.scale;
     copy.offset_y_m = (src.offset_y_m || 0) - dy / refs.scale;
-    copy.polygon = null;
+    // La copie garde la forme exacte de l'original (et plus un rectangle par défaut)
+    ensureUnitPolygon(src);
+    copy.polygon = translatePolygonM(unitPolygonM(src), dx / refs.scale, -dy / refs.scale);
     units.push(copy);
     renderUnitsTable(pick.label);
     renderParcelSvg(pick.label);
@@ -5720,18 +5735,14 @@ function _cmdRotateExecute(pick, centerPick, refPick, curPt) {
     const a0 = Math.atan2(refPick.refPt.y - cy, refPick.refPt.x - cx);
     const a1 = Math.atan2(curPt.y - cy, curPt.x - cx);
     const deltaDeg = (a1 - a0) * 180 / Math.PI;
-    // Rotation du centre unit autour de (cx, cy)
-    const uCx = refs.cxSvg + (u.offset_x_m || 0) * refs.scale;
-    const uCy = refs.cySvg - (u.offset_y_m || 0) * refs.scale;
-    const dx = uCx - cx, dy = uCy - cy;
     const rad = deltaDeg * Math.PI / 180;
-    const newCx = cx + dx * Math.cos(rad) - dy * Math.sin(rad);
-    const newCy = cy + dx * Math.sin(rad) + dy * Math.cos(rad);
-    commitUnitGeometry(pick.label, pick.unit_idx, {
-        offset_x_m: (newCx - refs.cxSvg) / refs.scale,
-        offset_y_m: -(newCy - refs.cySvg) / refs.scale,
-        rotation_deg: (u.rotation_deg || 0) + deltaDeg
+    const cosR = Math.cos(rad), sinR = Math.sin(rad);
+    const patch = _transformUnitPolygonPx(u, refs, p => {
+        const dx = p.x - cx, dy = p.y - cy;
+        return { x: cx + dx * cosR - dy * sinR, y: cy + dx * sinR + dy * cosR };
     });
+    patch.rotation_deg = (u.rotation_deg || 0) + deltaDeg;
+    commitUnitGeometry(pick.label, pick.unit_idx, patch);
 }
 function _cmdRotateGhost(pick, centerPick, refPick, curPt) {
     const refs = _svgRefs[pick.label];
@@ -5758,18 +5769,10 @@ function _cmdMirrorExecute(pick, axisA, axisB) {
     const refs = _svgRefs[pick.label];
     const u = (cockpitState.scenarios[pick.label].units || [])[pick.unit_idx];
     if (!refs || !u) return;
-    // Mirror du centre unit par rapport à l'axe (axisA, axisB)
-    const uCx = refs.cxSvg + (u.offset_x_m || 0) * refs.scale;
-    const uCy = refs.cySvg - (u.offset_y_m || 0) * refs.scale;
-    const mir = _reflectPointAcrossLine({ x: uCx, y: uCy }, axisA, axisB);
-    // Rotation de l'unité miroirée : 2*angleAxis - rotOrig
     const axisAngleDeg = Math.atan2(axisB.y - axisA.y, axisB.x - axisA.x) * 180 / Math.PI;
-    const newRot = 2 * axisAngleDeg - (u.rotation_deg || 0);
-    commitUnitGeometry(pick.label, pick.unit_idx, {
-        offset_x_m: (mir.x - refs.cxSvg) / refs.scale,
-        offset_y_m: -(mir.y - refs.cySvg) / refs.scale,
-        rotation_deg: newRot
-    });
+    const patch = _transformUnitPolygonPx(u, refs, p => _reflectPointAcrossLine(p, axisA, axisB));
+    patch.rotation_deg = 2 * axisAngleDeg - (u.rotation_deg || 0);
+    commitUnitGeometry(pick.label, pick.unit_idx, patch);
 }
 function _cmdMirrorGhost(pick, axisA, curPt) {
     const refs = _svgRefs[pick.label];
@@ -7044,7 +7047,8 @@ function renderCandidateThumbnailSvg(cand, siteAnalysis) {
     // Buildable
     const buildPts = (siteAnalysis.buildablePolygon || []).map(toPx).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
     // Unités
-    const UNIT_C = window.UNIT_COLORS || { AUTRE: "#8B5CF6" };
+    // UNIT_COLORS est un const de haut niveau : il n'existe pas sur window
+    const UNIT_C = (typeof UNIT_COLORS !== "undefined" && UNIT_COLORS) || { AUTRE: "#8B5CF6" };
     const unitsSvg = cand.units.map(u => {
         const color = UNIT_C[u.unit_type] || UNIT_C.AUTRE;
         const pts = (u.polygonM || []).map(toPx).map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
@@ -7765,7 +7769,7 @@ async function saveConstraints() {
 }
 
 function clearConstraints() {
-    // Efface tout
+    if (!confirm("Effacer toutes les contraintes et réglages des 3 scénarios ? Cette action ne peut pas être annulée.")) return;
     cockpitState.globals = {};
     ["cInputTypologies","cLateralHug","cLateralGap","cMaxFp","cRationale"].forEach(id => { const el = $(id); if (el) el.value = ""; });
     ["cIgnoreCos","cIgnoreSetbacks"].forEach(id => { const el = $(id); if (el) el.checked = false; });

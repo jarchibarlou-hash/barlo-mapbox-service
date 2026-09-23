@@ -665,6 +665,9 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
             # (drag vertex, offset, trim, corner, ...) arrivaient effondrés sur (0,0) → polygone dégénéré
             # → dessin invisible ou fallback rectangle heuristique dans le PPTX client.
             # Bug silencieux depuis 6+ mois. Fix : accepte les 2 schémas.
+            # {x,y} (studio v9+) = coordonnées ABSOLUES (origine centroïde parcelle) : ni offset ni rotation.
+            # {x_m,y_m} (legacy) = coordonnées locales à l'unité : offset + rotation s'appliquent.
+            is_legacy_local = custom_polygon[0].get('x') is None and custom_polygon[0].get('x_m') is not None
             poly_pts = []
             for pt in custom_polygon:
                 xm = pt.get('x_m')
@@ -673,9 +676,16 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
                 if ym is None: ym = pt.get('y')
                 lx = float(xm if xm is not None else 0)
                 ly = float(ym if ym is not None else 0)
-                px = cx + offset_x + lx * cos_r - ly * sin_r
-                py = cy + offset_y + lx * sin_r + ly * cos_r
+                if is_legacy_local:
+                    px = cx + offset_x + lx * cos_r - ly * sin_r
+                    py = cy + offset_y + lx * sin_r + ly * cos_r
+                else:
+                    px = cx + lx
+                    py = cy + ly
                 poly_pts.append((px, py))
+            real_area = _plan_polygon_area_m2(poly_pts)
+            if real_area > 0:
+                area_m2 = real_area
             up = MplPolygon(poly_pts, closed=True, facecolor=color, edgecolor='#F8FAFC',
                             linewidth=1.4, alpha=0.85, zorder=5)
             ax.add_patch(up)
@@ -924,8 +934,14 @@ def _plan_maybe_insert_all(prs, data, chart_dir):
         print(f"[PLAN v75.2] Polygone parcelle absent ou insuffisant ({len(polygon)} pts) — slides plan non insérées.", file=sys.stderr)
         return
 
-    # Repérer les indices des slides massing existantes AVANT insertion
-    indices = _plan_find_scenario_slide_indices(prs)
+    # Indices des slides massing : mémorisés pendant le remplacement des images, sinon détection
+    indices = {'A': None, 'B': None, 'C': None}
+    indices.update(data.get('_massing_slide_idx') or {})
+    if any(v is None for v in indices.values()):
+        detected = _plan_find_scenario_slide_indices(prs)
+        for k, v in detected.items():
+            if indices.get(k) is None:
+                indices[k] = v
     print(f"[PLAN v75.2] Indices slides massing détectés : {indices}", file=sys.stderr)
 
     # Générer les 3 images d'abord (dans chart_dir pour partager le cleanup)
@@ -1087,6 +1103,10 @@ def assemble_pptx(data, template_path, output_path):
                 # Images
                 if placeholder in IMAGE_PLACEHOLDERS:
                     img_key = placeholder_key
+                    # Position des slides massing, mémorisée avant que le placeholder soit consommé
+                    massing_match = re.match(r'^scenario_([ABC])_massing$', img_key)
+                    if massing_match:
+                        data.setdefault('_massing_slide_idx', {})[massing_match.group(1)] = slide_idx
                     img_path = downloaded_images.get(img_key)
                     if img_path:
                         # v73.2.1 : maintain_aspect_ratio=True pour TOUTES les images

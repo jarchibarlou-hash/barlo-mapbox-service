@@ -167,10 +167,11 @@ def generate_gauge(score: float, max_score: float, scenario_label: str, output_p
     ax.set_aspect('equal')
     ax.axis('off')
 
-    # Arc dégradé — transition fluide vert → orange → rouge
+    # Arc dégradé : rouge à gauche (score 0) → orange → vert à droite (score 100),
+    # dans le même sens que l'aiguille (angle = pi * (1 - pct)).
     n_segments = 150
     for i in range(n_segments):
-        t = i / n_segments
+        t = 1 - i / n_segments
         # Interpolation de couleur : vert (0) → orange (0.5) → rouge (1)
         if t < 0.5:
             r = int(0x1E + (0xD4 - 0x1E) * t * 2)
@@ -840,16 +841,16 @@ def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value
     """
     cost_total = float(scenario.get('cost_total_fcfa', 0) or 0)
     budget = float(budget_fcfa_value or 0)
-    if budget <= 0:
-        budget = max(cost_total * 1.1, 1)
+    # Budget client inconnu : on ne l'invente pas (plus de « coût × 1,1 » qui affichait toujours « dans le budget »)
+    has_budget = budget > 0
 
-    # Calcul de la position
-    ratio = cost_total / budget if budget > 0 else 0
-    # Échelle : 0 à 150% du budget
-    scale_max = max(1.5 * budget, cost_total * 1.05)
+    ratio = cost_total / budget if has_budget else 0
+    scale_max = max(1.5 * budget, cost_total * 1.05) if has_budget else max(cost_total * 1.25, 1)
 
-    # Couleur selon position
-    if ratio <= 0.95:
+    if not has_budget:
+        bar_color = COLORS['dark']
+        label_pos = 'Budget client non renseigné'
+    elif ratio <= 0.95:
         bar_color = COLORS['green']
         label_pos = 'Dans le budget'
     elif ratio <= 1.05:
@@ -869,16 +870,17 @@ def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value
     # Coût scénario
     ax.barh([bar_y], [cost_total], height=0.42, color=bar_color, edgecolor='none')
 
-    # Marker budget client (ligne verticale)
-    ax.axvline(x=budget, color=COLORS['dark'], linewidth=2.5, linestyle='--', zorder=5)
-    ax.text(budget, 1.02, f"Budget client\n{_format_money(budget)} FCFA",
-            ha='center', va='bottom', fontsize=9.5, fontweight='bold',
-            color=COLORS['dark'])
+    # Marker budget client (ligne verticale), seulement si le budget est connu
+    if has_budget:
+        ax.axvline(x=budget, color=COLORS['dark'], linewidth=2.5, linestyle='--', zorder=5)
+        ax.text(budget, 1.02, f"Budget client\n{_format_money(budget)} FCFA",
+                ha='center', va='bottom', fontsize=9.5, fontweight='bold',
+                color=COLORS['dark'])
 
     # Marker coût scénario (texte au-dessus de la barre)
     ax.text(cost_total / 2, bar_y, f"{_format_money(cost_total)} FCFA",
             ha='center', va='center', fontsize=14, fontweight='bold',
-            color='white' if ratio > 0.4 else COLORS['dark'])
+            color='white' if (ratio > 0.4 or not has_budget) else COLORS['dark'])
 
     # Label position en bas à droite
     ax.text(scale_max * 0.99, 0.0, label_pos,
@@ -886,9 +888,10 @@ def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value
             color=bar_color)
 
     # Pourcentage du budget
-    pct = ratio * 100
-    ax.text(scale_max * 0.99, 0.18, f"{pct:.0f} % du budget",
-            ha='right', va='top', fontsize=9, color=COLORS['muted'])
+    if has_budget:
+        pct = ratio * 100
+        ax.text(scale_max * 0.99, 0.18, f"{pct:.0f} % du budget",
+                ha='right', va='top', fontsize=9, color=COLORS['muted'])
 
     ax.set_xlim(0, scale_max)
     ax.set_ylim(-0.1, 1.55)  # v74.16 — plus d'espace en haut pour le label budget

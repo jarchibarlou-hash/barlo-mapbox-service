@@ -2612,13 +2612,14 @@ function computeTypologyDrivenSdp(typologiesString, standing, targetUnitsFallbac
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── GRILLE DES TAILLES UNITAIRES (source de vérité unique) ─────────────────────
+// HAUT = clé produite par l'étape 8A pour « haut standing » (même grille que CONFORT)
 const UNIT_SIZES_V73 = {
-  T1: { ECONOMIQUE: 30, STANDARD: 35, CONFORT: 40, PREMIUM: 45 },
-  T2: { ECONOMIQUE: 45, STANDARD: 50, CONFORT: 60, PREMIUM: 70 },
-  T3: { ECONOMIQUE: 65, STANDARD: 75, CONFORT: 90, PREMIUM: 105 },
-  T4: { ECONOMIQUE: 80, STANDARD: 90, CONFORT: 110, PREMIUM: 135 },
-  T5: { ECONOMIQUE: 95, STANDARD: 105, CONFORT: 130, PREMIUM: 160 },
-  COMMERCE: { ECONOMIQUE: 50, STANDARD: 60, CONFORT: 70, PREMIUM: 90 },
+  T1: { ECONOMIQUE: 30, STANDARD: 35, CONFORT: 40, HAUT: 40, PREMIUM: 45 },
+  T2: { ECONOMIQUE: 45, STANDARD: 50, CONFORT: 60, HAUT: 60, PREMIUM: 70 },
+  T3: { ECONOMIQUE: 65, STANDARD: 75, CONFORT: 90, HAUT: 90, PREMIUM: 105 },
+  T4: { ECONOMIQUE: 80, STANDARD: 90, CONFORT: 110, HAUT: 110, PREMIUM: 135 },
+  T5: { ECONOMIQUE: 95, STANDARD: 105, CONFORT: 130, HAUT: 130, PREMIUM: 160 },
+  COMMERCE: { ECONOMIQUE: 50, STANDARD: 60, CONFORT: 70, HAUT: 70, PREMIUM: 90 },
 };
 const TYPO_ORDER_V73 = ["T1", "T2", "T3", "T4", "T5"];
 const CIRCULATION_COEFF_V73 = 1.15;
@@ -5206,7 +5207,7 @@ app.post("/compute-scenarios", (req, res) => {
     budget_range: Number(p.budget_range) || 0,
     budget_range_raw: String(p.budget_range || ""),
     budget_band: p.budget_band || "",
-    budget_tension: Number(p.budget_tension) || 0,
+    budget_tension: p.budget_tension || 0,
     standing_level: p.standing_level || "STANDARD",
     target_units: Number(p.target_units) || 0,
     rent_score: Number(p.rent_score) || 0,
@@ -7926,7 +7927,7 @@ app.post("/generate-massing", async (req, res) => {
       scenario_C_role: scenario_C_role || "",
       budget_range: Number(budget_range) || 0,
       budget_band: budget_band || "",
-      budget_tension: Number(budget_tension) || 0,
+      budget_tension: budget_tension || 0,
       standing_level: standing_level || "STANDARD",
       rent_score: Number(rent_score) || 0,
       capacity_score: Number(capacity_score) || 0,
@@ -9752,7 +9753,7 @@ app.post("/generate-texts", async (req, res) => {
     budget_range: Number(p.budget_range) || 0,
     budget_range_raw: String(p.budget_range || ""),
     budget_band: p.budget_band || "",
-    budget_tension: Number(p.budget_tension) || 0,
+    budget_tension: p.budget_tension || 0,
     standing_level: p.standing_level || "STANDARD",
     target_units: Number(p.target_units) || 0,
     rent_score: Number(p.rent_score) || 0,
@@ -9808,8 +9809,8 @@ app.post("/generate-texts", async (req, res) => {
     retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
     retrait_emprise_constructible: `${retr.emprise_constructible_m2 || 0} m²`,
     retrait_reduction_pct: `${retr.reduction_pct || 0}%`,
-    site_cos_regl: String(siteDiag.cos_regl || "2.5"),
-    site_ces_regl: String(siteDiag.ces_regl_pct || "60"),
+    site_cos_regl: String(siteDiag.cos_reglementaire || siteDiag.cos_regl || "2.5"),
+    site_ces_regl: String(siteDiag.ces_reglementaire_pct || siteDiag.ces_regl_pct || "60"),
     site_sdp_max: `${siteDiag.sdp_max_m2 || 0} m²`,
     site_emprise_max: `${siteDiag.emprise_max_m2 || 0} m²`,
     profil_posture: profil.posture || p.feasibility_posture || "BALANCED",
@@ -9821,7 +9822,7 @@ app.post("/generate-texts", async (req, res) => {
     override_lateral_gap_m: String(p.override_lateral_gap_m || ""),
     override_max_fp_m2: String(p.override_max_fp_m2 || ""),
     constraints_rationale: String(p.constraints_rationale || ""),
-    A_role: sA.role || "", A_fp: String(sA.fp_m2 || 0), A_levels: String(sA.levels || 0),
+    A_role: sA.role || "", A_fp: String(sA.fp_m2 || 0), A_levels: String(Math.max(0, (sA.levels || 1) - 1)), // R+X, comme /generate-pptx
     A_height: String(sA.height_m || 0), A_sdp: String(sA.sdp_m2 || 0),
     A_units: String(sA.total_units || 0), A_unit_summary: sA.unit_mix_detail || "",
     A_m2_par_logt: String(sA.m2_habitable_par_logement || 0),
@@ -9862,7 +9863,7 @@ app.post("/generate-texts", async (req, res) => {
     A_layout_mode: sA.layout_mode || "SUPERPOSE",
     A_split_layout: sA.split_layout ? JSON.stringify(sA.split_layout) : "",
     A_frais_M: `${sA.frais_annexes ? Math.round(sA.frais_annexes / 1e6) : 0}M`,
-    B_role: sB.role || "", B_fp: String(sB.fp_m2 || 0), B_levels: String(sB.levels || 0),
+    B_role: sB.role || "", B_fp: String(sB.fp_m2 || 0), B_levels: String(Math.max(0, (sB.levels || 1) - 1)),
     B_height: String(sB.height_m || 0), B_sdp: String(sB.sdp_m2 || 0),
     B_units: String(sB.total_units || 0), B_unit_summary: sB.unit_mix_detail || "",
     B_m2_par_logt: String(sB.m2_habitable_par_logement || 0),
@@ -9901,7 +9902,7 @@ app.post("/generate-texts", async (req, res) => {
     B_config_justif: sB.config_justification || "",
     B_layout_mode: sB.layout_mode || "SUPERPOSE",
     B_frais_M: `${sB.frais_annexes ? Math.round(sB.frais_annexes / 1e6) : 0}M`,
-    C_role: sC.role || "", C_fp: String(sC.fp_m2 || 0), C_levels: String(sC.levels || 0),
+    C_role: sC.role || "", C_fp: String(sC.fp_m2 || 0), C_levels: String(Math.max(0, (sC.levels || 1) - 1)),
     C_height: String(sC.height_m || 0), C_sdp: String(sC.sdp_m2 || 0),
     C_units: String(sC.total_units || 0), C_unit_summary: sC.unit_mix_detail || "",
     C_m2_par_logt: String(sC.m2_habitable_par_logement || 0),
@@ -10074,7 +10075,7 @@ app.post("/generate-pptx", async (req, res) => {
       budget_range: Number(p.budget_range) || 0,
       budget_range_raw: String(p.budget_range || ""),
       budget_band: p.budget_band || "",
-      budget_tension: Number(p.budget_tension) || 0,
+      budget_tension: p.budget_tension || 0,
       standing_level: p.standing_level || "STANDARD",
       target_units: Number(p.target_units) || 0,
       rent_score: Number(p.rent_score) || 0,
@@ -10119,8 +10120,8 @@ app.post("/generate-pptx", async (req, res) => {
       retrait_mitoyennete: String(retrD.mitoyennete_cotes || 0),
       retrait_emprise_constructible: `${retrD.emprise_constructible_m2 || 0} m²`,
       retrait_reduction_pct: `${retrD.reduction_pct || 0}%`,
-      site_cos_regl: String((diag.site || {}).cos_regl || "2.5"),
-      site_ces_regl: String((diag.site || {}).ces_regl_pct || "60"),
+      site_cos_regl: String((diag.site || {}).cos_reglementaire || (diag.site || {}).cos_regl || "2.5"),
+      site_ces_regl: String((diag.site || {}).ces_reglementaire_pct || (diag.site || {}).ces_regl_pct || "60"),
       orient_zone: orientD.zone_climatique || "",
       delta_BA_sdp: `${dBA.delta_sdp_m2 || 0} m² (${dBA.delta_sdp_pct || 0}%)`,
       delta_BA_cout: `${dBA.delta_cout_fcfa ? Math.round(dBA.delta_cout_fcfa / 1e6) : 0}M FCFA (${dBA.delta_cout_pct || 0}%)`,
@@ -10528,7 +10529,7 @@ app.post("/generate-pptx-premium", async (req, res) => {
       feasibility_posture: p.feasibility_posture || "BALANCED",
       scenario_A_role: p.scenario_A_role || "", scenario_B_role: p.scenario_B_role || "", scenario_C_role: p.scenario_C_role || "",
       budget_range: Number(p.budget_range) || 0, budget_range_raw: String(p.budget_range || ""),
-      budget_band: p.budget_band || "", budget_tension: Number(p.budget_tension) || 0,
+      budget_band: p.budget_band || "", budget_tension: p.budget_tension || 0,
       standing_level: p.standing_level || "STANDARD",
       rent_score: Number(p.rent_score) || 0, capacity_score: Number(p.capacity_score) || 0,
       mix_score: Number(p.mix_score) || 0, phase_score: Number(p.phase_score) || 0, risk_score: Number(p.risk_score) || 0,
@@ -10553,8 +10554,8 @@ app.post("/generate-pptx-premium", async (req, res) => {
       city: p.city || p.project_city || "Douala",
       project_address: p.project_address || "",
       site_area: String(p.site_area || 0),
-      site_cos_regl: String((diag.site || {}).cos_regl || "2.5"),
-      site_ces_regl: String((diag.site || {}).ces_regl_pct || "60"),
+      site_cos_regl: String((diag.site || {}).cos_reglementaire || (diag.site || {}).cos_regl || "2.5"),
+      site_ces_regl: String((diag.site || {}).ces_reglementaire_pct || (diag.site || {}).ces_regl_pct || "60"),
       retrait_avant: `${retr.avant_m || 0}m`,
       retrait_lateral: `${retr.lateral_m || 0}m`,
       retrait_arriere: `${retr.arriere_m || 0}m`,
@@ -10733,12 +10734,12 @@ function parseSitePolygonForPptx(raw) {
       return parseSitePolygonForPptx(arr);
     } catch (e) { /* fallthrough */ }
   }
-  // Comma+semicolon or space-separated
-  const parts = s.split(/[;\n]+/).map(x => x.trim()).filter(Boolean);
+  // "lat,lon|lat,lon" (format polygon_drafts / site_polygon), ou séparé par ; ou retour ligne
+  const parts = s.split(/[|;\n]+/).map(x => x.trim()).filter(Boolean);
   const pts = [];
   for (const part of parts) {
     const nums = part.split(/[,\s]+/).map(Number).filter(n => Number.isFinite(n));
-    if (nums.length >= 2) pts.push([nums[0], nums[1]]);
+    for (let i = 0; i + 1 < nums.length; i += 2) pts.push([nums[i], nums[i + 1]]);
   }
   return pts;
 }
@@ -11657,6 +11658,33 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
 </script></body></html>`;
 }
 
+// Retrouve la ligne PIPELINE d'un lead (colonne A "cf" ou barlo_temp_code, comme l'étape 8A).
+// Retourne { rowNum, headers, row } avec row complétée à la largeur des en-têtes, ou null.
+async function findPipelineRowByRef(ref) {
+  const want = String(ref || "").trim().toUpperCase();
+  if (!want) return null;
+  const headersData = await gasGet("readPipelineHeaders");
+  const headers = headersData.values && headersData.values[0];
+  if (!headers) return null;
+  const all = await gasGet("readPipelineAll");
+  const rows = all.values || [];
+  const btcIdx = headers.indexOf("barlo_temp_code");
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const cf = String(r[0] || "").trim().toUpperCase();
+    const btc = btcIdx >= 0 ? String(r[btcIdx] || "").trim().toUpperCase() : "";
+    if (cf === want || btc === want) {
+      const fresh = await gasGet("readPipelineRow", { row: i + 1 });
+      const row = fresh.values && fresh.values[0] ? [...fresh.values[0]] : null;
+      // Garde-fou : jamais d'écriture sur une ligne relue vide ou qui n'est plus celle du lead
+      if (!row || String(row[0] || "").trim().toUpperCase() !== cf) return null;
+      while (row.length < headers.length) row.push("");
+      return { rowNum: i + 1, headers, row };
+    }
+  }
+  return null;
+}
+
 // Endpoint : régénère le massing 3D depuis les unités persistées d'un lead+scénario
 // Body : { lead_ref: "BARLO-XXXX", scenario: "A"|"B"|"C", zoom?: 18.5, bearing?: 0, upload?: true }
 app.post("/api/regen-massing-from-units", async (req, res) => {
@@ -11886,24 +11914,19 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       let appliedToPipeline = false;
       if (apply_to_pipeline && publicUrl && APPS_SCRIPT_URL) {
         try {
-          const refsData = await gasGet("readPipelineRefs");
-          const pipeRow = (refsData.rows || []).find(r => String(r.ref || r.barlo_code || "").trim().toUpperCase() === lead_ref.toUpperCase());
-          if (pipeRow && pipeRow.rowNum) {
-            const currentRow = await gasGet("readPipelineRow", { row: pipeRow.rowNum });
-            const headers = await gasGet("readPipelineHeaders");
-            const colName = `massing_scn_${scen}_img_url`;
-            const colIdx = (headers.headers || []).indexOf(colName);
-            if (colIdx >= 0) {
-              const newRow = (currentRow.row || []).slice();
-              newRow[colIdx] = publicUrl;
-              await gasPost("writePipelineRow", { rowNum: pipeRow.rowNum, row: newRow });
-              appliedToPipeline = true;
-              console.log(`[REGEN-3D] URL appliquée à PIPELINE row ${pipeRow.rowNum} col ${colName}`);
-            } else {
-              console.warn(`[REGEN-3D] colonne ${colName} introuvable dans PIPELINE headers`);
-            }
-          } else {
+          const found = await findPipelineRowByRef(lead_ref);
+          const colName = `massing_scn_${scen}_img_url`;
+          const colIdx = found ? found.headers.indexOf(colName) : -1;
+          if (!found) {
             console.warn(`[REGEN-3D] lead_ref ${lead_ref} introuvable dans PIPELINE`);
+          } else if (colIdx < 0) {
+            console.warn(`[REGEN-3D] colonne ${colName} introuvable dans PIPELINE headers`);
+          } else {
+            const newRow = found.row.slice();
+            newRow[colIdx] = publicUrl;
+            await gasPost("writePipelineRow", { rowNum: found.rowNum, row: newRow });
+            appliedToPipeline = true;
+            console.log(`[REGEN-3D] URL appliquée à PIPELINE row ${found.rowNum} col ${colName}`);
           }
         } catch (e) {
           console.warn(`[REGEN-3D] apply_to_pipeline failed: ${e.message}`);
