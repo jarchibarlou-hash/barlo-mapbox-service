@@ -17,6 +17,12 @@ function createFakeSupabase() {
       eq(col, val) { filters.push([col, val]); return q; },
       order() { return q; },
       maybeSingle() { single = true; return q; },
+      insert(payload) {
+        for (const row of Array.isArray(payload) ? payload : [payload]) {
+          rowsOf(table).push(Object.assign((DEFAULTS[table] || (() => ({})))(), JSON.parse(JSON.stringify(row))));
+        }
+        return Promise.resolve({ data: null, error: null });
+      },
       upsert(payload, opts) {
         calls.upsert++;
         const keys = String((opts && opts.onConflict) || "").split(",").map(s => s.trim()).filter(Boolean);

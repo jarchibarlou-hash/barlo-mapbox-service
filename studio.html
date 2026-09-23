@@ -405,7 +405,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.8-TRAVAUX</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.9-VALIDATION</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6063,7 +6063,7 @@ function renderV12Strip(L) {
     const m = v12Models && v12Models[L];
     if (!el || !m) return;
     const s = m.suggested || {};
-    const eng = (m.effective && m.effective.engine) || {};
+    const eng = v12DisplayEngine(m);
     const v = x => (x && x.value != null) ? x.value : null;
     const num = n => (n == null || n === "") ? "—" : Number(n).toLocaleString("fr-FR");
     const levelsTxt = n => n ? (n > 1 ? `R+${n - 1}` : "RDC") : "—";
@@ -6127,7 +6127,7 @@ function renderV12Strip(L) {
                 "Travaux du projet complet : phase 1 + phase 2, aux prix d'aujourd'hui (la phase 2 se finance plus tard). Hors honoraires, études, permis et assurances.");
         })()}
       </div>
-      ${v12RulesLine(m)}`;
+      ${v12RulesLine(m, eng)}`;
     const tabState = $(`cTabState${L}`);
     if (tabState) {
         const icon = { SUGGESTED: "", EDITING: " ●", VALIDATED: " ✓", ANALYZED: " ✓", OUTDATED: " ⚠" }[m.status] || "";
@@ -6136,12 +6136,43 @@ function renderV12Strip(L) {
     }
 }
 
+// v12.9 — Chiffres affichés : ceux de la géométrie VALIDÉE s'il y en a une (dessinée dans le cockpit),
+// sinon ceux du moteur. La suggestion BARLO reste affichée en référence (« BARLO … »).
+function v12DisplayEngine(m) {
+    const eng = (m.effective && m.effective.engine) || {};
+    const act = m.actual;
+    if (!act) return eng;
+    const cosOver = (act.checks || []).some(c => c.code === "COS_DEPASSE");
+    return Object.assign({}, eng, {
+        sdp_m2: act.sdp_m2, fp_m2: act.emprise_sol_m2, levels: act.levels_max,
+        total_units: act.units_count, unit_mix_detail: act.unit_mix_detail,
+        cos: act.occupation_sol_pct != null ? act.occupation_sol_pct / 100 : eng.cos,
+        cos_ratio_pct: act.cos_ratio_pct, cos_compliance: cosOver ? "AMBITIEUX_HORS_COS" : "CONFORME",
+        cost_total_fcfa: act.cost_travaux_fcfa, budget_fit: act.budget_fit, budget_needed_fcfa: act.budget_needed_fcfa,
+        budget_min_fcfa: act.budget_min_fcfa != null ? act.budget_min_fcfa : eng.budget_min_fcfa,
+        budget_max_fcfa: act.budget_max_fcfa != null ? act.budget_max_fcfa : eng.budget_max_fcfa,
+        budget_gap_pct: act.budget_gap_pct,
+        phase_2: null,   // la géométrie validée remplace le phasage suggéré
+        limits: Object.assign({}, eng.limits || {}, act.buildable_area_m2 != null ? { buildable_area: act.buildable_area_m2 } : {}),
+    });
+}
+
 // Ligne « règles du rôle » : limite qui s'impose, adaptations du programme, signal d'infaisabilité
 const V12_LIMIT_LABEL = { budget: "budget, réserve comprise", capacity: "place sur le terrain" };
-function v12RulesLine(m) {
-    const eng = (m.effective && m.effective.engine) || {};
+function v12RulesLine(m, engShown) {
+    const eng = engShown || (m.effective && m.effective.engine) || {};
     const L = eng.limits;
     if (!L) return "";
+    // v12.9 — scénario validé : les points à revoir viennent de la géométrie réelle (unité par unité)
+    if (m.actual) {
+        const act = m.actual;
+        const when = act.computed_at ? new Date(act.computed_at).toLocaleDateString("fr-FR") : "";
+        const lines = (act.checks || []).map(c =>
+            `<span style="color:${c.level === "error" ? "var(--brick2)" : "var(--amber)"};font-weight:700">⚠ ${esc(c.message)}</span>`);
+        const ok = lines.length ? "" : `<span style="color:var(--forest);font-weight:700">✓ Géométrie conforme : zone constructible, COS, pas de superposition.</span> `;
+        const head = `Chiffres issus de ta géométrie validée${m.revision ? ` (révision ${m.revision}${when ? ", " + when : ""})` : ""}${m.status === "OUTDATED" ? " · la suggestion BARLO a changé depuis : à revoir" : ""}`;
+        return `<div class="c-hint" style="margin-top:.4rem" title="${escAttr(act.conventions || "")}">${ok}${lines.join(" ")}${lines.length ? "<br>" : ""}${esc(head)}</div>`;
+    }
     const parts = [];
     if (L.binding && L.sdp_max) parts.push(`Limite qui s'impose : ${V12_LIMIT_LABEL[L.binding] || L.binding} (${Number(L.sdp_max).toLocaleString("fr-FR")} m² de SDP max)`);
     const ad = (eng.adaptations || []).filter(a => a.kind !== "PHASE_2");
@@ -6962,12 +6993,63 @@ async function validateScenarioImplantation(label) {
             return;
         }
         const geomCount = data.geometryPersisted || 0;
-        showToast(`✅ Scénario ${label} validé et enregistré : ${s.units.length} unités · ${Math.round(actualArea)}m² (cible ${totalArea}m²) · ${geomCount} géom persistée${geomCount > 1 ? "s" : ""}`);
         console.log("[BARLO validate] POST OK:", data);
+        // v12.9 — chiffres réels du scénario recalculés depuis la géométrie validée
+        try {
+            const act = await validateScenarioV12(label);
+            const errs = act ? (act.checks || []).filter(c => c.level === "error") : [];
+            showToast(act
+                ? (errs.length
+                    ? `⚠ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${errs.length} point(s) à revoir (voir le bandeau)`
+                    : `✅ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${act.emprise_sol_m2} m² au sol, tout est conforme`)
+                : `✅ Scénario ${label} enregistré : ${s.units.length} unités · ${geomCount} géom persistée${geomCount > 1 ? "s" : ""}`, errs.length > 0);
+        } catch (vErr) {
+            showToast(`Géométrie enregistrée, mais recalcul du scénario impossible : ${vErr.message}`, true);
+        }
     } catch (err) {
         console.error("[BARLO validate] POST error:", err);
         showToast(`❌ Erreur réseau enregistrement : ${err.message}`, true);
     }
+}
+
+// v12.9 — Unités dessinées telles que les voient la 3D ET la validation (une seule traduction).
+// R+X de l'unité ; vide → R+X du scénario.
+function geometryUnitsPayload(label) {
+    const s = cockpitState.scenarios[label] || {};
+    return (s.units || []).filter(u => u.polygon && u.polygon.length >= 3).map((u, i) => ({
+        unit_index: u.unit_index || (i + 1),
+        unit_type: u.unit_type || "AUTRE",
+        unit_name: u.unit_name || "",
+        unit_size_m2: Number(u.unit_size_m2) || 0,
+        polygon: u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) })),
+        etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : (Number(s.levels) || 0),
+        pilotis: !!u.pilotis,
+        sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
+        hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
+        niveau_depart_etage: u.niveau_depart_etage != null ? Number(u.niveau_depart_etage) : null,
+        altitude_base_m: u.altitude_base_m != null ? Number(u.altitude_base_m) : null,
+        rez_jardin: !!u.rez_jardin,
+        parking_ss: !!u.parking_ss,
+        terrasse: !!u.terrasse,
+        balcon: !!u.balcon
+    }));
+}
+
+// v12.9 — Validation : le serveur recalcule les chiffres du scénario depuis la géométrie dessinée
+// (SDP, emprise, COS, zone constructible, superpositions, coût des travaux, budget) et les enregistre.
+async function validateScenarioV12(label) {
+    const ref = v12Ref();
+    if (!ref || !currentBody8D) return null;
+    const units = geometryUnitsPayload(label);
+    if (!units.length) return null;
+    const r = await fetch(`${API}/api/scenarios/${encodeURIComponent(ref)}/${label}/validate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ units, lead: currentBody8D })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    await syncScenarioModels();
+    return d.actual;
 }
 
 // v11.11-3D-SYNC — Régénère l'image massing 3D depuis les unités éditées
@@ -6988,24 +7070,7 @@ async function regenMassing3D(label, hiddenIds, hiddenLabels) {
         // v11.15 : envoie les unités DIRECT DANS LE BODY (source cockpit RAM),
         // plus besoin de valider en base d'abord. Chaque édition Revit-mode
         // (drag, offset, resize, ...) est immédiatement reflétée sans persistance intermédiaire.
-        const unitsPayload = (s.units || []).filter(u => u.polygon && u.polygon.length >= 3).map((u, i) => ({
-            unit_index: u.unit_index || (i + 1),
-            unit_type: u.unit_type || "AUTRE",
-            unit_name: u.unit_name || "",
-            unit_size_m2: Number(u.unit_size_m2) || 0,
-            polygon: u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) })),
-            // R+X de l'unité ; vide → R+X du scénario
-            etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : (Number(s.levels) || 0),
-            pilotis: !!u.pilotis,
-            sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
-            hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
-            niveau_depart_etage: u.niveau_depart_etage != null ? Number(u.niveau_depart_etage) : null,
-            altitude_base_m: u.altitude_base_m != null ? Number(u.altitude_base_m) : null,
-            rez_jardin: !!u.rez_jardin,
-            parking_ss: !!u.parking_ss,
-            terrasse: !!u.terrasse,
-            balcon: !!u.balcon
-        }));
+        const unitsPayload = geometryUnitsPayload(label);
         // Envoie aussi le polygone parcelle GPS pour éviter la relecture polygon_drafts
         const parcelGeo = (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null;
         const res = await fetch(`${API}/api/regen-massing-from-units`, {

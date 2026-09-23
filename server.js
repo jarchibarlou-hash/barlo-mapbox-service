@@ -11007,12 +11007,15 @@ function costOverridesFromRows(rows) {
 // Vue « modèle » d'un scénario pour le studio (suggestion, surcharges, valeurs effectives, état).
 // engineScenario = scénario du calcul effectif (avec surcharges) : le studio affiche ses chiffres
 // sans rien recalculer lui-même.
-function scenarioModelView(letter, row, engineScenario, siteArea) {
+function scenarioModelView(letter, row, engineScenario, siteArea, lead) {
   const role = ScenarioModel.roleOf(letter);
   const suggested = (row && row.suggested) || null;
   const overrides = (row && row.overrides) || {};
   const e = engineScenario || null;
   const site = Number(siteArea) || 0;
+  // v12.9 — géométrie validée : coût recalculé avec le coût/m² effectif du moment (saisie éventuelle)
+  const actual = (row && row.actual) ? Object.assign({}, row.actual) : null;
+  if (actual && lead) Object.assign(actual, actualCostView(actual, role, effectiveCostPerM2(row, lead.standing_level, role), lead.budget_range));
   return {
     scenario: letter,
     role,
@@ -11046,7 +11049,7 @@ function scenarioModelView(letter, row, engineScenario, siteArea) {
         rules: e.role_rules_v12 || null,
       } : null,
     },
-    actual: (row && row.actual) || null,
+    actual,
     analysis: (row && row.analysis) || null,
     suggested_at: (row && row.suggested_at) || null,
     validated_at: (row && row.validated_at) || null,
@@ -11155,7 +11158,7 @@ app.post("/api/scenarios/:ref/sync", async (req, res) => {
     await mergeLeadOverridesFromPipeline(p);
     const r = await getOrComputeScenarioSet(p);
     const models = {};
-    for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k], p.site_area);
+    for (const k of ["A", "B", "C"]) models[k] = scenarioModelView(k, r.rows[k], r.scenarios[k], p.site_area, p);
     res.json({ ok: true, ref, from_store: r.fromStore, inputs_hash: r.hash, persisted: Object.keys(r.rows).length > 0, store_error: r.storeError || null, site: r.site || null, models });
   } catch (err) {
     console.error(`[V12 SYNC] ${ref} : ${err.message}`);
@@ -11204,6 +11207,79 @@ app.post("/api/lead-rules/:ref/segments", async (req, res) => {
     res.json({ ok: true, ref, segments });
   } catch (err) {
     if (isMissingTableError(err)) { logV12Missing(err); return res.status(503).json({ ok: false, error: "Tables v12 absentes : appliquer migration_v12_scenarios.sql" }); }
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── v12.9 — VALIDATION : la géométrie RÉELLE des unités dessinées devient les chiffres du scénario ──
+// Coût des travaux d'une géométrie validée : (SDP + sous-sols) × coût/m² effectif du scénario × 1,05 (VRD),
+// comparé à la fourchette du client avec la réserve du rôle.
+function actualCostView(actual, role, costPerM2, budgetRaw) {
+  const cpm = Number(costPerM2) || 0;
+  const cost = Math.round(((Number(actual.sdp_m2) || 0) + (Number(actual.sous_sols_m2) || 0)) * cpm * 1.05);
+  const target = Number(ScenarioRules.DEFAULT_RULES[role] && ScenarioRules.DEFAULT_RULES[role].budget_target) || 1;
+  const range = ScenarioRules.parseBudgetRange(budgetRaw);
+  const need = Math.round(cost / target);
+  return {
+    cost_per_m2: cpm, cost_travaux_fcfa: cost, budget_needed_fcfa: need,
+    budget_fit: ScenarioRules.budgetStatus(need, range),
+    budget_min_fcfa: range ? range.min : null, budget_max_fcfa: range ? range.max : null,
+    budget_gap_pct: range && range.max > 0 ? Math.round((need / range.max - 1) * 100) : null,
+    reserve_pct: target < 1 ? Math.round((1 - target) * 100) : null,
+  };
+}
+function effectiveCostPerM2(row, standing, role) {
+  const eff = ScenarioModel.effective(row && row.overrides, "cost_per_m2", row && row.suggested && row.suggested.cost_per_m2);
+  if (eff && Number(eff.value) > 0) return Number(eff.value);
+  const s = ScenarioModel.suggestedCostPerM2(standing, role);
+  return Number(s.value) || ScenarioModel.COST_GRID.STANDARD[role];
+}
+app.post("/api/scenarios/:ref/:scn/validate", async (req, res) => {
+  const ref = String(req.params.ref || "").trim();
+  const scn = String(req.params.scn || "").toUpperCase();
+  if (!["A", "B", "C"].includes(scn)) return res.status(400).json({ ok: false, error: "scénario A, B ou C" });
+  const body = req.body || {};
+  const units = Array.isArray(body.units) ? body.units.filter(u => u && Array.isArray(u.polygon) && u.polygon.length >= 3) : [];
+  if (!units.length) return res.status(400).json({ ok: false, error: "aucune unité dessinée à valider" });
+  if (units.length > 200) return res.status(400).json({ ok: false, error: "trop d'unités (200 max)" });
+  const p = Object.assign({}, body.lead || {}, { lead_id: ref });
+  const sb = getLeadUnitsSupabase();
+  if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré" });
+  try {
+    const rows = await loadScenarioRows(sb, ref);
+    let leadRules = {};
+    try { leadRules = await loadLeadRules(sb, ref); } catch (e) { console.warn(`[V12 VALIDATE] ${ref} : règles du terrain illisibles : ${e.message}`); }
+    const role = ScenarioModel.roleOf(scn);
+    const lc = parseLeadConstraints(p);
+    const cosSol = (lc.regulatory && lc.regulatory.ignore_cos) ? 0 : ScenarioRules.cosSolForZone(p.zoning_type).value;
+    const actual = SiteGeometry.scenarioActual(units, {
+      site_polygon: String(p.site_polygon || p.site_polygon_points || ""),
+      segments: engineSegments(leadRules),
+      site_area: Number(p.site_area) || 0,
+      cos_sol: cosSol,
+    });
+    const prev = rows[scn];
+    const now = new Date().toISOString();
+    Object.assign(actual, actualCostView(actual, role, effectiveCostPerM2(prev, p.standing_level, role), p.budget_range),
+      { computed_at: now, source: ScenarioModel.SOURCE.GEOMETRY_CALCULATION });
+    const revision = ((prev && prev.revision) || 0) + 1;
+    const { error } = await sb.from("sb_scenarios").upsert({
+      lead_ref: ref, scenario: scn, role, actual, status: ScenarioModel.STATUS.VALIDATED,
+      validated_at: now, revision, updated_at: now,
+    }, { onConflict: "lead_ref,scenario" });
+    if (error) throw error;
+    // Historique : chaque validation est conservée (géométrie + chiffres), jamais écrasée
+    const { error: revErr } = await sb.from("sb_scenario_revisions").insert({
+      lead_ref: ref, scenario: scn, revision,
+      snapshot: { actual, units, overrides: (prev && prev.overrides) || {}, validated_at: now },
+    });
+    if (revErr) console.warn(`[V12 VALIDATE] ${ref}/${scn} : historique non enregistré : ${revErr.message}`);
+    const after = await loadScenarioRows(sb, ref);
+    console.log(`[V12 VALIDATE] ${ref}/${scn} r${revision} : SDP ${actual.sdp_m2} m², emprise ${actual.emprise_sol_m2} m², ${actual.checks.filter(c => c.level === "error").length} alerte(s)`);
+    res.json({ ok: true, ref, scenario: scn, revision, actual, model: scenarioModelView(scn, after[scn], null, p.site_area, p) });
+  } catch (err) {
+    if (isMissingTableError(err)) { logV12Missing(err); return res.status(503).json({ ok: false, error: "Tables v12 absentes : appliquer migration_v12_scenarios.sql" }); }
+    console.error(`[V12 VALIDATE] ${ref}/${scn} : ${err.message}`);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
