@@ -1195,12 +1195,7 @@ def assemble_pptx(data, template_path, output_path):
                 shp.height = Emu(2286000)    # 2.5"
             except Exception:
                 pass
-        # Etape 2 : inserer le donut bottom-center, w=5.0" h=2.0"
-        if cost_chart and os.path.exists(cost_chart):
-            slide17.shapes.add_picture(cost_chart,
-                Emu(2286000), Emu(3382200),  # left=2.5", top=3.7"
-                Emu(4572000), Emu(1828800))  # 5.0" × 2.0"
-            print(f"v74.19: Donut on slide 17 repositioned bottom-center", file=sys.stderr)
+        # v12.17d — plus d'anneau : il reprenait les % de la 1re colonne et chevauchait le tableau
 
     # ─── v74.17 SLIDES 7/10/13 — DISCIPLINE LAYOUT ────────────────────────────
     # v25 a montre que le shape TEXTE prend toute la slide (~5.5" haut),
@@ -1281,9 +1276,10 @@ def assemble_pptx(data, template_path, output_path):
 
             # Position: bottom-left, left-aligned under text columns
             # left=0.3", top=3.7", width=5.8", height=1.3"
-            tbl_left = Emu(274320)    # 0.3"
-            tbl_top = Emu(3383280)    # 3.7"
-            tbl_width = Emu(5303520)  # 5.8"
+            # v12.17d — centré sous les 3 colonnes (qui finissent à 3.5"), au-dessus du bandeau
+            tbl_left = Emu(1417320)   # 1.55"
+            tbl_top = Emu(3337560)    # 3.65"
+            tbl_width = Emu(6309360)  # 6.9"
             tbl_height = Emu(1188720) # 1.3"
 
             rows, cols = 4, 6  # header + 3 data rows
@@ -1291,14 +1287,7 @@ def assemble_pptx(data, template_path, output_path):
             tbl = table_shape.table
 
             # Column widths (proportional)
-            col_widths_emu = [
-                Emu(914400),   # Scenario (1.0")
-                Emu(914400),   # SDP (1.0")
-                Emu(1143000),  # Cout/m2 marche (1.25")
-                Emu(1143000),  # Cout/m2 ajuste (1.25")
-                Emu(1028700),  # Cout total (1.125")
-                Emu(1257300),  # Label (1.375")
-            ]
+            col_widths_emu = [Emu(822960), Emu(822960), Emu(1051560), Emu(1051560), Emu(1143000), Emu(1417320)]  # 6.9"
             for i, w in enumerate(col_widths_emu):
                 tbl.columns[i].width = w
 
@@ -1340,69 +1329,8 @@ def assemble_pptx(data, template_path, output_path):
         except Exception as e:
             print(f"Warning: could not insert budget table on slide 17: {e}", file=sys.stderr)
 
-    # Slide 18 -- Budget comparison table (same as slide 17, for risk/conclusion)
-    if len(slides_list) >= 18:
-        slide18 = slides_list[17]
-        try:
-            table_rows_18 = []
-            for sc_key in ['A', 'B', 'C']:
-                sdp_val = flat_data.get(f'{sc_key}_sdp', '0')
-                cost_m2_marche = flat_data.get(f'{sc_key}_cost_m2_marche', '0k')
-                cost_m2_ajuste = flat_data.get(f'{sc_key}_cost_m2_ajuste', '0k')
-                cost_total = flat_data.get(f'{sc_key}_cost_total', '0M FCFA')
-                budget_fit = flat_data.get(f'{sc_key}_budget_fit', '')
-                fit_label = {
-                    'DANS_BUDGET': 'BAS DE FOURCHETTE',
-                    'BUDGET_TENDU': 'HAUT DE FOURCHETTE',
-                    'HORS_BUDGET': 'AU-DESSUS',
-                }.get(budget_fit, budget_fit)
-                table_rows_18.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
-
-            tbl_left_18 = Emu(1371600)
-            tbl_top_18 = Emu(3703320)
-            tbl_width_18 = Emu(6400800)
-            tbl_height_18 = Emu(1371600)
-
-            table_shape_18 = slide18.shapes.add_table(4, 6, tbl_left_18, tbl_top_18, tbl_width_18, tbl_height_18)
-            tbl_18 = table_shape_18.table
-
-            col_widths_18 = [Emu(914400), Emu(914400), Emu(1143000), Emu(1143000), Emu(1028700), Emu(1257300)]
-            for i, w in enumerate(col_widths_18):
-                tbl_18.columns[i].width = w
-
-            headers_18 = ['Sc\u00e9nario', 'SDP', 'Co\u00fbt/m\u00b2\ngrille', 'Co\u00fbt/m\u00b2\nretenu', 'Co\u00fbt\ntravaux', 'Budget']
-            DARK_GREEN_18 = RGBColor(0x2C, 0x5F, 0x2D)
-            WHITE_18 = RGBColor(0xFF, 0xFF, 0xFF)
-            LIGHT_BG_18 = RGBColor(0xF5, 0xF5, 0xF0)
-
-            for ci, hdr in enumerate(headers_18):
-                cell = tbl_18.cell(0, ci)
-                cell.text = hdr
-                for para in cell.text_frame.paragraphs:
-                    para.alignment = PP_ALIGN.CENTER
-                    for run in para.runs:
-                        run.font.size = Pt(9)
-                        run.font.bold = True
-                        run.font.color.rgb = WHITE_18
-                cell.fill.solid()
-                cell.fill.fore_color.rgb = DARK_GREEN_18
-
-            for ri, row_data in enumerate(table_rows_18):
-                for ci, val in enumerate(row_data):
-                    cell = tbl_18.cell(ri + 1, ci)
-                    cell.text = val
-                    for para in cell.text_frame.paragraphs:
-                        para.alignment = PP_ALIGN.CENTER
-                        for run in para.runs:
-                            run.font.size = Pt(9)
-                            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
-                    if ri % 2 == 1:
-                        cell.fill.solid()
-                        cell.fill.fore_color.rgb = LIGHT_BG_18
-
-            print("Inserted budget comparison table on slide 18", file=sys.stderr)
-        except Exception as e:
-            print(f"Warning: could not insert budget table on slide 18: {e}", file=sys.stderr)
+    # v12.17d — plus de tableau en double sur la slide 18 (déjà slide 17 et comparatif slide 15) :
+    # il recouvrait les colonnes de texte et débordait sur le bandeau.
 
     # Slide 18 -- FALLBACK: Force-inject 3rd column (strategic/phasage) text
     # The template's 3rd column shape has static text instead of a {{invisible_strategic_text}} placeholder,
