@@ -441,7 +441,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.16-REDACTION</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.17-MASTER</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -7095,6 +7095,9 @@ async function validateScenarioImplantation(label) {
                     ? `⚠ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${errs.length} point(s) à revoir (voir le bandeau)`
                     : `✅ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${act.emprise_sol_m2} m² au sol, tout est conforme`)
                 : `✅ Scénario ${label} enregistré : ${s.units.length} unités · ${geomCount} géom persistée${geomCount > 1 ? "s" : ""}`, errs.length > 0);
+            // v12.17 — l'image 3D du PPT suit la géométrie validée (même action que « 🎨 Régénérer 3D »),
+            // lancée après quelques secondes pour laisser lire le résultat de la validation
+            setTimeout(() => { regenMassing3D(label).catch(e => console.warn("[REGEN-3D auto]", e)); }, 3500);
         } catch (vErr) {
             showToast(`Géométrie enregistrée, mais recalcul du scénario impossible : ${vErr.message}`, true);
         }

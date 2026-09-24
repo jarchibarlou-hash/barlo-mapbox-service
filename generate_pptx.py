@@ -120,11 +120,11 @@ def get_font_size_for_slide(slide_num):
     elif slide_num in [4, 7, 10, 13, 19]:
         return Pt(11)    # Site, financial, next steps -- bumped from 10
     elif slide_num == 16:
-        return Pt(12)    # Strategic arbitrage -- BUMPED from 10 (feedback "trop petit")
+        return Pt(11)    # v12.17 -- texte calibré pour tenir à 11 pt sans réduction
     elif slide_num in [17, 18]:
         return Pt(10)    # 3-column layout -- bumped from 9 (still dense but legible)
     elif slide_num == 20:
-        return Pt(12)    # Conclusion -- bumped from 11
+        return Pt(11)    # v12.17 -- conclusion calibrée pour tenir à 11 pt sans réduction
     else:
         return None       # Keep template font (15-16pt) for slides 1, 2, 15
 
@@ -437,14 +437,8 @@ def _apply_text_to_shape(shape, placeholder, text, slide_num):
     font_size = get_font_size_for_slide(slide_num)
     if font_size is not None:
         set_font_size_for_shape(shape, font_size)
-    if slide_num in [8, 11, 14, 16]:
-        enable_auto_shrink(shape, fontScale=95000)  # 95% min — quasi pas de shrink, garantit la 12pt
-    elif slide_num in [17, 18]:
-        enable_auto_shrink(shape, fontScale=80000)  # 80% — 3-col dense
-    elif slide_num in [5, 6, 9, 12]:
-        enable_auto_shrink(shape, fontScale=85000)  # 85% — scenario sommaires
-    else:
-        enable_auto_shrink(shape, fontScale=90000)  # 90% standard (vs 80% avant)
+    # v12.17 — « découper, ne pas réduire » : textes calibrés côté serveur pour tenir à cette taille
+    enable_auto_shrink(shape, fontScale=100000)
 
 # -------------------------------------------------------------
 # MAIN ASSEMBLY
@@ -879,33 +873,45 @@ def _plan_insert_slide_after(prs, target_slide_idx, image_path, title_text):
         except Exception:
             pass
 
-    # Fond dark plein slide (rectangle)
+    # v12.17 — mêmes codes que le master : fond #F2F2F2, titre vert Century Gothic, bandeau vert / rose
     slide_w = prs.slide_width
     slide_h = prs.slide_height
     bg = slide.shapes.add_shape(1, 0, 0, slide_w, slide_h)  # 1 = MSO_SHAPE.RECTANGLE
     bg.fill.solid()
-    bg.fill.fore_color.rgb = RGBColor(0x0B, 0x0F, 0x19)
+    bg.fill.fore_color.rgb = RGBColor(0xF2, 0xF2, 0xF2)
     bg.line.fill.background()
+    bar_h = Emu(123825)
+    for i, rgb in enumerate([RGBColor(0x1F, 0x5E, 0x55), RGBColor(0xE9, 0x4B, 0x78)]):
+        bar = slide.shapes.add_shape(1, int(slide_w / 2) * i, slide_h - bar_h, int(slide_w / 2), bar_h)
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = rgb
+        bar.line.fill.background()
 
-    # Titre (bandeau haut)
-    title_h = Emu(457200)  # 0.5"
-    title_box = slide.shapes.add_textbox(Emu(228600), Emu(228600), slide_w - Emu(457200), title_h)
+    # Titre (même place et même style que les titres du master)
+    title_h = Emu(310000)
+    title_box = slide.shapes.add_textbox(Emu(304800), Emu(140000), slide_w - Emu(609600), title_h)
     tf = title_box.text_frame
     tf.word_wrap = True
-    tf.text = title_text
+    tf.text = title_text.upper()
     for para in tf.paragraphs:
         para.alignment = PP_ALIGN.LEFT
         for run in para.runs:
             run.font.size = Pt(20)
             run.font.bold = True
-            run.font.color.rgb = RGBColor(0xFB, 0xBF, 0x24)
+            run.font.name = 'Century Gothic'
+            run.font.color.rgb = RGBColor(0x1F, 0x5E, 0x55)
 
-    # Image plan (occupe la surface principale, sous le titre, avec marge)
-    img_left = Emu(228600)
-    img_top = Emu(228600) + title_h + Emu(114300)
-    img_width = slide_w - Emu(457200)
-    img_height = slide_h - img_top - Emu(228600)
-    slide.shapes.add_picture(image_path, img_left, img_top, img_width, img_height)
+    # Image plan (sous le titre, au-dessus du bandeau, avec marge)
+    img_left = Emu(304800)
+    img_top = Emu(140000) + title_h + Emu(114300)
+    img_width = slide_w - Emu(609600)
+    img_height = slide_h - img_top - bar_h - Emu(114300)
+    # v12.17 — proportions de l'image respectées (plus d'étirement), centrée dans la zone
+    pic = slide.shapes.add_picture(image_path, img_left, img_top, height=img_height)
+    if pic.width > img_width:
+        pic.height = int(pic.height * img_width / pic.width)
+        pic.width = int(img_width)
+    pic.left = int(img_left + (img_width - pic.width) / 2)
 
     # Réordonner via XML : la slide ajoutée est en dernier, on la déplace après target_slide_idx
     xml_slides = prs.slides._sldIdLst
@@ -1446,17 +1452,7 @@ def assemble_pptx(data, template_path, output_path):
             Emu(182880), Emu(3657600), Emu(8686800), Emu(1188720))
         print("Inserted recap card on slide 20", file=sys.stderr)
 
-    # -- Final auto-shrink pass for any text-heavy shapes not yet handled --
-    # Uses fontScale=80000 (80% minimum) to prevent over-shrinking
-    shrink_count = 0
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                text_content = shape.text_frame.text.strip()
-                if len(text_content) > 150:
-                    enable_auto_shrink(shape, fontScale=80000)
-                    shrink_count += 1
-    print(f"Auto-shrink applied to {shrink_count} text shapes (fontScale=80000)", file=sys.stderr)
+    # v12.17 — plus de passe de réduction à 80 % : les textes sont calibrés pour tenir (lib/ppt-fit.js)
 
     # v75.2 — Insertion des slides "Plan d'implantation" APRÈS chaque slide massing
     # Best-effort : n'échoue jamais le PPTX principal, log-only en cas d'erreur.

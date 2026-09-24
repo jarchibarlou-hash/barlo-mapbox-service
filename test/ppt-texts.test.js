@@ -56,7 +56,7 @@ test("surfaces des logements : même critère que le score, commerces exclus", (
   const { t } = render();
   for (const k of ["B", "C"]) assert.doesNotMatch(t[`scenario_${k}_risk_text`], /refus de permis|trop exigus/, `${k} cohérent avec le standing`);
   assert.match(t.scenario_A_risk_text, /42 m² en moyenne/, "A : (48 + 35) / 2, sans le commerce");
-  assert.match(t.scenario_B_summary_text, /Surface moyenne par logement : 29 m² contre 42 m²/);
+  assert.match(t.scenario_B_summary_text, /29 m² par logement contre 42 m²/);
 });
 
 test("coquilles et renvois fragiles", () => {
@@ -83,4 +83,42 @@ test("A dessiné avec un autre programme : signalé, et B / C présentés comme 
   assert.ok(sc.diagnostic.constats_v12.some(c => c.code === "PROGRAMME_A_DIFFERENT"));
   assert.match(t.scenario_B_summary_text, /variante équilibrée/);
   assert.doesNotMatch(t.scenario_B_summary_text, /conserve le même programme/);
+});
+
+// v12.17 — « découper, ne pas réduire » : chaque texte tient dans sa zone à la taille prévue
+const Fit = require("../lib/ppt-fit");
+function renderLead(lead, rows) {
+  const sc = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}, null, rows || {}));
+  const diag = sc.diagnostic, r = diag.retraits_reglementaires || {};
+  const flat = { rec_scenario: diag.recommandation.scenario, rec_score: Math.round(diag.recommandation.score * 100),
+    retrait_avant: S.retraitAvantLabel(r), retrait_lateral: `${r.lateral_m || 0}m`, retrait_arriere: `${r.arriere_m || 0}m`,
+    retrait_mitoyennete: String(r.mitoyennete_cotes || 0), retrait_emprise_constructible: `${r.emprise_constructible_m2 || 0} m²`,
+    site_cos_regl: S.cosSolLabel(diag.site), site_emprise_max: `${(diag.site || {}).emprise_max_m2 || 0} m²`, profil_posture: lead.feasibility_posture };
+  for (const k of "ABC") {
+    const s = sc[k];
+    Object.assign(flat, { [`${k}_fp`]: String(s.fp_m2), [`${k}_levels`]: String(Math.max(0, (s.levels || 1) - 1)), [`${k}_sdp`]: String(s.sdp_m2),
+      [`${k}_units`]: String(s.total_units), [`${k}_unit_summary`]: s.unit_mix_detail, [`${k}_has_pilotis`]: String(!!s.has_pilotis),
+      [`${k}_cost_total`]: `${Math.round(s.cost_total_fcfa / 1e6)}M FCFA`, [`${k}_cost_m2`]: `${Math.round(s.cost_per_m2_sdp / 1000)}k FCFA/m²`,
+      [`${k}_budget_fit`]: s.budget_fit, [`${k}_cos_pct`]: String(s.cos_ratio_pct), [`${k}_cos_compliance`]: s.cos_compliance,
+      [`${k}_parking_places`]: String((s.parking_detail || {}).places_disponibles || 0), [`${k}_parking_deficit`]: String((s.parking_detail || {}).deficit || 0),
+      [`${k}_cost_unit`]: `${Math.round(s.cost_per_unit / 1e6)}M FCFA`, [`${k}_duree_chantier`]: `${s.duree_chantier_mois} mois`,
+      [`${k}_hono_bas_M`]: "12", [`${k}_hono_haut_M`]: "18", [`${k}_hono_taux_bas`]: "10%", [`${k}_hono_taux_haut`]: "15%" });
+  }
+  S.enrichFlatForTemplates(flat, lead, sc);
+  return S.buildTemplateTexts(flat, sc);
+}
+
+test("PPT FMM4 : chaque texte tient dans sa zone sans réduction de police", () => {
+  const t = renderLead(LEAD, ROWS);
+  const trop = Fit.fitAll(t).filter(r => !r.fits);
+  assert.deepEqual(trop.map(r => `${r.key} ${r.lines}/${r.capacity}`), []);
+});
+
+test("PPT programme chargé (6 logements, mitoyenneté, budget serré) : tient aussi", () => {
+  const big = { site_area: 600, envelope_w: 20, envelope_d: 30, zoning_type: "URBAIN", program_main: "Usage mixte (logement + activité)",
+    standing_level: "STANDARD", layout_mode: "SUPERPOSE", input_typologies: "T2=4,T3=2", target_units: 7,
+    feasibility_posture: "BALANCED", city: "Yaoundé", budget_range: "⭕ 100 000 – 150 000 € (~66–98 M FCFA)" };
+  const t = renderLead(big);
+  const trop = Fit.fitAll(t).filter(r => !r.fits);
+  assert.deepEqual(trop.map(r => `${r.key} ${r.lines}/${r.capacity}`), []);
 });

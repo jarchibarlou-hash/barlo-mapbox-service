@@ -156,7 +156,7 @@ def generate_radar(risk_scores: dict, scenario_label: str, output_path: str):
 # ═══════════════════════════════════════════════════════════════
 # 2. GAUGE — Score global de recommandation (arc dégradé)
 # ═══════════════════════════════════════════════════════════════
-def generate_gauge(score: float, max_score: float, scenario_label: str, output_path: str):
+def generate_gauge(score: float, max_score: float, scenario_label: str, output_path: str, recommended: bool = False):
     """
     score : recommendation_score (0-100) — depuis /compute-scenarios.
     Arc dégradé progressif vert→orange→rouge au lieu de segments plats.
@@ -228,13 +228,15 @@ def generate_gauge(score: float, max_score: float, scenario_label: str, output_p
     ax.text(0, -0.36, '/100', fontsize=12, ha='center', va='center',
             color=COLORS['muted'])
 
-    # Label qualitatif
-    if pct >= 0.7:
+    # Label qualitatif — v12.17 : « Recommandé » seulement pour le scénario réellement recommandé
+    if recommended:
         label, lcolor = 'Recommandé', COLORS['green']
-    elif pct >= 0.4:
-        label, lcolor = 'Acceptable', COLORS['orange']
+    elif pct >= 0.75:
+        label, lcolor = 'Favorable', COLORS['green']
+    elif pct >= 0.6:
+        label, lcolor = 'Correct', COLORS['orange']
     else:
-        label, lcolor = 'Risqué', COLORS['red']
+        label, lcolor = 'Fragile', COLORS['red']
 
     ax.text(0, -0.50, label, fontsize=11, fontweight='bold',
             ha='center', va='center', color=lcolor)
@@ -732,7 +734,7 @@ def generate_recap_card(scenario: dict, label: str, output_path: str):
 # 9. PANEL RISQUE — 3 charts séparés pour un scénario
 # ═══════════════════════════════════════════════════════════════
 def generate_risk_panel(risk_scores: dict, recommendation_score: float,
-                        scenario_label: str, output_dir: str):
+                        scenario_label: str, output_dir: str, recommended: bool = False):
     """
     Génère 3 PNG séparés : radar, gauge, barres.
     Retourne dict des chemins. Données RÉELLES uniquement.
@@ -742,7 +744,7 @@ def generate_risk_panel(risk_scores: dict, recommendation_score: float,
     bars_path  = os.path.join(output_dir, f'risk_bars_{scenario_label}.png')
 
     generate_radar(risk_scores, scenario_label, radar_path)
-    generate_gauge(recommendation_score, 100, scenario_label, gauge_path)
+    generate_gauge(recommendation_score, 100, scenario_label, gauge_path, recommended)
     generate_risk_bars(risk_scores, scenario_label, bars_path)
 
     return {'radar': radar_path, 'gauge': gauge_path, 'bars': bars_path}
@@ -931,7 +933,7 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
               f"rec_score={rec_score}", file=sys.stderr)
 
         if risk_scores:
-            paths = generate_risk_panel(risk_scores, rec_score, label, output_dir)
+            paths = generate_risk_panel(risk_scores, rec_score, label, output_dir, bool(sc.get('recommended')))
             chart_paths[f'scenario_{label}_risk_radar'] = paths['radar']
             chart_paths[f'scenario_{label}_risk_gauge'] = paths['gauge']
             chart_paths[f'scenario_{label}_risk_bars']  = paths['bars']
@@ -950,7 +952,7 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
     chart_paths['arbitrage_graph_'] = arb_path
 
     # Ventilation coûts (slide 17)
-    rec_label = data.get('recommended_scenario', data.get('recommended', 'C'))
+    rec_label = data.get('recommended_scenario') or data.get('recommended') or next((l for l in ['A', 'B', 'C'] if (scenarios.get(l) or {}).get('recommended')), 'C')
     rec_sc = scenarios.get(rec_label, {})
     if rec_sc:
         pie_path = os.path.join(output_dir, 'cost_breakdown.png')

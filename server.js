@@ -9111,7 +9111,7 @@ function buildTemplateTexts(flat, scenarios) {
   const memeProgramme = (x, y) => JSON.stringify(Object.entries(progSigTT(x)).sort()) === JSON.stringify(Object.entries(progSigTT(y)).sort());
   const TYPE_LABEL_TT = { COMMERCE: ["commerce", "commerces"], BUREAU: ["bureau", "bureaux"], T1: ["studio T1", "studios T1"],
     T2: ["logement T2", "logements T2"], T3: ["logement T3", "logements T3"], T4: ["logement T4", "logements T4"], T5: ["logement T5", "logements T5"] };
-  const progDesc = l => unitsOf(l).map(u => { const lb = TYPE_LABEL_TT[u.type] || [u.type, u.type]; return `${u.count} ${u.count > 1 ? lb[1] : lb[0]}`; }).join(" + ");
+  const progDesc = l => Object.entries(progSigTT(l)).map(([type, count]) => { const lb = TYPE_LABEL_TT[type] || [type, type]; return `${count} ${count > 1 ? lb[1] : lb[0]}`; }).join(" + ");
   const totalNivOf = l => (parseInt(f(`${l}_levels`)) || 0) + 1;
   const empriseOf = l => Math.round(Number(scObj(l).emprise_sol_m2) || Number(scObj(l).fp_m2) || parseInt(f(`${l}_fp`)) || 0);
   const nbMitoyTT = parseInt(f("retrait_mitoyennete")) || 0;
@@ -9121,8 +9121,8 @@ function buildTemplateTexts(flat, scenarios) {
   const philosophieDe = l => {
     if (l === "A") return philosophie.A;
     const same = memeProgramme(l, "A");
-    if (l === "B") return same ? philosophie.B : `propose une variante équilibrée du programme (${progDesc("B")}), comparée à votre budget avec une réserve de 10 % pour imprévus`;
-    return same ? philosophie.C : `propose une variante prudente du programme (${progDesc("C")}), avec une réserve de 20 % et un phasage si le budget l'exige`;
+    if (l === "B") return same ? philosophie.B : "propose une variante équilibrée du programme, comparée à votre budget avec une réserve de 10 % pour imprévus";
+    return same ? philosophie.C : "propose une variante prudente du programme, avec une réserve de 20 % et un phasage si le budget l'exige";
   };
   // ── Fiche scénario (slides 6/9/12) : décrit ce que le scénario est réellement ──
   function buildSummary(sc) {
@@ -9141,7 +9141,7 @@ function buildTemplateTexts(flat, scenarios) {
     const fpPct = siteArea > 0 ? Math.round(emprise / siteArea * 100) : 0;
     let narrativeArchi;
     if (validated) {
-      narrativeArchi = `**Implantation dessinée et validée sur plan** (voir le plan d'implantation) : bâtiment ${niveauxTxt(totalNiv)}${totalNiv <= 1 ? ", toutes les unités au rez-de-chaussée — la solution la plus simple à construire" : ""}.`;
+      narrativeArchi = `**Implantation dessinée et validée sur plan** (voir le plan d'implantation)${totalNiv <= 1 ? " : toutes les unités au rez-de-chaussée, la solution la plus simple à construire" : ""}.`;
     } else if (isSplit) {
       narrativeArchi = `Le bâti se découpe en **deux volumes distincts** : le **commerce** en façade et un **bâtiment de logements en retrait**${hasPilotis ? " **sur pilotis** (rez-de-chaussée libéré pour le stationnement et les circulations)" : ""}. Cette dissociation donne de la visibilité au commerce et préserve l'intimité des logements.`;
     } else if (totalNiv <= 1) {
@@ -9168,8 +9168,9 @@ function buildTemplateTexts(flat, scenarios) {
       ? `Avec deux côtés mitoyens, **seules les façades libres** captent la lumière naturelle. En climat tropical, l'apport solaire le plus défavorable vient de l'**ouest** (soleil de fin d'après-midi). À privilégier : **claustras** ou **auvents profonds** sur les façades exposées, pièces de vie côté nord / sud-est lorsque possible. La **ventilation traversante** reste l'élément clé du confort thermique sans climatisation.`
       : `Plusieurs façades libres permettent une **bonne distribution lumineuse**. En climat tropical, prévoir des **protections solaires** (auvents, claustras) sur les façades ouest et sud-ouest pour éviter la surchauffe en fin d'après-midi. La **ventilation traversante** est toujours à privilégier pour le confort thermique.`;
     const surfTxt = commM2 > 0 && habTotal > commM2 ? `surface utile **${habTotal} m²** (dont ${commM2} m² de commerce)` : `surface utile **${habTotal} m²**`;
-    const empriseText = `**Empreinte au sol** : **${fpPct} %** du terrain (${emprise} m² bâtis sur ${siteArea} m²)${hasPilotis ? " ; le rez-de-chaussée sous pilotis reste libre (stationnement, circulation)" : ""}.`;
-    return `Le **Scénario ${sc}** ${philosophieDe(sc)}.\n\n**${plural(units, "unité")}** sur **${sdp} m² SDP** — bâtiment **${niveauxTxt(totalNiv)}**, ${surfTxt}.\n\n${narrativeArchi}${contrainteText}\n\n**Programme détaillé :**\n${unitBullets}\n\n**Exposition et orientation :**\n${expositionText}\n\n${empriseText}`;
+    const empriseText = `emprise au sol **${emprise} m²** (${fpPct} % du terrain)${hasPilotis ? ", rez-de-chaussée sous pilotis laissé libre (stationnement, circulation)" : ""}`;
+    // v12.17 — mitoyenneté et exposition sont communes aux trois scénarios : dites une fois (slide 5)
+    return `Le **Scénario ${sc}** ${philosophieDe(sc)}.\n\n**${plural(units, "unité")}** sur **${sdp} m² SDP** — bâtiment **${niveauxTxt(totalNiv)}**, ${surfTxt}, ${empriseText}.\n\n${narrativeArchi}\n\n**Programme :**\n${unitBullets}`;
   }
   // ── Scenario financial builder (slides 7/10/13) ──
   // Directive BARLO : "EXPLIQUER DE FAÇON ACCESSIBLE LE RAISONNEMENT DES CALCULS",
@@ -9204,7 +9205,7 @@ function buildTemplateTexts(flat, scenarios) {
     const units = f(`${sc}_units`);
     // v74.16 — texte allégé : les 2 charts (calc + gauge) portent l'info chiffrée
     // Le texte reste pour la ventilation par lot, le coût/unité, les honoraires
-    return `**${costM2}/m² de SDP** (travaux et VRD) — ${marcheTxt}.\n\nLa ventilation des coûts suit la répartition standard pour ce type de programme :\n- **Gros œuvre & structure** (${ventGoPct}) : fondations, structure béton armé, dalles et voiles\n- **Second œuvre & finitions** (${ventSoPct}) : menuiseries, revêtements, étanchéité\n- **Lots techniques** (${ventLtPct}) : électricité, plomberie, CVC\n- **VRD** (${ventVrdPct}) : raccordements réseaux, voirie\n\n**Coût par unité** : ${costUnit}/unité (${costTotal} ÷ ${plural(nbUnitsFin, "unité")}).\n**Honoraires maîtrise d'œuvre** : ${honoBas}M à ${honoHaut}M FCFA (${honoTauxBas} à ${honoTauxHaut} des travaux), à ajouter au coût travaux.\n\nLes graphiques ci-dessous illustrent comment se construit ce coût total et comment il se positionne face à l'enveloppe client de **${budgetFcfa}**. Ces chiffres sont à affiner en phase APS/APD.`;
+    return `**${costM2}/m² de SDP** (travaux et VRD) — ${marcheTxt}.\n\n**Répartition des travaux** : gros œuvre et structure ${ventGoPct} · second œuvre et finitions ${ventSoPct} · lots techniques ${ventLtPct} · VRD ${ventVrdPct}.\n\n**Coût par unité** : ${costUnit} (${costTotal} ÷ ${plural(nbUnitsFin, "unité")}). **Honoraires de maîtrise d'œuvre** : ${honoBas}M à ${honoHaut}M FCFA (${honoTauxBas} à ${honoTauxHaut} des travaux), en plus du coût des travaux.\n\nLes graphiques ci-dessous détaillent le calcul et la position face à votre fourchette de **${budgetFcfa}**. Chiffres à affiner en APS / APD.`;
   }
   // ── Scenario risk builder (slides 8/11/14) ──
   // Directive BARLO : "ÊTRE SPÉCIFIQUE SUR LES RISQUES, pas de phrase générique"
@@ -9262,11 +9263,11 @@ function buildTemplateTexts(flat, scenarios) {
     const resV12 = reservePctV12(scObjV12);
     const resTxtV12 = resV12 ? `réserve pour imprévus de ${resV12} % comprise` : "sans réserve pour imprévus : en prévoir une en plus";
     if (budgetFit === "hors budget") {
-      budgetAnalysis = `Le coût des travaux de ${costTotal} dépasse votre fourchette de ${budgetFcfa} (${resTxtV12}). Il faudrait revoir le programme, le phaser ou compléter le financement. Probabilité : élevée. Impact : fort.`;
+      budgetAnalysis = `Le coût des travaux de ${costTotal} dépasse votre fourchette de ${budgetFcfa} (${resTxtV12}). Il faudrait revoir le programme, le phaser ou compléter le financement.`;
     } else if (budgetFit === "dans le haut de votre fourchette") {
-      budgetAnalysis = `Le coût des travaux de ${costTotal} ne tient que dans le haut de votre fourchette de ${budgetFcfa} (${resTxtV12}). La marge de manœuvre est réduite. Probabilité : moyenne. Impact : modéré.`;
+      budgetAnalysis = `Le coût des travaux de ${costTotal} ne tient que dans le haut de votre fourchette de ${budgetFcfa} (${resTxtV12}). La marge de manœuvre est réduite.`;
     } else if (budgetFit === "dans le budget") {
-      budgetAnalysis = `Le coût des travaux de ${costTotal} tient dans le bas de votre fourchette de ${budgetFcfa} (${resTxtV12}). Probabilité de dépassement : faible. Impact : limité.`;
+      budgetAnalysis = `Le coût des travaux de ${costTotal} tient dans le bas de votre fourchette de ${budgetFcfa} (${resTxtV12}).`;
     } else {
       budgetAnalysis = `Budget non renseigné : le coût des travaux de ${costTotal} n'a pas pu être comparé à une enveloppe.`;
     }
@@ -9275,7 +9276,7 @@ function buildTemplateTexts(flat, scenarios) {
     const lgM2 = logementsM2(sc);
     let compaciteAnalysis;
     if (lgM2 == null) compaciteAnalysis = "Pas de logement dans ce scénario.";
-    else if (stdV12 && stdV12.score < 0.6) compaciteAnalysis = `${stdV12.explication} Les logements (${lgM2} m² en moyenne) seraient à agrandir en APS pour correspondre au standing ${standing} visé.`;
+    else if (stdV12 && stdV12.score < 0.6) compaciteAnalysis = `${stdV12.explication.replace(/\.\s*$/, "")} (${lgM2} m² en moyenne) ; à agrandir en APS.`;
     else compaciteAnalysis = stdV12 ? `${stdV12.explication.replace(/\.\s*$/, "")} (${lgM2} m² en moyenne par logement).` : `${lgM2} m² en moyenne par logement.`;
     // v74.14 — buildRisk raccourci : 5 sections compactes, taille 12pt sans auto-shrink
     // v74.36 PUSH 20 : nomenclature "X niveaux" (Niv 1 = RDC, levels stocke = R+X)
@@ -9284,7 +9285,7 @@ function buildTemplateTexts(flat, scenarios) {
     const complexite = totalNivRisk <= 1 ? "structure simple de plain-pied" : totalNivRisk <= 3
       ? `structure courante sur ${totalNivRisk} niveaux (poteaux-poutres en béton armé, maîtrisés localement)`
       : `structure sur ${totalNivRisk} niveaux : fondations et circulation verticale à dimensionner avec soin`;
-    return `**Score global ${score}/100** — profil ${profil}.\n\n**1. Urbanisme** — ${urbanismeBullet}\n\n**2. Surfaces des logements** — ${compaciteAnalysis}\n\n**3. Budget** — ${budgetAnalysis}\n\n**4. Stationnement** — ${parking}.\n\n**5. Constructibilité** — ${complexite}${pilotisRisk ? " ; pilotis à dimensionner" : ""}.`;
+    return `**Score global ${score}/100** — profil ${profil}.\n**1. Urbanisme** — ${urbanismeBullet}\n**2. Surfaces des logements** — ${compaciteAnalysis}\n**3. Budget** — ${budgetAnalysis}\n**4. Stationnement** — ${parking}.\n**5. Constructibilité** — ${complexite}${pilotisRisk ? " ; pilotis à dimensionner" : ""}.`;
   }
   // ── Recommended scenario shortcuts ──
   const rec = f("rec_scenario") || "C";
@@ -9314,12 +9315,12 @@ function buildTemplateTexts(flat, scenarios) {
     return groupes.concat(autres);
   }
   const pointsALeverV12 = bloquantsV12.length
-    ? `\n\n**Points à lever avant le permis :**\n${regrouperV12(bloquantsV12).slice(0, 4).map(m => `- ${m}`).join("\n")}` : "";
+    ? `\n**Points à lever avant le permis** : ${regrouperV12(bloquantsV12).slice(0, 3).join(" ")}` : "";
   const bloquantsRecV12 = bloquantsV12.filter(c => c.portee === rec || c.portee === "projet");
   const aConfirmerV12 = constatsV12.filter(c => c.niveau === "attention" && c.portee === "projet"
     && ["FACADE_RUE_NON_INDIQUEE", "PROGRAMME_ECART_BESOIN", "ZONE_NON_RENSEIGNEE", "BUDGET_INCONNU"].includes(c.code));
-  const pointsRecV12 = (bloquantsRecV12.length ? `\n\n**Points à lever avant le permis :**\n${regrouperV12(bloquantsRecV12).slice(0, 4).map(m => `- ${m}`).join("\n")}` : "")
-    + (aConfirmerV12.length ? `\n\n**À confirmer :**\n${aConfirmerV12.slice(0, 3).map(c => `- ${c.message}`).join("\n")}` : "");
+  const pointsRecV12 = (bloquantsRecV12.length ? `\n**Points à lever avant le permis** : ${regrouperV12(bloquantsRecV12).slice(0, 2).join(" ")}` : "")
+    + (aConfirmerV12.length ? `\n**À confirmer** : ${aConfirmerV12.slice(0, 2).map(c => c.message).join(" ")}` : "");
   const forcesTxtV12 = recForcesV12.length ? recForcesV12.join(", ") : "meilleur score multicritère";
   const reserveTxtV12 = recReserveV12
     ? `la **réserve pour imprévus de ${recReserveV12} %** est déjà intégrée à la comparaison au budget`
@@ -9344,7 +9345,7 @@ function buildTemplateTexts(flat, scenarios) {
   // v74.18 — slide 3 : roles purs sans SDP (chiffres reveles dans les slides scenario detaillees)
   // v74.30 PUSH 11 — prefixer l'intro slide 3 par le bloc alerte si contraintes lead
   const constraintsAlertPrefix = flat._constraints_alert_text ? `${flat._constraints_alert_text}\n\n` : "";
-  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${plural(parseInt(f("target_units")) || parseInt(f("A_units")) || 0, "unité")}** en standing ${standingTxt}, budget de référence **${f("budget_fcfa")}**.\n\nLe site est encadré par un **COS** (part du terrain que le bâtiment peut couvrir) de **${f("site_cos_regl")}**, et des retraits réglementaires qui réduisent significativement l'emprise constructible.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : ${memeProgramme("B", "A") ? "le même programme en plans optimisés (surfaces réduites de 5 à 10 % selon la typologie)" : `une variante optimisée du programme (${progDesc("B")})`}, ${memeProgramme("B", "A") ? "comparé" : "comparée"} à votre budget avec une réserve de 10 % pour les imprévus.\n- **Scénario C — la prudence** : ${memeProgramme("C", "A") ? "le même programme en plans compacts (surfaces réduites de 10 à 20 %)" : `une variante compacte du programme (${progDesc("C")})`}, avec une réserve de 20 % ; si le budget ne suffit pas, le projet est réalisé en deux phases, sans renoncer à vos typologies.\n\nChaque scénario est analysé sous trois angles — **architectural**, **financier**, **réglementaire** — pour identifier celui qui s'aligne le mieux à vos priorités.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Zone constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- Emprise au sol maximale (COS) : **${f("site_emprise_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${standingTxt}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${mitoyCourt}**`;
+  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${plural(parseInt(f("target_units")) || parseInt(f("A_units")) || 0, "unité")}** en standing ${standingTxt}, budget de référence **${f("budget_fcfa")}**.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : ${memeProgramme("B", "A") ? "le même programme en plans optimisés (surfaces réduites de 5 à 10 % selon la typologie)" : `une variante optimisée du programme (${progDesc("B")})`}, ${memeProgramme("B", "A") ? "comparé" : "comparée"} à votre budget avec une réserve de 10 % pour les imprévus.\n- **Scénario C — la prudence** : ${memeProgramme("C", "A") ? "le même programme en plans compacts (surfaces réduites de 10 à 20 %)" : `une variante compacte du programme (${progDesc("C")})`}, avec une réserve de 20 % ; si le budget ne suffit pas, le projet est réalisé en deux phases, sans renoncer à vos typologies. Chacun est lu sous trois angles : **architectural**, **financier**, **réglementaire**.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Zone constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- COS **${f("site_cos_regl")}** (part du terrain que le bâtiment peut couvrir) : emprise au sol maximale **${f("site_emprise_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${standingTxt}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${mitoyCourt}**`;
   texts.slide_3_programme_text = "";
   // ── SLIDE 4: Terrain ──
   // v74.14 — slide 4 : focus EMPRISE (déduit slide 3), sans COS/CES (déjà mentionnés)
@@ -9365,7 +9366,7 @@ function buildTemplateTexts(flat, scenarios) {
   const mitoyTxtV12 = nbMitoyV12 > 0
     ? `**Mitoyenneté sur ${nbMitoyV12} côté${nbMitoyV12 > 1 ? "s" : ""}** : ${nbMitoyV12 > 1 ? "ces façades sont aveugles" : "cette façade est aveugle"} ; l'éclairage naturel et la ventilation traversante passent par les façades libres. C'est une **contrainte structurante** pour la conception des logements.`
     : `**Aucune mitoyenneté indiquée** : le bâtiment respecte un retrait sur tous ses côtés, ce qui permet d'ouvrir les façades et de ventiler naturellement.`;
-  texts.slide_5_text = `**Contexte** : terrain situé à ${f("city")}${f("site_cos_zone") ? ` (zone ${f("site_cos_zone")})` : ""}.\n\n${mitoyTxtV12}\n\n**Climat ${(f("orient_zone") || "tropical").toLowerCase()}** :\n- Soleil intense, pluies abondantes en saison humide\n- La **ventilation naturelle traversante** est essentielle pour le confort thermique sans sur-coût énergétique\n- Les protections solaires (auvents, claustras) prolongent la durabilité des façades\n\n**Repère volumétrique** : le scénario recommandé compte **${(parseInt(f("rec_levels")) || 0) + 1} niveau${(parseInt(f("rec_levels")) || 0) > 0 ? "x" : ""}** pour un programme de **${plural(parseInt(f(`${rec}_units`)) || 0, "unité")}**.`;
+  texts.slide_5_text = `**Contexte** : terrain situé à ${f("city")}${f("site_cos_zone") ? ` (zone ${f("site_cos_zone")})` : ""}.\n\n${mitoyTxtV12}\n\n**Climat ${(f("orient_zone") || "tropical").toLowerCase()}** :\n- Soleil intense, pluies abondantes en saison humide\n- La **ventilation naturelle traversante** est essentielle pour le confort thermique sans sur-coût énergétique\n- Protections solaires (auvents, claustras) sur les façades **ouest et sud-ouest** : le soleil de fin d'après-midi est le plus pénalisant\n\n**Repère volumétrique** : le scénario recommandé compte **${(parseInt(f("rec_levels")) || 0) + 1} niveau${(parseInt(f("rec_levels")) || 0) > 0 ? "x" : ""}** pour un programme de **${plural(parseInt(f(`${rec}_units`)) || 0, "unité")}**.`;
   // ── SLIDES 6/9/12: Scenario summaries ──
   texts.scenario_A_summary_text = buildSummary("A");
   // B vs A comparison
@@ -9375,20 +9376,20 @@ function buildTemplateTexts(flat, scenarios) {
   const costM2OfTT = l => Math.round((Number(scObj(l).cost_per_m2_sdp) || 0) / 1000);
   const coutInverseTT = (n("B_sdp") < n("A_sdp") && costOfTT("B") > costOfTT("A")) || (n("B_sdp") > n("A_sdp") && costOfTT("B") < costOfTT("A"));
   const lgA = logementsM2("A"), lgB = logementsM2("B");
-  const bVsA_comparison = `\n\nComparaison avec le Scénario A :\n`
-    + (memeProgramme("B", "A") ? "" : `Programme : ${progDesc("B")} contre ${progDesc("A")} pour A.\n`)
-    + `Par rapport au Scénario A, le Scénario B ${bVsA_verbe} (${f("A_sdp")} → ${f("B_sdp")} m²) et ferait passer le coût des travaux de ${f("A_cost_total")} à ${f("B_cost_total")}.`
-    + (coutInverseTT ? ` L'écart s'explique par le coût au m² retenu : ${costM2OfTT("B")}k FCFA/m² pour B contre ${costM2OfTT("A")}k FCFA/m² pour A.` : "")
-    + ` Emprise au sol : ${empriseOf("B")} m² contre ${empriseOf("A")} m².`
-    + (lgA && lgB ? ` Surface moyenne par logement : ${lgB} m² contre ${lgA} m².` : "")
-    + ` Score : ${f("B_score")}/100 contre ${f("A_score")}/100 pour A (voir le comparatif).`;
+  const bVsA_comparison = `\n\n**Par rapport à A :**\n`
+    + (memeProgramme("B", "A") ? "" : `- Programme de A : ${progDesc("A")}\n`)
+    + `- SDP ${f("B_sdp")} m² contre ${f("A_sdp")} m² ; travaux ${f("B_cost_total")} contre ${f("A_cost_total")}`
+    + (coutInverseTT ? ` (coût au m² retenu : ${costM2OfTT("B")}k contre ${costM2OfTT("A")}k FCFA)` : "")
+    + `\n- Emprise ${empriseOf("B")} m² contre ${empriseOf("A")} m²`
+    + (lgA && lgB ? ` ; ${lgB} m² par logement contre ${lgA} m²` : "")
+    + `\n- Score ${f("B_score")}/100 contre ${f("A_score")}/100`;
   texts.scenario_B_summary_text = buildSummary("B") + bVsA_comparison;
   // C vs A+B comparison
   // v12.12 — comparaison factuelle : chaque « plus / moins » est vérifié sur les chiffres
   const costOfV12 = l => Number(scenarios && scenarios[l] && scenarios[l].cost_total_fcfa) || 0;
   const cMoinsCherV12 = costOfV12("C") > 0 && costOfV12("C") <= costOfV12("A") && costOfV12("C") <= costOfV12("B");
   const phase2CV12 = scenarios && scenarios.C && scenarios.C.phase_2_v12;
-  const cVsAB_comparison = `\n\nComparaison avec les Scénarios A et B :\n${cMoinsCherV12 ? "Le Scénario C est le moins cher des trois" : "Le Scénario C n'est pas le moins cher des trois"} : ${f("C_cost_total")} de travaux${phase2CV12 ? " pour la phase 1" : ""}, contre ${f("A_cost_total")} pour A et ${f("B_cost_total")} pour B, avec une emprise au sol de ${empriseOf("C")} m² (${empriseOf("B")} m² pour B, ${empriseOf("A")} m² pour A).${phase2CV12 ? ` La phase 2 (${Math.round((phase2CV12.cost_fcfa || 0) / 1e6)}M FCFA aux prix actuels) porte le coût final à ${Math.round(((scenarios.C.cost_final_fcfa) || 0) / 1e6)}M FCFA.` : ""} Son score de ${f("C_score")}/100 est ${scoreRangV12("C")} (voir les graphiques d'arbitrage).`;
+  const cVsAB_comparison = `\n\n**Par rapport à A et B :**\n- ${cMoinsCherV12 ? "Le moins cher des trois" : "Pas le moins cher des trois"} : travaux ${f("C_cost_total")}${phase2CV12 ? " (phase 1)" : ""} contre ${f("A_cost_total")} (A) et ${f("B_cost_total")} (B)${phase2CV12 ? `\n- Phase 2 : ${Math.round((phase2CV12.cost_fcfa || 0) / 1e6)}M FCFA aux prix actuels, coût final ${Math.round(((scenarios.C.cost_final_fcfa) || 0) / 1e6)}M FCFA` : ""}\n- Emprise ${empriseOf("C")} m² (B : ${empriseOf("B")} m², A : ${empriseOf("A")} m²)\n- Score ${f("C_score")}/100 : ${scoreRangV12("C")}`;
   texts.scenario_C_summary_text = buildSummary("C") + cVsAB_comparison;
   // ── SLIDES 7/10/13: Financial ──
   texts.scenario_A_financial_text = buildFinancial("A");
@@ -9404,7 +9405,7 @@ function buildTemplateTexts(flat, scenarios) {
   // ── SLIDE 16: Arbitrage stratégique ──
   // Cross-ref aux 4 graphiques d'arbitrage
   // v74.12 — arbitrage clair : posture, scoring résumé, comparatif chiffré, recommandation directe
-  texts.strategic_arbitrage_text = `Programme **${f("program_main")}** en standing ${standingTxt}, posture **${f("feasibility_posture_fr")}**, enveloppe **${f("budget_fcfa")}**.\n\n**Système de scoring** — 7 critères pondérés :\nbudget (25 %) · risque (20 %) · capacité programme (13 %) · COS (12 %) · efficacité coût (12 %) · phasage (10 %) · standing (8 %).\n\n**Comparatif chiffré** (cf. graphiques d'arbitrage ci-dessous) :\n- **Scénario A** : ${f("A_cost_total")} · ${f("A_hab_m2_total")} m² utiles · ${plural(parseInt(f("A_units")) || 0, "unité")} · score **${f("A_score")}/100**\n- **Scénario B** : ${f("B_cost_total")} · ${f("B_hab_m2_total")} m² utiles · ${plural(parseInt(f("B_units")) || 0, "unité")} · score **${f("B_score")}/100**\n- **Scénario C** : ${f("C_cost_total")} · ${f("C_hab_m2_total")} m² utiles · ${plural(parseInt(f("C_units")) || 0, "unité")} · score **${f("C_score")}/100**\n\n**Lecture** : position de chaque scénario dans votre fourchette — A ${positionBudgetV12(scenarios && scenarios.A && scenarios.A.budget_fit)}, B ${positionBudgetV12(scenarios && scenarios.B && scenarios.B.budget_fit)}, C ${positionBudgetV12(scenarios && scenarios.C && scenarios.C.budget_fit)}.\n\n**Notre recommandation : Scénario ${rec} (${f("rec_score")}/100${egaliteRecTxt})** — points forts : ${forcesTxtV12}${recFaibleV12 ? ` ; point faible : ${recFaibleV12.critere}` : ""}.${pointsALeverV12}`;
+  texts.strategic_arbitrage_text = `Programme **${f("program_main")}** en standing ${standingTxt}, posture **${f("feasibility_posture_fr")}**, enveloppe **${f("budget_fcfa")}**.\n**Score sur 100**, 7 critères pondérés : budget 25 % · risque 20 % · nombre d'unités 13 % · COS et retraits 12 % · coût par unité 12 % · phasage 10 % · surfaces 8 %.\n**Scores** : A **${f("A_score")}** · B **${f("B_score")}** · C **${f("C_score")}** — budget : A ${positionBudgetV12(scenarios && scenarios.A && scenarios.A.budget_fit)}, B ${positionBudgetV12(scenarios && scenarios.B && scenarios.B.budget_fit)}, C ${positionBudgetV12(scenarios && scenarios.C && scenarios.C.budget_fit)}.\n**Notre recommandation : Scénario ${rec} (${f("rec_score")}/100${egaliteRecTxt})** — points forts : ${forcesTxtV12}${recFaibleV12 ? ` ; point faible : ${recFaibleV12.critere}` : ""}.${pointsALeverV12}`;
   // ── SLIDE 17: Conditions de réussite (donut chart à droite) ──
   // v74.19 — textes courts, bullets, bold sur chiffres et concepts clés
   texts.invisible_intro_text = `**Conditions de réussite** — maîtriser le coût, le phasage et les délais.`;
@@ -9422,7 +9423,7 @@ function buildTemplateTexts(flat, scenarios) {
   // ── SLIDE 19: Next steps — études et démarches APS/APD ──
   // v74.19 — bullets concis avec phases en bold
   texts.next_step_intro_text = `**Suite à la recommandation du Scénario ${rec}**, voici les études et démarches à engager pour passer à la phase opérationnelle. La timeline ci-dessus illustre l'enchaînement.`;
-  texts.next_step_scope_text = `**Périmètre des études à lancer :**\n\n- **APS** (Avant-Projet Sommaire) — **3-4 semaines**\nDéfinition des volumes, implantation, choix structurels. Valide la faisabilité technique et affine le budget.\n\n- **APD** (Avant-Projet Définitif) — **4-6 semaines**\nPlans détaillés, dimensionnement structure, choix des matériaux. Base du chiffrage définitif.\n\n- **Étude géotechnique** — **2-3 semaines**\nSondages et essais de sol pour dimensionner les fondations. **Indispensable** avant dépôt de permis.\n\n- **Permis de construire** — instruction **2-4 mois** (selon commune)\nConstitution et dépôt du dossier administratif complet.\n\n- **Consultation entreprises** — **3-4 semaines**\nAppel d'offres restreint, réception et analyse des devis, sélection.`;
+  texts.next_step_scope_text = `**Périmètre des études à lancer :**\n- **APS** (avant-projet sommaire, **3-4 semaines**) : volumes, implantation, choix structurels ; valide la faisabilité et affine le budget.\n- **APD** (avant-projet définitif, **4-6 semaines**) : plans détaillés, structure, matériaux ; base du chiffrage définitif.\n- **Étude géotechnique** (**2-3 semaines**) : sondages pour dimensionner les fondations, **indispensable** avant le permis.\n- **Permis de construire** (instruction **2-4 mois** selon la commune) : dossier administratif complet.\n- **Consultation des entreprises** (**3-4 semaines**) : appel d'offres restreint, analyse des devis, sélection.`;
   texts.next_step_outcome_text = `**Livrables attendus** : APS validé, budget affiné à ±10 %, rapport géotechnique, dossier de permis prêt pour dépôt.`;
   // ── SLIDE 20: Conclusion premium ──
   // v74.19 — verdict premium, dynamique, appel à l'action clair
@@ -9433,7 +9434,7 @@ function buildTemplateTexts(flat, scenarios) {
   const recSdp = f(`${rec}_sdp`) || f("rec_sdp");
   // v12.12 — verdict fondé sur les constats (budget, conformité, forces et faiblesse du scénario)
   const recNivV12 = (parseInt(f("rec_levels")) || 0) + 1;
-  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² SDP** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${f("rec_cost_total")}**, ${recPositionV12} (**${f("budget_fcfa")}**)\n- **Conformité** : ${recConformeV12 ? "COS et retraits respectés" : "**implantation à reprendre** avant le permis"}\n\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
+  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² SDP** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${f("rec_cost_total")}**, ${recPositionV12} (**${f("budget_fcfa")}**)\n- **Conformité** : ${recConformeV12 ? "COS et retraits respectés" : "**implantation à reprendre** avant le permis"}\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
   texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** ${egauxRecV12.length ? `Score multicritère de **${f("rec_score")}/100**${egaliteRecTxt}` : `Meilleur score multicritère (**${f("rec_score")}/100**)`}, porté par : **${forcesTxtV12}**. Coût des travaux **${f("rec_cost_total")}** (${recPositionV12}) pour **${plural(parseInt(recUnits) || 0, "unité")} sur ${recSdp} m² SDP**, ${niveauxTxt(recNivV12)}.`;
   texts.conclusion_projection_text = `**Horizon de livraison** : études et permis (**4 à 7 mois** : APS, APD, étude de sol, instruction) puis chantier (**${f("rec_duree_chantier")}**), sous réserve d'obtention du permis dans les délais.\n\n**Calendrier optimal** :\n- Démarrage **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**`;
   console.log(`│ ✅ TEMPLATE ENGINE v2.0 PREMIUM: ${Object.keys(texts).length} textes générés (accents, conditionnel, cross-ref charts)`);
@@ -9830,7 +9831,7 @@ TON CIBLE : Architecte conseil moderne — accessible, dynamique, démonstratif,
 RÈGLES STRICTES :
 1. Tu reçois un texte de référence dans "slide_5_base" du JSON {data}. Tu le REFORMULES.
 2. Tu NE CHANGES AUCUN chiffre, dimension, pourcentage, surface du texte de base.
-3. Tu N'INVENTES RIEN et NE SUPPRIMES AUCUNE information. Aucune description du quartier (densité, voirie, voisinage, commerces) qui ne figure pas dans le texte de base.
+3. Tu N'INVENTES RIEN et NE SUPPRIMES AUCUNE information. Aucune description du quartier (densité, voirie, voisinage, commerces) qui ne figure pas dans le texte de base. Aucun qualificatif sur la ville, la zone ou le quartier (ex. « dynamique », « prisé », « en plein essor ») : seulement ce que dit le texte de base.
 3bis. Les "constats_verifies" du JSON sont des faits établis : tu ne les contredis jamais (ex. ne dis pas « conforme » ou « dans le budget » si un constat dit le contraire).
 4. Écrire en français AVEC accents.
 5. **Mets en gras (avec syntaxe markdown \`**texte**\`) tous les chiffres clés** : surfaces (m²), pourcentages, COS, CES, dimensions, nombre d'unités, références à la mitoyenneté en côtés.
@@ -11268,7 +11269,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.16";
+const V12_ENGINE_VERSION = "12.17";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
