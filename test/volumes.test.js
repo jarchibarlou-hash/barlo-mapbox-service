@@ -33,7 +33,7 @@ test("écart entre le programme saisi et le besoin déclaré : signalé, pas inv
   const c = sc.diagnostic.constats_v12.find(x => x.code === "PROGRAMME_ECART_BESOIN");
   assert.ok(c, "constat présent");
   assert.match(c.message, /1 T1 \+ 1 commerce, soit 2 unités/);
-  assert.match(c.message, /3 unités, 225 m²/);
+  assert.match(c.message, /3 unités \(225 m²\)/);
   const ok = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, LEAD, { input_typologies: "T1=2" }), {}, null, {}));
   assert.ok(!ok.diagnostic.constats_v12.some(x => x.code === "PROGRAMME_ECART_BESOIN"), "pas de constat quand le programme couvre le besoin");
 });

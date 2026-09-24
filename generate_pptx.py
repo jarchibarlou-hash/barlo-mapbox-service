@@ -1268,9 +1268,9 @@ def assemble_pptx(data, template_path, output_path):
                 budget_fit = flat_data.get(f'{sc_key}_budget_fit', '')
                 # Translate budget_fit labels
                 fit_label = {
-                    'DANS_BUDGET': 'DANS BUDGET',
+                    'DANS_BUDGET': 'BAS DE FOURCHETTE',
                     'BUDGET_TENDU': 'HAUT DE FOURCHETTE',
-                    'HORS_BUDGET': 'HORS BUDGET',
+                    'HORS_BUDGET': 'AU-DESSUS',
                 }.get(budget_fit, budget_fit)
                 table_rows.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
 
@@ -1298,7 +1298,7 @@ def assemble_pptx(data, template_path, output_path):
                 tbl.columns[i].width = w
 
             # Header row
-            headers = ['Scenario', 'SDP', 'Cout/m\u00b2\nmarche', 'Cout/m\u00b2\najuste', 'Cout\ntotal', 'Label']
+            headers = ['Sc\u00e9nario', 'SDP', 'Co\u00fbt/m\u00b2\ngrille', 'Co\u00fbt/m\u00b2\nretenu', 'Co\u00fbt\ntravaux', 'Budget']
             DARK_GREEN = RGBColor(0x2C, 0x5F, 0x2D)
             WHITE = RGBColor(0xFF, 0xFF, 0xFF)
             LIGHT_BG = RGBColor(0xF5, 0xF5, 0xF0)
@@ -1347,9 +1347,9 @@ def assemble_pptx(data, template_path, output_path):
                 cost_total = flat_data.get(f'{sc_key}_cost_total', '0M FCFA')
                 budget_fit = flat_data.get(f'{sc_key}_budget_fit', '')
                 fit_label = {
-                    'DANS_BUDGET': 'DANS BUDGET',
+                    'DANS_BUDGET': 'BAS DE FOURCHETTE',
                     'BUDGET_TENDU': 'HAUT DE FOURCHETTE',
-                    'HORS_BUDGET': 'HORS BUDGET',
+                    'HORS_BUDGET': 'AU-DESSUS',
                 }.get(budget_fit, budget_fit)
                 table_rows_18.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
 
@@ -1365,7 +1365,7 @@ def assemble_pptx(data, template_path, output_path):
             for i, w in enumerate(col_widths_18):
                 tbl_18.columns[i].width = w
 
-            headers_18 = ['Scenario', 'SDP', 'Cout/m\u00b2\nmarche', 'Cout/m\u00b2\najuste', 'Cout\ntotal', 'Label']
+            headers_18 = ['Sc\u00e9nario', 'SDP', 'Co\u00fbt/m\u00b2\ngrille', 'Co\u00fbt/m\u00b2\nretenu', 'Co\u00fbt\ntravaux', 'Budget']
             DARK_GREEN_18 = RGBColor(0x2C, 0x5F, 0x2D)
             WHITE_18 = RGBColor(0xFF, 0xFF, 0xFF)
             LIGHT_BG_18 = RGBColor(0xF5, 0xF5, 0xF0)
