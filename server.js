@@ -2139,7 +2139,7 @@ function pickRecommendedV12(rr, posture) {
 // Chaque constat : { code, niveau: "bloquant"|"attention"|"info"|"atout", portee: "projet"|"A"|"B"|"C",
 // message (phrase prête à écrire), chiffres }. Rien n'est affirmé sans la donnée qui le prouve.
 const CRITERE_LABEL_V12 = { budget_fit: "budget", risk_alignment: "risque maîtrisé", cos_conformity: "conformité (COS, retraits)",
-  capacity_adequacy: "programme tenu", cost_efficiency: "coût par unité", standing_match: "surfaces conformes au standing", phase_flexibility: "phasage" };
+  capacity_adequacy: "nombre d'unités face au besoin", cost_efficiency: "coût par unité", standing_match: "surfaces conformes au standing", phase_flexibility: "phasage" };
 function scenarioConformeV12(sc) {
   const d = sc && sc.score_detail && sc.score_detail.cos_conformity;
   return d ? d.score >= 0.5 : sc.cos_compliance !== "AMBITIEUX_HORS_COS";
@@ -2177,6 +2177,18 @@ function buildFindingsV12(rr, ctx) {
       `Aucun scénario ne tient dans le bas de votre fourchette (${rangeTxt}) : ${tendu.join(", ")} suppose(nt) d'en viser le haut.`);
     else add("info", "projet", "BUDGET_OK", `Scénario(s) finançable(s) dans le bas de votre fourchette (${rangeTxt}) : ${dans.join(", ")}.`);
   } else add("attention", "projet", "BUDGET_INCONNU", "Budget non renseigné : la faisabilité financière n'est pas évaluée.");
+  // ── Programme saisi / besoin déclaré par le client ──
+  const progV12 = (labels.map(l => rr[l].client_program_v12).find(Boolean)) || null;
+  if (progV12 && Number(ctx.target_units) > 0) {
+    const nLog = (progV12.logements || []).reduce((t, x) => t + (Number(x.count) || 0), 0);
+    const nTot = nLog + (Number(progV12.commerce) || 0);
+    if (nTot > 0 && nTot < Number(ctx.target_units)) {
+      const detail = [(progV12.logements || []).map(x => `${x.count} ${x.type}`).join(" + "), progV12.commerce ? `${progV12.commerce} commerce${progV12.commerce > 1 ? "s" : ""}` : ""].filter(Boolean).join(" + ");
+      add("attention", "projet", "PROGRAMME_ECART_BESOIN",
+        `Programme retenu (${detail}, soit ${nTot} unité${nTot > 1 ? "s" : ""}) en dessous du besoin déclaré par le client (${ctx.target_units} unités${Number(ctx.target_surface_m2) > 0 ? `, ${ctx.target_surface_m2} m²` : ""}) : à confirmer avec lui.`,
+        { unites_programme: nTot, unites_besoin: Number(ctx.target_units) });
+    }
+  }
   // ── Données du terrain ──
   if (ctx.retraits && ctx.retraits.rue_identifiee === false) add("attention", "projet", "FACADE_RUE_NON_INDIQUEE",
     "Façade sur rue non indiquée : 3 m de retrait appliqués partout ; le recul de 5 m côté rue reste à positionner.");
@@ -2187,8 +2199,11 @@ function buildFindingsV12(rr, ctx) {
     const sc = rr[l];
     for (const c of (sc.geometry_checks_v12 || []).filter(x => x.level === "error")) add("bloquant", l, c.code, `Scénario ${l} : ${c.message.split(" : ")[0]}.`);
     const lim = sc.sdp_limits_v12 || {};
-    if (!sc._v12_validated && lim.buildable_area != null && Number(sc.fp_m2) > Number(lim.buildable_area) + 0.5)
-      add("bloquant", l, "EMPRISE_HORS_ZONE", `Scénario ${l} : emprise de ${Math.round(sc.fp_m2)} m² supérieure à la zone constructible (${lim.buildable_area} m²).`);
+    const empriseV12 = Math.max(Number(sc.fp_m2) || 0, Number(sc.emprise_sol_m2) || 0);
+    if (!sc._v12_validated && lim.buildable_area != null && empriseV12 > Number(lim.buildable_area) + 0.5)
+      add("bloquant", l, "EMPRISE_HORS_ZONE", `Scénario ${l} : emprise de ${Math.round(empriseV12)} m² supérieure à la zone constructible (${lim.buildable_area} m²).`);
+    if (!sc._v12_validated && sc.split_refused_v12) add("info", l, "VOLUMES_SUPERPOSES",
+      `Scénario ${l} : commerce au rez-de-chaussée et logements à l'étage ; la zone constructible (${sc.split_refused_v12.emprise_max_m2} m²) ne permet pas deux volumes séparés avant / arrière.`);
     if (sc.cos_compliance === "AMBITIEUX_HORS_COS") add("bloquant", l, "COS_DEPASSE",
       `Scénario ${l} : emprise au sol au-delà du COS (${sc.cos_ratio_pct} % de l'emprise autorisée).`);
     if (sc.infeasible_v12) add("bloquant", l, "PROGRAMME_IMPOSSIBLE", `Scénario ${l} : le programme ne tient pas dans ses limites, même réduit ou phasé.`);
@@ -2205,9 +2220,15 @@ function buildFindingsV12(rr, ctx) {
   if (rec && rr[rec]) {
     const forces = scenarioForcesV12(rr[rec], 2);
     const faible = scenarioFaiblesseV12(rr[rec]);
+    const recScore = Math.round((rr[rec].recommendation_score || 0) * 100);
+    // v12.15 — égalité de score : dire que c'est la posture du client qui départage
+    const egaux = labels.filter(l => l !== rec && Math.round((rr[l].recommendation_score || 0) * 100) === recScore);
+    const p = String(ctx.posture || "").toUpperCase();
+    const postureTxt = /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(p) ? "prudente" : /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(p) ? "ambitieuse" : "équilibrée";
+    const egaliteTxt = egaux.length ? ` ; à égalité avec ${egaux.join(" et ")}, départagé par votre posture ${postureTxt}` : "";
     add(scenarioConformeV12(rr[rec]) ? "atout" : "attention", rec, "RECOMMANDATION",
-      `Scénario ${rec} recommandé (${Math.round((rr[rec].recommendation_score || 0) * 100)}/100)${forces.length ? ` : points forts ${forces.join(" et ")}` : ""}${faible ? ` ; point faible : ${faible.critere}` : ""}.`,
-      { score: rr[rec].recommendation_score });
+      `Scénario ${rec} recommandé (${recScore}/100)${forces.length ? ` : points forts ${forces.join(" et ")}` : ""}${faible ? ` ; point faible : ${faible.critere}` : ""}${egaliteTxt}.`,
+      { score: rr[rec].recommendation_score, egalite_avec: egaux });
   }
   const ordre = { bloquant: 0, attention: 1, atout: 2, info: 3 };
   return out.sort((a, b) => ordre[a.niveau] - ordre[b.niveau]);
@@ -3432,19 +3453,26 @@ function computeProgramDrivenScenarioV73(params) {
   // 6. NIVEAUX & EMPRISE — plafonds du rôle (identiques à l'ancien calcul pour A)
   const empriseMaxAbsolue = limitsV12.emprise_max;
   const levelsCapRole = limitsV12.levels_cap;
-  const isSplit = layout_mode === "SPLIT_AV_AR" && programType === "MIXTE" && scenarioCommerceCount > 0 && !rulesV12.compact;
+  // v12.15 — le volume suggéré tient toujours dans la zone constructible (emprise_max) : plus de
+  // plateau minimal de 50 m² qui la dépassait. Deux volumes séparés (commerce devant, logements
+  // derrière) seulement s'ils tiennent côte à côte ; sinon commerce au RDC et logements à l'étage.
+  const PLATEAU_MIN_M2 = 25;   // plus petit plateau habitable (un T1)
+  const stdV12 = String(standing_level).toUpperCase();
+  const commSize = (commerce_size_m2 > 0) ? commerce_size_m2 : (UNIT_SIZES_V73.COMMERCE[stdV12] || 50);
+  const fpCommerce = scenarioCommerceCount * commSize;
+  const splitRequested = layout_mode === "SPLIT_AV_AR" && programType === "MIXTE" && scenarioCommerceCount > 0 && !rulesV12.compact;
+  const isSplit = splitRequested && sdpData.sdp_logements > 0 && (empriseMaxAbsolue - fpCommerce) >= PLATEAU_MIN_M2;
+  const splitRefused = splitRequested && !isSplit && sdpData.sdp_logements > 0
+    ? { emprise_max_m2: Math.round(empriseMaxAbsolue), commerce_m2: Math.round(fpCommerce) } : null;
   let fp, fpRdc, fpEtages, levels, splitLayout = null, hasPilotis = false;
   if (isSplit) {
-    const std = String(standing_level).toUpperCase();
-    const commSize = (commerce_size_m2 > 0) ? commerce_size_m2 : (UNIT_SIZES_V73.COMMERCE[std] || 50);
-    const fpCommerce = scenarioCommerceCount * commSize;
     const sdpCommerce = fpCommerce;
     const sdpLogements = sdpData.sdp_logements;
-    const empriseMaxLogement = Math.max(50, empriseMaxAbsolue - fpCommerce);
+    const empriseMaxLogement = empriseMaxAbsolue - fpCommerce;
     let levelsLogement = Math.max(1, Math.ceil(sdpLogements / empriseMaxLogement));
     levelsLogement = Math.max(levelsLogement, levelsMin);
     levelsLogement = Math.min(levelsLogement, levelsCapRole);
-    const fpLogement = Math.max(50, Math.round(sdpLogements / levelsLogement));
+    const fpLogement = Math.min(empriseMaxLogement, Math.round(sdpLogements / levelsLogement));
     hasPilotis = true; // volume logement arrière sur pilotis (programme scindé, jamais en mode compact)
     splitLayout = {
       mode: "SPLIT_AV_AR",
@@ -3471,28 +3499,25 @@ function computeProgramDrivenScenarioV73(params) {
       ces_total_pct: Math.round((fpCommerce + fpLogement) / Math.max(1, site_area) * 100),
     };
     fp = fpLogement; fpRdc = fpLogement; fpEtages = fpLogement; levels = levelsLogement;
+  } else if (scenarioCommerceCount > 0) {
+    // Commerce au RDC (dans la limite de la zone), le reste du programme dans les étages
+    const fpCommerceRdc = Math.min(fpCommerce, empriseMaxAbsolue);
+    const sdpRestante = Math.max(0, sdpTotal - fpCommerceRdc);
+    let levelsTotal = sdpRestante > 0 ? Math.ceil(sdpRestante / empriseMaxAbsolue) + 1 : 1;
+    levelsTotal = Math.max(levelsTotal, levelsMin);
+    levelsTotal = Math.min(levelsTotal, levelsCapRole);
+    const nbEtagesLog = Math.max(1, levelsTotal - 1);
+    const fpLogEtages = sdpRestante > 0 ? Math.min(empriseMaxAbsolue, Math.round(sdpRestante / nbEtagesLog)) : 0;
+    fpRdc = Math.round(fpCommerceRdc);
+    fpEtages = Math.round(fpLogEtages);
+    fp = Math.max(fpRdc, fpEtages);
+    levels = levelsTotal;
   } else {
-    const std = String(standing_level).toUpperCase();
-    const commSize = (commerce_size_m2 > 0) ? commerce_size_m2 : (UNIT_SIZES_V73.COMMERCE[std] || 50);
-    if (scenarioCommerceCount > 0) {
-      const fpCommerceRdc = scenarioCommerceCount * commSize;
-      const sdpRestante = sdpTotal - fpCommerceRdc;
-      let levelsTotal = Math.max(1, Math.ceil(sdpRestante / empriseMaxAbsolue) + 1);
-      levelsTotal = Math.max(levelsTotal, levelsMin);
-      levelsTotal = Math.min(levelsTotal, levelsCapRole);
-      const nbEtagesLog = Math.max(1, levelsTotal - 1);
-      const fpLogEtages = Math.max(50, Math.round(sdpRestante / nbEtagesLog));
-      fpRdc = Math.round(fpCommerceRdc);
-      fpEtages = Math.round(fpLogEtages);
-      fp = fpEtages;
-      levels = levelsTotal;
-    } else {
-      let nbNiveaux = Math.max(1, Math.ceil(sdpTotal / empriseMaxAbsolue));
-      nbNiveaux = Math.max(nbNiveaux, levelsMin);
-      nbNiveaux = Math.min(nbNiveaux, levelsCapRole);
-      const fpUniforme = Math.max(50, Math.round(sdpTotal / nbNiveaux));
-      fp = fpUniforme; fpRdc = fpUniforme; fpEtages = fpUniforme; levels = nbNiveaux;
-    }
+    let nbNiveaux = Math.max(1, Math.ceil(sdpTotal / empriseMaxAbsolue));
+    nbNiveaux = Math.max(nbNiveaux, levelsMin);
+    nbNiveaux = Math.min(nbNiveaux, levelsCapRole);
+    const fpUniforme = Math.min(empriseMaxAbsolue, Math.round(sdpTotal / nbNiveaux));
+    fp = fpUniforme; fpRdc = fpUniforme; fpEtages = fpUniforme; levels = nbNiveaux;
   }
   const heightM = Math.round(levels * floor_height * 10) / 10;
   const unitMixDetail = buildUnitMixDetailV73(scenarioMix, scenarioCommerceCount, standing_level, sizeOfRoleV12);
@@ -3509,6 +3534,7 @@ function computeProgramDrivenScenarioV73(params) {
     has_pilotis: hasPilotis,
     split_layout: splitLayout,
     layout_mode: splitLayout ? "SPLIT_AV_AR" : "SUPERPOSE",
+    split_refused_v12: splitRefused,   // v12.15 — volumes séparés demandés mais impossibles dans la zone
     total_units: totalUnits,
     nb_logements: sdpData.nb_logements,
     nb_commerces: sdpData.nb_commerces,
@@ -4167,6 +4193,7 @@ function computeSmartScenarios({
       role_label_v12: ScenarioModel.ROLE_LABEL_FR[roleV12],
       // v12 — traçabilité du dimensionnement : programme demandé, règles du rôle, limites, adaptations
       client_program_v12: v73Result.client_program_v12,
+      split_refused_v12: v73Result.split_refused_v12 || null,
       role_rules_v12: v73Result.role_rules_v12,
       role_rules_source_v12: v73Result.role_rules_source_v12,
       sdp_limits_v12: v73Result.sdp_limits_v12,
@@ -5135,6 +5162,7 @@ function computeSmartScenarios({
   // v12.12 — constats structurés (faits vérifiés) : base unique du cockpit et de la rédaction
   diagnostic.constats_v12 = buildFindingsV12(_scenarios, {
     budget_range: budgetRangeV12, retraits: diagnostic.retraits_reglementaires, site: diagnostic.site, recommended,
+    target_units, target_surface_m2, posture: feasibility_posture,
   });
   return { A: _scenarios.A, B: _scenarios.B, C: _scenarios.C, meta, diagnostic, computed_budget_band: budget_band, _v12_program_driven: !!isProgramDriven, _site_v12: _siteV12 };
 }
@@ -10999,7 +11027,7 @@ app.post("/generate-pptx-premium", async (req, res) => {
       program_main: p.program_main || "Petit collectif",
       target_units: String(p.target_units || 0),
       standing_level: p.standing_level || "ECONOMIQUE",
-      budget_fcfa: `${Math.round((profil.budget_max_fcfa || 0) / 1e6)}M FCFA`,
+      budget_fcfa: budgetRangeLabel(p.budget_range),   // v12.15 — fourchette du client, comme /generate-pptx
       rec_scenario: (diag.recommandation || {}).scenario || "B",
       rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100),
       rec_levels: String(Math.max(0, ((scenarios[(diag.recommandation || {}).scenario || "B"] || {}).levels || 1) - 1)),
@@ -11170,7 +11198,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.14";
+const V12_ENGINE_VERSION = "12.15";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
