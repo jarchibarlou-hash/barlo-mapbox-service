@@ -444,7 +444,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.20-NIVEAUX</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.20b-NIVEAUX</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -728,7 +728,9 @@ async function loadPipelineData(ref) {
         populateCockpitFromLead(combined, (unitsRes && unitsRes.units) || {A:[],B:[],C:[]});
         resetLiveBaseline();
         $("generateBtn").disabled=false; hideLoader(); showDetail();
-        syncScenarioModels();
+        // v12.19 — référence du dessin prise APRÈS le premier affichage (qui complète les formes
+        // manquantes) : seul un geste de l'utilisateur déclenche un recalcul automatique
+        Promise.resolve(syncScenarioModels()).finally(() => setTimeout(() => resetLiveBaseline(), 300));
     } catch(e) { hideLoader(); showError(e.message); }
 }
 
