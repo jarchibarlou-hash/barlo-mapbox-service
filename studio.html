@@ -290,6 +290,9 @@
         .draggable-unit:hover polygon.body{stroke-width:2px}
         /* v9.1 — Vertices individuels manipulables (petit cercle discret, hover cyan agrandi) */
         .unit-vertex{fill:#c9a878;fill-opacity:0.85;stroke:#fff;stroke-width:0.7;cursor:crosshair;pointer-events:all}
+        .unit-vertex-hit{fill:transparent;stroke:none;cursor:crosshair;pointer-events:all}
+        .snap-target{fill:none;stroke:#22C55E;stroke-width:1.6;pointer-events:none}
+        .snap-target-label{fill:#22C55E;font-size:8px;font-weight:700;pointer-events:none;paint-order:stroke;stroke:#0B1120;stroke-width:2px}
         .unit-vertex:hover{fill:#06B6D4;stroke:#0B1120;stroke-width:1;r:5}
         .unit-vertex.dragging{fill:#06B6D4;r:5}
         /* v9.1 — Arêtes draggables : ligne invisible épaisse pour hitTest, cyan au hover */
@@ -441,7 +444,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.18-TESTABC</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.20-NIVEAUX</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -721,7 +724,9 @@ async function loadPipelineData(ref) {
         const combined = {...leadRes.body8D, ...leadRes.display, _ref: ref};
         renderDetail(combined);
         await loadSiteRules();
+        for (const k of Object.keys(_liveSig)) delete _liveSig[k];
         populateCockpitFromLead(combined, (unitsRes && unitsRes.units) || {A:[],B:[],C:[]});
+        resetLiveBaseline();
         $("generateBtn").disabled=false; hideLoader(); showDetail();
         syncScenarioModels();
     } catch(e) { hideLoader(); showError(e.message); }
@@ -3893,7 +3898,9 @@ function renderParcelSvg(label) {
         });
         // v9.1 — Vertices draggables individuellement : cercle visible + zone hit augmentée
         polyPx.forEach((v, vi) => {
-            unitsHtml += `<circle class="unit-vertex" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" data-role="vertex" cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="3"/>`;
+            // v12.20 — zone de prise de 9 px autour du sommet (le point visible reste petit)
+            unitsHtml += `<circle class="unit-vertex-hit" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" data-role="vertex" cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="9"/>`;
+            unitsHtml += `<circle class="unit-vertex" data-scn="${label}" data-uidx="${globalIdx}" data-vi="${vi}" data-role="vertex" cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="3.5"/>`;
         });
         unitsHtml += `</g>`;
     });
@@ -4298,7 +4305,8 @@ function onUnitDragStart(e) {
             basePt: { x: svgPt.x, y: svgPt.y },
             startPolyM, startCentroid,
             deltaX: 0, deltaY: 0, curRot: 0,   // legacy fields (unused mais accessed ailleurs)
-            lastX: curX, lastY: curY, lastRot: curRot, snappedSegmentIdx: null
+            lastX: curX, lastY: curY, lastRot: curRot, snappedSegmentIdx: null,
+            polyAbs: !mT, renderedDelta: { x: 0, y: 0 }   // v12.20
         };
     }
     el.classList.add("dragging");
@@ -4319,8 +4327,83 @@ function projectPointOnSegment(p, p1, p2) {
 // v75.5.0 — Efface les visuels temporaires (snap hint, guides d'alignement)
 function clearDragVisuals(svgEl) {
     if (!svgEl) return;
-    svgEl.querySelectorAll(".snap-hint, .align-guide").forEach(n => n.remove());
+    svgEl.querySelectorAll(".snap-hint, .align-guide, .snap-target, .snap-target-label").forEach(n => n.remove());
 }
+
+// v12.20 — AIMANTATION du mode Revit : un point l'emporte sur une arête ; Alt enfoncé = pas d'aimantation.
+const SNAP_PT_PX = 11, SNAP_EDGE_PX = 8, SNAP_ALIGN_PX = 6;
+function snapTargets(label, excludeUidx) {
+    const refs = _svgRefs[label];
+    const pts = [], segs = [];
+    if (!refs) return { pts, segs };
+    const units = (cockpitState.scenarios[label] || {}).units || [];
+    units.forEach((u, i) => {
+        if (i === excludeUidx || !u.polygon || u.polygon.length < 3) return;
+        const name = u.unit_name || u.unit_type || `unité ${i + 1}`;
+        const px = polygonMToSvgPx(u.polygon, refs.cxSvg, refs.cySvg, refs.scale);
+        px.forEach((p, k) => {
+            pts.push({ p, kind: `coin · ${name}` });
+            segs.push({ p1: p, p2: px[(k + 1) % px.length], kind: `arête · ${name}` });
+        });
+    });
+    const addPoly = (poly, ptKind, segKind) => (poly || []).forEach((p, k, a) => {
+        pts.push({ p, kind: ptKind });
+        segs.push({ p1: p, p2: a[(k + 1) % a.length], kind: segKind });
+    });
+    addPoly(refs.svgPtsRaw, "sommet de parcelle", "limite de parcelle");
+    addPoly(refs.svgPtsBuildable, "coin zone constructible", "zone constructible");
+    return { pts, segs };
+}
+function snapPoint(pt, targets) {
+    let best = null;
+    for (const t of targets.pts) {
+        const d = Math.hypot(pt.x - t.p.x, pt.y - t.p.y);
+        if (d < SNAP_PT_PX && (!best || d < best.d)) best = { p: { x: t.p.x, y: t.p.y }, d, kind: t.kind, point: true };
+    }
+    if (best) return best;
+    for (const sg of targets.segs) {
+        const { proj, dist } = projectPointOnSegment(pt, sg.p1, sg.p2);
+        if (dist < SNAP_EDGE_PX && (!best || dist < best.d)) best = { p: proj, d: dist, kind: sg.kind, point: false };
+    }
+    return best;
+}
+// Meilleure correction pour un ensemble de points déplacés ensemble (arête ou unité entière)
+function snapGroup(ptsPx, targets) {
+    let best = null;
+    for (const q of ptsPx) {
+        const sn = snapPoint(q, targets);
+        if (!sn) continue;
+        const cand = { dx: sn.p.x - q.x, dy: sn.p.y - q.y, d: sn.d, point: sn.point, kind: sn.kind, at: sn.p };
+        if (!best || (cand.point && !best.point) || (cand.point === best.point && cand.d < best.d)) best = cand;
+    }
+    return best;
+}
+function drawSnapFeedback(label, snap, guides) {
+    const svgEl = $(`cParcelSvg${label}`);
+    if (!svgEl) return;
+    clearDragVisuals(svgEl);
+    const NS = "http://www.w3.org/2000/svg";
+    (guides || []).forEach(g => {
+        const l = document.createElementNS(NS, "line");
+        l.setAttribute("class", "align-guide");
+        l.setAttribute("x1", g.x1.toFixed(1)); l.setAttribute("y1", g.y1.toFixed(1));
+        l.setAttribute("x2", g.x2.toFixed(1)); l.setAttribute("y2", g.y2.toFixed(1));
+        svgEl.appendChild(l);
+    });
+    if (!snap) return;
+    const c = document.createElementNS(NS, snap.point ? "circle" : "rect");
+    c.setAttribute("class", "snap-target");
+    if (snap.point) { c.setAttribute("cx", snap.at.x.toFixed(1)); c.setAttribute("cy", snap.at.y.toFixed(1)); c.setAttribute("r", "6"); }
+    else { c.setAttribute("x", (snap.at.x - 4).toFixed(1)); c.setAttribute("y", (snap.at.y - 4).toFixed(1)); c.setAttribute("width", "8"); c.setAttribute("height", "8"); }
+    svgEl.appendChild(c);
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("class", "snap-target-label");
+    t.setAttribute("x", (snap.at.x + 8).toFixed(1)); t.setAttribute("y", (snap.at.y - 8).toFixed(1));
+    t.textContent = snap.kind;
+    svgEl.appendChild(t);
+}
+const _pxOf = (refs, p) => ({ x: refs.cxSvg + p.x * refs.scale, y: refs.cySvg - p.y * refs.scale });
+const _mOf = (refs, p) => ({ x: (p.x - refs.cxSvg) / refs.scale, y: -(p.y - refs.cySvg) / refs.scale });
 
 // v9.0 — Live re-render throttled : translation PURE du polygon initial (aucune déformation)
 let _dragLastRenderTs = 0;
@@ -4347,6 +4430,8 @@ function throttledRenderParcelDuringDrag(label, uidx, newX, newY /*, newRot igno
     if (newEl && _dragState) {
         newEl.classList.add("dragging");
         _dragState.el = newEl;
+        // v12.20 — le polygone est désormais dessiné à cet écart : le transform repart de zéro
+        _dragState.renderedDelta = { x: dxM * refs.scale, y: -dyM * refs.scale };
     }
 }
 
@@ -4357,37 +4442,51 @@ function onUnitDragMove(e) {
 
     // v9.1 — Drag vertex individuel : seul ce point bouge
     if (mode === "vertex-drag") {
-        const dxPx = svgPt.x - _dragState.basePt.x;
-        const dyPx = svgPt.y - _dragState.basePt.y;
-        const { dxM, dyM } = pxDeltaToM(dxPx, dyPx, refs.scale);
         const u = (cockpitState.scenarios[label].units || [])[uidx];
         if (!u) return;
-        const newPoly = _dragState.startPolyM.map((p, idx) =>
-            idx === _dragState.vi ? { x: p.x + dxM, y: p.y + dyM } : { x: p.x, y: p.y }
-        );
-        u.polygon = newPoly;
+        const start = _dragState.startPolyM, vi = _dragState.vi, N = start.length;
+        const s0 = _pxOf(refs, start[vi]);
+        let target = { x: s0.x + svgPt.x - _dragState.basePt.x, y: s0.y + svgPt.y - _dragState.basePt.y };
+        let snap = null; const guides = [];
+        if (!e.altKey) {
+            const sn = snapPoint(target, snapTargets(label, uidx));
+            if (sn) { target = sn.p; snap = { point: sn.point, kind: sn.kind, at: sn.p }; }
+            else {
+                // v12.20 — alignement horizontal / vertical sur les sommets voisins : angles droits sans décalage
+                for (const k of [(vi + N - 1) % N, (vi + 1) % N]) {
+                    const q = _pxOf(refs, start[k]);
+                    if (Math.abs(target.x - q.x) < SNAP_ALIGN_PX) { target.x = q.x; guides.push({ x1: q.x, y1: Math.min(q.y, target.y) - 20, x2: q.x, y2: Math.max(q.y, target.y) + 20 }); }
+                    if (Math.abs(target.y - q.y) < SNAP_ALIGN_PX) { target.y = q.y; guides.push({ x1: Math.min(q.x, target.x) - 20, y1: q.y, x2: Math.max(q.x, target.x) + 20, y2: q.y }); }
+                }
+            }
+        }
+        const tm = _mOf(refs, target);
+        u.polygon = start.map((p, idx) => idx === vi ? { x: tm.x, y: tm.y } : { x: p.x, y: p.y });
         renderParcelSvg(label);
-        // Re-attach dragging class on the vertex (innerHTML replaces DOM)
-        const newV = document.querySelector(`#cParcelSvg${label} .unit-vertex[data-uidx="${uidx}"][data-vi="${_dragState.vi}"]`);
+        drawSnapFeedback(label, snap, guides);
+        const newV = document.querySelector(`#cParcelSvg${label} .unit-vertex[data-uidx="${uidx}"][data-vi="${vi}"]`);
         if (newV) newV.classList.add("dragging");
         e.preventDefault();
         return;
     }
     // v9.1 — Drag arête : translation parallèle des 2 vertices adjacents (vi et vi+1)
     if (mode === "edge-drag") {
-        const dxPx = svgPt.x - _dragState.basePt.x;
-        const dyPx = svgPt.y - _dragState.basePt.y;
-        const { dxM, dyM } = pxDeltaToM(dxPx, dyPx, refs.scale);
         const u = (cockpitState.scenarios[label].units || [])[uidx];
         if (!u) return;
-        const N = _dragState.startPolyM.length;
+        const start = _dragState.startPolyM, N = start.length;
         const viA = _dragState.vi, viB = (viA + 1) % N;
-        const newPoly = _dragState.startPolyM.map((p, idx) =>
-            (idx === viA || idx === viB) ? { x: p.x + dxM, y: p.y + dyM } : { x: p.x, y: p.y }
-        );
-        u.polygon = newPoly;
+        let dxPx = svgPt.x - _dragState.basePt.x, dyPx = svgPt.y - _dragState.basePt.y;
+        let snap = null;
+        if (!e.altKey) {
+            const moved = [start[viA], start[viB]].map(p => { const q = _pxOf(refs, p); return { x: q.x + dxPx, y: q.y + dyPx }; });
+            const sn = snapGroup(moved, snapTargets(label, uidx));
+            if (sn) { dxPx += sn.dx; dyPx += sn.dy; snap = sn; }
+        }
+        const { dxM, dyM } = pxDeltaToM(dxPx, dyPx, refs.scale);
+        u.polygon = start.map((p, idx) => (idx === viA || idx === viB) ? { x: p.x + dxM, y: p.y + dyM } : { x: p.x, y: p.y });
         renderParcelSvg(label);
-        const newE = document.querySelector(`#cParcelSvg${label} .unit-edge[data-uidx="${uidx}"][data-vi="${_dragState.vi}"]`);
+        drawSnapFeedback(label, snap, []);
+        const newE = document.querySelector(`#cParcelSvg${label} .unit-edge[data-uidx="${uidx}"][data-vi="${viA}"]`);
         if (newE) newE.classList.add("dragging");
         e.preventDefault();
         return;
@@ -4453,70 +4552,32 @@ function onUnitDragMove(e) {
         const handleS = el.querySelector("[data-role='resize-s']");
         if (handleS) handleS.setAttribute("y", (newH/2 - hs).toFixed(1));
     } else {
-        // Déplacement
-        let newX = svgPt.x - _dragState.deltaX;
-        let newY = svgPt.y - _dragState.deltaY;
+        // Déplacement — v12.20 : translation depuis le point saisi + aimantation des sommets
+        const c0 = _dragState.startCentroid ? _pxOf(refs, _dragState.startCentroid) : { x: svgPt.x, y: svgPt.y };
+        let newX = c0.x + svgPt.x - _dragState.basePt.x;
+        let newY = c0.y + svgPt.y - _dragState.basePt.y;
         let newRot = _dragState.curRot;
-        clearDragVisuals(svgEl);
         _dragState.snappedSegmentIdx = null;
-
-        // v75.5.0 — SNAP MAGNET sur les lignes retrait segment (seuil 14 px)
-        const SNAP_THRESHOLD = 14;
-        let bestSnap = null;
-        for (const s of (refs.segLinesForSnap || [])) {
-            const { proj, dist } = projectPointOnSegment({ x: newX, y: newY }, s.p1, s.p2);
-            if (dist < SNAP_THRESHOLD && (!bestSnap || dist < bestSnap.dist)) {
-                bestSnap = { proj, dist, angleDeg: s.angleDeg, segIdx: s.i, p1: s.p1, p2: s.p2 };
-            }
+        let snap = null;
+        if (!e.altKey && _dragState.startPolyM) {
+            const moved = _dragState.startPolyM.map(p => { const q = _pxOf(refs, p); return { x: q.x + newX - c0.x, y: q.y + newY - c0.y }; });
+            const sn = snapGroup(moved, snapTargets(label, uidx));
+            if (sn) { newX += sn.dx; newY += sn.dy; snap = sn; }
         }
-        if (bestSnap) {
-            newX = bestSnap.proj.x;
-            newY = bestSnap.proj.y;
-            // Rotation parallèle au segment : rect longueur alignée sur segment
-            newRot = bestSnap.angleDeg;
-            _dragState.snappedSegmentIdx = bestSnap.segIdx;
-            // Visuel : ligne verte le long du segment retrait complet
-            const hint = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            hint.setAttribute("class", "snap-hint");
-            hint.setAttribute("x1", bestSnap.p1.x.toFixed(1));
-            hint.setAttribute("y1", bestSnap.p1.y.toFixed(1));
-            hint.setAttribute("x2", bestSnap.p2.x.toFixed(1));
-            hint.setAttribute("y2", bestSnap.p2.y.toFixed(1));
-            svgEl.appendChild(hint);
+        _dragState.snapFeedback = snap;
+
+        if (_dragState.polyAbs) {
+            const rd = _dragState.renderedDelta || { x: 0, y: 0 };
+            el.setAttribute("transform", `translate(${(newX - c0.x - rd.x).toFixed(1)},${(newY - c0.y - rd.y).toFixed(1)})`);
         } else {
-            // v75.5.0 — GUIDES D'ALIGNEMENT avec autres unités (± 4px en x ou y)
-            const ALIGN_THRESHOLD = 4;
-            const otherUnits = (cockpitState.scenarios[label].units || []).filter((u, i) => i !== uidx && u.offset_x_m !== undefined && u.offset_x_m !== null);
-            for (const u of otherUnits) {
-                const ox = refs.cxSvg + Number(u.offset_x_m) * refs.scale;
-                const oy = refs.cySvg - Number(u.offset_y_m) * refs.scale;
-                if (Math.abs(newX - ox) < ALIGN_THRESHOLD) {
-                    newX = ox;
-                    const guide = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                    guide.setAttribute("class", "align-guide");
-                    guide.setAttribute("x1", ox.toFixed(1)); guide.setAttribute("y1", "0");
-                    guide.setAttribute("x2", ox.toFixed(1)); guide.setAttribute("y2", "400");
-                    svgEl.appendChild(guide);
-                    break;
-                }
-                if (Math.abs(newY - oy) < ALIGN_THRESHOLD) {
-                    newY = oy;
-                    const guide = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                    guide.setAttribute("class", "align-guide");
-                    guide.setAttribute("x1", "0"); guide.setAttribute("y1", oy.toFixed(1));
-                    guide.setAttribute("x2", "400"); guide.setAttribute("y2", oy.toFixed(1));
-                    svgEl.appendChild(guide);
-                    break;
-                }
-            }
+            el.setAttribute("transform", `translate(${newX.toFixed(1)},${newY.toFixed(1)}) rotate(${newRot.toFixed(1)})`);
         }
-
-        el.setAttribute("transform", `translate(${newX.toFixed(1)},${newY.toFixed(1)}) rotate(${newRot.toFixed(1)})`);
         _dragState.lastX = newX;
         _dragState.lastY = newY;
         _dragState.lastRot = newRot;
         // v75.8.8 : re-render throttled pendant le drag → clip parcelle + tetris en direct
         throttledRenderParcelDuringDrag(label, uidx, newX, newY, newRot);
+        drawSnapFeedback(label, _dragState && _dragState.snapFeedback, []);
     }
     e.preventDefault();
 }
@@ -6337,7 +6398,14 @@ function updateUnitDetail(label, idx, field, val) {
     // v11.34 — rez_jardin ajoute aux checkboxes ; hauteur_niveau/altitude_base_m/niveau_depart_etage aux nombres
     if (field === "pilotis" || field === "parking_ss" || field === "terrasse" || field === "balcon" || field === "rez_jardin") {
         u[field] = !!val;
-    } else if (field === "etages_unit" || field === "sous_sols" || field === "hauteur_niveau" || field === "altitude_base_m" || field === "niveau_depart_etage") {
+    } else if (field === "nb_niveaux") {
+        // v12.19 — saisi en nombre de niveaux (1 = un seul), stocké en R+X (0 = un seul)
+        u.etages_unit = val === "" ? null : Math.max(0, Math.round(Number(val)) - 1);
+    } else if (field === "hauteur_niveau") {
+        // v12.19 — une seule hauteur d'étage par scénario : les niveaux de toutes les unités s'alignent
+        const h = val === "" ? null : Number(val);
+        (cockpitState.scenarios[label].units || []).forEach(x => { x.hauteur_niveau = h; });
+    } else if (field === "etages_unit" || field === "sous_sols" || field === "altitude_base_m" || field === "niveau_depart_etage") {
         u[field] = val === "" ? null : Number(val);
     } else {
         u[field] = val;
@@ -6366,16 +6434,17 @@ function renderUnitsTable(label) {
                 </select>
                 <span class="c-modal-hint">Toutes les formes sont clippées automatiquement aux limites de la parcelle.</span>
               </label>
-              <label class="stacked">Étages (R+X override)
-                <input type="number" min="0" max="10" step="1" value="${u.etages_unit != null ? u.etages_unit : ""}" placeholder="scenario" oninput="updateUnitDetail('${label}',${i},'etages_unit',this.value)">
+              <label class="stacked">Nombre de niveaux de l'unité
+                <input type="number" min="1" max="11" step="1" value="${u.etages_unit != null && u.etages_unit !== "" ? Number(u.etages_unit) + 1 : ""}" placeholder="1" oninput="updateUnitDetail('${label}',${i},'nb_niveaux',this.value)">
+                <span class="c-modal-hint">1 = un seul niveau. Pour empiler des unités, garde 1 et règle le niveau de départ.</span>
               </label>
               <label class="stacked">Sous-sols
                 <input type="number" min="0" max="3" step="1" value="${u.sous_sols != null ? u.sous_sols : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'sous_sols',this.value)">
               </label>
-              <label class="stacked">Hauteur d'un niveau (m)
-                <input type="number" min="2" max="10" step="0.1" value="${u.hauteur_niveau != null ? u.hauteur_niveau : ""}" placeholder="3" oninput="updateUnitDetail('${label}',${i},'hauteur_niveau',this.value)">
+              <label class="stacked">Hauteur d'étage (m) — commune au scénario
+                <input type="number" min="2" max="10" step="0.1" value="${u.hauteur_niveau != null ? u.hauteur_niveau : ""}" placeholder="3" oninput="updateUnitDetail('${label}',${i},'hauteur_niveau',this.value)" onchange="renderUnitsTable('${label}')">
               </label>
-              <label class="stacked">Étage de départ (0=RDC)
+              <label class="stacked">Niveau de départ (0 = RDC, 1 = R+1…)
                 <input type="number" min="-3" max="20" step="1" value="${u.niveau_depart_etage != null ? u.niveau_depart_etage : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'niveau_depart_etage',this.value)">
               </label>
               <label class="stacked">Altitude base (m, override)
@@ -6449,9 +6518,17 @@ function updateUnit(label, idx, field, val) {
     // dimensionné à la nouvelle surface (les patterns custom foisaient chuter la surface après clip)
     if (field === "unit_size_m2") {
         const u = units[idx];
-        u.width_m = null;
-        u.height_m = null;
-        u.polygon = null;
+        const target = Number(String(val).replace(",", "."));
+        const cur = u.polygon && u.polygon.length >= 3 ? polygonAreaM2(u.polygon) : 0;
+        if (cur > 0 && target >= 4) {
+            // v12.19 — forme dessinée conservée : homothétie autour de son centre vers la nouvelle surface
+            const k = Math.sqrt(target / cur), c = polygonCentroidM(u.polygon);
+            u.polygon = u.polygon.map(p => ({ x: c.x + (p.x - c.x) * k, y: c.y + (p.y - c.y) * k }));
+        } else if (!(cur > 0)) {
+            u.width_m = null;
+            u.height_m = null;
+            u.polygon = null;
+        }
     }
     // v75.5.1 : si type change ET width/height custom, recalcule aussi selon nouveau aspect stretch
     if (field === "unit_type") {
@@ -6479,7 +6556,7 @@ function openUnitDetailsModal(label, idx) {
     if (!u) return;
     _editingUnit = { label, idx };
     $("udmUnitLabel").textContent = `Scénario ${label} · ${u.unit_name || u.unit_type || "unité "+(idx+1)}`;
-    $("udmEtages").value = (u.etages_unit != null && u.etages_unit !== "") ? u.etages_unit : "";
+    $("udmEtages").value = (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) + 1 : "";
     $("udmSousSols").value = (u.sous_sols != null && u.sous_sols !== "") ? u.sous_sols : "";
     $("udmPilotis").checked = !!u.pilotis;
     $("udmParkingSs").checked = !!u.parking_ss;
@@ -6502,7 +6579,7 @@ function saveUnitDetails() {
     if (!u) { closeUnitDetailsModal(); return; }
     const etV = $("udmEtages").value;
     const ssV = $("udmSousSols").value;
-    u.etages_unit = etV !== "" ? Number(etV) : null;
+    u.etages_unit = etV !== "" ? Math.max(0, Math.round(Number(etV)) - 1) : null;
     u.sous_sols = ssV !== "" ? Number(ssV) : null;
     u.pilotis = !!$("udmPilotis").checked;
     u.parking_ss = !!$("udmParkingSs").checked;
@@ -7040,7 +7117,35 @@ async function validateScenarioImplantation(label) {
         showToast(`⚠ Scénario ${label} validé en RAM uniquement (pas de lead_ref pour persister)`, true);
         return;
     }
-    // Construit le body avec les 3 scénarios (le POST est atomique par lead — remplace tout)
+    try {
+        showToast(`⏳ Enregistrement scénario ${label}...`);
+        const data = await persistLeadUnits(ref);
+        const geomCount = data.geometryPersisted || 0;
+        console.log("[BARLO validate] POST OK:", data);
+        resetLiveBaseline(label);
+        // v12.9 — chiffres réels du scénario recalculés depuis la géométrie validée
+        try {
+            const act = await validateScenarioV12(label);
+            const errs = act ? (act.checks || []).filter(c => c.level === "error") : [];
+            showToast(act
+                ? (errs.length
+                    ? `⚠ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${errs.length} point(s) à revoir (voir le bandeau)`
+                    : `✅ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${act.emprise_sol_m2} m² au sol, tout est conforme`)
+                : `✅ Scénario ${label} enregistré : ${s.units.length} unités · ${geomCount} géom persistée${geomCount > 1 ? "s" : ""}`, errs.length > 0);
+            // v12.17 — l'image 3D du PPT suit la géométrie validée (même action que « 🎨 Régénérer 3D »),
+            // lancée après quelques secondes pour laisser lire le résultat de la validation
+            setTimeout(() => { regenMassing3D(label).catch(e => console.warn("[REGEN-3D auto]", e)); }, 3500);
+        } catch (vErr) {
+            showToast(`Géométrie enregistrée, mais recalcul du scénario impossible : ${vErr.message}`, true);
+        }
+    } catch (err) {
+        console.error("[BARLO validate] error:", err);
+        showToast(`❌ Enregistrement échoué : ${err.message}`, true);
+    }
+}
+
+// v12.19 — géométrie complète des 3 scénarios, telle qu'enregistrée dans sb_lead_units
+function leadUnitsPayloadAll() {
     const unitsPayload = {};
     for (const scen of ["A", "B", "C"]) {
         const scS = cockpitState.scenarios[scen] || {};
@@ -7074,40 +7179,16 @@ async function validateScenarioImplantation(label) {
             rez_jardin: !!u.rez_jardin
         }));
     }
-    try {
-        showToast(`⏳ Enregistrement scénario ${label}...`);
-        const res = await fetch(`${API}/api/lead-units/${encodeURIComponent(ref)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ units: unitsPayload })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) {
-            console.error("[BARLO validate] POST failed:", res.status, data);
-            showToast(`❌ Enregistrement échoué : ${data.error || res.status}`, true);
-            return;
-        }
-        const geomCount = data.geometryPersisted || 0;
-        console.log("[BARLO validate] POST OK:", data);
-        // v12.9 — chiffres réels du scénario recalculés depuis la géométrie validée
-        try {
-            const act = await validateScenarioV12(label);
-            const errs = act ? (act.checks || []).filter(c => c.level === "error") : [];
-            showToast(act
-                ? (errs.length
-                    ? `⚠ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${errs.length} point(s) à revoir (voir le bandeau)`
-                    : `✅ Scénario ${label} validé : ${act.sdp_m2} m² de SDP, ${act.emprise_sol_m2} m² au sol, tout est conforme`)
-                : `✅ Scénario ${label} enregistré : ${s.units.length} unités · ${geomCount} géom persistée${geomCount > 1 ? "s" : ""}`, errs.length > 0);
-            // v12.17 — l'image 3D du PPT suit la géométrie validée (même action que « 🎨 Régénérer 3D »),
-            // lancée après quelques secondes pour laisser lire le résultat de la validation
-            setTimeout(() => { regenMassing3D(label).catch(e => console.warn("[REGEN-3D auto]", e)); }, 3500);
-        } catch (vErr) {
-            showToast(`Géométrie enregistrée, mais recalcul du scénario impossible : ${vErr.message}`, true);
-        }
-    } catch (err) {
-        console.error("[BARLO validate] POST error:", err);
-        showToast(`❌ Erreur réseau enregistrement : ${err.message}`, true);
-    }
+    return unitsPayload;
+}
+async function persistLeadUnits(ref) {
+    const res = await fetch(`${API}/api/lead-units/${encodeURIComponent(ref)}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ units: leadUnitsPayloadAll() })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
 }
 
 // v12.14 — R+X par défaut d'une unité sans étages saisis : celui de la suggestion BARLO du scénario
@@ -7126,7 +7207,7 @@ function geometryUnitsPayload(label) {
         unit_name: u.unit_name || "",
         unit_size_m2: Number(u.unit_size_m2) || 0,
         polygon: u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) })),
-        etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : defaultEtagesV12(label),
+        etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : 0,   // v12.19 : vide = 1 niveau
         pilotis: !!u.pilotis,
         sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
         hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
@@ -7141,14 +7222,14 @@ function geometryUnitsPayload(label) {
 
 // v12.9 — Validation : le serveur recalcule les chiffres du scénario depuis la géométrie dessinée
 // (SDP, emprise, COS, zone constructible, superpositions, coût des travaux, budget) et les enregistre.
-async function validateScenarioV12(label) {
+async function validateScenarioV12(label, opts) {
     const ref = v12Ref();
     if (!ref || !currentBody8D) return null;
     const units = geometryUnitsPayload(label);
     if (!units.length) return null;
     const r = await fetch(`${API}/api/scenarios/${encodeURIComponent(ref)}/${label}/validate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ units, lead: currentBody8D })
+        body: JSON.stringify({ units, lead: currentBody8D, live: !!(opts && opts.live) })
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
@@ -7514,7 +7595,8 @@ function applyCandidate(label, idx) {
         target.width_m = null; target.height_m = null;
         target.rotation_deg = null;
         // v10.11 — Propage level assigné par distributeByLevels
-        if (cu.level != null) target.etages_unit = cu.level;
+        // v12.19 — « level » = niveau où l'unité est posée (0 = RDC), pas sa hauteur
+        if (cu.level != null) { target.niveau_depart_etage = cu.level; target.etages_unit = 0; }
         // Recalcule offset centroïde pour compat drag legacy
         const c = polygonCentroidM(target.polygon);
         target.offset_x_m = Number(c.x.toFixed(2));
@@ -8131,8 +8213,46 @@ function updateCoherenceBadges() {
     });
 }
 
+// v12.19 — Un scénario déjà validé suit son dessin : toute modification (m², forme, niveaux, départ,
+// hauteur, ajout / suppression d'unité) relance son calcul 1,5 s après la dernière retouche.
+const _liveSig = {}, _liveTimers = {};
+function liveGeomSig(label) {
+    const s = cockpitState.scenarios[label] || {};
+    return JSON.stringify((s.units || []).map(u => [u.unit_type, u.unit_name, u.unit_size_m2, u.polygon, u.etages_unit, u.niveau_depart_etage,
+        u.hauteur_niveau, u.altitude_base_m, u.sous_sols, u.pilotis, u.placement_sector, u.offset_x_m, u.offset_y_m, u.width_m, u.height_m, u.rotation_deg]));
+}
+function resetLiveBaseline(label) {
+    (label ? [label] : ["A", "B", "C"]).forEach(l => { clearTimeout(_liveTimers[l]); _liveSig[l] = liveGeomSig(l); });
+}
+function checkLiveRecalc() {
+    ["A", "B", "C"].forEach(l => {
+        const sig = liveGeomSig(l);
+        if (_liveSig[l] === undefined) { _liveSig[l] = sig; return; }
+        if (sig === _liveSig[l]) return;
+        _liveSig[l] = sig;
+        const m = v12Models && v12Models[l];
+        if (!m || !m.actual) return;                 // jamais validé : on attend « ✅ Valider implantation »
+        clearTimeout(_liveTimers[l]);
+        _liveTimers[l] = setTimeout(() => liveRecalc(l), 1500);
+    });
+}
+async function liveRecalc(label) {
+    const ref = (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
+    const s = cockpitState.scenarios[label];
+    if (!ref || !s || !(s.units || []).length) return;
+    try {
+        s.units.forEach(u => ensureUnitPolygon(u));
+        resetLiveBaseline(label);
+        await persistLeadUnits(ref);
+        const act = await validateScenarioV12(label, { live: true });
+        if (act) showToast(`↻ Scénario ${label} recalculé : ${act.sdp_m2} m² de SDP, ${Math.round((act.cost_travaux_fcfa || 0) / 1e6)} M FCFA de travaux`);
+    } catch (e) {
+        showToast(`Recalcul du scénario ${label} impossible : ${e.message}`, true);
+    }
+}
 function updateConstraintsCount() {
     syncCockpitStateFromForm();
+    try { checkLiveRecalc(); } catch (e) { console.warn("[LIVE]", e); }
     let n = 0;
     const g = cockpitState.globals;
     for (const k of ["input_typologies","lateral_hug","lateral_gap_m","max_fp_m2"]) if (g[k]) n++;
@@ -8297,9 +8417,9 @@ function stepState(id,state){const el=document.querySelector(`[data-step="${id}"
       <button class="c-modal-close" onclick="closeUnitDetailsModal()">✕</button>
     </h3>
     <div class="c-modal-body">
-      <label>Étages (R+X spécifique)
-        <input type="number" id="udmEtages" min="0" max="10" step="1" placeholder="ex : 2">
-        <span class="c-modal-hint">Override du R+X global du scénario (laisse vide pour utiliser la valeur scenario)</span>
+      <label>Nombre de niveaux de l'unité
+        <input type="number" id="udmEtages" min="1" max="11" step="1" placeholder="1">
+        <span class="c-modal-hint">1 = un seul niveau (vide = 1). Pour empiler, règle le niveau de départ dans ⚙.</span>
       </label>
       <label>Sous-sols (niveaux)
         <input type="number" id="udmSousSols" min="0" max="3" step="1" placeholder="0">

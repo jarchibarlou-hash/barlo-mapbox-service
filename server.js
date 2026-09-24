@@ -11659,18 +11659,23 @@ app.post("/api/scenarios/:ref/:scn/validate", async (req, res) => {
     const now = new Date().toISOString();
     Object.assign(actual, actualCostView(actual, role, effectiveCostPerM2(prev, p.standing_level, role), p.budget_range),
       { computed_at: now, source: ScenarioModel.SOURCE.GEOMETRY_CALCULATION });
-    const revision = ((prev && prev.revision) || 0) + 1;
+    // v12.19 — body.live : recalcul automatique après une retouche du dessin (même calcul, sans
+    // nouvelle révision dans l'historique ; seule une validation explicite en crée une)
+    const live = !!body.live && prev && prev.revision;
+    const revision = live ? prev.revision : ((prev && prev.revision) || 0) + 1;
     const { error } = await sb.from("sb_scenarios").upsert({
       lead_ref: ref, scenario: scn, role, actual, status: ScenarioModel.STATUS.VALIDATED,
       validated_at: now, revision, updated_at: now,
     }, { onConflict: "lead_ref,scenario" });
     if (error) throw error;
-    // Historique : chaque validation est conservée (géométrie + chiffres), jamais écrasée
-    const { error: revErr } = await sb.from("sb_scenario_revisions").insert({
-      lead_ref: ref, scenario: scn, revision,
-      snapshot: { actual, units, overrides: (prev && prev.overrides) || {}, validated_at: now },
-    });
-    if (revErr) console.warn(`[V12 VALIDATE] ${ref}/${scn} : historique non enregistré : ${revErr.message}`);
+    // Historique : chaque validation explicite est conservée (géométrie + chiffres), jamais écrasée
+    if (!live) {
+      const { error: revErr } = await sb.from("sb_scenario_revisions").insert({
+        lead_ref: ref, scenario: scn, revision,
+        snapshot: { actual, units, overrides: (prev && prev.overrides) || {}, validated_at: now },
+      });
+      if (revErr) console.warn(`[V12 VALIDATE] ${ref}/${scn} : historique non enregistré : ${revErr.message}`);
+    }
     const after = await loadScenarioRows(sb, ref);
     console.log(`[V12 VALIDATE] ${ref}/${scn} r${revision} : SDP ${actual.sdp_m2} m², emprise ${actual.emprise_sol_m2} m², ${actual.checks.filter(c => c.level === "error").length} alerte(s)`);
     res.json({ ok: true, ref, scenario: scn, revision, actual, model: scenarioModelView(scn, after[scn], null, p.site_area, p) });
@@ -12830,7 +12835,10 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         ? pilotisPostsM(polyM).map(sq => sq.map(p => fromM_studio(p.x, p.y, cLat, cLon)))
         : [];
       // Étiquette affichée au-dessus du volume : nom + réglages non visibles en 3D (sous-sols, parking...)
-      const tags = [levels > 1 ? `R+${levels - 1}` : "RDC"];
+      // v12.19 — étiquette = niveaux réellement occupés (départ → dernier), pas seulement la hauteur
+      const startLv = Math.round(groundM / fh) + (pilotisOn ? 1 : 0), endLv = startLv + levels - 1;
+      const lvName = n => n <= 0 ? "RDC" : `R+${n}`;
+      const tags = [levels > 1 ? `${lvName(startLv)} → ${lvName(endLv)}` : lvName(startLv)];
       if (pilotisOn) tags.push("pilotis");
       const sousSols = Math.max(0, Math.round(Number(fp.sous_sols) || 0));
       if (sousSols > 0) tags.push(`${sousSols} SS`);
