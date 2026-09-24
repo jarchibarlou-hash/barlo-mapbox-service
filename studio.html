@@ -441,7 +441,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.17b-MASTER</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.17c-MASTER</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -1165,6 +1165,9 @@ async function saveSegments() {
         cockpitState._segmentsMismatch = false;
         renderSegmentsSummary();
         await syncScenarioModels();   // le moteur relit les retraits : limites A/B/C mises à jour
+        // v12.17c — la conformité d'une géométrie validée est calculée à la validation : la refaire
+        const dejaValides = ["A", "B", "C"].filter(l => v12Models && v12Models[l] && v12Models[l].actual);
+        if (dejaValides.length) showToast(`Retraits enregistrés. Re-valide ${dejaValides.join(", ")} (« ✅ Valider implantation ») pour recalculer ${dejaValides.length > 1 ? "leur" : "sa"} conformité avec ces retraits.`, true);
     } catch (e) {
         showToast(`Retraits non enregistrés : ${e.message}`, true);
     }
