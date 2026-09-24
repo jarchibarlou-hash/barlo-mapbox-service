@@ -771,8 +771,7 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
             ha='center', va='bottom', zorder=9)
 
     # --- Titre + légende types ---
-    ax.set_title(_SCENARIO_TITLES.get(scenario_label, f"Scénario {scenario_label}"),
-                 color='#FBBF24', fontsize=14, fontweight='bold', pad=12)
+    # v12.17b — titre porté par la diapo (master), plus répété dans l'image
 
     # Légende types présents
     present_cats = []
@@ -787,7 +786,7 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
             yy = legend_y + i * max_span * 0.045
             ax.add_patch(MplRectangle((legend_x, yy), max_span * 0.03, max_span * 0.02,
                                        facecolor=_UNIT_COLOR[c], edgecolor='#F8FAFC', linewidth=0.8, zorder=8))
-            ax.text(legend_x + max_span * 0.04, yy + max_span * 0.01, c.title(),
+            ax.text(legend_x + max_span * 0.04, yy + max_span * 0.01, {'RESI': 'Logement', 'COMMERCE': 'Commerce', 'BUREAU': 'Bureau', 'ATELIER': 'Atelier'}.get(c, c.title()),
                     color='#F8FAFC', fontsize=8, ha='left', va='center', zorder=8)
 
     # Info parcelle (superficie affichée en bas)

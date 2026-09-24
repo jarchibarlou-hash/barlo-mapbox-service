@@ -54,11 +54,11 @@ COLORS = {
 # (avant : « Densité COS » affichait la capacité, « Coût au m² » le standing, etc.).
 # Échelle 0-100 : 100 = favorable.
 RISK_LABELS_FR = {
-    'budget_fit':              'Budget\n(fourchette)',
+    'budget_fit':              'Budget',
     'complexite_structurelle': 'Risque /\nposture',
     'risque_permis':           'Conformité\n(COS, retraits)',
     'ratio_efficacite':        'Efficacité\ncoût',
-    'densite_cos':             'Capacité\nprogramme',
+    'densite_cos':             'Nombre\nd\'unités',
     'phasabilite':             'Phasage',
     'cout_m2':                 'Standing\n(surfaces)',
 }
@@ -142,6 +142,7 @@ def generate_radar(risk_scores: dict, scenario_label: str, output_path: str):
     ax.set_yticklabels(['20', '40', '60', '80', '100'], fontsize=6.5, color=COLORS['muted'])
     ax.set_xticks(angles)
     ax.set_xticklabels(labels, **FONT_LABEL)
+    ax.tick_params(axis='x', pad=14)   # v12.17b — libellés décollés des valeurs
 
     ax.spines['polar'].set_visible(False)
     ax.grid(color=COLORS['grid'], linewidth=0.6, alpha=0.8)
@@ -312,7 +313,7 @@ def generate_comparatif_table(scenarios: dict, output_path: str):
     """
     criteria = [
         ('SDP (m²)',                 'sdp_m2'),
-        ('Surface habitable (m²)',   'surface_habitable_m2'),
+        ('Surface utile (m²)',       'surface_habitable_m2'),
         ('Efficacité (%)',           'ratio_efficacite_pct'),
         ('Nombre d\'unités',         'total_units'),
         ('Niveaux',                  'levels'),
@@ -433,7 +434,7 @@ def generate_arbitrage_graphs(scenarios: dict, output_path: str):
 
     criteria = [
         ('Coût total\n(M FCFA)',        'cost_total_fcfa',      1_000_000, 'M'),
-        ('Surface habitable\n(m²)',     'surface_habitable_m2', 1,         'm²'),
+        ('Surface utile\n(m²)',         'surface_habitable_m2', 1,         'm²'),
         ('Nombre\nd\'unités',           'total_units',          1,         ''),
         ('Score\nrecommandation',       'recommendation_score', 1,         '/100'),
     ]
@@ -684,9 +685,9 @@ def generate_recap_card(scenario: dict, label: str, output_path: str):
     # KPI boxes — données RÉELLES
     kpis = [
         ('SDP',             f'{scenario.get("sdp_m2", 0)} m²'),
-        ('Surface\nhabitable', f'{scenario.get("surface_habitable_m2", 0)} m²'),
+        ('Surface\nutile',     f'{scenario.get("surface_habitable_m2", 0)} m²'),
         ('Unités',          f'{scenario.get("total_units", 0)}'),
-        ('Coût\nestimé',    f'{scenario.get("cost_total_fcfa", 0) / 1_000_000:.0f} M FCFA'),
+        ('Coût des\ntravaux', f'{scenario.get("cost_total_fcfa", 0) / 1_000_000:.0f} M FCFA'),
         ('Durée\nchantier', f'{scenario.get("duree_chantier_mois", 0)} mois'),
         ('Score',           f'{scenario.get("recommendation_score", 0)}/100'),
     ]
