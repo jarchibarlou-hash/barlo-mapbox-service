@@ -49,15 +49,18 @@ COLORS = {
     'pie_vrd': '#C0392B',   # VRD — brique
 }
 
-# Libellés français des clés de risque (doivent correspondre à /compute-scenarios)
+# Libellés des 7 critères du score BARLO (v12.12). Les clés restent celles envoyées par le serveur
+# (mapScenarioForPython) ; chaque libellé nomme le critère RÉELLEMENT porté par la valeur
+# (avant : « Densité COS » affichait la capacité, « Coût au m² » le standing, etc.).
+# Échelle 0-100 : 100 = favorable.
 RISK_LABELS_FR = {
-    'budget_fit':              'Adéquation\nbudgétaire',
-    'complexite_structurelle': 'Complexité\nstructurelle',
-    'risque_permis':           'Risque\npermis',
-    'ratio_efficacite':        'Ratio\nd\'efficacité',
-    'densite_cos':             'Densité\nCOS',
-    'phasabilite':             'Phasabilité',
-    'cout_m2':                 'Coût\nau m²',
+    'budget_fit':              'Budget\n(fourchette)',
+    'complexite_structurelle': 'Risque /\nposture',
+    'risque_permis':           'Conformité\n(COS, retraits)',
+    'ratio_efficacite':        'Efficacité\ncoût',
+    'densite_cos':             'Capacité\nprogramme',
+    'phasabilite':             'Phasage',
+    'cout_m2':                 'Standing\n(surfaces)',
 }
 
 # Typographie
@@ -144,7 +147,7 @@ def generate_radar(risk_scores: dict, scenario_label: str, output_path: str):
     ax.grid(color=COLORS['grid'], linewidth=0.6, alpha=0.8)
     ax.set_facecolor('white')
 
-    ax.set_title(f'Profil de risque — Scénario {scenario_label}',
+    ax.set_title(f'Évaluation multicritère — Scénario {scenario_label} (100 = favorable)',
                  pad=25, **FONT_TITLE)
 
     _save(fig, output_path)
@@ -291,7 +294,7 @@ def generate_risk_bars(risk_scores: dict, scenario_label: str, output_path: str)
     ax.spines['left'].set_color(COLORS['grid'])
     ax.grid(axis='x', color=COLORS['grid'], linewidth=0.4, alpha=0.5)
 
-    ax.set_title(f'Facteurs de risque — Scénario {scenario_label}',
+    ax.set_title(f'Critères du score — Scénario {scenario_label} (100 = favorable)',
                  pad=18, **FONT_TITLE)
 
     _save(fig, output_path)

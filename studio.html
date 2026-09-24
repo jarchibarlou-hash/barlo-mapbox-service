@@ -181,6 +181,15 @@
         .v12-kpi.warn .v{color:var(--brick2)}
         .v12-score{font-size:.6rem;font-weight:700;padding:.1rem .45rem;border-radius:10px;border:1px solid var(--border);color:var(--text2);cursor:help;margin-left:auto;margin-right:.4rem}
         .v12-score.rec{color:#0B1120;background:var(--amber);border-color:var(--amber)}
+        .v12-steps{display:flex;flex-wrap:wrap;gap:.35rem;margin:.6rem 0 .8rem}
+        .v12-steps:empty{display:none}
+        .v12-step{flex:1 1 130px;display:flex;flex-direction:column;gap:.1rem;text-align:left;cursor:pointer;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--text2);border-radius:6px;padding:.35rem .55rem;color:var(--text);font-family:inherit}
+        .v12-step:hover{border-color:var(--amber)}
+        .v12-step .t{font-size:.64rem;font-weight:700}
+        .v12-step .s{font-size:.58rem;color:var(--text2)}
+        .v12-step.ok{border-left-color:var(--forest)} .v12-step.ok .s{color:#2ECC71}
+        .v12-step.warn{border-left-color:var(--amber)} .v12-step.warn .s{color:var(--amber)}
+        .v12-step.block{border-left-color:var(--brick2)} .v12-step.block .s{color:var(--brick2)}
         .v12-findings{margin:.2rem 0 .7rem}
         .v12-findings:empty{display:none}
         .v12-findings details{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:.45rem .7rem}
@@ -418,7 +427,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.12-CONSTATS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.13-ETAPES</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -459,6 +468,9 @@
                 <div class="kpi"><div class="kpi-label">Niveaux</div><div class="kpi-value brick" id="kFloors">—</div></div>
                 <div class="kpi"><div class="kpi-label">Posture</div><div class="kpi-value forest" id="kPosture">—</div></div>
             </div>
+
+            <!-- v12.12 — Parcours par étapes : où en est ce lead, et où agir (clic = aller à la section) -->
+            <nav class="v12-steps" id="cV12Steps" aria-label="Étapes du diagnostic"></nav>
 
             <!-- ═══ v75.1 — Cockpit du diagnostic ═══ -->
             <details class="constraints-panel" id="constraintsPanel" open>
@@ -1128,6 +1140,7 @@ function renderSegmentsSummary() {
     if (cockpitState._segmentsMismatch) warn += `<div style="color:var(--amber)">⚠ La parcelle a changé de nombre de côtés : tes retraits enregistrés ne s'appliquent plus, règle par défaut en attendant.</div>`;
     if (!segs.some(x => x.type === "rue")) warn += `<div style="color:var(--amber)">⚠ Côté rue non indiqué : ${SETBACK_BY_TYPE.libre} m partout. Choisis « Rue » sur la façade (${SETBACK_BY_TYPE.rue} m).</div>`;
     el.innerHTML = parts.join(" · ") + warn;
+    renderV12Steps();   // l'étape « Terrain » suit les retraits en direct
 }
 
 async function loadSiteRules() {
@@ -6155,8 +6168,43 @@ function renderV12Strip(L) {
     }
 }
 
+// v12.12 — Parcours par étapes : état de chaque étape du diagnostic, clic = aller à la section
+function renderV12Steps() {
+    const el = $("cV12Steps");
+    if (!el) return;
+    if (!currentBody8D) { el.innerHTML = ""; return; }
+    const models = v12Models || {};
+    const findings = models._findings || [];
+    const segs = cockpitState.segments || [];
+    const hasRue = segs.some(s => s.type === "rue");
+    const validated = ["A", "B", "C"].filter(k => models[k] && models[k].actual);
+    const recKey = ["A", "B", "C"].find(k => models[k] && models[k].effective && models[k].effective.engine && models[k].effective.engine.recommended);
+    const bloquants = findings.filter(c => c.niveau === "bloquant").length;
+    const active = cockpitState.activeTab || "A";
+    const steps = [
+        { t: "1 · Programme", s: "demande du client", c: "ok", go: ".c-target-header" },
+        { t: "2 · Terrain", s: hasRue ? (cockpitState._segmentsSource === "USER_OVERRIDE" ? "retraits réglés" : "règle BARLO") : "côté rue à indiquer",
+          c: hasRue ? "ok" : "warn", go: "#cSegmentsBody" },
+        { t: "3 · Scénarios", s: v12Models ? `A/B/C proposés${recKey ? ` · ${recKey} recommandé` : ""}` : "en attente", c: v12Models ? "ok" : "", go: ".c-scn-tabs" },
+        { t: "4 · Implantation", s: `${validated.length}/3 validé${validated.length > 1 ? "s" : ""}${recKey && !validated.includes(recKey) ? ` · ${recKey} à valider` : ""}`,
+          c: validated.length === 3 ? "ok" : validated.length ? "warn" : "", go: `#cParcelSvg${active}` },
+        { t: "5 · Constats", s: !v12Models ? "en attente" : bloquants ? `${bloquants} bloquant${bloquants > 1 ? "s" : ""}` : "aucun bloquant",
+          c: !v12Models ? "" : bloquants ? "block" : "ok", go: "#cV12Findings" },
+        { t: "6 · PPT", s: !v12Models ? "en attente" : bloquants ? "possible, avec réserves" : "prêt à générer",
+          c: !v12Models ? "" : bloquants ? "warn" : "ok", go: "#generateBtn" },
+    ];
+    el.innerHTML = steps.map(st => `<button type="button" class="v12-step ${st.c}" onclick="goToV12Step('${escAttr(st.go)}')"><span class="t">${esc(st.t)}</span><span class="s">${esc(st.s)}</span></button>`).join("");
+}
+function goToV12Step(sel) {
+    const panel = $("constraintsPanel");
+    if (panel && !panel.open && sel !== "#generateBtn") panel.open = true;
+    const target = document.querySelector(sel);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 // v12.12 — Constats du projet : les mêmes faits que ceux sur lesquels s'appuie la rédaction du PPT
 function renderV12Findings() {
+    renderV12Steps();
     const el = $("cV12Findings");
     if (!el) return;
     const list = (v12Models && v12Models._findings) || [];

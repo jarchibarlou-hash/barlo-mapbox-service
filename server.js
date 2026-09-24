@@ -1980,6 +1980,10 @@ const SCORE_WEIGHTS_V12 = Object.freeze({
   cost_efficiency: 0.12, standing_match: 0.08, phase_flexibility: 0.10,
 });
 const clamp01 = x => Math.max(0, Math.min(1, x));
+// Libellé du standing dans les textes (grille de Jeremy)
+function standingLabelFr(standing) {
+  return { ECONOMIQUE: "économique", STANDARD: "standard", HAUT: "haut standing", PREMIUM: "très haut standing" }[standingGridKey(standing)];
+}
 function standingGridKey(standing) {
   const s = String(standing || "").toUpperCase();
   if (/PREMIUM|TRES|LUXE/.test(s)) return "PREMIUM";
@@ -2074,7 +2078,7 @@ function scoreScenariosV12(rr, ctx) {
       ? (sizeRatio >= 0.8 ? 1 : sizeRatio >= 0.7 ? 0.7 : 0.4)
       : (sizeRatio >= 0.95 ? 1 : sizeRatio >= 0.85 ? 0.8 : sizeRatio >= 0.75 ? 0.6 : 0.4);
     const explStanding = sizeRatio == null ? "Pas de logement a comparer : critère neutre."
-      : `Surfaces des logements a ${Math.round(sizeRatio * 100)} % de la grille ${String(ctx.standing_level || "").toLowerCase()} : ${standing >= 0.9 ? "cohérent avec le standing visé" : standing >= 0.6 ? "un peu compactes pour ce standing" : "trop compactes pour ce standing"}.`;
+      : `Surfaces des logements à ${Math.round(sizeRatio * 100)} % de la grille ${standingLabelFr(ctx.standing_level)} : ${standing >= 0.9 ? "cohérent avec le standing visé" : standing >= 0.6 ? "un peu compactes pour ce standing" : "trop compactes pour ce standing"}.`;
     // 7. PHASAGE (10 %) — phasage prévu, ou construction par niveaux possible
     const lv = Number(sc.levels) || 1;
     let phase = p2 ? 1 : lv >= 2 ? 0.7 : 0.5;
@@ -2139,7 +2143,7 @@ function buildFindingsV12(rr, ctx) {
   const labels = ["A", "B", "C"].filter(l => rr[l] && !rr[l].unsupported);
   const M = v => `${Math.round((Number(v) || 0) / 1e6)} M FCFA`;
   const range = ctx.budget_range;
-  const rangeTxt = range ? (range.min === range.max ? M(range.max) : `${Math.round(range.min / 1e6)} a ${Math.round(range.max / 1e6)} M FCFA`) : null;
+  const rangeTxt = range ? (range.min === range.max ? M(range.max) : `${Math.round(range.min / 1e6)} à ${Math.round(range.max / 1e6)} M FCFA`) : null;
   // ── Conformité ──
   const conformes = labels.filter(l => scenarioConformeV12(rr[l]));
   if (!conformes.length) add("bloquant", "projet", "AUCUN_SCENARIO_CONFORME",
