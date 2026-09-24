@@ -465,17 +465,8 @@ const EXTRA_DISPLAY_COLS = [
   "total_units_A", "total_units_B", "total_units_C",
   "slide_4_image_url", "plot_area_m2", "barlo_status",
   "Disposition", "input_typologies", "diagnostic_narrative",
-  // v75 — Lead Constraints (v75 initial : geometry + regulatory + per-scenario overrides simples)
-  "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
-  "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
-  "override_units_A", "override_units_B", "override_units_C",
-  "override_fp_A", "override_fp_B", "override_fp_C",
-  "override_levels_A", "override_levels_B", "override_levels_C",
-  "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
-  // v75.1 — Cockpit config par scénario (COS/layout/target_sdp/rationale/unités JSON)
-  "override_cos_A", "override_cos_B", "override_cos_C",
-  "override_layout_A", "override_layout_B", "override_layout_C",
-  "override_target_sdp_A", "override_target_sdp_B", "override_target_sdp_C",
+  // v75 — Lead Constraints encore valides (v12.14 : saisies chiffrées de la première configuration retirées)
+  "override_ignore_cos", "override_ignore_setbacks", "constraints_rationale",
   "scenario_rationale_A", "scenario_rationale_B", "scenario_rationale_C",
   "override_units_detail_A", "override_units_detail_B", "override_units_detail_C"
 ];
@@ -759,6 +750,11 @@ app.post("/api/process-lead", async (req, res) => {
       } catch (e) { console.warn(`[8A] Preserve images error: ${e.message}`); }
       // v75 — appliquer contraintes du body APRÈS preserveCols (les nouvelles écrasent les anciennes)
       applyBodyConstraints(newRow);
+      // v12.14 — effacer les réglages de la première configuration (ignorés partout désormais)
+      for (const col of LEGACY_OVERRIDE_KEYS) {
+        if (/^override_units_detail_/.test(col)) continue;   // unités dessinées : gardées pour le plan 2D du PPT
+        const idx = pipeHeaders.indexOf(col); if (idx >= 0) newRow[idx] = "";
+      }
       await gasPost("writePipelineRow", { rowNum: pipeRowNum, row: newRow });
       console.log(`[8A] Lead ${leadRef} UPDATED at row ${pipeRowNum} ✓`);
     } else {
@@ -1184,6 +1180,23 @@ app.post("/api/process-lead", async (req, res) => {
       if (hasStructuralOverride) {
         console.log(`[8F] Cache BYPASS : lead constraints detectees (hug=${obj8F.override_lateral_hug || "-"} gap=${obj8F.override_lateral_gap_m || "-"} ignore_cos=${obj8F.override_ignore_cos || "-"} max_fp=${obj8F.override_max_fp_m2 || "-"} ignore_setbacks=${obj8F.override_ignore_setbacks || "-"}) → regen massing A/B/C forcee`);
       }
+      // v12.14 — résultat moteur unique calculé AVANT les images : les massings 8F montrent les mêmes
+      // volumes que le cockpit et le PPT (retraits réels, géométries validées), sans calcul séparé.
+      let scenariosV12For8F = null;
+      try {
+        const p8F = { floor_height: 3.2 };
+        for (const [pipeCol, bodyKey] of Object.entries(PIPELINE_TO_BODY)) {
+          if (obj8F[pipeCol] !== undefined && obj8F[pipeCol] !== "") p8F[bodyKey] = obj8F[pipeCol];
+        }
+        p8F.lead_id = leadRef;
+        await mergeLeadOverridesFromPipeline(p8F);
+        scenariosV12For8F = (await getOrComputeScenarioSet(p8F)).scenarios;
+      } catch (e) { console.warn(`[8F] résultat v12 indisponible, calcul autonome : ${e.message}`); }
+      const massingFieldsV12 = sc => sc && !sc.unsupported ? {
+        fp_m2: sc.fp_m2, fp_rdc_m2: sc.fp_rdc_m2, fp_etages_m2: sc.fp_etages_m2, levels: sc.levels, height_m: sc.height_m,
+        commerce_levels: sc.commerce_levels, has_pilotis: sc.has_pilotis, split_layout: sc.split_layout || null,
+        sdp_m2: sc.sdp_m2, label_fr: sc.label_fr, accent_color: sc.accent_color, cos_compliance: sc.cos_compliance,
+      } : null;
       for (const label of ["A", "B", "C"]) {
         const cachedKey = `massing_scn_${label}_img_url`;
         const cached = obj8F[cachedKey] || "";
@@ -1197,6 +1210,7 @@ app.post("/api/process-lead", async (req, res) => {
           const massingBody = {
             lead_id: leadRef, client_name: clientNameImg,
             polygon_points: polygonForImg,
+            scenario_v12: scenariosV12For8F ? massingFieldsV12(scenariosV12For8F[label]) : undefined,
             site_area: obj8D.site_area_m2 || (plotW * plotD),
             setback_front: setbackFront, setback_side: setbackSide, setback_back: setbackBack,
             envelope_w: envW, envelope_d: envD,
@@ -1226,24 +1240,10 @@ app.post("/api/process-lead", async (req, res) => {
             commerce_depth_m: obj8D.commerce_depth_m || commerceDepth,
             retrait_inter_volumes_m: obj8D.retrait_inter_volumes_m || retraitInter,
             // v74.34 PUSH 16 — propager les contraintes lead lues FRAICHEMENT (obj8F)
-            override_lateral_hug: obj8F.override_lateral_hug || "",
-            override_lateral_gap_m: obj8F.override_lateral_gap_m || "",
+            // v12.14 — seuls les réglages encore valides ; volumes = résultat moteur unique (scenario_v12)
             override_ignore_cos: obj8F.override_ignore_cos || "",
-            override_max_fp_m2: obj8F.override_max_fp_m2 || "",
             override_ignore_setbacks: obj8F.override_ignore_setbacks || "",
             constraints_rationale: obj8F.constraints_rationale || "",
-            override_units_A: obj8F.override_units_A || "",
-            override_units_B: obj8F.override_units_B || "",
-            override_units_C: obj8F.override_units_C || "",
-            override_fp_A: obj8F.override_fp_A || "",
-            override_fp_B: obj8F.override_fp_B || "",
-            override_fp_C: obj8F.override_fp_C || "",
-            override_levels_A: obj8F.override_levels_A || "",
-            override_levels_B: obj8F.override_levels_B || "",
-            override_levels_C: obj8F.override_levels_C || "",
-            override_gap_m_A: obj8F.override_gap_m_A || "",
-            override_gap_m_B: obj8F.override_gap_m_B || "",
-            override_gap_m_C: obj8F.override_gap_m_C || "",
           };
           console.log(`[8F-${label}-DIAG] body constraints sent : hug="${massingBody.override_lateral_hug}" gap="${massingBody.override_lateral_gap_m}" cos="${massingBody.override_ignore_cos}" max_fp="${massingBody.override_max_fp_m2}" ignore_setbacks="${massingBody.override_ignore_setbacks}"`);
           const mRes = await fetch(`http://localhost:${PORT}/generate-massing`, {
@@ -1730,6 +1730,23 @@ function computeAccessPoint(coords, cLat, cLon, frontEdgeIndex) {
   console.log(`│ AccessPoint: edge=${bestI} midLat=${midLat.toFixed(6)} bearing=${outBrng.toFixed(0)}°`);
   return { lat: midLat, lon: midLon, bearing: outBrng };
 }
+// v12.14 — Zone constructible RÉELLE (retraits réglés dans le cockpit, sinon règle 5 m rue / 3 m)
+// en coordonnées GPS, pour les images (plan satellite, massings 8F). Même calcul que le moteur.
+// null si indisponible : l'appelant garde alors l'ancienne enveloppe.
+async function buildableEnvelopeGps(ref, coords, cLat, cLon) {
+  if (!ref || !Array.isArray(coords) || coords.length < 3) return null;
+  let segments = null;
+  const sb = getLeadUnitsSupabase();
+  if (sb) {
+    try { segments = engineSegments(await loadLeadRules(sb, String(ref))); }
+    catch (e) { console.warn(`[ENVELOPE] ${ref} : retraits du cockpit illisibles, règle par défaut : ${e.message}`); }
+  }
+  const site = SiteGeometry.siteBuildable(coords.map(c => ({ lat: Number(c.lat), lon: Number(c.lon) })), segments, 0);
+  if (!site || !site.buildable || site.buildable.length < 3) return null;
+  console.log(`│ [ENVELOPE] ${ref} : zone constructible réelle ${site.buildable_area_m2} m² (${segments ? "retraits du cockpit" : "règle BARLO"})`);
+  return site.buildable.map(p => fromM_studio(p.x, p.y, cLat, cLon));
+}
+
 function computeEnvelope(coords, cLat, cLon, front, side, back, frontEdgeIndex) {
   const pts = coords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const n = pts.length;
@@ -5142,6 +5159,22 @@ function computeSmartScenarios({
 // de toucher computeSmartScenarios, computeMassingPolygon, ni les textes
 // directement — c'est tout l'interet de la structure.
 // ═══════════════════════════════════════════════════════════════════════════
+// v12.14 — Réglages de la « première configuration » (saisies chiffrées par scénario, mitoyenneté
+// supposée côté est, emprise max, layout forcé…) : remplacés par les retraits par côté (sb_lead_rules)
+// et la géométrie validée. Ignorés par le moteur, les textes et les images ; effacés de PIPELINE au
+// prochain retraitement. Restent actifs : programme précis, dérogations COS / retraits, notes.
+const LEGACY_OVERRIDE_KEYS = [
+  "override_lateral_hug", "override_lateral_gap_m", "override_max_fp_m2",
+  "override_mitoyennete_imposee", "override_retraits_segments",
+  ...["A", "B", "C"].flatMap(l => [`override_units_${l}`, `override_fp_${l}`, `override_levels_${l}`,
+    `override_gap_m_${l}`, `override_cos_${l}`, `override_layout_${l}`, `override_target_sdp_${l}`,
+    `override_units_detail_${l}`]),
+];
+function stripLegacyOverrides(p) {
+  const o = Object.assign({}, p || {});
+  for (const k of LEGACY_OVERRIDE_KEYS) delete o[k];
+  return o;
+}
 function parseLeadConstraints(body) {
   const c = {
     geometry: {},
@@ -5553,7 +5586,7 @@ function applyConstraintsToTexts(flat, constraints) {
 }
 // Compat : ancienne signature applyScenarioOverrides → delegue au framework
 function applyScenarioOverrides(scenarios, params) {
-  const constraints = parseLeadConstraints(params || {});
+  const constraints = parseLeadConstraints(stripLegacyOverrides(params || {}));
   return applyConstraintsToScenarios(scenarios, constraints);
 }
 // ─── ENDPOINT /compute-scenarios ─────────────────────────────────────────────
@@ -5613,7 +5646,7 @@ app.post("/compute-scenarios", (req, res) => {
     commerce_size_m2: Number(p.commerce_size_m2) || 0,
     retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
     // v74.30 PUSH 11 : injecter contraintes specifiques du lead (parsees ici)
-    _leadConstraints: parseLeadConstraints(p),
+    _leadConstraints: parseLeadConstraints(stripLegacyOverrides(p)),
   });
   // v57.22: champs diagnostic APLATIS pour Make.com (évite {object} dans Google Sheets)
   const diag = scenarios.diagnostic || {};
@@ -7788,7 +7821,9 @@ app.post("/generate", async (req, res) => {
   const frontEdgeIndex = (front_edge !== undefined && front_edge !== null && front_edge !== "")
     ? (console.log(`│ FRONT-EDGE: override depuis body → arête ${front_edge}`), Number(front_edge))
     : (console.log(`│ FRONT-EDGE: convention v73.1 → arête 0 (premier segment polygone)`), 0);
-  const envelopeCoords = computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
+  // v12.14 — zone constructible réelle (retraits du cockpit) ; ancienne enveloppe en repli
+  const envelopeCoords = (await buildableEnvelopeGps(lead_id, coords, cLat, cLon))
+    || computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
   const zoom = zoomOverride ? Number(zoomOverride) : computeZoom(coords, cLat, cLon);
   // v70.1: Slide 4 TOUJOURS orienté nord en haut (bearing=0) pour repérage facile
   const bearing = 0;
@@ -8292,7 +8327,12 @@ app.post("/generate-massing", async (req, res) => {
   if (compute_scenario || !fp_m2_raw || !levels_raw) {
     // MODE SMART : le moteur calcule tout
     if (!site_area) return res.status(400).json({ error: "site_area obligatoire en mode compute_scenario" });
-    const scenarios = computeSmartScenarios({
+    // v12.14 — figures du résultat moteur unique (cockpit, PPT) quand le traitement les fournit :
+    // l'image montre alors exactement le scénario présenté, au lieu d'un calcul séparé.
+    const scV12 = (req.body.scenario_v12 && typeof req.body.scenario_v12 === "object" && Number(req.body.scenario_v12.fp_m2) > 0)
+      ? req.body.scenario_v12 : null;
+    if (scV12) console.log(`│ [8F] ${label} : figures du résultat moteur v12 (fp=${scV12.fp_m2} m², ${scV12.levels} niveaux)`);
+    const scenarios = scV12 ? { A: scV12, B: scV12, C: scV12 } : computeSmartScenarios({
       site_area: Number(site_area),
       envelope_w: envW,
       envelope_d: envD,
@@ -8332,11 +8372,9 @@ app.post("/generate-massing", async (req, res) => {
       input_typologies: input_typologies || "",
       commerce_size_m2: Number(commerce_size_m2) || 0,
       // v74.30 PUSH 11 : injecter contraintes specifiques du lead
-      _leadConstraints: parseLeadConstraints(req.body),
+      _leadConstraints: parseLeadConstraints(stripLegacyOverrides(req.body)),
     });
-    // v74.30: applyScenarioOverrides est maintenant un alias du framework Lead Constraints,
-    // mais le moteur les a deja appliquees via _leadConstraints — appel devenu no-op ici.
-    applyScenarioOverrides(scenarios, req.body);
+    // v12.14 — plus de seconde application des réglages : le moteur les applique déjà
     const sc = scenarios[label] || scenarios.A;
     // v72.28: LOG les 3 scénarios pour vérifier la différenciation
     console.log(`[v72.28] ═══ SMART SCENARIOS COMPUTED ═══`);
@@ -8527,9 +8565,11 @@ app.post("/generate-massing", async (req, res) => {
   // et on utilise la PARCELLE comme enveloppe (retraits = 0). Le bati pourra alors
   // s'etendre sur toute la parcelle dans la limite des autres contraintes (hug, gap, max_fp).
   const _ignoreSetbacks = String(req.body.override_ignore_setbacks || "").trim().toUpperCase() === "Y";
+  // v12.14 — zone constructible réelle (retraits du cockpit) ; ancienne enveloppe en repli
   const envelopeCoords = _ignoreSetbacks
     ? (console.log(`│ [CONSTRAINTS] override_ignore_setbacks=Y → ENVELOPE = PARCELLE (retraits ignores)`), [...coords])
-    : computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex);
+    : ((await buildableEnvelopeGps(req.body.lead_id, coords, cLat, cLon))
+      || computeEnvelope(coords, cLat, cLon, (Number(setback_front) > 0 ? Number(setback_front) : 5), (Number(setback_side) > 0 ? Number(setback_side) : 3), (Number(setback_back) > 0 ? Number(setback_back) : 3), frontEdgeIndex));
   // ── DIAGNOSTIC : vérifier que l'enveloppe est à l'intérieur de la parcelle ──
   const envPtsDbg = envelopeCoords.map(c => toM(c.lat, c.lon, cLat, cLon));
   const envMinX = Math.min(...envPtsDbg.map(p => p.x)), envMaxX = Math.max(...envPtsDbg.map(p => p.x));
@@ -8577,7 +8617,7 @@ app.post("/generate-massing", async (req, res) => {
     // v74.30 PUSH 11+18 — passer les contraintes structurelles du lead au framework.
     // computeMassingPolygon utilise applyConstraintsToMassing() pour les consommer
     // et selectionne un gap_m par scenario si fourni.
-    lead_constraints: parseLeadConstraints(req.body),
+    lead_constraints: parseLeadConstraints(stripLegacyOverrides(req.body)),
   });
   const sb = requireSupabase();
   const slug = String(client_name || "client").toLowerCase().trim().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
@@ -10155,14 +10195,8 @@ async function mergeLeadOverridesFromPipeline(p) {
       console.log(`[MERGE-OVERRIDES] Lead "${leadId}" introuvable dans PIPELINE → skip`);
       return p;
     }
-    const overrideFields = [
-      "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
-      "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
-      "override_units_A", "override_units_B", "override_units_C",
-      "override_fp_A", "override_fp_B", "override_fp_C",
-      "override_levels_A", "override_levels_B", "override_levels_C",
-      "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
-    ];
+    // v12.14 — seuls les réglages encore valides (les saisies de la première configuration sont ignorées)
+    const overrideFields = ["override_ignore_cos", "override_ignore_setbacks", "constraints_rationale"];
     let mergedCount = 0;
     const merged = [];
     for (const f of overrideFields) {
@@ -10367,7 +10401,7 @@ app.post("/generate-texts", async (req, res) => {
   // ═══ v72.91 ENRICH flat with ALL keys needed by template engine ═══
   enrichFlatForTemplates(flat, p, scenarios);
   // ═══ v74.30 PUSH 11 — injecter alerte contraintes (si lead a des contraintes) ═══
-  applyConstraintsToTexts(flat, parseLeadConstraints(p));
+  applyConstraintsToTexts(flat, parseLeadConstraints(stripLegacyOverrides(p)));
   // ═══ v72.90 TEMPLATE ENGINE — deterministic texts (zero GPT) ═══
   const templateTexts = buildTemplateTexts(flat, scenarios);
   console.log(`[GENERATE-TEXTS] Template engine: ${Object.keys(templateTexts).length} deterministic texts`);
@@ -10576,7 +10610,7 @@ app.post("/generate-pptx", async (req, res) => {
     // ═══ v72.91 ENRICH flat with ALL keys needed by template engine ═══
     enrichFlatForTemplates(flat, p, scenarios);
     // ═══ v74.30 PUSH 11 — injecter alerte contraintes (si lead a des contraintes) ═══
-    applyConstraintsToTexts(flat, parseLeadConstraints(p));
+    applyConstraintsToTexts(flat, parseLeadConstraints(stripLegacyOverrides(p)));
     // ═══ v72.90 TEMPLATE ENGINE — deterministic texts ═══
     const templateTexts = buildTemplateTexts(flat, scenarios);
     // ═══ v72.90 GPT — ONLY slide_5_text ═══
@@ -10866,14 +10900,8 @@ app.get("/pptx-premium/:leadId", async (req, res) => {
       if (obj[pipeCol] !== undefined && obj[pipeCol] !== "") p[bodyKey] = obj[pipeCol];
     }
     // Plus tous les overrides
-    const overrideFields = [
-      "override_lateral_hug", "override_lateral_gap_m", "override_ignore_cos",
-      "override_max_fp_m2", "override_ignore_setbacks", "constraints_rationale",
-      "override_units_A", "override_units_B", "override_units_C",
-      "override_fp_A", "override_fp_B", "override_fp_C",
-      "override_levels_A", "override_levels_B", "override_levels_C",
-      "override_gap_m_A", "override_gap_m_B", "override_gap_m_C",
-    ];
+    // v12.14 — seuls les réglages encore valides (les saisies de la première configuration sont ignorées)
+    const overrideFields = ["override_ignore_cos", "override_ignore_setbacks", "constraints_rationale"];
     for (const f of overrideFields) {
       if (obj[f] !== undefined && obj[f] !== "") p[f] = obj[f];
     }
@@ -10942,7 +10970,7 @@ app.post("/generate-pptx-premium", async (req, res) => {
       layout_mode: p.layout_mode || "SUPERPOSE", commerce_depth_m: Number(p.commerce_depth_m) || 6,
       retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
       input_typologies: p.input_typologies || "", commerce_size_m2: Number(p.commerce_size_m2) || 0,
-      _leadConstraints: parseLeadConstraints(p),
+      _leadConstraints: parseLeadConstraints(stripLegacyOverrides(p)),
     });
     // (plus de seconde application des réglages PIPELINE : le moteur les applique déjà, et elle
     //  écraserait la géométrie validée)
@@ -10976,7 +11004,7 @@ app.post("/generate-pptx-premium", async (req, res) => {
       rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100),
       rec_levels: String(Math.max(0, ((scenarios[(diag.recommandation || {}).scenario || "B"] || {}).levels || 1) - 1)),
       rec_duree_chantier: `${(scenarios[(diag.recommandation || {}).scenario || "B"] || {}).duree_chantier_mois || 0} mois`,
-      _has_constraints: parseLeadConstraints(p).isEmpty ? "" : "Y",
+      _has_constraints: parseLeadConstraints(stripLegacyOverrides(p)).isEmpty ? "" : "Y",
     };
     // Per-scenario fields
     for (const [key, s] of [["A", sA], ["B", sB], ["C", sC]]) {
@@ -11142,7 +11170,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.13";
+const V12_ENGINE_VERSION = "12.14";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -11169,7 +11197,7 @@ function actualToScenarioOverride(actual) {
   };
 }
 function leadConstraintsWithActual(p, rows) {
-  const lc = parseLeadConstraints(p);
+  const lc = parseLeadConstraints(stripLegacyOverrides(p));
   const validated = ["A", "B", "C"].filter(k => rows && rows[k] && rows[k].actual && Number(rows[k].actual.units_count) > 0);
   if (!validated.length) return lc;
   lc.programmatic = lc.programmatic || {};
@@ -11519,7 +11547,7 @@ app.post("/api/scenarios/:ref/:scn/validate", async (req, res) => {
     let leadRules = {};
     try { leadRules = await loadLeadRules(sb, ref); } catch (e) { console.warn(`[V12 VALIDATE] ${ref} : règles du terrain illisibles : ${e.message}`); }
     const role = ScenarioModel.roleOf(scn);
-    const lc = parseLeadConstraints(p);
+    const lc = parseLeadConstraints(stripLegacyOverrides(p));
     const cosSol = (lc.regulatory && lc.regulatory.ignore_cos) ? 0 : ScenarioRules.cosSolForZone(p.zoning_type).value;
     const actual = SiteGeometry.scenarioActual(units, {
       site_polygon: String(p.site_polygon || p.site_polygon_points || ""),

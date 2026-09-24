@@ -45,7 +45,7 @@ test("scénario validé : le moteur (donc le PPT) prend la géométrie validée,
   const ventil = A.cout_ventilation;
   const lots = ventil.gros_oeuvre_fcfa + ventil.second_oeuvre_fcfa + ventil.lots_techniques_fcfa + ventil.amenagements_ext_fcfa + ventil.vrd_fcfa;
   assert.ok(Math.abs(lots - A.cost_total_fcfa) / A.cost_total_fcfa < 0.12, "ventilation recalée sur le nouveau coût");
-  assert.equal(r.scenarios.B.fp_m2, 112, "B non validé : garde ses saisies");
+  assert.notEqual(r.scenarios.B.fp_m2, 112, "B non validé : suggestion BARLO, les saisies de la première configuration sont ignorées");
   const after = fake.tables.sb_scenarios.find(x => x.scenario === "A");
   assert.equal(JSON.stringify(after.suggested), suggestedBefore, "la suggestion BARLO reste intacte");
   assert.equal(after.status, "VALIDATED", "la validation ne se périme pas toute seule");

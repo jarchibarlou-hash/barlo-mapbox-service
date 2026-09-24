@@ -150,18 +150,17 @@ test("C phasé : ce qui ne tient pas est reporté en phase 2, avec la réserve d
   }
 });
 
-test("emprise max saisie = plafond : jamais d'emprise agrandie ni de ratios fixes par lettre", () => {
-  const lead = Object.assign({}, LEAD, { input_typologies: "T1=1", target_units: 1, budget_range: "",
-    override_max_fp_m2: "150", override_lateral_hug: "EAST", override_lateral_gap_m: "3" });
-  const inputs = S.scenarioEngineInputs(lead, {});
-  const r = S.computeSmartScenarios(inputs);
-  S.applyScenarioOverrides(r, lead);
+test("première configuration ignorée : saisies chiffrées, mitoyenneté supposée, emprise max", () => {
+  const legacy = { override_max_fp_m2: "40", override_lateral_hug: "EAST", override_lateral_gap_m: "3",
+    override_fp_A: "180", override_levels_A: "1", override_units_A: "9", override_fp_B: "112", override_cos_B: "0.9" };
+  const clean = S.computeSmartScenarios(S.scenarioEngineInputs(LEAD, {}));
+  const withLegacy = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, LEAD, legacy), {}));
   for (const k of ["A", "B", "C"]) {
-    assert.ok(r[k].sdp_m2 < 150, `${k} : SDP du petit programme, pas gonflée à 150 m² × niveaux`);
-    assert.ok(!r[k].fp_capped_by_constraint, `${k} : ancien plafond à ratios fixes non appliqué`);
+    assert.equal(withLegacy[k].fp_m2, clean[k].fp_m2, `${k} : emprise inchangée par les anciennes saisies`);
+    assert.equal(withLegacy[k].sdp_m2, clean[k].sdp_m2, `${k} : SDP inchangée`);
+    assert.equal(withLegacy[k].total_units, clean[k].total_units, `${k} : unités inchangées`);
   }
-  const tight = S.computeSmartScenarios(S.scenarioEngineInputs(Object.assign({}, LEAD, { override_max_fp_m2: "40" }), {}));
-  assert.ok(tight.B.sdp_limits_v12.emprise_max <= 40, "le plafond saisi réduit l'emprise disponible");
+  assert.equal(withLegacy.B.sdp_limits_v12.emprise_max, clean.B.sdp_limits_v12.emprise_max, "plus de plafond « emprise max » saisi");
 });
 
 test("le moteur est déterministe (condition de la relecture du résultat enregistré)", () => {

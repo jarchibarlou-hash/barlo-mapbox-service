@@ -378,6 +378,20 @@
         .c-segments-table input,.c-segments-table select{width:100%;padding:.22rem .3rem;background:var(--navy);color:var(--text);border:1px solid var(--border);border-radius:3px;font-family:inherit;font-size:.63rem;outline:none}
         .c-segments-table input:focus,.c-segments-table select:focus{border-color:var(--amber)}
         .c-segments-table td.seg-len{color:var(--text2);font-size:.6rem;text-align:right;font-family:'JetBrains Mono',monospace}
+        /* v12.14 — type de côté en un clic (Rue / Mitoyen / Libre / Fond) + repère sur le plan */
+        .c-segments-table tr.seg-row:hover td{background:rgba(212,133,14,.07)}
+        .seg-types{display:flex;gap:.2rem;flex-wrap:wrap}
+        .seg-type{flex:1 1 auto;padding:.22rem .4rem;border-radius:4px;border:1px solid var(--border);background:var(--navy);color:var(--text2);font-family:inherit;font-size:.6rem;font-weight:600;cursor:pointer;white-space:nowrap}
+        .seg-type:hover{border-color:var(--amber);color:var(--text)}
+        .seg-type.on.libre{background:#6b5a3e;border-color:#c9a878;color:#fff}
+        .seg-type.on.rue{background:#1f5f8b;border-color:#3498DB;color:#fff}
+        .seg-type.on.mitoyen{background:#8b2a22;border-color:#E74C3C;color:#fff}
+        .seg-type.on.fond{background:#1d6b3c;border-color:#27AE60;color:#fff}
+        .seg-edge{stroke:transparent;stroke-width:4;stroke-linecap:round}
+        .seg-edge.seg-t-rue{stroke:#3498DB}
+        .seg-edge.seg-t-mitoyen{stroke:#E74C3C}
+        .seg-edge.seg-t-fond{stroke:#27AE60;stroke-width:3}
+        .seg-edge.hl{stroke:#FBBF24 !important;stroke-width:7}
         .c-btn-reset-segments{padding:.28rem .55rem;font-size:.6rem;font-weight:600;border:1px solid var(--border);border-radius:4px;cursor:pointer;background:var(--navy);color:var(--text2);font-family:inherit;margin-top:.3rem}
         .c-btn-reset-segments:hover{color:var(--text)}
 
@@ -427,7 +441,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.13b-ETAPES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.14-COTES</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -535,14 +549,8 @@
                             </div>
                         </div>
 
-                        <label>Emprise maximale globale (m²) <span class="c-hint">— toutes scénarios confondus</span>
-                            <input type="text" id="cMaxFp" placeholder="Ex : 180">
-                        </label>
 
                         <div class="c-checks-row">
-                            <label title="Coche si un ou plusieurs murs de ton bâtiment doivent partager la limite parcellaire avec un voisin (mitoyenneté = mur pignon commun, pas de retrait sur ce côté). Le ou les côtés exacts se règlent via les retraits par segment ci-dessus : mets le retrait à 0 m pour un segment mitoyen.">
-                                <input type="checkbox" id="cMitoyenneteImposee"> Mitoyenneté imposée <span class="c-tt-icon">?</span>
-                            </label>
                             <label title="Ignore le plafond COS réglementaire (dérogation urbanistique déjà négociée avec la mairie)."><input type="checkbox" id="cIgnoreCos"> Ignorer plafond COS <span class="c-tt-icon">?</span></label>
                             <label title="Ignore les retraits réglementaires standard (dérogation urbanistique)."><input type="checkbox" id="cIgnoreSetbacks"> Ignorer retraits réglementaires <span class="c-tt-icon">?</span></label>
                         </div>
@@ -848,38 +856,8 @@ function renderScenarioPanels() {
 function scenarioPanelTemplate(L) {
     return `
       <div class="v12-strip" id="cV12Strip${L}"><span class="c-hint">Scénario non synchronisé — charge un lead traité.</span></div>
-      <div class="c-section">
-        <h4>🏗️ Configuration du bloc <span class="c-hint">(pré-rempli par le moteur — modifie ce que tu juges pertinent)</span></h4>
-        <div class="c-block-grid">
-          <label>COS cible (0–3)
-            <input type="text" id="cCos${L}" data-scn="${L}" data-field="cos" placeholder="Ex : 0.90">
-          </label>
-          <label>Layout (change → réapplique)
-            <select id="cLayout${L}" data-scn="${L}" data-field="layout" onchange="reapplyPatternFromDropdown('${L}',this.value)">
-              <option value="OPTIMIZED">🧠 Optimisé (packer)</option>
-              <option value="">Auto (moteur)</option>
-              <option value="U">U (cour Sud)</option>
-              <option value="LAMELLE">LAMELLE (3:1)</option>
-              <option value="PLOT">PLOT (compact grille)</option>
-              <option value="SUPERPOSE">SUPERPOSE (1 volume compact)</option>
-              <!-- v11.9-CLEANUP : SPLIT_AV_AR retiré du dropdown (legacy écrasé par PACKED au load) -->
-            </select>
-          </label>
-          <label>SDP cible (m²)
-            <input type="text" id="cTargetSdp${L}" data-scn="${L}" data-field="target_sdp" placeholder="Ex : 225">
-          </label>
-          <label>Emprise sol (m²)
-            <input type="text" id="cFp${L}" data-scn="${L}" data-field="fp" placeholder="Ex : 113">
-          </label>
-          <label>Niveaux (0=RDC, 1=R+1…)
-            <input type="text" id="cLevels${L}" data-scn="${L}" data-field="levels" placeholder="Ex : 2">
-          </label>
-          <label>Unités totales
-            <input type="text" id="cUnits${L}" data-scn="${L}" data-field="units_count" placeholder="Ex : 3">
-          </label>
-        </div>
-      </div>
-
+      <!-- v12.14 : « Configuration du bloc » (COS cible, SDP cible, emprise, niveaux, unités, layout) supprimée :
+           les chiffres d'un scénario viennent de la suggestion BARLO puis de ta géométrie validée. -->
       <div class="c-section">
         <h4>🏠 Unités programmées <span class="c-hint">— nomme et place chaque unité</span></h4>
         <table class="c-units-table">
@@ -998,7 +976,8 @@ function scenarioPanelTemplate(L) {
 // Type par défaut : T3 si logement dans programme, sinon RESI. Chaque unité prend sdp/N m².
 function splitScenarioIntoN(label, n) {
     const s = cockpitState.scenarios[label];
-    const sdp = Number(s.target_sdp) || Number((currentBody8D||{})[`sdp_${label}`]) || 200;
+    const sugSdp = v12Models && v12Models[label] && v12Models[label].suggested && v12Models[label].suggested.sdp_m2;
+    const sdp = Number(sugSdp && sugSdp.value) || Number((currentBody8D||{})[`sdp_${label}`]) || 200;
     if (sdp <= 0) { showToast("SDP cible manquante — remplis d'abord le champ SDP cible", true); return; }
     const perUnit = Math.round(sdp / n);
     // Type par défaut : COMMERCE en position 1 si programme mixte, sinon T3
@@ -1099,14 +1078,18 @@ function renderSegmentsTable() {
         tbody.innerHTML = `<div style="color:var(--text2);font-size:.65rem;padding:.5rem;text-align:center">Charge un lead pour voir les segments de la parcelle.</div>`;
         return;
     }
+    // v12.14 — type du côté en un clic ; le côté survolé est mis en évidence sur les plans
+    const SEG_TIPS = { libre: "Voisin sans construction en limite : 3 m", rue: "Façade sur voie : 5 m",
+        mitoyen: "Bâti collé au voisin, façade aveugle : 0 m", fond: "Fond de parcelle : 3 m" };
+    const SEG_SHORT = { libre: "Libre", rue: "Rue", mitoyen: "Mitoyen", fond: "Fond" };
     const rows = segs.map((s, i) => `
-        <tr>
+        <tr class="seg-row" onmouseenter="highlightSegment(${i})" onmouseleave="highlightSegment(null)">
           <td class="seg-label">${s.from}–${s.to}</td>
-          <td><input type="number" min="0" step="0.1" value="${s.retrait_m}" oninput="updateSegment(${i},'retrait_m',this.value)" title="Distance de retrait entre le bâtiment et la limite parcellaire sur ce segment. Mets 0 si mitoyen."></td>
+          <td><input type="number" min="0" step="0.1" value="${s.retrait_m}" oninput="updateSegment(${i},'retrait_m',this.value)" title="Distance de retrait entre le bâtiment et la limite parcellaire sur ce côté. Réglée par le type, modifiable."></td>
           <td>
-            <select onchange="updateSegment(${i},'type',this.value)" title="Type de bordure : Libre (voisin sans construction), Rue (façade sur voie), Mitoyen (mur pignon commun voisin), Fond de parcelle.">
-              ${SEGMENT_TYPES.map(t => `<option value="${t.value}"${s.type===t.value?" selected":""}>${t.label}</option>`).join("")}
-            </select>
+            <div class="seg-types" role="group" aria-label="Type du côté ${s.from}–${s.to}">
+              ${SEGMENT_TYPES.map(t => `<button type="button" class="seg-type ${t.value}${s.type === t.value ? " on" : ""}" onclick="updateSegment(${i},'type','${t.value}')" title="${escAttr(SEG_TIPS[t.value] || t.label)}">${SEG_SHORT[t.value] || t.label}</button>`).join("")}
+            </div>
           </td>
           <td class="seg-len">${s.length_m} m</td>
         </tr>
@@ -1122,6 +1105,13 @@ function renderSegmentsTable() {
         <button class="c-btn-reset-segments" onclick="resetSegmentsToMoteur()" title="Garde le type de chaque côté et remet le retrait de la règle : ${SETBACK_BY_TYPE.rue} m rue, ${SETBACK_BY_TYPE.libre} m libre/fond, ${SETBACK_BY_TYPE.mitoyen} m mitoyen">🔄 Retraits de la règle BARLO selon le type</button>
     `;
     renderSegmentsSummary();
+}
+
+// v12.14 — Surbrillance d'un côté de parcelle sur les 3 plans (survol du tableau des retraits)
+function highlightSegment(idx) {
+    document.querySelectorAll(".seg-edge.hl").forEach(e => e.classList.remove("hl"));
+    if (idx == null) return;
+    document.querySelectorAll(`.seg-edge[data-seg="${idx}"]`).forEach(e => e.classList.add("hl"));
 }
 
 // v12.4 — Zone constructible réelle (même calcul que le moteur) + source des retraits
@@ -3806,10 +3796,12 @@ function renderParcelSvg(label) {
     // v75.6.2 — Ajoute les cotes segments en mètres affichées au milieu de chaque arête polygone
     const segLinesForSnapPre = [];
     let segCotesHtml = "";
+    let segEdgesHtml = "";   // v12.14 — côtés colorés selon leur type (rue, mitoyen, fond) + surbrillance au survol du tableau
     for (let i = 0; i < N; i++) {
         const seg = (cockpitState.segments || [])[i] || { retrait_m: 3, length_m: 0 };
         const retraitPx = seg.retrait_m * scale;
         const p1 = svgPts[i], p2 = svgPts[(i + 1) % N];
+        segEdgesHtml += `<line class="seg-edge seg-t-${escAttr(seg.type || "libre")}" data-seg="${i}" x1="${p1.x.toFixed(1)}" y1="${p1.y.toFixed(1)}" x2="${p2.x.toFixed(1)}" y2="${p2.y.toFixed(1)}"><title>${vertexLabel(i)}–${vertexLabel((i + 1) % N)} : ${escAttr(seg.type || "libre")}, retrait ${seg.retrait_m} m</title></line>`;
         const dx = p2.x - p1.x, dy = p2.y - p1.y;
         const l = Math.hypot(dx, dy) || 1;
         const nx = inwardSign * (-dy) / l, ny = inwardSign * dx / l;
@@ -4160,6 +4152,7 @@ function renderParcelSvg(label) {
         <rect x="0" y="0" width="400" height="400" fill="#0B1120"/>
         ${sectorLinesHtml}
         <polygon points="${polyStr}" fill="rgba(212,133,14,0.13)" stroke="#c9a878" stroke-width="2"/>
+        ${segEdgesHtml}
         ${segRetraitsHtml}
         <polygon points="${polyStrBuildable}" fill="rgba(30,132,73,0.05)" stroke="rgba(30,132,73,0.4)" stroke-width="1" stroke-dasharray="2,3"/>
         <circle cx="${cxSvg.toFixed(1)}" cy="${cySvg.toFixed(1)}" r="2.5" fill="#c9a878"/>
@@ -6160,6 +6153,13 @@ function renderV12Strip(L) {
         })()}
       </div>
       ${v12RulesLine(m, eng)}`;
+    const badge = $(`cBadge${L}`);
+    if (badge && eng.score != null) {
+        const conforme = !((eng.score_detail && eng.score_detail.cos_conformity && eng.score_detail.cos_conformity.score < 0.5));
+        badge.textContent = `${eng.recommended ? "★ " : ""}${eng.score}`;
+        badge.className = "c-badge-coh " + (conforme ? "good" : "warn");
+        badge.title = `Score ${eng.score}/100${eng.recommended ? " — scénario recommandé" : ""}${conforme ? "" : " — non conforme en l'état (retraits ou COS)"}`;
+    }
     const tabState = $(`cTabState${L}`);
     if (tabState) {
         const icon = { SUGGESTED: "", EDITING: " ●", VALIDATED: " ✓", ANALYZED: " ✓", OUTDATED: " ⚠" }[m.status] || "";
@@ -6902,8 +6902,7 @@ function reapplyPatternFromDropdown(label, patternValue) {
     const userPref = BARLO.site.detectUserLevelsPref(currentBody8D || {});
     let scenLevels = userPref.maxLevels != null ? userPref.maxLevels
         : (s.levels != null && s.levels !== "" ? Number(s.levels)
-        : (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== ""
-            ? Number(currentBody8D[`override_levels_${label}`])
+        : (defaultEtagesV12(label) > 0 || (v12Models && v12Models[label]) ? defaultEtagesV12(label)
             : (currentBody8D[`${label}_levels`] != null ? Number(currentBody8D[`${label}_levels`]) : 3)));
     const maxLevels = Math.max(0, isNaN(scenLevels) ? 3 : scenLevels);
     const cosUser = s.cos != null && s.cos !== "" ? Number(s.cos) : null;
@@ -7105,6 +7104,12 @@ async function validateScenarioImplantation(label) {
     }
 }
 
+// v12.14 — R+X par défaut d'une unité sans étages saisis : celui de la suggestion BARLO du scénario
+function defaultEtagesV12(label) {
+    const m = v12Models && v12Models[label];
+    const lv = m && m.suggested && m.suggested.levels && Number(m.suggested.levels.value);
+    return lv > 0 ? lv - 1 : 0;
+}
 // v12.9 — Unités dessinées telles que les voient la 3D ET la validation (une seule traduction).
 // R+X de l'unité ; vide → R+X du scénario.
 function geometryUnitsPayload(label) {
@@ -7115,7 +7120,7 @@ function geometryUnitsPayload(label) {
         unit_name: u.unit_name || "",
         unit_size_m2: Number(u.unit_size_m2) || 0,
         polygon: u.polygon.map(p => ({ x: Number(p.x), y: Number(p.y) })),
-        etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : (Number(s.levels) || 0),
+        etages_unit: (u.etages_unit != null && u.etages_unit !== "") ? Number(u.etages_unit) : defaultEtagesV12(label),
         pilotis: !!u.pilotis,
         sous_sols: u.sous_sols != null ? Number(u.sous_sols) : 0,
         hauteur_niveau: u.hauteur_niveau != null ? Number(u.hauteur_niveau) : null,
@@ -7343,8 +7348,8 @@ function runSolverForScenario(label) {
         console.log(`[BARLO solver] Préférence user formulaire : "${userPref.raw}" → maxLevels=${userPref.maxLevels} (strict=${userPref.strict})`);
     } else if (s.levels != null && s.levels !== "") {
         scenLevels = Number(s.levels);
-    } else if (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== "") {
-        scenLevels = Number(currentBody8D[`override_levels_${label}`]);
+    } else if (v12Models && v12Models[label]) {
+        scenLevels = defaultEtagesV12(label);   // v12.14 — suggestion BARLO du scénario
     } else if (currentBody8D[`${label}_levels`] != null) {
         scenLevels = Number(currentBody8D[`${label}_levels`]);
     } else {
@@ -7893,11 +7898,10 @@ function renderMoteurBrief(label) {
         const userPref = BARLO.site.detectUserLevelsPref(currentBody8D || {});
         const scenLvl = userPref.maxLevels != null ? userPref.maxLevels
             : (s.levels != null && s.levels !== "" ? Number(s.levels)
-            : (currentBody8D[`override_levels_${label}`] != null && currentBody8D[`override_levels_${label}`] !== ""
-                ? Number(currentBody8D[`override_levels_${label}`])
+            : (defaultEtagesV12(label) > 0 || (v12Models && v12Models[label]) ? defaultEtagesV12(label)
                 : (currentBody8D[`${label}_levels`] != null ? Number(currentBody8D[`${label}_levels`]) : 3)));
         const maxLvl = Math.max(0, isNaN(scenLvl) ? 3 : scenLvl);
-        const lvlSrc = userPref.maxLevels != null ? "formulaire" : (s.levels ? "cockpit" : (currentBody8D[`override_levels_${label}`] ? "backend" : "défaut"));
+        const lvlSrc = userPref.maxLevels != null ? "formulaire" : (s.levels ? "cockpit" : (v12Models && v12Models[label] ? "suggestion BARLO" : "défaut"));
         const groundMax = parcelArea !== "?" ? Math.round(parcelArea * cosVal) : "?";
         const totalCap = groundMax !== "?" ? Math.round(groundMax * (maxLvl + 1)) : "?";
         const okColor = (parcelArea !== "?" && totalProgramArea <= parcelArea * cosVal * (maxLvl + 1) * 1.05) ? "#22C55E" : "#F59E0B";
@@ -7937,10 +7941,8 @@ function populateCockpitFromLead(L, units) {
 
     // 2) Globaux (v75.3.1 : cLateralHug/cLateralGap remplacés par segments per-arête + checkbox mitoyenneté)
     setInput("cInputTypologies", L.input_typologies);
-    setInput("cMaxFp", L.override_max_fp_m2);
     setCheckbox("cIgnoreCos", String(L.override_ignore_cos||"").toUpperCase() === "Y");
     setCheckbox("cIgnoreSetbacks", String(L.override_ignore_setbacks||"").toUpperCase() === "Y");
-    setCheckbox("cMitoyenneteImposee", String(L.override_mitoyennete_imposee||L.override_lateral_hug||"").length > 0 && String(L.override_mitoyennete_imposee||L.override_lateral_hug||"").toUpperCase() !== "N");
     setInput("cRationale", L.constraints_rationale);
 
     // v75.3.1 : reset segments et re-render du tableau (chargement fresh lead)
@@ -7949,13 +7951,13 @@ function populateCockpitFromLead(L, units) {
     // 3) Par scénario
     ["A","B","C"].forEach(label => {
         const s = cockpitState.scenarios[label];
-        s.cos = L[`override_cos_${label}`] || "";
-        s.layout = L[`override_layout_${label}`] || "";
-        s.target_sdp = L[`override_target_sdp_${label}`] || "";
-        s.fp = L[`override_fp_${label}`] || "";
-        s.levels = L[`override_levels_${label}`] || "";
-        s.units_count = L[`override_units_${label}`] || "";
-        s.gap_m = L[`override_gap_m_${label}`] || "";
+        s.cos = "";   // v12.14 : saisie de la première configuration, plus lue
+        s.layout = "";   // v12.14 : saisie de la première configuration, plus lue
+        s.target_sdp = "";   // v12.14 : saisie de la première configuration, plus lue
+        s.fp = "";   // v12.14 : saisie de la première configuration, plus lue
+        s.levels = "";   // v12.14 : saisie de la première configuration, plus lue
+        s.units_count = "";   // v12.14 : saisie de la première configuration, plus lue
+        s.gap_m = "";   // v12.14 : saisie de la première configuration, plus lue
         s.rationale = L[`scenario_rationale_${label}`] || "";
         // Unités : priorité à Supabase, sinon défaut moteur
         // v11.8-P0.3 — le GET /api/lead-units/:ref restitue maintenant footprint_json fusionné
@@ -8041,27 +8043,13 @@ function collectAllConstraints() {
     const g = cockpitState.globals;
     const out = {
         input_typologies: g.input_typologies || "",
-        override_max_fp_m2: g.max_fp_m2 || "",
         override_ignore_cos: !!g.ignore_cos,
         override_ignore_setbacks: !!g.ignore_setbacks,
-        override_mitoyennete_imposee: !!g.mitoyennete_imposee,  // v75.3.1
-        constraints_rationale: g.rationale || "",
-        // v75.3.1 — Retraits par segment (backend peut consommer via override_retraits_segments)
-        override_retraits_segments: (cockpitState.segments || []).length > 0
-            ? JSON.stringify(cockpitState.segments.map(s => ({
-                from: s.from, to: s.to, retrait_m: Number(s.retrait_m) || 0, type: s.type || "libre"
-            })))
-            : ""
+        constraints_rationale: g.rationale || ""
+        // v12.14 — retraits par côté : enregistrés à part (sb_lead_rules), plus via PIPELINE
     };
     ["A","B","C"].forEach(label => {
         const s = cockpitState.scenarios[label];
-        out[`override_cos_${label}`] = s.cos || "";
-        out[`override_layout_${label}`] = s.layout || "";
-        out[`override_target_sdp_${label}`] = s.target_sdp || "";
-        out[`override_fp_${label}`] = s.fp || "";
-        out[`override_levels_${label}`] = s.levels || "";
-        out[`override_units_${label}`] = s.units_count || "";
-        out[`override_gap_m_${label}`] = s.gap_m || "";
         out[`scenario_rationale_${label}`] = s.rationale || "";
         // Unités structurées : JSON (le server les lit AUSSI depuis Supabase, mais on met en PIPELINE pour redondance)
         // v75.5.2 : inclut tous les nouveaux champs (drag, rotation, shape, détails techniques)
@@ -8092,10 +8080,8 @@ function collectAllConstraints() {
 function syncCockpitStateFromForm() {
     cockpitState.globals = {
         input_typologies: ($("cInputTypologies")?.value || "").trim(),
-        max_fp_m2: ($("cMaxFp")?.value || "").trim(),
         ignore_cos: !!$("cIgnoreCos")?.checked,
         ignore_setbacks: !!$("cIgnoreSetbacks")?.checked,
-        mitoyennete_imposee: !!$("cMitoyenneteImposee")?.checked,  // v75.3.1
         rationale: ($("cRationale")?.value || "").trim()
     };
     ["A","B","C"].forEach(label => {
@@ -8109,6 +8095,8 @@ function syncCockpitStateFromForm() {
 }
 
 function updateCoherenceBadges() {
+    // v12.14 — le badge porte le score du scénario (renderV12Strip) ; plus de fourchettes par lettre
+    if (v12Models) return;
     if (!currentBody8D || !currentBody8D.target_surface_m2) {
         ["A","B","C"].forEach(l => {
             const b = $(`cBadge${l}`);
@@ -8195,7 +8183,7 @@ async function saveConstraints() {
 function clearConstraints() {
     if (!confirm("Effacer toutes les contraintes et réglages des 3 scénarios ? Cette action ne peut pas être annulée.")) return;
     cockpitState.globals = {};
-    ["cInputTypologies","cLateralHug","cLateralGap","cMaxFp","cRationale"].forEach(id => { const el = $(id); if (el) el.value = ""; });
+    ["cInputTypologies","cRationale"].forEach(id => { const el = $(id); if (el) el.value = ""; });
     ["cIgnoreCos","cIgnoreSetbacks"].forEach(id => { const el = $(id); if (el) el.checked = false; });
     ["A","B","C"].forEach(label => {
         cockpitState.scenarios[label] = emptyScenarioState();
@@ -8229,8 +8217,8 @@ function scheduleScenarioRerender(label) {
 }
 
 function attachCockpitListeners() {
-    // Live update sur inputs globaux (v75.3.1 : cLateralHug/cLateralGap retirés, cMitoyenneteImposee ajouté)
-    const ids = ["cInputTypologies","cMaxFp","cRationale","cIgnoreCos","cIgnoreSetbacks","cMitoyenneteImposee"];
+    // Live update sur inputs globaux (v12.14 : emprise max et mitoyenneté imposée retirées)
+    const ids = ["cInputTypologies","cRationale","cIgnoreCos","cIgnoreSetbacks"];
     ids.forEach(id => {
         const el = $(id);
         if (!el) return;
