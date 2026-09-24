@@ -444,7 +444,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.20b-NIVEAUX</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.21-HAUTEURS</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6404,9 +6404,8 @@ function updateUnitDetail(label, idx, field, val) {
         // v12.19 — saisi en nombre de niveaux (1 = un seul), stocké en R+X (0 = un seul)
         u.etages_unit = val === "" ? null : Math.max(0, Math.round(Number(val)) - 1);
     } else if (field === "hauteur_niveau") {
-        // v12.19 — une seule hauteur d'étage par scénario : les niveaux de toutes les unités s'alignent
-        const h = val === "" ? null : Number(val);
-        (cockpitState.scenarios[label].units || []).forEach(x => { x.hauteur_niveau = h; });
+        // v12.21 — hauteur propre à l'unité (vide = 3 m) ; « Appliquer à toutes » l'étend au scénario
+        u.hauteur_niveau = val === "" ? null : Number(val);
     } else if (field === "etages_unit" || field === "sous_sols" || field === "altitude_base_m" || field === "niveau_depart_etage") {
         u[field] = val === "" ? null : Number(val);
     } else {
@@ -6415,6 +6414,15 @@ function updateUnitDetail(label, idx, field, val) {
     updateConstraintsCount();
 }
 
+// v12.21 — étend la hauteur d'étage d'une unité à toutes les unités du scénario (choix explicite)
+function applyHeightToAllUnits(label, idx) {
+    const units = cockpitState.scenarios[label].units || [];
+    const h = units[idx] ? units[idx].hauteur_niveau : null;
+    units.forEach(x => { x.hauteur_niveau = h; });
+    renderUnitsTable(label);
+    updateConstraintsCount();
+    showToast(`Hauteur d'étage ${h != null ? h : 3} m appliquée aux ${units.length} unités du scénario ${label}`);
+}
 function renderUnitsTable(label) {
     const tbody = $(`cUnitsBody${label}`);
     if (!tbody) return;
@@ -6443,10 +6451,11 @@ function renderUnitsTable(label) {
               <label class="stacked">Sous-sols
                 <input type="number" min="0" max="3" step="1" value="${u.sous_sols != null ? u.sous_sols : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'sous_sols',this.value)">
               </label>
-              <label class="stacked">Hauteur d'étage (m) — commune au scénario
-                <input type="number" min="2" max="10" step="0.1" value="${u.hauteur_niveau != null ? u.hauteur_niveau : ""}" placeholder="3" oninput="updateUnitDetail('${label}',${i},'hauteur_niveau',this.value)" onchange="renderUnitsTable('${label}')">
+              <label class="stacked">Hauteur d'étage de l'unité (m)
+                <input type="number" min="2" max="10" step="0.1" value="${u.hauteur_niveau != null ? u.hauteur_niveau : ""}" placeholder="3" oninput="updateUnitDetail('${label}',${i},'hauteur_niveau',this.value)">
+                <span class="c-modal-hint">Vide = 3 m. <a href="#" onclick="applyHeightToAllUnits('${label}',${i});return false" style="color:var(--amber)">Appliquer à toutes les unités du scénario</a></span>
               </label>
-              <label class="stacked">Niveau de départ (0 = RDC, 1 = R+1…)
+              <label class="stacked">Niveau de départ (0 = RDC, 1 = R+1, 2 = R+2…)
                 <input type="number" min="-3" max="20" step="1" value="${u.niveau_depart_etage != null ? u.niveau_depart_etage : ""}" placeholder="0" oninput="updateUnitDetail('${label}',${i},'niveau_depart_etage',this.value)">
               </label>
               <label class="stacked">Altitude base (m, override)
