@@ -11142,7 +11142,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.12";
+const V12_ENGINE_VERSION = "12.13";
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
