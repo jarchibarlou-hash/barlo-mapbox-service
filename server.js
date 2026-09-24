@@ -9380,8 +9380,8 @@ function buildTemplateTexts(flat, scenarios) {
     + (memeProgramme("B", "A") ? "" : `- Programme de A : ${progDesc("A")}\n`)
     + `- SDP ${f("B_sdp")} m² contre ${f("A_sdp")} m² ; travaux ${f("B_cost_total")} contre ${f("A_cost_total")}`
     + (coutInverseTT ? ` (coût au m² retenu : ${costM2OfTT("B")}k contre ${costM2OfTT("A")}k FCFA)` : "")
-    + `\n- Emprise ${empriseOf("B")} m² contre ${empriseOf("A")} m²`
-    + (lgA && lgB ? ` ; ${lgB} m² par logement contre ${lgA} m²` : "")
+    + (empriseOf("B") === empriseOf("A") ? `\n- Même emprise au sol (${empriseOf("B")} m²)` : `\n- Emprise ${empriseOf("B")} m² contre ${empriseOf("A")} m²`)
+    + (lgA && lgB ? (lgA === lgB ? ` ; même surface par logement (${lgB} m²)` : ` ; ${lgB} m² par logement contre ${lgA} m²`) : "")
     + `\n- Score ${f("B_score")}/100 contre ${f("A_score")}/100`;
   texts.scenario_B_summary_text = buildSummary("B") + bVsA_comparison;
   // C vs A+B comparison
@@ -11698,9 +11698,12 @@ app.post("/api/scenarios/:ref/:scn/override", async (req, res) => {
     const rows = await loadScenarioRows(sb, ref);
     const prev = rows[scn];
     const overrides = ScenarioModel.setOverride(prev && prev.overrides, key, clean);
+    // v12.18 — changer le prix d'un scénario validé ne périme pas sa géométrie : le coût des travaux
+    // est recalculé à chaque calcul depuis la géométrie validée × le prix au m² en vigueur
+    const keepValidated = key === "cost_per_m2" && prev && prev.actual && ["VALIDATED", "ANALYZED"].includes(prev.status);
     const row = {
       lead_ref: ref, scenario: scn, role: ScenarioModel.roleOf(scn), overrides,
-      status: ScenarioModel.statusAfterEdit(prev && prev.status), updated_at: new Date().toISOString(),
+      status: keepValidated ? prev.status : ScenarioModel.statusAfterEdit(prev && prev.status), updated_at: new Date().toISOString(),
     };
     const { error } = await sb.from("sb_scenarios").upsert(row, { onConflict: "lead_ref,scenario" });
     if (error) throw error;
