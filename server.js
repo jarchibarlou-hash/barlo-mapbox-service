@@ -12183,8 +12183,11 @@ function autoZoomForParcel(parcelCoords, cLat) {
 
 // HTML Mapbox rendant N unités extrudées + parcelle en overlay
 // hiddenBuildingIds : array optionnel d'IDs Mapbox composite/building à masquer (choix user)
-function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken, hiddenBuildingIds, hiddenBuildingLabels) {
+function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, unitsData, mapboxToken, hiddenBuildingIds, hiddenBuildingLabels, opts) {
   // unitsData : Array of { id, name, type, polygonGeo:[{lat,lon},...], baseM, topM, groundM, postsGeo, colorHex, floors }
+  // v12.22 — opts.mask : masquage validé du terrain ; opts.preview : aperçu en direct du cockpit
+  const maskSpec = (opts && opts.mask) || null;
+  const preview = !!(opts && opts.preview);
   const parcelGeoJSON = {
     type: "Feature",
     geometry: { type: "Polygon", coordinates: [[...parcelCoords.map(c => [c.lon, c.lat]), [parcelCoords[0].lon, parcelCoords[0].lat]]] }
@@ -12307,11 +12310,18 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
         "paint": { "line-color": "#989898", "line-width": ["interpolate", ["linear"], ["zoom"], 14, 8, 16, 20, 17, 32, 18, 48, 19, 64] } }
     ]
   };
+  // v12.22 : en apercu, la carte reste fixe (meme cadrage que l'image finale) mais les batis sont cliquables
+  const PREVIEW = ${preview ? "true" : "false"};
   const map = new mapboxgl.Map({
     container: 'map', style: hektarStyle,
     center: [${center.lon}, ${center.lat}], zoom: ${zoom}, bearing: ${bearing}, pitch: 58,
-    antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: false
+    antialias: true, preserveDrawingBuffer: true, fadeDuration: 0, interactive: PREVIEW
   });
+  if (PREVIEW) {
+    ['dragPan', 'scrollZoom', 'boxZoom', 'dragRotate', 'keyboard', 'doubleClickZoom', 'touchZoomRotate', 'touchPitch'].forEach(function (h) {
+      try { if (map[h]) map[h].disable(); } catch (_) {}
+    });
+  }
   // v11.26 : parcelData au niveau IIFE pour etre accessible par detectAndMaskBuildings()
   const parcelData = ${JSON.stringify(parcelGeoJSON)};
   const parcelMask = ${JSON.stringify(parcelMaskGeoJSON)};
@@ -12387,13 +12397,19 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     });
   });
   // v11.23 : detection intersect robuste (querySourceFeatures + composite ID synthetique)
-  // v11.32 : hiddenLabels = numeros 1,2,3,4 des batis a masquer (matching par index detected)
+  // v11.32 : hiddenLabels = numeros 1,2,3,4 des batis a masquer (ancien cockpit)
+  // v12.22 : maskSpec = masquage valide du terrain (centres des batis masques / gardes visibles) ;
+  //          en apercu, masquer / afficher un bati est instantane (message du cockpit ou clic sur le bati)
   const preHiddenIds = ${JSON.stringify(hiddenBuildingIds || [])};
   const preHiddenLabels = ${JSON.stringify(hiddenBuildingLabels || [])};
+  const maskSpec = ${JSON.stringify(maskSpec)};
   window.__DETECTED_BUILDINGS = [];
   window.__MASKED_IDS = preHiddenIds.slice();
   window.__MASK_DIAG = { attempts: 0, source_loaded: false, features_found: 0, intersected: 0, errors: [] };
   let intersectDone = false;
+  let allBuildings = [];
+  let detectedList = [];
+  let pieceGroup = {};
   function sectorFromBearing(deg) {
     const d = ((deg % 360) + 360) % 360;
     if (d < 22.5 || d >= 337.5) return 'N';
@@ -12415,6 +12431,103 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     } catch (_) {}
     return 'idx_' + idx;
   }
+  function heightOf(b) { return (b.properties && (b.properties.height || b.properties.render_height)) || 7; }
+  function bboxOverlap(a, b) { return !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3]); }
+  // v12.22 : un bati est reconnu d'un rendu a l'autre par son centre (4 m pres), pas par son rang
+  function nearSaved(d, list) {
+    if (!Array.isArray(list) || !list.length) return false;
+    const k = Math.cos(d.centroid[0] * Math.PI / 180);
+    return list.some(function (s) {
+      const dy = (Number(s.lat) - d.centroid[0]) * 111320;
+      const dx = (Number(s.lon) - d.centroid[1]) * 111320 * k;
+      return Math.sqrt(dx * dx + dy * dy) <= 4;
+    });
+  }
+  function postToStudio(msg) {
+    if (!PREVIEW) return;
+    try { msg.source = 'barlo-massing'; window.parent.postMessage(msg, '*'); } catch (_) {}
+  }
+  // v11.33 : le layer natif 3d-buildings est cache et remplace par un layer custom ne contenant
+  // QUE les batis visibles (les batis composite Mapbox Streets v8 n'ont pas d'id natif filtrable).
+  // v12.22 : idsToMask = identifiants de batis detectes (un bati coupe entre deux tuiles = un seul identifiant)
+  function applyMask(idsToMask) {
+    const maskSet = new Set((idsToMask || []).map(String));
+    window.__MASKED_IDS = detectedList.filter(function (d) { return maskSet.has(String(d.id)); }).map(function (d) { return d.id; });
+    window.__DETECTED_BUILDINGS = detectedList.map(function (d, i) { return Object.assign({}, d, { numero: i + 1, masked: maskSet.has(String(d.id)) }); });
+    const detectedIds = new Set(detectedList.map(function (d) { return String(d.id); }));
+    try {
+      if (map.getLayer('3d-buildings')) map.setLayoutProperty('3d-buildings', 'visibility', 'none');
+      if (map.getLayer('bldg-mask-cover')) map.removeLayer('bldg-mask-cover');
+      if (map.getSource('bldg-mask-src')) map.removeSource('bldg-mask-src');
+      const visibleFeatures = [];
+      const seenKeys = new Set();
+      allBuildings.forEach(function (b, idx) {
+        if (!b.geometry) return;
+        const fp = buildingFingerprint(b, idx);
+        const gid = pieceGroup[fp] || fp;
+        if (maskSet.has(String(gid))) return; // masque
+        // Dedup (querySourceFeatures duplique aux frontieres de tuiles)
+        try {
+          const c0 = b.geometry.coordinates && b.geometry.coordinates[0] && b.geometry.coordinates[0][0];
+          const key = c0 ? c0[0].toFixed(6) + '_' + c0[1].toFixed(6) : ('fp_' + fp);
+          if (seenKeys.has(key)) return;
+          seenKeys.add(key);
+        } catch (_) {}
+        const base = (b.properties && (b.properties.min_height || b.properties.render_min_height)) || 0;
+        visibleFeatures.push({
+          type: 'Feature',
+          properties: { height: heightOf(b), base: base, bid: detectedIds.has(String(gid)) ? String(gid) : '' },
+          geometry: b.geometry
+        });
+      });
+      const fc = { type: 'FeatureCollection', features: visibleFeatures };
+      if (map.getSource('bldg-custom-src')) {
+        map.getSource('bldg-custom-src').setData(fc);
+      } else {
+        map.addSource('bldg-custom-src', { type: 'geojson', data: fc });
+      }
+      if (!map.getLayer('bldg-custom')) {
+        // Insere sous la parcelle-outline pour garder le contour rouge visible
+        const beforeId = map.getLayer('parcel-outline') ? 'parcel-outline' : undefined;
+        map.addLayer({
+          id: 'bldg-custom',
+          source: 'bldg-custom-src',
+          type: 'fill-extrusion',
+          paint: {
+            'fill-extrusion-color': PREVIEW ? ['case', ['!=', ['get', 'bid'], ''], '#fde7c2', '#f0ede8'] : '#f0ede8',
+            'fill-extrusion-height': ['get', 'height'],
+            'fill-extrusion-base': ['get', 'base'],
+            'fill-extrusion-opacity': 0.92,
+            'fill-extrusion-vertical-gradient': true
+          }
+        }, beforeId);
+      }
+      // Numeros des batis : apercu du cockpit seulement (jamais dans l'image du PPT)
+      if (PREVIEW) {
+        const labelFc = { type: 'FeatureCollection', features: detectedList.map(function (d, i) {
+          return { type: 'Feature', properties: { label: String(i + 1), bid: String(d.id), masked: maskSet.has(String(d.id)) ? 1 : 0 },
+            geometry: { type: 'Point', coordinates: [d.centroid[1], d.centroid[0]] } };
+        }) };
+        if (map.getSource('bldg-labels-src')) {
+          map.getSource('bldg-labels-src').setData(labelFc);
+        } else {
+          map.addSource('bldg-labels-src', { type: 'geojson', data: labelFc });
+          map.addLayer({ id: 'bldg-labels-circles', source: 'bldg-labels-src', type: 'circle',
+            paint: {
+              'circle-radius': 16,
+              'circle-color': ['case', ['==', ['get', 'masked'], 1], '#EF4444', '#22C55E'],
+              'circle-stroke-color': '#1a1a1a', 'circle-stroke-width': 2, 'circle-opacity': 0.95
+            } });
+          map.addLayer({ id: 'bldg-labels-text', source: 'bldg-labels-src', type: 'symbol',
+            layout: { 'text-field': ['get', 'label'], 'text-size': 18, 'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+              'text-allow-overlap': true, 'text-ignore-placement': true },
+            paint: { 'text-color': '#FFFFFF' } });
+        }
+      }
+      console.log('[MASK v12.22]', visibleFeatures.length, 'batis visibles,', window.__MASKED_IDS.length, 'masques sur', detectedList.length, 'detectes');
+      map.triggerRepaint();
+    } catch (e) { console.warn('[MASK v12.22] failed:', e.message); window.__MASK_DIAG.errors.push('mask: ' + e.message); }
+  }
   function detectAndMaskBuildings() {
     if (intersectDone) return;
     window.__MASK_DIAG.attempts++;
@@ -12423,49 +12536,26 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
       const sourceLoaded = map.isSourceLoaded('composite');
       window.__MASK_DIAG.source_loaded = sourceLoaded;
       if (!sourceLoaded) return;
-
-      // querySourceFeatures : retourne geometries COMPLETES (pas clippees aux tuiles)
-      // vs queryRenderedFeatures qui clipping per tile.
+      // querySourceFeatures : les batis a cheval sur deux tuiles arrivent en plusieurs morceaux
       const buildings = map.querySourceFeatures('composite', {
         sourceLayer: 'building',
         filter: ['==', 'extrude', 'true']
       });
       window.__MASK_DIAG.features_found = buildings.length;
       if (!buildings || buildings.length === 0) return;
+      allBuildings = buildings;
 
       const parcelBuffered = turf.buffer(parcelData, 2, { units: 'meters' });
       const parcelBbox = turf.bbox(parcelBuffered);  // [minX, minY, maxX, maxY] en lon/lat
       const parcelCentroid = turf.centroid(parcelData);
-      // v11.25 : log sample du 1er building pour debug format
-      if (buildings.length > 0 && !window.__MASK_DIAG.sample) {
-        try {
-          const s = buildings[0];
-          window.__MASK_DIAG.sample = {
-            has_geometry: !!s.geometry,
-            geom_type: s.geometry && s.geometry.type,
-            first_coord: s.geometry && s.geometry.coordinates && JSON.stringify(s.geometry.coordinates).substring(0, 200),
-            parcel_bbox: parcelBbox,
-            id: s.id, has_id: s.id != null,
-            props_sample: s.properties && Object.keys(s.properties).slice(0, 6).join(',')
-          };
-        } catch (_) {}
-      }
-      const detected = [];
-      const seenKeys = new Set();
-      let synCounter = 0;
-      // v11.25 : fallback intersect en 3 methodes (bbox pre-check + turf.intersect + turf.boolean-intersects)
+      const nearBbox = turf.bbox(turf.buffer(parcelData, 60, { units: 'meters' }));
       function testIntersect(buildingGeom) {
         try {
-          // Method 1 : bbox pre-check (rapide, rejette 99% des non-candidats)
           const bBbox = turf.bbox({ type: 'Feature', geometry: buildingGeom });
-          const [bMinX, bMinY, bMaxX, bMaxY] = bBbox;
-          const [pMinX, pMinY, pMaxX, pMaxY] = parcelBbox;
-          const bboxOverlap = !(bMaxX < pMinX || bMinX > pMaxX || bMaxY < pMinY || bMinY > pMaxY);
-          if (!bboxOverlap) return false;
-          // Method 2 : test Feature wrappe (plus safe)
+          if (!bboxOverlap(bBbox, parcelBbox)) return false;
           const bFeature = { type: 'Feature', properties: {}, geometry: buildingGeom };
           if (turf.booleanIntersects(bFeature, parcelBuffered)) return true;
-          // Method 3 : cast en Polygon simple si MultiPolygon (parfois bug Turf)
+          // cast en Polygon simple si MultiPolygon (parfois bug Turf)
           if (buildingGeom.type === 'MultiPolygon' && buildingGeom.coordinates.length > 0) {
             for (const poly of buildingGeom.coordinates) {
               const singleFeature = { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: poly } };
@@ -12475,174 +12565,102 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
           return false;
         } catch (e) { window.__MASK_DIAG.errors.push('testIntersect: ' + e.message); return false; }
       }
-      buildings.forEach((b, idx) => {
+      // 1. Morceaux de batis proches de la parcelle (un par empreinte distincte)
+      const pieces = [];
+      const seenFp = new Set();
+      buildings.forEach(function (b, idx) {
         if (!b.geometry) return;
         const fp = buildingFingerprint(b, idx);
-        if (seenKeys.has(fp)) return;
+        if (seenFp.has(fp)) return;
+        let bb;
+        try { bb = turf.bbox({ type: 'Feature', geometry: b.geometry }); } catch (_) { return; }
+        if (!bboxOverlap(bb, nearBbox)) return;
+        seenFp.add(fp);
+        pieces.push({ fp: fp, geom: b.geometry, bbox: bb, h: heightOf(b), parent: pieces.length });
+      });
+      // 2. v12.22 : morceaux d'un meme bati coupe entre deux tuiles (meme hauteur, qui se chevauchent)
+      //    regroupes, pour qu'un bati se masque en entier et pas a moitie
+      function root(i) { while (pieces[i].parent !== i) i = pieces[i].parent; return i; }
+      for (let i = 0; i < pieces.length; i++) {
+        for (let j = i + 1; j < pieces.length; j++) {
+          const a = pieces[i], b = pieces[j];
+          if (a.h !== b.h || !bboxOverlap(a.bbox, b.bbox)) continue;
+          try {
+            const inter = turf.intersect({ type: 'Feature', properties: {}, geometry: a.geom }, { type: 'Feature', properties: {}, geometry: b.geom });
+            if (inter && turf.area(inter) > 0.5) { const ra = root(i), rb = root(j); if (ra !== rb) pieces[rb].parent = ra; }
+          } catch (_) {}
+        }
+      }
+      const groups = {};
+      pieces.forEach(function (p, i) { const r = root(i); (groups[r] = groups[r] || []).push(p); });
+      // 3. Batis (groupes) touchant la parcelle
+      const detected = [];
+      pieceGroup = {};
+      Object.keys(groups).forEach(function (r) {
+        const parts = groups[r];
+        const gid = parts.map(function (p) { return p.fp; }).sort()[0];
+        parts.forEach(function (p) { pieceGroup[p.fp] = gid; });
+        if (!parts.some(function (p) { return testIntersect(p.geom); })) return;
         try {
-          if (testIntersect(b.geometry)) {
-            seenKeys.add(fp);
-            const bFeature = { type: 'Feature', properties: b.properties || {}, geometry: b.geometry };
-            const centroid = turf.centroid(bFeature);
-            const [bLon, bLat] = centroid.geometry.coordinates;
-            const bearingDeg = turf.bearing(parcelCentroid, centroid);
-            const compassDeg = (bearingDeg + 360) % 360;
-            const sector = sectorFromBearing(compassDeg);
-            const areaM2 = Math.round(turf.area(bFeature));
-            const height = (b.properties && (b.properties.height || b.properties.render_height)) || 6;
-            detected.push({
-              id: fp, sector, bearing_deg: Math.round(compassDeg),
-              area_m2: areaM2, height_m: Math.round(height),
-              centroid: [+bLat.toFixed(7), +bLon.toFixed(7)]
-            });
-          }
+          let area = 0, sx = 0, sy = 0;
+          parts.forEach(function (p) {
+            const feat = { type: 'Feature', properties: {}, geometry: p.geom };
+            const a = turf.area(feat);
+            const c = turf.centroid(feat).geometry.coordinates;
+            area += a; sx += c[0] * a; sy += c[1] * a;
+          });
+          const c0 = turf.centroid({ type: 'Feature', properties: {}, geometry: parts[0].geom }).geometry.coordinates;
+          const bLon = area > 0 ? sx / area : c0[0];
+          const bLat = area > 0 ? sy / area : c0[1];
+          const compassDeg = (turf.bearing(parcelCentroid, turf.point([bLon, bLat])) + 360) % 360;
+          detected.push({
+            id: gid, sector: sectorFromBearing(compassDeg), bearing_deg: Math.round(compassDeg),
+            area_m2: Math.round(area), height_m: Math.round(parts[0].h), parts: parts.length,
+            centroid: [+bLat.toFixed(7), +bLon.toFixed(7)]
+          });
         } catch (e) { window.__MASK_DIAG.errors.push(e.message); }
       });
       window.__MASK_DIAG.intersected = detected.length;
       const secOrder = { 'N':0,'NE':1,'E':2,'SE':3,'S':4,'SW':5,'W':6,'NW':7 };
-      detected.sort((a, b) => (secOrder[a.sector] - secOrder[b.sector]) || (b.area_m2 - a.area_m2));
-      window.__DETECTED_BUILDINGS = detected;
+      detected.sort(function (a, b) { return (secOrder[a.sector] - secOrder[b.sector]) || (b.area_m2 - a.area_m2); });
+      detectedList = detected;
 
-      // v11.32 : labels numerotes 1, 2, 3, 4 avec COULEUR selon etat masquage
-      // Matching PRIORITAIRE par LABEL (numero 1..4 = position dans detected) car
-      // les IDs Mapbox composite peuvent varier entre 2 requetes.
-      const preHiddenLabelSet = new Set((preHiddenLabels || []).map(Number));
-      const preHiddenIdSet = new Set((preHiddenIds || []).map(String));
-      const anyPreHidden = preHiddenLabelSet.size > 0 || preHiddenIdSet.size > 0;
-      const labelFeatures = detected.map((d, i) => {
-        const numero = i + 1;
-        let isMasked;
-        if (anyPreHidden) {
-          // Match par LABEL en priorite (stable), fallback ID
-          isMasked = preHiddenLabelSet.has(numero) || preHiddenIdSet.has(String(d.id));
-        } else {
-          // 1er appel : defaut = tous masques
-          isMasked = true;
-        }
-        return {
-          type: 'Feature',
-          properties: { label: String(numero), masked: isMasked ? 1 : 0 },
-          geometry: { type: 'Point', coordinates: [d.centroid[1], d.centroid[0]] }
-        };
-      });
-      // Log detaille pour debug
-      console.log('[MASK-LABEL] preHiddenLabels=', JSON.stringify(preHiddenLabels), 'labelFeatures.masked=', labelFeatures.map(f => f.properties.masked).join(','));
-      if (labelFeatures.length > 0) {
-        try {
-          if (map.getLayer('bldg-labels-circles')) map.removeLayer('bldg-labels-circles');
-          if (map.getLayer('bldg-labels-text')) map.removeLayer('bldg-labels-text');
-          if (map.getSource('bldg-labels-src')) map.removeSource('bldg-labels-src');
-          map.addSource('bldg-labels-src', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
-          map.addLayer({
-            id: 'bldg-labels-circles',
-            source: 'bldg-labels-src',
-            type: 'circle',
-            paint: {
-              'circle-radius': 16,
-              // v11.31 : rouge si masque, jaune si visible
-              'circle-color': ['case', ['==', ['get', 'masked'], 1], '#EF4444', '#FBBF24'],
-              'circle-stroke-color': '#1a1a1a',
-              'circle-stroke-width': 2,
-              'circle-opacity': 0.95
-            }
-          });
-          map.addLayer({
-            id: 'bldg-labels-text',
-            source: 'bldg-labels-src',
-            type: 'symbol',
-            layout: {
-              'text-field': ['get', 'label'],
-              'text-size': 18,
-              'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-              'text-allow-overlap': true,
-              'text-ignore-placement': true
-            },
-            paint: {
-              'text-color': ['case', ['==', ['get', 'masked'], 1], '#FFFFFF', '#1a1a1a']
-            }
-          });
-        } catch (e) { window.__MASK_DIAG.errors.push('labels: ' + e.message); }
-      }
-
-      // v11.32 : construction de idsToMask basee sur LABELS (numeros) en priorite
-      // preHiddenLabels contient les numeros 1..N des batis a masquer.
-      // detected[i] correspond au bati numero (i+1).
+      // 4. Batis a masquer : ancien cockpit (numeros / ids) > masquage valide du terrain > defaut (tous)
       let idsToMask;
       if (preHiddenLabels && preHiddenLabels.length > 0) {
-        idsToMask = detected.filter((d, i) => preHiddenLabels.includes(i + 1)).map(d => d.id);
+        idsToMask = detected.filter(function (d, i) { return preHiddenLabels.includes(i + 1); }).map(function (d) { return d.id; });
       } else if (preHiddenIds && preHiddenIds.length > 0) {
         idsToMask = preHiddenIds;
+      } else if (maskSpec) {
+        // masque sauf s'il a ete explicitement garde visible (un bati nouveau est masque par defaut)
+        idsToMask = detected.filter(function (d) { return nearSaved(d, maskSpec.hidden) || !nearSaved(d, maskSpec.visible); }).map(function (d) { return d.id; });
       } else {
-        idsToMask = detected.map(d => d.id);  // defaut : tous
+        idsToMask = detected.map(function (d) { return d.id; });
       }
-      window.__MASKED_IDS = idsToMask;
-
-      // v11.33 : CACHE le layer natif 3d-buildings et RECONSTRUIT un layer custom
-      // ne contenant QUE les buildings visibles (tous sauf ceux dans idsToMask).
-      // Raison : les buildings composite Mapbox Streets v8 n'ont PAS d'id natif utilisable
-      // (b.id === null), donc le filter ['!in',['id'],[...]] etait vide et ne masquait rien.
-      // On abandonne aussi l'overlay bldg-mask-cover qui creait des cubes 100m geants a l'ecran.
-      try {
-        // 1. Cache le layer natif (garde le node dans le style, juste visibility off)
-        if (map.getLayer('3d-buildings')) {
-          map.setLayoutProperty('3d-buildings', 'visibility', 'none');
-        }
-        // 2. Retire tout residuel d'un ancien overlay (v11.30) qui creait des barres 100m
-        if (map.getLayer('bldg-mask-cover')) map.removeLayer('bldg-mask-cover');
-        if (map.getSource('bldg-mask-src')) map.removeSource('bldg-mask-src');
-
-        // 3. Reconstruit tous les buildings VISIBLES dans un GeoJSON custom
-        const idsToMaskSet = new Set(idsToMask.map(String));
-        const visibleFeatures = [];
-        const seenKeys = new Set();
-        let synCounter2 = 0;
-        buildings.forEach((b, idx) => {
-          if (!b.geometry) return;
-          const fp = buildingFingerprint(b, idx);
-          if (idsToMaskSet.has(String(fp))) return; // skip masked
-          // Dedup (querySourceFeatures duplique aux frontieres de tuiles)
-          try {
-            const c0 = b.geometry.coordinates && b.geometry.coordinates[0] && b.geometry.coordinates[0][0];
-            const key = c0 ? c0[0].toFixed(6) + '_' + c0[1].toFixed(6) : ('fp_' + fp);
-            if (seenKeys.has(key)) return;
-            seenKeys.add(key);
-          } catch (_) {}
-          const h = (b.properties && (b.properties.height || b.properties.render_height)) || 7;
-          const base = (b.properties && (b.properties.min_height || b.properties.render_min_height)) || 0;
-          visibleFeatures.push({
-            type: 'Feature',
-            properties: { height: h, base: base },
-            geometry: b.geometry
-          });
-        });
-
-        const fc = { type: 'FeatureCollection', features: visibleFeatures };
-        if (map.getSource('bldg-custom-src')) {
-          map.getSource('bldg-custom-src').setData(fc);
-        } else {
-          map.addSource('bldg-custom-src', { type: 'geojson', data: fc });
-        }
-        if (!map.getLayer('bldg-custom')) {
-          // Insere sous la parcelle-outline pour garder le contour rouge visible
-          const beforeId = map.getLayer('parcel-outline') ? 'parcel-outline' : undefined;
-          map.addLayer({
-            id: 'bldg-custom',
-            source: 'bldg-custom-src',
-            type: 'fill-extrusion',
-            paint: {
-              'fill-extrusion-color': '#f0ede8',
-              'fill-extrusion-height': ['get', 'height'],
-              'fill-extrusion-base': ['get', 'base'],
-              'fill-extrusion-opacity': 0.92,
-              'fill-extrusion-vertical-gradient': true
-            }
-          }, beforeId);
-        }
-        console.log('[MASK v11.33] hid native 3d-buildings, custom layer with', visibleFeatures.length, 'visible / ', buildings.length, 'total,', idsToMask.length, 'masked');
-        map.triggerRepaint();
-      } catch (e) { console.warn('[MASK v11.33] failed:', e.message); window.__MASK_DIAG.errors.push('v11.33: ' + e.message); }
+      applyMask(idsToMask);
       intersectDone = true;
-    } catch (e) { console.warn('[MASK] failed:', e.message); window.__MASK_DIAG.errors.push(e.message); intersectDone = true; }
+      postToStudio({ type: 'ready', detected: window.__DETECTED_BUILDINGS, diag: window.__MASK_DIAG });
+    } catch (e) { console.warn('[MASK] failed:', e.message); window.__MASK_DIAG.errors.push(e.message); intersectDone = true; postToStudio({ type: 'ready', detected: [], diag: window.__MASK_DIAG }); }
+  }
+  if (PREVIEW) {
+    // Clic sur un bati detecte (ou sur son numero) : le cockpit bascule masque / visible
+    function hitAt(point) {
+      const layers = ['bldg-labels-circles', 'bldg-labels-text', 'bldg-custom'].filter(function (l) { return map.getLayer(l); });
+      if (!layers.length) return null;
+      return map.queryRenderedFeatures(point, { layers: layers }).find(function (f) { return f.properties && f.properties.bid; }) || null;
+    }
+    map.on('click', function (e) {
+      const hit = hitAt(e.point);
+      if (hit) postToStudio({ type: 'toggle', id: hit.properties.bid });
+    });
+    map.on('mousemove', function (e) { map.getCanvas().style.cursor = hitAt(e.point) ? 'pointer' : ''; });
+    window.addEventListener('message', function (e) {
+      if (e.source !== window.parent) return;
+      const m = e.data || {};
+      if (m.source !== 'barlo-studio' || m.type !== 'set-mask' || !intersectDone) return;
+      applyMask(Array.isArray(m.masked) ? m.masked : []);
+      postToStudio({ type: 'applied', masked: window.__MASKED_IDS });
+    });
   }
   let rendered = false;
   let idleCount = 0;
@@ -12659,7 +12677,10 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     if (intersectDone) { clearInterval(retryInterval); return; }
     detectAndMaskBuildings();
   }, 1500);
-  setTimeout(() => { clearInterval(retryInterval); }, 12000);
+  setTimeout(() => {
+    clearInterval(retryInterval);
+    if (!intersectDone) postToStudio({ type: 'ready', detected: [], diag: window.__MASK_DIAG });
+  }, 12000);
   setTimeout(() => { window.__MAP_READY = true; }, 18000);
 })();
 </script></body></html>`;
@@ -12692,193 +12713,277 @@ async function findPipelineRowByRef(ref) {
   return null;
 }
 
+// v12.22 — Masquage des bâtiments voisins : un seul choix par terrain, validé dans le cockpit et relu
+// à chaque image 3D (A, B, C), pour que le PPT montre exactement ce qui a été validé.
+// Un bâtiment est reconnu d'un rendu à l'autre par son centre (à 4 m près), pas par son rang dans la liste.
+function cleanMaskList(list) {
+  const num = v => (v === null || v === undefined || v === "") ? NaN : Number(v);
+  return (Array.isArray(list) ? list : []).slice(0, 200).filter(b => b && typeof b === "object").map(b => ({
+    lat: num(b.lat), lon: num(b.lon), area_m2: Math.round(Number(b.area_m2) || 0)
+  })).filter(b => isFinite(b.lat) && isFinite(b.lon) && Math.abs(b.lat) <= 90 && Math.abs(b.lon) <= 180);
+}
+function cleanMassingMask(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  return { hidden: cleanMaskList(raw.hidden), visible: cleanMaskList(raw.visible) };
+}
+async function loadMassingMask(sb, ref) {
+  try {
+    const m = (await loadLeadRules(sb, ref)).massing_mask;
+    return m && (Array.isArray(m.hidden) || Array.isArray(m.visible)) ? m : null;
+  } catch (e) {
+    console.warn(`[MASQUAGE] ${ref} : masquage enregistré illisible : ${e.message}`);
+    return null;
+  }
+}
+async function saveMassingMask(sb, ref, mask, scen) {
+  const prev = await loadLeadRules(sb, ref);
+  const now = new Date().toISOString();
+  const rules = Object.assign({}, prev, { massing_mask: Object.assign({}, mask, { validated_at: now, validated_from: scen }) });
+  const { error } = await sb.from("sb_lead_rules").upsert({ lead_ref: ref, rules, updated_at: now }, { onConflict: "lead_ref" });
+  if (error) throw error;
+}
+
+// Scène 3D d'un scénario : unités (cockpit ou base), parcelle GPS, origine, zoom. Partagée par
+// l'aperçu en direct du cockpit et le rendu final, pour que les deux cadrent exactement pareil.
+async function prepareMassingScene(body, sb) {
+  const {
+    lead_ref, scenario,
+    zoom: zoomOverride = null,
+    units_live = null,               // v11.15
+    parcel_polygon_string = null     // v11.15
+  } = body || {};
+  if (!lead_ref || !scenario) return { status: 400, error: "lead_ref et scenario requis" };
+  const scen = String(scenario).toUpperCase();
+  if (!["A", "B", "C"].includes(scen)) return { status: 400, error: "scenario doit être A/B/C" };
+
+  // 1. v11.15 — Source de vérité UNITÉS : body units_live (RAM cockpit) > sinon base sb_lead_units
+  let rows;
+  if (Array.isArray(units_live) && units_live.length > 0) {
+    // Normalise en format compatible avec la suite du code
+    rows = units_live.map(u => ({
+      scenario: scen,
+      unit_index: u.unit_index,
+      unit_type: u.unit_type,
+      unit_name: u.unit_name || "",
+      unit_size_m2: u.unit_size_m2,
+      footprint_json: {
+        polygon: u.polygon,
+        etages_unit: u.etages_unit != null ? u.etages_unit : 0,
+        pilotis: !!u.pilotis,
+        sous_sols: u.sous_sols,
+        hauteur_niveau: u.hauteur_niveau,
+        niveau_depart_etage: u.niveau_depart_etage,
+        altitude_base_m: u.altitude_base_m,
+        rez_jardin: !!u.rez_jardin,
+        parking_ss: !!u.parking_ss,
+        terrasse: !!u.terrasse,
+        balcon: !!u.balcon
+      }
+    }));
+    console.log(`[REGEN-3D] ${rows.length} unités LIVE (source RAM cockpit — reflète éditions non-validées)`);
+  } else {
+    if (!sb) return { status: 503, error: "Supabase non configuré (et pas d'units_live fournies)" };
+    const { data, error } = await sb
+      .from("sb_lead_units")
+      .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, footprint_json")
+      .eq("lead_ref", lead_ref)
+      .eq("scenario", scen)
+      .order("unit_index", { ascending: true });
+    if (error) throw new Error(`Supabase: ${error.message}`);
+    if (!data || data.length === 0) return { status: 404, error: `Aucune unité pour ${lead_ref} scenario ${scen}. Clique 'Valider implantation' d'abord ou envoie units_live.` };
+    rows = data;
+    console.log(`[REGEN-3D] ${rows.length} unités lues depuis sb_lead_units (base)`);
+  }
+
+  // 2. v11.15 — Source parcelle GPS : body parcel_polygon_string > sinon Supabase polygon_drafts
+  let parcelCoords = [];
+  if (parcel_polygon_string && typeof parcel_polygon_string === "string") {
+    parcelCoords = parcel_polygon_string.split(/[|;\n]/).map(p => {
+      const [lat, lon] = p.trim().split(",").map(Number);
+      return { lat, lon };
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+    console.log(`[REGEN-3D] Parcelle GPS LIVE (body) : ${parcelCoords.length} sommets`);
+  }
+  if (parcelCoords.length < 3 && sb) {
+    const { data: drafts, error: dErr } = await sb
+      .from("polygon_drafts")
+      .select("polygon_points")
+      .eq("temp_id", lead_ref)
+      .limit(1);
+    if (dErr) throw new Error(`polygon_drafts: ${dErr.message}`);
+    if (drafts && drafts[0] && drafts[0].polygon_points) {
+      parcelCoords = String(drafts[0].polygon_points).split(/[|;\n]/).map(p => {
+        const [lat, lon] = p.trim().split(",").map(Number);
+        return { lat, lon };
+      }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
+      console.log(`[REGEN-3D] Parcelle GPS lue depuis polygon_drafts : ${parcelCoords.length} sommets`);
+    }
+  }
+  if (parcelCoords.length < 3) {
+    return { status: 400, error: `Polygone parcelle GPS introuvable pour ${lead_ref}` };
+  }
+
+  // 3. v11.13 — Centroïde MOYENNE ARITHMÉTIQUE (identique studio.html:3528-3529)
+  // Le studio utilise la moyenne des sommets GPS comme origine du repère mètres locaux,
+  // PAS le centroïde géométrique shoelace. v11.12 était faux dans les 2 sens.
+  const centStudio = polygonCentroidStudio(parcelCoords);
+  const cLat = centStudio.lat;
+  const cLon = centStudio.lon;
+  console.log(`[REGEN-3D] Origine (moyenne arith. studio) : lat=${cLat.toFixed(7)}, lon=${cLon.toFixed(7)}`);
+
+  // 4. Palette couleurs par typologie
+  const colorByType = (t) => {
+    const T = String(t || "").toUpperCase();
+    if (T === "COMMERCE") return "#e07830";
+    if (T === "BUREAU") return "#8B5CF6";
+    if (T === "ATELIER") return "#6B7280";
+    if (T.startsWith("T")) return "#3a7ac0"; // T1/T2/T3/T4/T5 = logements bleu
+    return "#7098c8";
+  };
+
+  // 5. Construit unitsData : polygonGeo (mètres → GPS via fromM), hauteur (étages × 3m + pilotis)
+  const unitsData = [];
+  const rejected = [];
+  for (const row of rows) {
+    const fp = row.footprint_json && typeof row.footprint_json === "object" ? row.footprint_json : null;
+    if (!fp || !fp.polygon || !Array.isArray(fp.polygon) || fp.polygon.length < 3) {
+      rejected.push({ index: row.unit_index, name: row.unit_name, reason: "polygon absent" });
+      continue;
+    }
+    // v11.13 — Utilise fromM_studio (y+ = SUD comme le studio) au lieu de fromM (y+ = Nord)
+    // Support des 2 schémas {x,y} et {x_m,y_m}
+    const polygonGeo = fp.polygon.map(p => {
+      const xm = p.x_m != null ? p.x_m : p.x;
+      const ym = p.y_m != null ? p.y_m : p.y;
+      return fromM_studio(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
+    });
+    // v11.36 — Étages = R+X (R+0 = 1 niveau). Pilotis = poteaux d'un niveau de haut, le volume se pose dessus.
+    // Sous-sols enterrés : invisibles en vue aérienne (Mapbox ne rend rien sous le sol).
+    const fh = Number(fp.hauteur_niveau) > 0 ? Number(fp.hauteur_niveau) : 3;
+    const levels = Math.max(0, Number(fp.etages_unit) || 0) + 1;
+    const pilotisOn = !!fp.pilotis;
+    let groundM = 0;
+    if (fp.altitude_base_m != null && fp.altitude_base_m !== "" && !isNaN(Number(fp.altitude_base_m))) {
+      groundM = Number(fp.altitude_base_m);
+    } else if (fp.niveau_depart_etage != null && fp.niveau_depart_etage !== "" && !isNaN(Number(fp.niveau_depart_etage))) {
+      groundM = Number(fp.niveau_depart_etage) * fh;
+    }
+    groundM = Math.max(0, groundM);
+    const baseM = groundM + (pilotisOn ? fh : 0);
+    const topM = baseM + levels * fh;
+    const polyM = fp.polygon.map(p => ({
+      x: Number(p.x_m != null ? p.x_m : p.x) || 0,
+      y: Number(p.y_m != null ? p.y_m : p.y) || 0
+    }));
+    const postsGeo = pilotisOn
+      ? pilotisPostsM(polyM).map(sq => sq.map(p => fromM_studio(p.x, p.y, cLat, cLon)))
+      : [];
+    // Étiquette affichée au-dessus du volume : nom + réglages non visibles en 3D (sous-sols, parking...)
+    // v12.19 — étiquette = niveaux réellement occupés (départ → dernier), pas seulement la hauteur
+    const startLv = Math.round(groundM / fh) + (pilotisOn ? 1 : 0), endLv = startLv + levels - 1;
+    const lvName = n => n <= 0 ? "RDC" : `R+${n}`;
+    const tags = [levels > 1 ? `${lvName(startLv)} → ${lvName(endLv)}` : lvName(startLv)];
+    if (pilotisOn) tags.push("pilotis");
+    const sousSols = Math.max(0, Math.round(Number(fp.sous_sols) || 0));
+    if (sousSols > 0) tags.push(`${sousSols} SS`);
+    if (fp.rez_jardin) tags.push("rez-de-jardin");
+    if (fp.parking_ss) tags.push("parking");
+    if (fp.terrasse) tags.push("terrasse");
+    if (fp.balcon) tags.push("balcons");
+    const labelText = `${row.unit_name || row.unit_type || "Unité"}\n${tags.join(" · ")}`;
+    unitsData.push({
+      id: row.unit_index,
+      name: row.unit_name || `Unit ${row.unit_index}`,
+      type: row.unit_type,
+      polygonGeo,
+      baseM,
+      topM,
+      groundM,
+      postsGeo,
+      labelText,
+      floors: levels,
+      colorHex: colorByType(row.unit_type)
+    });
+    console.log(`[REGEN-3D] ${row.unit_name || row.unit_index} : sol=${groundM}m pilotis=${pilotisOn ? fh + "m (" + postsGeo.length + " poteaux)" : "non"} volume ${baseM}→${topM}m (${levels} niv × ${fh}m)`);
+  }
+  console.log(`[REGEN-3D] ${unitsData.length} unités converties GPS, ${rejected.length} rejetées`);
+  if (unitsData.length === 0) {
+    return { status: 400, error: "Aucune unité avec polygon exploitable", rejected };
+  }
+
+  // 6. v11.12 — Auto-zoom depuis la bbox parcelle (sauf override)
+  const zoom = zoomOverride != null ? Number(zoomOverride) : autoZoomForParcel(parcelCoords, cLat);
+  console.log(`[REGEN-3D] Zoom auto = ${zoom.toFixed(2)}`);
+  return { scen, parcelCoords, cLat, cLon, unitsData, rejected, zoom };
+}
+
+// v12.22 — Aperçu en direct du cockpit : la même page que le rendu final, ouverte dans le navigateur.
+// Masquer / afficher un bâtiment y est instantané ; seule la validation relance le rendu final.
+app.post("/api/massing-preview-html", async (req, res) => {
+  const body = req.body || {};
+  // Mapbox GL n'accepte que les jetons publics (pk.) : jamais d'autre jeton envoyé au navigateur
+  if (!MAPBOX_TOKEN || !String(MAPBOX_TOKEN).startsWith("pk.")) return res.status(503).json({ ok: false, error: "aperçu 3D indisponible : jeton Mapbox public absent" });
+  const sb = getLeadUnitsSupabase();
+  try {
+    const scene = await prepareMassingScene(body, sb);
+    if (scene.error) return res.status(scene.status || 400).json({ ok: false, error: scene.error, rejected: scene.rejected });
+    const saved = sb ? await loadMassingMask(sb, body.lead_ref) : null;
+    const html = generateMultiUnitMassingHTML(
+      { lat: scene.cLat, lon: scene.cLon }, scene.zoom, Number(body.bearing) || 0, scene.parcelCoords, scene.unitsData, MAPBOX_TOKEN,
+      null, null, { mask: saved, preview: true }
+    );
+    res.json({
+      ok: true, html, zoom_used: scene.zoom, units_rendered: scene.unitsData.length,
+      saved_mask: saved ? { hidden: (saved.hidden || []).length, visible: (saved.visible || []).length, validated_at: saved.validated_at || null, validated_from: saved.validated_from || null } : null
+    });
+  } catch (err) {
+    console.error(`[MASSING-PREVIEW] ${body.lead_ref}/${body.scenario}: ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Endpoint : régénère le massing 3D depuis les unités persistées d'un lead+scénario
 // Body : { lead_ref: "BARLO-XXXX", scenario: "A"|"B"|"C", zoom?: 18.5, bearing?: 0, upload?: true }
+// v12.22 : mask = { hidden:[{lat,lon}], visible:[{lat,lon}] } (+ save_mask pour l'enregistrer) ;
+// sans mask, le masquage validé du terrain est relu (défaut : tous les bâtiments touchant la parcelle masqués)
 app.post("/api/regen-massing-from-units", async (req, res) => {
   const t0 = Date.now();
   const {
     lead_ref, scenario,
-    zoom: zoomOverride = null, bearing = 0,
+    bearing = 0,
     upload = true, apply_to_pipeline = false,
-    units_live = null,               // v11.15
-    parcel_polygon_string = null,    // v11.15
-    hidden_building_ids = null,      // v11.22 : IDs Mapbox à masquer
-    hidden_building_labels = null    // v11.32 : numéros 1,2,3,4 (fallback matching par index)
+    hidden_building_ids = null,      // v11.22 : IDs Mapbox à masquer (ancien cockpit)
+    hidden_building_labels = null,   // v11.32 : numéros 1,2,3,4 (ancien cockpit)
+    mask = null, save_mask = false   // v12.22
   } = req.body || {};
-  if (!lead_ref || !scenario) return res.status(400).json({ ok: false, error: "lead_ref et scenario requis" });
-  const scen = String(scenario).toUpperCase();
-  if (!["A", "B", "C"].includes(scen)) return res.status(400).json({ ok: false, error: "scenario doit être A/B/C" });
-  console.log(`═══ /api/regen-massing-from-units v11.11 ═══ lead=${lead_ref} scen=${scen}`);
+  console.log(`═══ /api/regen-massing-from-units v12.22 ═══ lead=${lead_ref} scen=${scenario}`);
 
   const sb = getLeadUnitsSupabase();
   try {
-    // 1. v11.15 — Source de vérité UNITÉS : body units_live (RAM cockpit) > sinon base sb_lead_units
-    let rows;
-    if (Array.isArray(units_live) && units_live.length > 0) {
-      // Normalise en format compatible avec la suite du code
-      rows = units_live.map(u => ({
-        scenario: scen,
-        unit_index: u.unit_index,
-        unit_type: u.unit_type,
-        unit_name: u.unit_name || "",
-        unit_size_m2: u.unit_size_m2,
-        footprint_json: {
-          polygon: u.polygon,
-          etages_unit: u.etages_unit != null ? u.etages_unit : 0,
-          pilotis: !!u.pilotis,
-          sous_sols: u.sous_sols,
-          hauteur_niveau: u.hauteur_niveau,
-          niveau_depart_etage: u.niveau_depart_etage,
-          altitude_base_m: u.altitude_base_m,
-          rez_jardin: !!u.rez_jardin,
-          parking_ss: !!u.parking_ss,
-          terrasse: !!u.terrasse,
-          balcon: !!u.balcon
-        }
-      }));
-      console.log(`[REGEN-3D] ${rows.length} unités LIVE (source RAM cockpit — reflète éditions non-validées)`);
-    } else {
-      if (!sb) return res.status(503).json({ ok: false, error: "Supabase non configuré (et pas d'units_live fournies)" });
-      const { data, error } = await sb
-        .from("sb_lead_units")
-        .select("scenario, unit_index, unit_type, unit_name, unit_size_m2, footprint_json")
-        .eq("lead_ref", lead_ref)
-        .eq("scenario", scen)
-        .order("unit_index", { ascending: true });
-      if (error) throw new Error(`Supabase: ${error.message}`);
-      if (!data || data.length === 0) return res.status(404).json({ ok: false, error: `Aucune unité pour ${lead_ref} scenario ${scen}. Clique 'Valider implantation' d'abord ou envoie units_live.` });
-      rows = data;
-      console.log(`[REGEN-3D] ${rows.length} unités lues depuis sb_lead_units (base)`);
-    }
+    const scene = await prepareMassingScene(req.body || {}, sb);
+    if (scene.error) return res.status(scene.status || 400).json({ ok: false, error: scene.error, rejected: scene.rejected });
+    const { scen, parcelCoords, cLat, cLon, unitsData, rejected, zoom } = scene;
 
-    // 2. v11.15 — Source parcelle GPS : body parcel_polygon_string > sinon Supabase polygon_drafts
-    let parcelCoords = [];
-    if (parcel_polygon_string && typeof parcel_polygon_string === "string") {
-      parcelCoords = parcel_polygon_string.split(/[|;\n]/).map(p => {
-        const [lat, lon] = p.trim().split(",").map(Number);
-        return { lat, lon };
-      }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
-      console.log(`[REGEN-3D] Parcelle GPS LIVE (body) : ${parcelCoords.length} sommets`);
+    // v12.22 — masquage : choix envoyé (et enregistré si demandé) > masquage validé du terrain > défaut
+    const legacyMask = Array.isArray(hidden_building_ids) || Array.isArray(hidden_building_labels);
+    let maskSpec = cleanMassingMask(mask);
+    let maskSource = maskSpec ? "body" : (legacyMask ? "legacy" : "default");
+    let maskSaved = false;
+    if (maskSpec && save_mask && sb) {
+      try { await saveMassingMask(sb, lead_ref, maskSpec, scen); maskSaved = true; }
+      catch (e) { console.warn(`[REGEN-3D] masquage non enregistré : ${e.message}`); }
     }
-    if (parcelCoords.length < 3 && sb) {
-      const { data: drafts, error: dErr } = await sb
-        .from("polygon_drafts")
-        .select("polygon_points")
-        .eq("temp_id", lead_ref)
-        .limit(1);
-      if (dErr) throw new Error(`polygon_drafts: ${dErr.message}`);
-      if (drafts && drafts[0] && drafts[0].polygon_points) {
-        parcelCoords = String(drafts[0].polygon_points).split(/[|;\n]/).map(p => {
-          const [lat, lon] = p.trim().split(",").map(Number);
-          return { lat, lon };
-        }).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
-        console.log(`[REGEN-3D] Parcelle GPS lue depuis polygon_drafts : ${parcelCoords.length} sommets`);
-      }
+    if (!maskSpec && !legacyMask && sb) {
+      const saved = await loadMassingMask(sb, lead_ref);
+      if (saved) { maskSpec = saved; maskSource = "saved"; }
     }
-    if (parcelCoords.length < 3) {
-      return res.status(400).json({ ok: false, error: `Polygone parcelle GPS introuvable pour ${lead_ref}` });
-    }
-
-    // 3. v11.13 — Centroïde MOYENNE ARITHMÉTIQUE (identique studio.html:3528-3529)
-    // Le studio utilise la moyenne des sommets GPS comme origine du repère mètres locaux,
-    // PAS le centroïde géométrique shoelace. v11.12 était faux dans les 2 sens.
-    const centStudio = polygonCentroidStudio(parcelCoords);
-    const cLat = centStudio.lat;
-    const cLon = centStudio.lon;
-    console.log(`[REGEN-3D] Origine (moyenne arith. studio) : lat=${cLat.toFixed(7)}, lon=${cLon.toFixed(7)}`);
-
-    // 4. Palette couleurs par typologie
-    const colorByType = (t) => {
-      const T = String(t || "").toUpperCase();
-      if (T === "COMMERCE") return "#e07830";
-      if (T === "BUREAU") return "#8B5CF6";
-      if (T === "ATELIER") return "#6B7280";
-      if (T.startsWith("T")) return "#3a7ac0"; // T1/T2/T3/T4/T5 = logements bleu
-      return "#7098c8";
-    };
-
-    // 5. Construit unitsData : polygonGeo (mètres → GPS via fromM), hauteur (étages × 3m + pilotis)
-    const unitsData = [];
-    const rejected = [];
-    for (const row of rows) {
-      const fp = row.footprint_json && typeof row.footprint_json === "object" ? row.footprint_json : null;
-      if (!fp || !fp.polygon || !Array.isArray(fp.polygon) || fp.polygon.length < 3) {
-        rejected.push({ index: row.unit_index, name: row.unit_name, reason: "polygon absent" });
-        continue;
-      }
-      // v11.13 — Utilise fromM_studio (y+ = SUD comme le studio) au lieu de fromM (y+ = Nord)
-      // Support des 2 schémas {x,y} et {x_m,y_m}
-      const polygonGeo = fp.polygon.map(p => {
-        const xm = p.x_m != null ? p.x_m : p.x;
-        const ym = p.y_m != null ? p.y_m : p.y;
-        return fromM_studio(Number(xm) || 0, Number(ym) || 0, cLat, cLon);
-      });
-      // v11.36 — Étages = R+X (R+0 = 1 niveau). Pilotis = poteaux d'un niveau de haut, le volume se pose dessus.
-      // Sous-sols enterrés : invisibles en vue aérienne (Mapbox ne rend rien sous le sol).
-      const fh = Number(fp.hauteur_niveau) > 0 ? Number(fp.hauteur_niveau) : 3;
-      const levels = Math.max(0, Number(fp.etages_unit) || 0) + 1;
-      const pilotisOn = !!fp.pilotis;
-      let groundM = 0;
-      if (fp.altitude_base_m != null && fp.altitude_base_m !== "" && !isNaN(Number(fp.altitude_base_m))) {
-        groundM = Number(fp.altitude_base_m);
-      } else if (fp.niveau_depart_etage != null && fp.niveau_depart_etage !== "" && !isNaN(Number(fp.niveau_depart_etage))) {
-        groundM = Number(fp.niveau_depart_etage) * fh;
-      }
-      groundM = Math.max(0, groundM);
-      const baseM = groundM + (pilotisOn ? fh : 0);
-      const topM = baseM + levels * fh;
-      const polyM = fp.polygon.map(p => ({
-        x: Number(p.x_m != null ? p.x_m : p.x) || 0,
-        y: Number(p.y_m != null ? p.y_m : p.y) || 0
-      }));
-      const postsGeo = pilotisOn
-        ? pilotisPostsM(polyM).map(sq => sq.map(p => fromM_studio(p.x, p.y, cLat, cLon)))
-        : [];
-      // Étiquette affichée au-dessus du volume : nom + réglages non visibles en 3D (sous-sols, parking...)
-      // v12.19 — étiquette = niveaux réellement occupés (départ → dernier), pas seulement la hauteur
-      const startLv = Math.round(groundM / fh) + (pilotisOn ? 1 : 0), endLv = startLv + levels - 1;
-      const lvName = n => n <= 0 ? "RDC" : `R+${n}`;
-      const tags = [levels > 1 ? `${lvName(startLv)} → ${lvName(endLv)}` : lvName(startLv)];
-      if (pilotisOn) tags.push("pilotis");
-      const sousSols = Math.max(0, Math.round(Number(fp.sous_sols) || 0));
-      if (sousSols > 0) tags.push(`${sousSols} SS`);
-      if (fp.rez_jardin) tags.push("rez-de-jardin");
-      if (fp.parking_ss) tags.push("parking");
-      if (fp.terrasse) tags.push("terrasse");
-      if (fp.balcon) tags.push("balcons");
-      const labelText = `${row.unit_name || row.unit_type || "Unité"}\n${tags.join(" · ")}`;
-      unitsData.push({
-        id: row.unit_index,
-        name: row.unit_name || `Unit ${row.unit_index}`,
-        type: row.unit_type,
-        polygonGeo,
-        baseM,
-        topM,
-        groundM,
-        postsGeo,
-        labelText,
-        floors: levels,
-        colorHex: colorByType(row.unit_type)
-      });
-      console.log(`[REGEN-3D] ${row.unit_name || row.unit_index} : sol=${groundM}m pilotis=${pilotisOn ? fh + "m (" + postsGeo.length + " poteaux)" : "non"} volume ${baseM}→${topM}m (${levels} niv × ${fh}m)`);
-    }
-    console.log(`[REGEN-3D] ${unitsData.length} unités converties GPS, ${rejected.length} rejetées`);
-    if (unitsData.length === 0) {
-      return res.status(400).json({ ok: false, error: "Aucune unité avec polygon exploitable", rejected });
-    }
-
-    // 6. v11.12 — Auto-zoom depuis la bbox parcelle (sauf override)
-    const zoom = zoomOverride != null ? Number(zoomOverride) : autoZoomForParcel(parcelCoords, cLat);
-    console.log(`[REGEN-3D] Zoom auto = ${zoom.toFixed(2)}`);
-    // v11.32 : log detaille des IDs et labels a masquer
-    if (hidden_building_ids || hidden_building_labels) {
-      console.log(`[REGEN-3D] Mask request: ids=${JSON.stringify(hidden_building_ids)} labels=${JSON.stringify(hidden_building_labels)}`);
-    }
+    console.log(`[REGEN-3D] Masquage : ${maskSource}${maskSpec ? ` (${maskSpec.hidden.length} masqué(s), ${maskSpec.visible.length} visible(s))` : ""}${maskSaved ? " — enregistré" : ""}`);
     // Génère HTML + screenshot Puppeteer
     const html = generateMultiUnitMassingHTML(
       { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN,
       Array.isArray(hidden_building_ids) ? hidden_building_ids : null,
-      Array.isArray(hidden_building_labels) ? hidden_building_labels : null
+      Array.isArray(hidden_building_labels) ? hidden_building_labels : null,
+      { mask: maskSpec, preview: false }
     );
     if (!BROWSERLESS_TOKEN) return res.status(503).json({ ok: false, error: "BROWSERLESS_TOKEN manquant" });
     let browser = null, page = null;
@@ -12957,6 +13062,8 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         detected_buildings: detectedBuildings,
         masked_building_ids: maskedIds,
         mask_diagnostics: maskDiag,
+        mask_source: maskSource,
+        mask_saved: maskSaved,
         duration_ms: ms
       });
     } finally {
@@ -12964,7 +13071,7 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       try { if (browser) await browser.disconnect(); } catch (_) {}
     }
   } catch (err) {
-    console.error(`[REGEN-3D] ${lead_ref}/${scen}: ${err.message}`);
+    console.error(`[REGEN-3D] ${lead_ref}/${scenario}: ${err.message}`);
     res.status(500).json({ ok: false, error: err.message });
   }
 });

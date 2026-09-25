@@ -444,7 +444,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.21-HAUTEURS</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.22-MASQUAGE</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -918,7 +918,8 @@ function scenarioPanelTemplate(L) {
             <span class="c-toolbar-label" style="color:#A78BFA">Solver :</span>
             <button type="button" class="c-tb-btn c-tb-btn-cyan" style="border-color:#A78BFA;color:#A78BFA" onclick="runSolverForScenario('${L}')" title="🧠 Génère plusieurs implantations valides via BARLO Site Layout Solver (multi-candidats + scoring + diversity)">🧠 Générer propositions</button>
             <button type="button" class="c-tb-btn" style="border-color:#22C55E;color:#22C55E" onclick="validateScenarioImplantation('${L}')" title="✅ Fige la géométrie finale : sauvegarde les u.polygon comme scénario BARLO officiel (envoyé au PPTX et exportable Mapbox)">✅ Valider implantation</button>
-            <button type="button" class="c-tb-btn" style="border-color:#F59E0B;color:#F59E0B" onclick="regenMassing3D('${L}')" title="🎨 Régénère l'image massing 3D depuis tes unités éditées (Mapbox + extrusion N polygones). Le prochain PPTX utilisera cette image.">🎨 Régénérer 3D</button>
+            ${L !== "A" ? `<button type="button" class="c-tb-btn" style="border-color:#38BDF8;color:#38BDF8" onclick="copyScenarioFrom('${L}')" title="⧉ Reprend les unités (programme, niveaux, hauteurs) et l'implantation du scénario ${L === "B" ? "A" : "B"}, à modifier ensuite. Le prix au m² de ${L} ne change pas.">⧉ Reprendre ${L === "B" ? "A" : "B"}</button>` : ""}
+            <button type="button" class="c-tb-btn" style="border-color:#F59E0B;color:#F59E0B" onclick="openMassingEditor('${L}')" title="🎨 Aperçu 3D en direct : masque ou affiche les bâtiments voisins, puis valide pour refaire l'image du PPT.">🎨 Régénérer 3D</button>
           </div>
           <div class="c-toolbar-group">
             <span class="c-toolbar-label">Axe :</span>
@@ -6118,6 +6119,55 @@ function switchScenarioTab(tab) {
     cockpitState.activeTab = tab;
     document.querySelectorAll(".c-scn-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
     document.querySelectorAll(".c-scn-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === tab));
+    // v12.22 — premier passage sur B (ou C) : repart du scénario précédent s'il a été travaillé
+    try { if (shouldAutoCopyScenarioV12(tab)) copyScenarioFrom(tab, { auto: true }); } catch (e) { console.warn("[COPIE SCÉNARIO]", e); }
+}
+
+// v12.22 — B part de A, C part de B : mêmes unités (programme, niveaux, départs, hauteurs, options)
+// et même implantation, à retoucher ensuite à la main. Le prix au m² reste propre à chaque scénario.
+const SCN_SOURCE_V12 = { B: "A", C: "B" };
+function scenarioTouchedV12(label) {
+    const m = v12Models && v12Models[label];
+    if (m && (m.actual || ["VALIDATED", "ANALYZED", "OUTDATED"].includes(m.status))) return true;
+    return _history.filter(h => h.label === label).length > 1;
+}
+function unitsSignatureV12(units) {
+    return JSON.stringify((units || []).map(u => [String(u.unit_type || "").toUpperCase(), Number(u.unit_size_m2) || 0, String(u.unit_name || "")]).sort());
+}
+// Copie automatique seulement si le scénario est encore exactement la suggestion BARLO (jamais validé,
+// pas retouché, mêmes unités que le moteur) et que le scénario précédent a été dessiné et travaillé
+function shouldAutoCopyScenarioV12(label) {
+    const src = SCN_SOURCE_V12[label];
+    const s = cockpitState.scenarios[label], from = src && cockpitState.scenarios[src];
+    if (!src || !s || !from || s._copiedFrom) return false;
+    if (!(from.units || []).some(u => u.polygon && u.polygon.length >= 3)) return false;
+    if (scenarioTouchedV12(label) || !scenarioTouchedV12(src)) return false;
+    if (unitsSignatureV12(s.units) === unitsSignatureV12(from.units)) return false;
+    return unitsSignatureV12(s.units) === unitsSignatureV12(defaultUnitsFromMoteur(label));
+}
+function copyScenarioFrom(label, opts) {
+    opts = opts || {};
+    const src = SCN_SOURCE_V12[label];
+    const from = src && cockpitState.scenarios[src], to = cockpitState.scenarios[label];
+    if (!to || !from || !(from.units || []).length) {
+        if (!opts.auto) showToast(`Scénario ${src || "précédent"} vide : rien à reprendre`, true);
+        return false;
+    }
+    if (!opts.auto && (to.units || []).length && !confirm(`Remplacer les unités et l'implantation du scénario ${label} par celles du scénario ${src} ?\nLe prix au m² du scénario ${label} ne change pas.`)) return false;
+    historyPush(label);
+    to.units = JSON.parse(JSON.stringify(from.units));
+    to.implantationAxis = from.implantationAxis;
+    to.activePattern = from.activePattern;
+    to._copiedFrom = src;
+    document.querySelectorAll(`.axis-btn[data-scn="${label}"]`).forEach(b => b.classList.toggle("active", b.dataset.axis === to.implantationAxis));
+    [..._openUnitDetails].filter(k => k.startsWith(label + ":")).forEach(k => _openUnitDetails.delete(k));
+    renderUnitsTable(label);
+    renderParcelSvg(label);
+    try { renderMoteurBrief(label); } catch (_) {}
+    updateConstraintsCount();
+    const n = to.units.length;
+    showToast(`⧉ Scénario ${label} repris de ${src} : ${n} unité${n > 1 ? "s" : ""} avec leurs niveaux, hauteurs et implantation. Modifie ce qui change, puis ✅ Valider implantation.`);
+    return true;
 }
 
 // ═══ v12 — Modèles de scénario (source de vérité serveur : rôle, état, suggestion vs effectif) ═══
@@ -7249,178 +7299,252 @@ async function validateScenarioV12(label, opts) {
 }
 
 // v11.11-3D-SYNC — Régénère l'image massing 3D depuis les unités éditées
-// v11.22 — Accepte hiddenIds pour override du choix de masquage
-// v11.32 — Accepte aussi hiddenLabels (numeros 1,2,3,4) en fallback matching
-async function regenMassing3D(label, hiddenIds, hiddenLabels) {
-    const ref = (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
-    if (!ref) { showToast("⚠ Aucun lead_ref (charge un lead d'abord)", true); return; }
+// v12.22 — Rendu final (serveur) avec le masquage des bâtiments voisins validé pour le terrain.
+// opts.mask : masquage choisi dans l'aperçu, enregistré avant le rendu ; sans mask, le serveur relit
+// le masquage validé. Les rendus passent un par un (chacun réécrit la ligne PIPELINE du lead).
+let _regenQueue = Promise.resolve();
+function regenMassing3D(label, opts) {
+    const run = () => regenMassing3DNow(label, opts || {});
+    const p = _regenQueue.then(run, run);
+    _regenQueue = p.catch(() => {});
+    return p;
+}
+function massingRefV12() {
+    return (currentBody8D && (currentBody8D.barlo_code || currentBody8D.lead_ref || currentBody8D.lead_id || currentBody8D.ref)) || "";
+}
+function massingReadyV12(label) {
     const s = cockpitState.scenarios[label] || {};
-    if (!s.units || s.units.length === 0) { showToast("Aucune unité pour ce scénario", true); return; }
-    const withPoly = s.units.filter(u => u.polygon && Array.isArray(u.polygon) && u.polygon.length >= 3);
-    if (withPoly.length === 0) {
-        showToast("⚠ Clique '✅ Valider implantation' d'abord (aucun polygon à extruder)", true);
-        return;
-    }
+    return (s.units || []).some(u => u.polygon && Array.isArray(u.polygon) && u.polygon.length >= 3);
+}
+async function regenMassing3DNow(label, opts) {
+    const ref = massingRefV12();
+    if (!ref) { showToast("⚠ Aucun lead_ref (charge un lead d'abord)", true); return null; }
+    if (!massingReadyV12(label)) { showToast("⚠ Clique '✅ Valider implantation' d'abord (aucun polygon à extruder)", true); return null; }
     try {
-        showToast(`🎨 Régénération 3D scénario ${label} en cours (~10-20s)...`);
-        // v11.15 : envoie les unités DIRECT DANS LE BODY (source cockpit RAM),
-        // plus besoin de valider en base d'abord. Chaque édition Revit-mode
-        // (drag, offset, resize, ...) est immédiatement reflétée sans persistance intermédiaire.
-        const unitsPayload = geometryUnitsPayload(label);
-        // Envoie aussi le polygone parcelle GPS pour éviter la relecture polygon_drafts
-        const parcelGeo = (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null;
+        if (!opts.quiet) showToast(`🎨 Image 3D du scénario ${label} en cours (~20 s)…`);
+        // v11.15 : unités envoyées depuis le cockpit (RAM) ; parcelle GPS envoyée pour éviter une relecture
         const res = await fetch(`${API}/api/regen-massing-from-units`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 lead_ref: ref, scenario: label, bearing: 0, upload: true, apply_to_pipeline: true,
-                units_live: unitsPayload,
-                parcel_polygon_string: parcelGeo,
-                hidden_building_ids: Array.isArray(hiddenIds) ? hiddenIds : null,
-                // v11.32 : envoie aussi les labels (numeros 1,2,3,4) pour matching robuste cote serveur
-                hidden_building_labels: Array.isArray(hiddenLabels) ? hiddenLabels : null
+                units_live: geometryUnitsPayload(label),
+                parcel_polygon_string: (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null,
+                mask: opts.mask || null,
+                save_mask: !!opts.mask
             })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
-            const msg = data.error || `HTTP ${res.status}`;
-            if (msg.includes("Clique 'Valider implantation'")) {
-                showToast("⚠ " + msg, true);
-            } else {
-                showToast(`❌ Régénération 3D échouée : ${msg}`, true);
-            }
+            showToast(`❌ Image 3D du scénario ${label} échouée : ${data.error || `HTTP ${res.status}`}`, true);
             console.error("[REGEN-3D] fail:", res.status, data);
-            return;
+            return null;
         }
         console.log("[REGEN-3D] OK:", data);
-        const applyMsg = data.applied_to_pipeline ? " · ✅ PIPELINE mise à jour" : " · ⚠ PIPELINE pas mise à jour";
-        showToast(`✅ Massing 3D régénéré : ${data.units_rendered} unités (zoom ${(data.zoom_used||0).toFixed(1)}, ${data.duration_ms}ms)${applyMsg}`);
-        // v11.16 — CRITIQUE : override currentBody8D.images.scenario_X_massing pour que le
-        // prochain POST /generate-pptx envoie la NOUVELLE URL (server.js:10360 fait
-        // `images: p.images || {}` — il ne relit PAS la Sheet mise à jour par apply_to_pipeline).
+        // v11.16 — le prochain POST /generate-pptx envoie la NOUVELLE URL (il ne relit pas la Sheet)
         if (data.image_url && currentBody8D) {
             if (!currentBody8D.images || typeof currentBody8D.images !== "object") currentBody8D.images = {};
             currentBody8D.images[`scenario_${label}_massing`] = data.image_url;
-            // Aussi les champs flat au cas où (rétro-compat multi-lecteurs)
             currentBody8D[`massing_scn_${label}_img_url`] = data.image_url;
-            console.log(`[REGEN-3D] currentBody8D.images.scenario_${label}_massing = ${data.image_url}`);
         }
-        // v11.12 : refresh du panneau IMAGES pour voir la nouvelle vignette Massing X
         try {
             const imgEl = document.querySelector(`img[data-massing-scn="${label}"]`);
-            if (imgEl && data.image_url) {
-                imgEl.src = data.image_url + "?t=" + Date.now();  // cache-bust
-            }
+            if (imgEl && data.image_url) imgEl.src = data.image_url + "?t=" + Date.now();
         } catch (_) {}
-        // v11.22 — Overlay avec image + panel liste bâtiments détectés + checkboxes
-        if (data.image_url || data.image_base64) {
-            const src = data.image_url || data.image_base64;
-            const detected = Array.isArray(data.detected_buildings) ? data.detected_buildings : [];
-            const maskedSet = new Set(Array.isArray(data.masked_building_ids) ? data.masked_building_ids : []);
-            const overlay = document.createElement("div");
-            overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.88);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1.5rem";
-            // v11.24 — Diagnostic visible directement dans le panel
-            const diag = data.mask_diagnostics || {};
-            const diagHtml = `<details style="background:rgba(30,58,95,0.5);padding:.4rem;border-radius:3px;font-size:.55rem;color:#94A3B8;margin-bottom:.5rem">
-                <summary style="cursor:pointer;color:#A78BFA;font-weight:600">🔍 Diagnostic détection</summary>
-                <div style="margin-top:.3rem;font-family:monospace;line-height:1.5">
-                    attempts: <b>${diag.attempts||0}</b><br>
-                    source_loaded: <b>${diag.source_loaded ? '✅' : '❌'}</b><br>
-                    features_found: <b>${diag.features_found||0}</b><br>
-                    intersected: <b>${diag.intersected||0}</b><br>
-                    errors: <b>${(diag.errors||[]).length}</b> ${(diag.errors||[]).slice(0,2).join(' · ')}
-                </div>
-            </details>`;
-            const buildingsList = detected.length === 0
-                ? `${diagHtml}<div style="color:#94A3B8;font-style:italic;padding:.6rem;background:rgba(239,68,68,0.1);border-left:2px solid #EF4444;border-radius:3px;font-size:.7rem">Aucun bâtiment détecté touchant la parcelle.<br><br>${diag.source_loaded===false ? '⚠ Source Mapbox pas chargée' : ''}${diag.features_found===0 ? '⚠ 0 features returned by querySourceFeatures' : ''}${(diag.errors||[]).length ? '⚠ Erreurs Turf : '+diag.errors[0] : ''}</div>`
-                : diagHtml + detected.map((b, i) => {
-                    const checked = maskedSet.has(b.id) ? "checked" : "";
-                    return `<label class="mask-item" data-bid="${b.id}" style="display:flex;align-items:center;gap:.5rem;padding:.4rem .5rem;background:${checked ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.10)'};border-left:3px solid ${checked ? '#EF4444' : '#22C55E'};border-radius:3px;font-size:.68rem;color:#F8FAFC;cursor:pointer;transition:background .15s">
-                        <input type="checkbox" ${checked} data-bid="${b.id}" style="cursor:pointer">
-                        <span style="min-width:2.2rem;color:#FBBF24;font-weight:700;text-align:center">${b.sector}</span>
-                        <span style="flex:1">Bâti #${i+1}</span>
-                        <span style="color:#94A3B8">h=${b.height_m}m</span>
-                        <span style="color:#94A3B8">${b.area_m2}m²</span>
-                        <span class="mask-status" style="min-width:3.5rem;font-size:.55rem;font-weight:700;color:${checked ? '#EF4444' : '#22C55E'}">${checked ? '❌ MASQUÉ' : '✓ VISIBLE'}</span>
-                    </label>`;
-                }).join("");
-            overlay.innerHTML = `<div style="max-width:95vw;max-height:95vh;background:#0B1120;border-radius:10px;padding:1rem;display:flex;gap:1rem;box-shadow:0 20px 60px rgba(0,0,0,0.6)">
-                <div style="flex:1;display:flex;flex-direction:column;align-items:center;min-width:0">
-                    <img id="regenPreview_${label}" src="${src}" style="max-width:100%;max-height:75vh;border-radius:4px;box-shadow:0 4px 20px rgba(0,0,0,0.4)"/>
-                    <div style="color:#F8FAFC;margin-top:.6rem;font-size:.75rem">Massing 3D scénario ${label} · ${data.units_rendered} unités · zoom ${(data.zoom_used||0).toFixed(1)} · ${data.duration_ms}ms</div>
-                </div>
-                <div style="width:300px;display:flex;flex-direction:column;gap:.6rem;color:#F8FAFC">
-                    <div style="font-size:.75rem;font-weight:700;color:#A78BFA">🏢 Bâtiments Mapbox touchant la parcelle</div>
-                    <div style="font-size:.6rem;color:#94A3B8">Coche = masquer · Décoche = garder visible</div>
-                    <div id="maskCounter_${label}" style="font-size:.7rem;padding:.35rem .5rem;background:rgba(245,158,11,0.15);border-radius:3px;color:#F59E0B;font-weight:700"></div>
-                    <div id="buildingList_${label}" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem;max-height:52vh;padding-right:.3rem">${buildingsList}</div>
-                    <button id="btnRegenMask_${label}" style="padding:.6rem;background:#F59E0B;color:#0B1120;border:none;border-radius:5px;font-weight:700;cursor:pointer;font-size:.75rem" ${detected.length === 0 ? "disabled" : ""}>🎨 Régénérer avec ce masquage</button>
-                    <button id="btnCloseOverlay_${label}" style="padding:.5rem;background:transparent;color:#94A3B8;border:1px solid #333;border-radius:5px;cursor:pointer;font-size:.65rem">Fermer</button>
-                </div>
-            </div>`;
-            document.body.appendChild(overlay);
-            // v11.27 — Feedback live : à chaque clic checkbox, met à jour couleur/statut/compteur
-            const listEl = overlay.querySelector(`#buildingList_${label}`);
-            const counterEl = overlay.querySelector(`#maskCounter_${label}`);
-            function updateFeedback() {
-                if (!listEl) return;
-                const items = listEl.querySelectorAll('label.mask-item');
-                let nMasked = 0;
-                items.forEach(item => {
-                    const cb = item.querySelector('input[type="checkbox"]');
-                    const status = item.querySelector('.mask-status');
-                    if (cb && cb.checked) {
-                        nMasked++;
-                        item.style.background = 'rgba(239,68,68,0.15)';
-                        item.style.borderLeftColor = '#EF4444';
-                        if (status) { status.textContent = '❌ MASQUÉ'; status.style.color = '#EF4444'; }
-                    } else {
-                        item.style.background = 'rgba(34,197,94,0.10)';
-                        item.style.borderLeftColor = '#22C55E';
-                        if (status) { status.textContent = '✓ VISIBLE'; status.style.color = '#22C55E'; }
-                    }
-                });
-                if (counterEl) {
-                    const total = items.length;
-                    counterEl.textContent = `${nMasked} / ${total} bâtiment${total > 1 ? 's' : ''} sera${nMasked > 1 ? 'ont' : ''} masqué${nMasked > 1 ? 's' : ''}`;
-                }
-            }
-            updateFeedback();
-            if (listEl) listEl.addEventListener('change', (e) => {
-                if (e.target && e.target.type === 'checkbox') updateFeedback();
-            });
-            // Handler bouton régénérer avec choix
-            const btnRegen = overlay.querySelector(`#btnRegenMask_${label}`);
-            const btnClose = overlay.querySelector(`#btnCloseOverlay_${label}`);
-            if (btnRegen) btnRegen.addEventListener("click", () => {
-                const listEl = overlay.querySelector(`#buildingList_${label}`);
-                const checkboxes = listEl ? listEl.querySelectorAll('input[type="checkbox"]') : [];
-                // v11.32 : envoie aussi les LABELS (numeros 1,2,3,4) en plus des IDs
-                // pour matching cote serveur meme si tri detecte varie entre requetes.
-                const selectedIds = [];
-                const selectedLabels = [];
-                Array.from(checkboxes).forEach((cb, idx) => {
-                    if (!cb.checked) return;
-                    const raw = cb.getAttribute("data-bid");
-                    const n = Number(raw);
-                    selectedIds.push(isNaN(n) ? raw : n);
-                    // Trouve le numero du label (1, 2, 3, 4) via le row
-                    const row = cb.closest('label.mask-item');
-                    if (row) {
-                        const allRows = Array.from(listEl.querySelectorAll('label.mask-item'));
-                        const posIdx = allRows.indexOf(row);
-                        if (posIdx >= 0) selectedLabels.push(posIdx + 1);
-                    }
-                });
-                overlay.remove();
-                regenMassing3D(label, selectedIds, selectedLabels);
-            });
-            if (btnClose) btnClose.addEventListener("click", () => overlay.remove());
-        }
+        const nDet = (data.detected_buildings || []).length;
+        const nMasked = (data.detected_buildings || []).filter(b => b.masked).length;
+        const maskTxt = nDet ? ` · ${nMasked}/${nDet} bâtiment${nDet > 1 ? "s" : ""} voisin${nDet > 1 ? "s" : ""} masqué${nMasked > 1 ? "s" : ""}` : "";
+        showToast(`✅ Image 3D du scénario ${label} mise à jour${maskTxt}${data.applied_to_pipeline ? "" : " · ⚠ PIPELINE pas mise à jour"}`);
+        return data;
     } catch (err) {
         console.error("[REGEN-3D] network error:", err);
-        showToast(`❌ Erreur réseau régénération 3D : ${err.message}`, true);
+        showToast(`❌ Erreur réseau image 3D : ${err.message}`, true);
+        return null;
     }
+}
+
+// v12.22 — Masquage des bâtiments voisins : aperçu 3D en direct, même cadrage que l'image du PPT.
+// Masquer / afficher est instantané (liste ou clic sur le bâtiment) ; « Valider ce masquage »
+// l'enregistre pour le terrain (commun à A, B et C) et refait l'image finale, puis celles des autres
+// scénarios validés, pour que tout le PPT montre le même choix.
+async function openMassingEditor(label) {
+    const ref = massingRefV12();
+    if (!ref) { showToast("⚠ Aucun lead_ref (charge un lead d'abord)", true); return; }
+    if (!massingReadyV12(label)) { showToast("⚠ Clique '✅ Valider implantation' d'abord (aucun polygon à extruder)", true); return; }
+    const S = Math.floor(Math.max(320, Math.min(window.innerHeight * 0.8, window.innerWidth - 420, 780)));
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.88);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1.5rem";
+    const btn = "padding:.35rem .5rem;background:transparent;color:#CBD5E1;border:1px solid #334155;border-radius:4px;cursor:pointer;font-size:.62rem;flex:1";
+    overlay.innerHTML = `<div style="max-width:96vw;max-height:96vh;background:#0B1120;border-radius:10px;padding:1rem;display:flex;gap:1rem;box-shadow:0 20px 60px rgba(0,0,0,0.6)">
+        <div style="display:flex;flex-direction:column;align-items:center;min-width:0">
+            <div class="me-stage" style="position:relative;width:${S}px;height:${S}px;overflow:hidden;border-radius:6px;background:#1E293B">
+                <div class="me-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94A3B8;font-size:.8rem;text-align:center;padding:1rem;z-index:2">⏳ Chargement de l'aperçu 3D…</div>
+            </div>
+            <div class="me-caption" style="color:#94A3B8;margin-top:.5rem;font-size:.68rem;text-align:center;max-width:${S}px">Aperçu en direct, même cadrage que l'image du PPT. Clique un bâtiment ou son numéro pour le masquer ou l'afficher.</div>
+        </div>
+        <div style="width:300px;display:flex;flex-direction:column;gap:.5rem;color:#F8FAFC">
+            <div style="font-size:.8rem;font-weight:700;color:#A78BFA">🏢 Bâtiments voisins · scénario ${label}</div>
+            <div class="me-saved" style="font-size:.6rem;color:#94A3B8;line-height:1.4"></div>
+            <div class="me-counter" style="font-size:.7rem;padding:.35rem .5rem;background:rgba(245,158,11,0.15);border-radius:3px;color:#F59E0B;font-weight:700">—</div>
+            <div style="display:flex;gap:.3rem"><button type="button" class="me-all-hide" style="${btn}">Tout masquer</button><button type="button" class="me-all-show" style="${btn}">Tout afficher</button></div>
+            <div class="me-list" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem;max-height:48vh;padding-right:.3rem"></div>
+            <div class="me-status" style="font-size:.62rem;color:#94A3B8;line-height:1.4;min-height:1.2em;white-space:pre-line"></div>
+            <button type="button" class="me-validate" disabled style="padding:.6rem;background:#22C55E;color:#0B1120;border:none;border-radius:5px;font-weight:700;cursor:pointer;font-size:.75rem;opacity:.5">✅ Valider ce masquage</button>
+            <button type="button" class="me-close" style="padding:.5rem;background:transparent;color:#94A3B8;border:1px solid #333;border-radius:5px;cursor:pointer;font-size:.65rem">Fermer</button>
+        </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const $ = sel => overlay.querySelector(sel);
+    const stage = $(".me-stage"), loading = $(".me-loading"), listEl = $(".me-list"), counterEl = $(".me-counter");
+    const statusEl = $(".me-status"), validateBtn = $(".me-validate"), savedEl = $(".me-saved");
+    let iframe = null, detected = [], masked = new Set(), initial = new Set(), ready = false, busy = false, done = false;
+    const setsDiffer = (a, b) => a.size !== b.size || [...a].some(x => !b.has(x));
+    function render() {
+        listEl.innerHTML = detected.length === 0
+            ? `<div style="color:#94A3B8;font-style:italic;padding:.6rem;background:rgba(148,163,184,0.08);border-radius:3px;font-size:.68rem">${ready ? "Aucun bâtiment Mapbox ne touche la parcelle : rien à masquer." : "Détection des bâtiments…"}</div>`
+            : detected.map((d, i) => {
+                const m = masked.has(String(d.id));
+                return `<div data-bid="${String(d.id).replace(/"/g, "&quot;")}" style="display:flex;align-items:center;gap:.5rem;padding:.4rem .5rem;background:${m ? "rgba(239,68,68,0.15)" : "rgba(34,197,94,0.10)"};border-left:3px solid ${m ? "#EF4444" : "#22C55E"};border-radius:3px;font-size:.68rem;cursor:${ready && !busy && !done ? "pointer" : "default"}">
+                    <span style="width:1.35rem;height:1.35rem;border-radius:50%;background:${m ? "#EF4444" : "#22C55E"};color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none">${i + 1}</span>
+                    <span style="min-width:1.8rem;color:#FBBF24;font-weight:700">${d.sector}</span>
+                    <span style="flex:1;color:#94A3B8">h ${d.height_m} m · ${d.area_m2} m²</span>
+                    <span style="font-size:.6rem;font-weight:700;color:${m ? "#EF4444" : "#22C55E"}">${m ? "MASQUÉ" : "VISIBLE"}</span>
+                </div>`;
+            }).join("");
+        const nM = detected.filter(d => masked.has(String(d.id))).length;
+        counterEl.textContent = detected.length
+            ? `${nM} masqué${nM > 1 ? "s" : ""} · ${detected.length - nM} visible${detected.length - nM > 1 ? "s" : ""}`
+            : "Aucun bâtiment voisin détecté";
+        const dirty = setsDiffer(masked, initial);
+        if (!busy && !done) statusEl.textContent = dirty ? "Modifications pas encore validées." : "";
+        const canValidate = ready && !busy && !done;
+        validateBtn.disabled = !canValidate;
+        validateBtn.style.opacity = canValidate ? "1" : ".5";
+    }
+    function send() {
+        if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ source: "barlo-studio", type: "set-mask", masked: [...masked] }, "*");
+    }
+    function setMasked(next) {
+        if (!ready || busy || done) return;
+        masked = next; render(); send();
+    }
+    function toggle(id) {
+        const next = new Set(masked);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        setMasked(next);
+    }
+    listEl.addEventListener("click", e => { const row = e.target.closest("[data-bid]"); if (row) toggle(row.getAttribute("data-bid")); });
+    $(".me-all-hide").addEventListener("click", () => setMasked(new Set(detected.map(d => String(d.id)))));
+    $(".me-all-show").addEventListener("click", () => setMasked(new Set()));
+    function onMsg(e) {
+        if (!iframe || e.source !== iframe.contentWindow) return;
+        const m = e.data || {};
+        if (m.source !== "barlo-massing") return;
+        if (m.type === "ready" && !ready) {
+            detected = Array.isArray(m.detected) ? m.detected : [];
+            masked = new Set(detected.filter(d => d.masked).map(d => String(d.id)));
+            initial = new Set(masked);
+            ready = true;
+            loading.style.display = "none";
+            render();
+        } else if (m.type === "toggle") {
+            toggle(String(m.id));
+        }
+    }
+    window.addEventListener("message", onMsg);
+    function close() { window.removeEventListener("message", onMsg); overlay.remove(); }
+    $(".me-close").addEventListener("click", () => {
+        if (!done && ready && setsDiffer(masked, initial) && !confirm("Fermer sans valider ? Le masquage enregistré reste celui d'avant.")) return;
+        close();
+    });
+    render();
+
+    // Aperçu : la même page que le rendu final, ouverte ici (le serveur y met le masquage déjà validé)
+    try {
+        const r = await fetch(`${API}/api/massing-preview-html`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                lead_ref: ref, scenario: label, bearing: 0,
+                units_live: geometryUnitsPayload(label),
+                parcel_polygon_string: (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null
+            })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        const sm = d.saved_mask;
+        savedEl.textContent = sm
+            ? `Masquage validé${sm.validated_at ? " le " + new Date(sm.validated_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : ""} : ${sm.hidden} masqué${sm.hidden > 1 ? "s" : ""}, ${sm.visible} gardé${sm.visible > 1 ? "s" : ""} visible${sm.visible > 1 ? "s" : ""}. Commun aux scénarios A, B et C.`
+            : "Aucun masquage validé pour ce terrain : par défaut, tous les bâtiments qui touchent la parcelle sont masqués. Le choix validé ici vaudra pour A, B et C.";
+        if (!overlay.isConnected) return;
+        iframe = document.createElement("iframe");
+        iframe.title = "Aperçu 3D";
+        iframe.style.cssText = `position:absolute;top:0;left:0;width:1280px;height:1280px;border:0;transform:scale(${S / 1280});transform-origin:0 0`;
+        stage.appendChild(iframe);
+        iframe.srcdoc = d.html;
+        setTimeout(() => { if (!ready && overlay.isConnected) loading.textContent = "⏳ L'aperçu met plus de temps que prévu (tuiles Mapbox)…"; }, 20000);
+    } catch (err) {
+        loading.textContent = `❌ Aperçu indisponible : ${err.message}`;
+        return;
+    }
+
+    validateBtn.addEventListener("click", async () => {
+        if (!ready || busy || done) return;
+        busy = true; render();
+        const pick = d => ({ lat: d.centroid[0], lon: d.centroid[1], area_m2: d.area_m2 });
+        const mask = {
+            hidden: detected.filter(d => masked.has(String(d.id))).map(pick),
+            visible: detected.filter(d => !masked.has(String(d.id))).map(pick)
+        };
+        statusEl.style.color = "#F59E0B";
+        statusEl.textContent = "⏳ Masquage enregistré, rendu de l'image finale du PPT (~20 s)…";
+        const data = await regenMassing3D(label, { mask, quiet: true });
+        busy = false;
+        if (!data) {
+            statusEl.style.color = "#EF4444";
+            statusEl.textContent = "❌ Rendu final échoué : le masquage n'a peut-être pas été enregistré. Réessaie.";
+            render();
+            return;
+        }
+        done = true;
+        initial = new Set(masked);
+        // Contrôle de fidélité : chaque bâtiment de l'aperçu doit avoir le même état dans l'image finale
+        const finals = Array.isArray(data.detected_buildings) ? data.detected_buildings : [];
+        const near = (a, b) => {
+            const k = Math.cos(a.centroid[0] * Math.PI / 180);
+            const dy = (a.centroid[0] - b.centroid[0]) * 111320, dx = (a.centroid[1] - b.centroid[1]) * 111320 * k;
+            return Math.sqrt(dx * dx + dy * dy) <= 4;
+        };
+        const ecarts = detected.filter(d => {
+            const f = finals.find(x => Array.isArray(x.centroid) && near(d, x));
+            return !f || !!f.masked !== masked.has(String(d.id));
+        }).map(d => detected.indexOf(d) + 1);
+        const src = data.image_url || data.image_base64;
+        if (src) {
+            if (iframe) iframe.remove();
+            iframe = null;
+            loading.style.display = "none";
+            const img = document.createElement("img");
+            img.src = data.image_url ? data.image_url + "?t=" + Date.now() : src;
+            img.style.cssText = `width:${S}px;height:${S}px;object-fit:contain;display:block`;
+            stage.appendChild(img);
+            $(".me-caption").textContent = `Image finale du PPT · scénario ${label}`;
+        }
+        statusEl.style.color = ecarts.length ? "#F59E0B" : "#22C55E";
+        statusEl.textContent = ecarts.length
+            ? `⚠ Masquage enregistré, mais le rendu final diffère pour le${ecarts.length > 1 ? "s" : ""} bâtiment${ecarts.length > 1 ? "s" : ""} n° ${ecarts.join(", ")}. Rouvre « 🎨 Régénérer 3D » pour vérifier.`
+            : "✅ Masquage validé et enregistré. L'image du PPT correspond à l'aperçu.";
+        validateBtn.textContent = "✅ Masquage validé";
+        render();
+        // Même masquage pour les images des autres scénarios validés
+        const others = ["A", "B", "C"].filter(x => x !== label && massingReadyV12(x) && v12Models && v12Models[x] && v12Models[x].actual);
+        if (!others.length) return;
+        const base = statusEl.textContent;
+        for (const x of others) {
+            statusEl.textContent = `${base}\n↻ Image 3D du scénario ${x} refaite avec ce masquage…`;
+            await regenMassing3D(x, { quiet: true });
+        }
+        statusEl.textContent = `${base}\n✅ Image${others.length > 1 ? "s" : ""} ${others.join(" et ")} refaite${others.length > 1 ? "s" : ""} avec le même masquage.`;
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
