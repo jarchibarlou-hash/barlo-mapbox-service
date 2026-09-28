@@ -2790,6 +2790,61 @@ const DUREE_CHANTIER_MOIS_PAR_NIVEAU = {
   finitions: 2,                // second œuvre + lots techniques
   vrd_ext: 1,                  // VRD + aménagements extérieurs
 };
+// v13.3 — CALENDRIER DU PROJET (Jeremy, 29/09) : les études ne sont plus prises sur la durée des travaux.
+// Travaux = durée par niveaux + 20 % de marge d'aléas. Études de conception (APS, APD, dossier de permis) =
+// part de la durée des travaux qui croît avec la surface (25 % pour un petit projet, 40 % au-delà de
+// 2 000 m²), 2 mois minimum. Permis de construire + consultation des entreprises (en parallèle) : 2 mois.
+const MARGE_DELAIS_V13 = 0.20;
+const DUREE_PERMIS_MOIS_V13 = 2;
+function projectScheduleV13(sc) {
+  const lv = Math.max(1, Number(sc.levels) || 1);
+  const D = DUREE_CHANTIER_MOIS_PAR_NIVEAU;
+  const parts = [["Terrassement et fondations", D.fondations_terrassement, "fondations"], ["Gros œuvre", lv * D.par_niveau, "gros œuvre"],
+    ["Second œuvre et lots techniques", D.finitions, "second œuvre, lots"], ["Finitions, VRD et réception", D.vrd_ext, "finitions, réception"]];
+  const brut = parts.reduce((s, p) => s + p[1], 0);
+  const travaux = Math.ceil(brut * (1 + MARGE_DELAIS_V13) - 1e-9);
+  // répartition en mois entiers (plus forts restes), chaque phase d'au moins 1 mois
+  const raw = parts.map(p => p[1] * travaux / brut);
+  const mois = raw.map(v => Math.max(1, Math.floor(v)));
+  let reste = travaux - mois.reduce((s, v) => s + v, 0);
+  const ordre = raw.map((v, i) => [v - Math.floor(v), i]).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; reste > 0; k = (k + 1) % ordre.length) { mois[ordre[k][1]]++; reste--; }
+  while (reste < 0) { const i = mois.indexOf(Math.max(...mois)); mois[i]--; reste++; }
+  const sdp = Number(sc.sdp_m2) || 0;
+  const ratioEtudes = 0.25 + 0.15 * Math.min(1, sdp / 2000);
+  const etudes = Math.max(2, Math.round(travaux * ratioEtudes));
+  let m = 1;
+  const seg = (nom, n, groupe, court) => { const s = { nom, court, groupe, mois: n, debut: m, fin: m + n - 1 }; m += n; return s; };
+  const phases = [seg("Études de conception", etudes, "etudes", "études de conception"),
+    seg("Permis et consultation des entreprises", DUREE_PERMIS_MOIS_V13, "etudes", "permis, consultation")]
+    .concat(parts.map((p, i) => seg(p[0], mois[i], "travaux", p[2])));
+  return { etudes_mois: etudes, permis_mois: DUREE_PERMIS_MOIS_V13, travaux_mois: travaux, travaux_brut_mois: Math.round(brut * 10) / 10,
+    marge_pct: Math.round(MARGE_DELAIS_V13 * 100), ratio_etudes_pct: Math.round(ratioEtudes * 100), total_mois: m - 1, phases };
+}
+// v13.3 — surface de plancher par niveau (graphique « surfaces par niveau » du comparatif) : géométrie
+// validée si elle existe (unités, niveau de départ, nombre de niveaux), sinon volumes du moteur
+function sdpParNiveauV13(sc) {
+  const g = sc.geom_v12;
+  const lv = {};
+  if (g && Array.isArray(g.units) && g.units.length) {
+    for (const u of g.units) {
+      const st = Number(u.start_level) || 0, fl = Math.max(1, Number(u.floors) || 1);
+      for (let k = st; k < st + fl; k++) lv[k] = (lv[k] || 0) + (Number(u.area_m2) || 0);
+    }
+  } else {
+    const n = Math.max(1, Number(sc.levels) || 1), sdp = Number(sc.sdp_m2) || 0, rdc = Number(sc.fp_rdc_m2) || 0;
+    if (n > 1 && rdc > 0 && rdc < sdp) { lv[0] = rdc; for (let k = 1; k < n; k++) lv[k] = (sdp - rdc) / (n - 1); }
+    else for (let k = 0; k < n; k++) lv[k] = sdp / n;
+  }
+  return Object.keys(lv).map(Number).sort((a, b) => a - b).map(k => ({ niveau: k === 0 ? "RDC" : `R+${k}`, m2: Math.round(lv[k]) }));
+}
+function applyScheduleV13(sc) {
+  const s = projectScheduleV13(sc);
+  sc.schedule_v13 = s;
+  sc.duree_chantier_mois = s.travaux_mois;     // durée des TRAVAUX, marge comprise
+  sc.duree_projet_mois = s.total_mois;         // études + permis + travaux
+  return s;
+}
 // ══════════════════════════════════════════════════════════════════════════════
 // v56.9 — RÈGLES PAR PROGRAMME (chaque option du formulaire client)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -5348,6 +5403,8 @@ function computeSmartScenarios({
   }
   // v12.11 — score, recommandation, comparatif et phasage recalculés APRÈS les réglages de Jeremy et
   // ses géométries validées (avant : calculés sur la suggestion seule, donc hors sujet dès qu'il dessinait).
+  // v13.3 — calendrier recalculé sur le scénario final (niveaux de la géométrie validée compris)
+  for (const k of ["A", "B", "C"]) if (_scenarios[k] && !_scenarios[k].unsupported) applyScheduleV13(_scenarios[k]);
   scoreScenariosV12(_scenarios, scoreCtxV12);
   const recommendedFinal = pickRecommendedV12(_scenarios, feasibility_posture);
   if (recommendedFinal !== recommended) console.log(`│ v12.11 recommandation : ${recommended} → ${recommendedFinal} (après réglages / géométries validées)`);
@@ -9513,6 +9570,19 @@ function buildTemplateTexts(flat, scenarios) {
   const recForcesV12 = scenarioForcesV12(recScV12, 3);
   const recFaibleV12 = scenarioFaiblesseV12(recScV12);
   const recReserveV12 = reservePctV12(recScV12);
+  // v13.3 — calendrier du scénario recommandé : études, permis, travaux (marge de 20 % comprise)
+  const schV13 = (recScV12 && recScV12.schedule_v13) || null;
+  const moisTxtV13 = p => p.debut === p.fin ? `M${p.debut}` : `M${p.debut}–M${p.fin}`;
+  const phasageLignesV13 = schV13 ? schV13.phases.map(p => `- **${moisTxtV13(p)}** : ${p.court || p.nom}`).join("\n") : "";
+  const decaissementsV13 = (() => {
+    const cv = recScV12 && recScV12.cout_ventilation, ph = schV13 && schV13.phases.filter(p => p.groupe === "travaux");
+    const tot = cv ? Number(cv.sous_total_construction_fcfa) || 0 : 0;
+    if (!cv || !ph || ph.length < 4 || !(tot > 0)) return "";
+    const pct = v => Math.round((Number(v) || 0) / tot * 100);
+    const go = pct(cv.gros_oeuvre_fcfa), so = pct((Number(cv.second_oeuvre_fcfa) || 0) + (Number(cv.lots_techniques_fcfa) || 0));
+    const rng = (a, b) => a.debut === b.fin ? `M${a.debut}` : `M${a.debut}–M${b.fin}`;
+    return `\n\n**Décaissements des travaux** :\n- **${rng(ph[0], ph[1])}** : ${go} % (fondations, gros œuvre)\n- **${rng(ph[2], ph[2])}** : ${so} % (second œuvre, lots techniques)\n- **${rng(ph[3], ph[3])}** : ${Math.max(0, 100 - go - so)} % (VRD, finitions, solde)`;
+  })();
   const bloquantsV12 = constatsV12.filter(c => c.niveau === "bloquant");
   const positionBudgetV12 = fit => ({ DANS_BUDGET: "dans le bas de votre fourchette", BUDGET_TENDU: "dans le haut de votre fourchette",
     HORS_BUDGET: "au-dessus de votre fourchette" })[fit] || "budget non renseigné";
@@ -9631,9 +9701,9 @@ function buildTemplateTexts(flat, scenarios) {
   // v74.19 — textes courts, bullets, bold sur chiffres et concepts clés
   texts.invisible_intro_text = `**Conditions de réussite** — maîtriser le coût, le phasage et les délais.`;
   // v12.17d — 3 colonnes de la slide 17 : une ligne par point (zones de 2,5" de haut)
-  texts.invisible_technical_text = `**Ventilation — Scénario ${rec}** (${f("rec_cost_total")}) :\n- **Gros œuvre** ${f("rec_ventil_go_pct")} : structure, fondations\n- **Second œuvre** ${f("rec_ventil_so_pct")} : finitions\n- **Lots techniques** ${f("rec_ventil_lt_pct")} : réseaux intérieurs\n- **VRD** ${f("rec_ventil_vrd_pct")} : raccordements extérieurs\n\n**Phasage** (${f("rec_duree_chantier")}) :\n- **M1-M2** : études et permis\n- **M3** : fondations (saison sèche)\n- **M4-M5** : gros œuvre\n- **M6-M7** : second œuvre, lots techniques\n- **M8** : finitions et réception`;
+  texts.invisible_technical_text = `**Ventilation — Scénario ${rec}** (${f("rec_cost_total")}) :\n- **Gros œuvre** ${f("rec_ventil_go_pct")} : structure, fondations\n- **Second œuvre** ${f("rec_ventil_so_pct")} : finitions\n- **Lots techniques** ${f("rec_ventil_lt_pct")} : réseaux intérieurs\n- **VRD** ${f("rec_ventil_vrd_pct")} : raccordements extérieurs${schV13 ? `\n\n**Calendrier** (${schV13.total_mois} mois, dont ${schV13.travaux_mois} de travaux) :\n${phasageLignesV13}` : `\n\n**Travaux** : ${f("rec_duree_chantier")}`}`;
   texts.invisible_financial_text = `**Coût des travaux** : ${f("rec_cost_total")} (fourchette ${f("budget_fcfa")}).\n\n**À prévoir en plus** :\n- **Architecte** : ${f("rec_hono_bas")}M-${f("rec_hono_haut")}M FCFA (${f("rec_hono_taux_bas")}-${f("rec_hono_taux_haut")})\n- **Permis et taxes** : ~1-2 % des travaux\n- **Étude de sol** : 300k-500k FCFA\n- **Notaire, administratif** : variable\n- **Assurance dommage-ouvrage** : ~2 %\n\n${recReserveV12 ? `**Réserve pour imprévus** : ${recReserveV12} %, déjà comptée dans la comparaison au budget.` : "**Réserve pour imprévus** : au moins 10 % du coût des travaux, à ajouter."}`;
-  texts.invisible_strategic_text = `**Calendrier** (pluies de juin à octobre à ${f("city")}) :\n- **Démarrage** : novembre-janvier (saison sèche)\n- **Fondations** : hors saison des pluies\n- **Gros œuvre** : possible sous la pluie, avec précautions\n- **Finitions** : avant les pluies suivantes\n\n**Décaissements** :\n- **M1-M2** : 15 % (études, permis, installation)\n- **M3-M5** : 50 % (fondations, gros œuvre)\n- **M6-M7** : 25 % (second œuvre)\n- **M8** : 10 % (finitions, réception, solde)`;
+  texts.invisible_strategic_text = `**Calendrier** (pluies de juin à octobre à ${f("city")}) :\n- **Travaux** : ${schV13 ? `à partir de M${schV13.phases.find(p => p.groupe === "travaux").debut}, ` : ""}démarrage en saison sèche (novembre-janvier)\n- **Fondations** : hors saison des pluies\n- **Finitions** : avant les pluies suivantes${decaissementsV13}`;
   // ── SLIDE 18: Ce qu'on ne voit pas encore — points techniques + checklist + jalons ──
   // v74.19 — différenciée de slide 17 : col financier = checklist actions, col stratégique = jalons décisionnels
   texts.success_intro_text = recConformeV12
@@ -9658,7 +9728,7 @@ function buildTemplateTexts(flat, scenarios) {
   const recNivV12 = (parseInt(f("rec_levels")) || 0) + 1;
   texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² SDP** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${f("rec_cost_total")}**, ${recPositionV12} (**${f("budget_fcfa")}**)\n- **Conformité** : ${recConformeV12 ? (recScV12.facade_aveugle_v13 ? "conforme **si les façades en débord restent aveugles**" : "COS et retraits respectés") : "**implantation à reprendre** avant le permis"}${sousReserveV12 ? " (aucun scénario conforme en l'état : **recommandation sous réserve**)" : ""}\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
   texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** ${egauxRecV12.length ? `Score multicritère de **${f("rec_score")}/100**${egaliteRecTxt}` : `Meilleur score multicritère (**${f("rec_score")}/100**)`}, porté par : **${forcesTxtV12}**. Coût des travaux **${f("rec_cost_total")}** (${recPositionV12}) pour **${plural(parseInt(recUnits) || 0, "unité")} sur ${recSdp} m² SDP**, ${niveauxTxt(recNivV12)}.`;
-  texts.conclusion_projection_text = `**Horizon de livraison** : études et permis (**4 à 7 mois** : APS, APD, étude de sol, instruction) puis chantier (**${f("rec_duree_chantier")}**), sous réserve d'obtention du permis dans les délais.\n\n**Calendrier optimal** :\n- Démarrage **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**`;
+  texts.conclusion_projection_text = `**Horizon de livraison** : ${schV13 ? `environ **${schV13.total_mois} mois** — études de conception (**${schV13.etudes_mois} mois**), permis et consultation des entreprises (**${schV13.permis_mois} mois**, jusqu'à 4 selon la commune), puis travaux (**${schV13.travaux_mois} mois**, marge d'aléas de 20 % comprise)` : `études et permis, puis chantier (**${f("rec_duree_chantier")}**)`}.\n\n**Calendrier optimal** :\n- Démarrage des travaux **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**`;
   console.log(`│ ✅ TEMPLATE ENGINE v2.0 PREMIUM: ${Object.keys(texts).length} textes générés (accents, conditionnel, cross-ref charts)`);
   return texts;
 }
@@ -11041,6 +11111,11 @@ app.post("/generate-pptx", async (req, res) => {
         budget_max_fcfa: sc.budget_max_fcfa || 0,
         budget_needed_fcfa: sc.budget_needed_fcfa || 0,
         recommended: !!sc.recommended,
+        // v13.3 — calendrier (études, permis, travaux), surfaces par niveau, décomposition du score
+        schedule: sc.schedule_v13 || null,
+        duree_projet_mois: sc.duree_projet_mois || 0,
+        sdp_par_niveau: sdpParNiveauV13(sc),
+        score_parts: CRITERES_V13.map(c => ({ key: c.key, label: c.court, points: sd[c.key] && sd[c.key].score != null ? Math.round(sd[c.key].contribution * 1000) / 10 : 0 })),
         parking_detail: sc.parking_detail || {},
         free_ground_m2: sc.free_ground_m2 || 0,
         circulation_ratio_pct: sc.circulation_ratio_pct || 0,

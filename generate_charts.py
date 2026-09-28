@@ -934,7 +934,7 @@ SLOTS = {
     'comparatif':   (9.50, 4.75),   # slide 15
     'cost_calc':    (9.00, 1.10),   # slides 7/10/13
     'budget_gauge': (9.00, 1.00),   # slides 7/10/13
-    'timeline':     (9.50, 1.60),   # slide 19
+    'timeline':     (9.50, 2.20),   # slide 19 : calendrier études + permis + travaux
     'recap_card':   (9.50, 1.30),   # slide 20
 }
 # Positions (pouces) des graphiques posés hors emplacement du modèle
@@ -942,7 +942,7 @@ SLOT_POS = {
     'comparatif':   (0.25, 0.45),
     'cost_calc':    (0.50, 3.00),
     'budget_gauge': (0.50, 4.40),
-    'timeline':     (0.25, 3.80),
+    'timeline':     (0.25, 3.15),
     'recap_card':   (0.25, 4.00),
 }
 BRAND_GREEN = '#1F5E55'
@@ -1069,36 +1069,91 @@ def generate_bars_fit(risk_scores, label, path):
     _save_exact(fig, path)
 
 
-# ── Slide 16 : arbitrage (9,45 × 2,62) ──────────────────────────────────────────
+# ── Slide 16 : arbitrage — coût face à la fourchette + d'où vient le score (9,45 × 2,62) ──
+CRIT_COLORS = ['#1F5E55', '#2E7D6F', '#5B8DB8', '#8B5CF6', '#D4850E', '#B07D3A', '#E94B78']
+
+
 def generate_arbitrage_fit(scenarios, path):
-    labels = ['A', 'B', 'C']
-    colors = [COLORS[l] for l in labels]
-    crit = [('Coût des travaux', 'cost_total_fcfa', 1e6, ' M'), ('Surface de plancher', 'sdp_m2', 1, ' m²'),
-            ('Unités', 'total_units', 1, ''), ('Score', 'recommendation_score', 1, '/100')]
+    labels = [l for l in ['A', 'B', 'C'] if scenarios.get(l)]
     fig = _fig('arbitrage')
-    for i, (title, key, div, suf) in enumerate(crit):
-        ax = fig.add_axes([0.03 + i * 0.245, 0.14, 0.2, 0.62])
-        vals = [float((scenarios.get(l) or {}).get(key, 0) or 0) / div for l in labels]
-        mx = max(vals) if max(vals) > 0 else 1
-        bars = ax.bar(labels, vals, color=colors, width=0.58, edgecolor='white', lw=1)
-        for b_, v, c in zip(bars, vals, colors):
-            ax.text(b_.get_x() + b_.get_width() / 2, v + mx * 0.05, f'{v:.0f}{suf}', ha='center', va='bottom', fontsize=7, fontweight='bold', color=c)
-        ax.set_ylim(0, mx * 1.3)
-        ax.yaxis.set_visible(False)
-        for s in ('top', 'right', 'left'):
-            ax.spines[s].set_visible(False)
-        ax.spines['bottom'].set_color(COLORS['grid'])
-        ax.tick_params(axis='x', labelsize=7.5, colors=COLORS['text'], length=0)
-        fig.text(0.03 + i * 0.245 + 0.1, 0.86, title, ha='center', va='center', fontsize=8, fontweight='bold', color=COLORS['dark'])
+    W, H = SLOTS['arbitrage']
+    # ─ gauche : coût des travaux de chaque scénario face à la fourchette du client ─
+    ax = fig.add_axes([0.13, 0.2, 0.36, 0.62])
+    costs = [float(scenarios[l].get('cost_total_fcfa', 0) or 0) for l in labels]
+    needs = [float(scenarios[l].get('budget_needed_fcfa', 0) or 0) or c for l, c in zip(labels, costs)]
+    bmin = max([float(scenarios[l].get('budget_min_fcfa', 0) or 0) for l in labels] + [0])
+    bmax = max([float(scenarios[l].get('budget_max_fcfa', 0) or 0) for l in labels] + [0])
+    xmax = max(needs + costs + [bmax * 1.15, 1]) * 1.12
+    y = np.arange(len(labels))[::-1]
+    if bmax:
+        lo = bmin if bmin < bmax else bmax * 0.97
+        ax.axvspan(lo, bmax, color='#C8E6C9', alpha=0.8, zorder=0)
+        ax.text((lo + bmax) / 2, len(labels) - 0.35, f'votre fourchette\n{_m(bmin)} – {_m(bmax)}' if bmin < bmax else f'votre budget\n{_m(bmax)}',
+                ha='center', va='bottom', fontsize=6.3, color=COLORS['green'], fontweight='bold')
+    for yy, l, c, nd in zip(y, labels, costs, needs):
+        ax.barh(yy, c, height=0.5, color=COLORS[l], zorder=2)
+        ax.text(max(c, nd) + xmax * 0.015, yy, f'{_m(c)}', va='center', ha='left', fontsize=7, fontweight='bold', color=COLORS[l], zorder=3)
+        if nd > c * 1.005:
+            ax.plot([nd, nd], [yy - 0.32, yy + 0.32], color=COLORS['dark'], lw=1.2, zorder=4)
+    ax.set_yticks(y)
+    ax.set_yticklabels([f'Scénario {l}' for l in labels], fontsize=7.5, color=COLORS['text'])
+    ax.set_xlim(0, xmax)
+    ax.set_ylim(-0.6, len(labels) - 0.05)
+    ax.set_xticks([])
+    for s in ('top', 'right', 'bottom'):
+        ax.spines[s].set_visible(False)
+    ax.spines['left'].set_color(COLORS['grid'])
+    ax.tick_params(axis='y', length=0)
+    fig.text(0.28, 0.93, 'Coût des travaux face à votre fourchette', ha='center', va='center', fontsize=8.2, fontweight='bold', color=COLORS['dark'])
+    fig.text(0.28, 0.07, '| trait noir : besoin avec la réserve pour imprévus du scénario', ha='center', va='center', fontsize=5.8, color=COLORS['muted'])
+    # ─ droite : d'où vient le score (contribution de chaque critère, sur 100) ─
+    ax2 = fig.add_axes([0.6, 0.32, 0.37, 0.5])
+    parts0 = (scenarios[labels[0]].get('score_parts') or []) if labels else []
+    names = [RADAR_SHORT.get(p.get('key'), p.get('label', '')) for p in parts0]   # mêmes libellés courts que le radar
+    for yy, l in zip(y, labels):
+        parts = scenarios[l].get('score_parts') or []
+        left = 0.0
+        for k, p in enumerate(parts):
+            v = float(p.get('points', 0) or 0)
+            if v <= 0:
+                continue
+            ax2.barh(yy, v, left=left, height=0.5, color=CRIT_COLORS[k % len(CRIT_COLORS)], edgecolor='white', lw=0.6)
+            if v >= 7:
+                ax2.text(left + v / 2, yy, f'{v:.0f}', ha='center', va='center', fontsize=5.8, color='white', fontweight='bold')
+            left += v
+        ax2.text(left + 1.5, yy, f'{int(round(float(scenarios[l].get("recommendation_score", 0) or 0)))}/100', va='center', ha='left',
+                 fontsize=7, fontweight='bold', color=COLORS[l])
+    ax2.set_yticks(y)
+    ax2.set_yticklabels(labels, fontsize=7.5, fontweight='bold', color=COLORS['text'])
+    ax2.set_xlim(0, 112)
+    ax2.set_ylim(-0.6, len(labels) - 0.4)
+    ax2.set_xticks([])
+    for s in ('top', 'right', 'bottom'):
+        ax2.spines[s].set_visible(False)
+    ax2.spines['left'].set_color(COLORS['grid'])
+    ax2.tick_params(axis='y', length=0)
+    fig.text(0.785, 0.93, "D'où vient le score (points sur 100)", ha='center', va='center', fontsize=8.2, fontweight='bold', color=COLORS['dark'])
+    # légende des critères sur deux lignes
+    per_row = 4
+    for k, nm in enumerate(names):
+        r, c = divmod(k, per_row)
+        x0 = 0.6 + c * 0.095
+        y0 = 0.19 - r * 0.1
+        fig.patches.append(mpatches.Rectangle((x0, y0 - 0.025), 0.012, 0.05, transform=fig.transFigure, color=CRIT_COLORS[k % len(CRIT_COLORS)]))
+        fig.text(x0 + 0.017, y0, nm, fontsize=5.6, va='center', ha='left', color=COLORS['text'])
     _save_exact(fig, path)
 
 
-# ── Slide 15 : comparatif (9,50 × 4,75) ─────────────────────────────────────────
+# ── Slide 15 : comparatif (tableau) + surfaces par niveau (9,50 × 4,75) ─────────
+LEVEL_COLORS = ['#1F5E55', '#3E8A7E', '#6FB0A4', '#A4CFC6', '#D3E9E4', '#EAF4F1']
+
+
 def generate_comparatif_fit(scenarios, path):
     crit = [('Surface de plancher (SDP)', 'sdp_m2', 'm²', 'max'), ('Surface utile', 'surface_habitable_m2', 'm²', 'max'),
             ("Nombre d'unités", 'total_units', '', 'max'), ('Niveaux', 'levels', '', None),
             ('Coût des travaux', 'cost_total_fcfa', 'FCFA', 'min'), ('Coût au m² de SDP', 'cost_per_m2_sdp', 'FCFA', 'min'),
-            ('Score de la grille', 'recommendation_score', '/100', 'max'), ('Durée de chantier', 'duree_chantier_mois', 'mois', 'min')]
+            ('Score de la grille', 'recommendation_score', '/100', 'max'), ('Durée des travaux', 'duree_chantier_mois', 'mois', 'min'),
+            ('Délai total du projet', 'duree_projet_mois', 'mois', 'min')]
     labels = ['A', 'B', 'C']
     rows = []
     for name, key, unit, best in crit:
@@ -1115,13 +1170,17 @@ def generate_comparatif_fit(scenarios, path):
     rec = next((l for l in labels if (scenarios.get(l) or {}).get('recommended')), None)
     cols_x = [0.05, 3.05, 5.2, 7.35]
     col_w = [2.95, 2.1, 2.1, 2.1]
-    top = H - 0.12
-    rh = min(0.44, (H - 0.75) / (len(rows) + 1))
+    niv = {l: (scenarios.get(l) or {}).get('sdp_par_niveau') or [] for l in labels}
+    has_levels = any(niv.values())
+    table_h = H - (1.55 if has_levels else 0.45)
+    top = H - 0.05
+    rh = min(0.4, table_h / (len(rows) + 1))
     hdr = ['Critère'] + [f'Scénario {l}' + ('  ★' if l == rec else '') for l in labels]
     hcol = [COLORS['dark'], COLORS['A'], COLORS['B'], COLORS['C']]
+    fs = 8.3 if rh >= 0.3 else 7.5
     for j in range(4):
-        ax.add_patch(FancyBboxPatch((cols_x[j], top - rh), col_w[j] - 0.06, rh - 0.05, boxstyle='round,pad=0.01', fc=hcol[j], ec='none'))
-        ax.text(cols_x[j] + col_w[j] / 2 - 0.03, top - rh / 2 - 0.02, hdr[j], ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+        ax.add_patch(FancyBboxPatch((cols_x[j], top - rh), col_w[j] - 0.06, rh - 0.04, boxstyle='round,pad=0.008', fc=hcol[j], ec='none'))
+        ax.text(cols_x[j] + col_w[j] / 2 - 0.03, top - rh / 2 - 0.02, hdr[j], ha='center', va='center', fontsize=fs + 0.4, fontweight='bold', color='white')
     for i, (name, key, unit, best, vals) in enumerate(rows):
         yb = top - (i + 2) * rh
         bg = 'white' if i % 2 == 0 else COLORS['light']
@@ -1129,24 +1188,49 @@ def generate_comparatif_fit(scenarios, path):
         bi = None
         if best and len(nums) >= 2 and len({v for _, v in nums}) > 1:
             bi = (max if best == 'max' else min)(nums, key=lambda t: t[1])[0]
-        ax.add_patch(FancyBboxPatch((cols_x[0], yb), col_w[0] - 0.06, rh - 0.05, boxstyle='round,pad=0.01', fc=bg, ec=COLORS['grid'], lw=0.5))
-        ax.text(cols_x[0] + 0.12, yb + rh / 2 - 0.02, name, ha='left', va='center', fontsize=8.5, fontweight='bold', color=COLORS['text'])
+        ax.add_patch(FancyBboxPatch((cols_x[0], yb), col_w[0] - 0.06, rh - 0.04, boxstyle='round,pad=0.008', fc=bg, ec=COLORS['grid'], lw=0.5))
+        ax.text(cols_x[0] + 0.12, yb + rh / 2 - 0.02, name, ha='left', va='center', fontsize=fs, fontweight='bold', color=COLORS['text'])
         for k, v in enumerate(vals):
             j = k + 1
             good = k == bi
-            ax.add_patch(FancyBboxPatch((cols_x[j], yb), col_w[j] - 0.06, rh - 0.05, boxstyle='round,pad=0.01', fc=('#E8F5E9' if good else bg),
+            ax.add_patch(FancyBboxPatch((cols_x[j], yb), col_w[j] - 0.06, rh - 0.04, boxstyle='round,pad=0.008', fc=('#E8F5E9' if good else bg),
                                         ec=(COLORS['green'] if good else COLORS['grid']), lw=(1.0 if good else 0.5)))
             if isinstance(v, (int, float)):
-                txt = (_m(v) + ' FCFA') if unit == 'FCFA' and v >= 1e6 else (f'{_sp(v)} FCFA' if unit == 'FCFA' else f'{_sp(v)} {unit}'.strip())
                 if unit == '/100':
                     txt = f'{int(round(v))}/100'
+                elif unit == 'FCFA':
+                    txt = (_m(v) + ' FCFA') if v >= 1e6 else f'{_sp(v)} FCFA'
+                else:
+                    txt = f'{_sp(v)} {unit}'.strip()
             else:
                 txt = str(v if v not in (None, '') else '—')
-            ax.text(cols_x[j] + col_w[j] / 2 - 0.03, yb + rh / 2 - 0.02, txt, ha='center', va='center', fontsize=8.5,
+            ax.text(cols_x[j] + col_w[j] / 2 - 0.03, yb + rh / 2 - 0.02, txt, ha='center', va='center', fontsize=fs,
                     fontweight=('bold' if good else 'normal'), color=(COLORS['green'] if good else COLORS['text']))
-    yl = top - (len(rows) + 1) * rh - 0.18
-    ax.text(cols_x[0], yl, 'En vert : la valeur la plus favorable des trois scénarios.' + ('  ★ : scénario recommandé.' if rec else ''),
-            ha='left', va='top', fontsize=7, color=COLORS['muted'], fontstyle='italic')
+    ynote = top - (len(rows) + 1) * rh - 0.1
+    ax.text(cols_x[0], ynote, 'En vert : la valeur la plus favorable des trois scénarios.' + ('  ★ : scénario recommandé.' if rec else ''),
+            ha='left', va='top', fontsize=6.5, color=COLORS['muted'], fontstyle='italic')
+    # ─ surfaces par niveau : une barre par scénario, un segment par niveau ─
+    if has_levels:
+        ax.text(cols_x[0], 1.18, 'Surface de plancher par niveau', ha='left', va='center', fontsize=8.2, fontweight='bold', color=COLORS['dark'])
+        tot_max = max(sum(p.get('m2', 0) for p in niv[l]) for l in labels) or 1
+        x0, wmax = 1.3, W - 1.3 - 0.9
+        for i, l in enumerate(labels):
+            yy = 0.86 - i * 0.3
+            ax.text(x0 - 0.1, yy, f'Scénario {l}', ha='right', va='center', fontsize=7.3, fontweight='bold', color=COLORS[l])
+            left = x0
+            for k, p in enumerate(niv[l]):
+                w = wmax * float(p.get('m2', 0) or 0) / tot_max
+                if w <= 0:
+                    continue
+                c = LEVEL_COLORS[min(k, len(LEVEL_COLORS) - 1)]
+                ax.add_patch(mpatches.Rectangle((left, yy - 0.11), w, 0.22, fc=c, ec='white', lw=0.8))
+                lab = f"{p.get('niveau')} · {int(p.get('m2', 0))} m²"
+                if w > len(lab) * 0.052:
+                    ax.text(left + w / 2, yy, lab, ha='center', va='center', fontsize=6.2, fontweight='bold', color=('white' if k < 3 else COLORS['dark']))
+                elif w > 0.3:
+                    ax.text(left + w / 2, yy, p.get('niveau'), ha='center', va='center', fontsize=6, fontweight='bold', color=('white' if k < 3 else COLORS['dark']))
+                left += w
+            ax.text(left + 0.08, yy, f"{int(sum(p.get('m2', 0) for p in niv[l]))} m²", ha='left', va='center', fontsize=7, fontweight='bold', color=COLORS['text'])
     _save_exact(fig, path)
 
 
@@ -1213,50 +1297,70 @@ def generate_budget_range_fit(sc, label, path, budget_single=0):
     _save_exact(fig, path)
 
 
-# ── Slide 19 : phasage du chantier (9,50 × 1,60) ────────────────────────────────
+# ── Slide 19 : calendrier du projet — études, permis, travaux (9,50 × 2,20) ─────
 def generate_timeline_fit(sc, path):
-    base = [('Études & permis', 3, COLORS['dark']), ('Terrassement & fondations', 2, '#2E7D6F'), ('Gros œuvre', 4, COLORS['B']),
-            ('Second œuvre', 3, '#B07D3A'), ('Finitions & réception', 1, COLORS['C'])]
-    duree = int(sc.get('duree_chantier_mois', 13) or 13)
-    tot = sum(p[1] for p in base)
-    phases = [(n, max(1, round(m * duree / tot)), c) for n, m, c in base]
-    diff = duree - sum(p[1] for p in phases)
-    if diff:
-        n, m, c = phases[2]
-        phases[2] = (n, max(1, m + diff), c)
-    total = sum(p[1] for p in phases)
+    sch = sc.get('schedule') or None
+    if not sch or not sch.get('phases'):
+        duree = int(sc.get('duree_chantier_mois', 12) or 12)
+        sch = {'total_mois': duree, 'travaux_mois': duree, 'etudes_mois': 0, 'permis_mois': 0, 'marge_pct': 0,
+               'phases': [{'nom': 'Travaux', 'groupe': 'travaux', 'mois': duree, 'debut': 1, 'fin': duree}]}
+    total = int(sch['total_mois'])
     fig = _fig('timeline')
     W, H = SLOTS['timeline']
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
     ax.set_ylim(0, H)
     ax.axis('off')
-    x0, x1 = 0.08, W - 0.08
-    ax.text(W / 2, H - 0.13, f'Phasage du chantier — durée estimée : {total} mois', ha='center', va='center', fontsize=9, fontweight='bold', color=COLORS['dark'])
-    yb, hb = 0.52, 0.5
-    x, cum = x0, 0
-    for name, m, c in phases:
-        w = (x1 - x0) * m / total
-        ax.add_patch(FancyBboxPatch((x + 0.02, yb), w - 0.04, hb, boxstyle='round,pad=0.01', fc=c, ec='none'))
-        lines = name if w > 1.6 else name.replace(' & ', ' &\n')
-        ax.text(x + w / 2, yb + hb / 2, lines, ha='center', va='center', fontsize=(7.2 if w > 0.9 else 6), fontweight='bold', color='white', linespacing=1.05)
-        ax.text(x + w / 2, yb - 0.1, f'{m} mois', ha='center', va='center', fontsize=6.8, color=COLORS['text'])
-        ax.text(x + 0.03, yb + hb + 0.08, f'M{cum + 1}', ha='left', va='center', fontsize=5.8, color=COLORS['muted'])
-        cum += m
-        x += w
-    if phases[-1][1] > 1:   # fin de chantier, si elle ne tombe pas sur le début de la dernière phase
-        ax.text(x1, yb + hb + 0.08, f'M{total}', ha='right', va='center', fontsize=5.8, color=COLORS['muted'])
-    ax.text(W / 2, 0.12, '⚠ Saison des pluies (juin – octobre) : éviter terrassement et fondations', ha='center', va='center',
-            fontsize=6.8, fontstyle='italic', color=COLORS['orange'])
+    x0, x1 = 1.55, W - 0.12
+    mw = (x1 - x0) / total
+    X = lambda mth: x0 + (mth - 1) * mw
+    ttl = f"Calendrier du projet — environ {total} mois : {sch.get('etudes_mois', 0) + sch.get('permis_mois', 0)} mois d'études et d'autorisations, " \
+          f"puis {sch.get('travaux_mois', total)} mois de travaux" + (f" (marge de {sch.get('marge_pct')} % comprise)" if sch.get('marge_pct') else '')
+    ax.text(W / 2, H - 0.14, ttl, ha='center', va='center', fontsize=8.6, fontweight='bold', color=COLORS['dark'])
+    # graduation des mois
+    ya = H - 0.42
+    step = 1 if total <= 18 else 2
+    for mth in range(1, total + 1):
+        ax.plot([X(mth), X(mth)], [0.34, ya - 0.06], color=COLORS['grid'], lw=0.5, zorder=0)
+        if (mth - 1) % step == 0:
+            ax.text(X(mth) + mw / 2, ya, f'M{mth}', ha='center', va='center', fontsize=5.8, color=COLORS['muted'])
+    ax.plot([X(total + 1), X(total + 1)], [0.34, ya - 0.06], color=COLORS['grid'], lw=0.5, zorder=0)
+    rows = [('etudes', 'Études et autorisations', H - 0.82), ('travaux', 'Travaux', H - 1.37)]
+    colors = {'Études de conception': COLORS['dark'], 'Permis et consultation des entreprises': '#6B7280',
+              'Terrassement et fondations': '#2E7D6F', 'Gros œuvre': COLORS['B'], 'Second œuvre et lots techniques': '#B07D3A',
+              'Finitions, VRD et réception': COLORS['C']}
+    hb = 0.42
+    for grp, name, yc in rows:
+        ax.text(x0 - 0.1, yc, name, ha='right', va='center', fontsize=7.4, fontweight='bold', color=COLORS['text'])
+        for p in [q for q in sch['phases'] if q.get('groupe') == grp]:
+            xa, w = X(p['debut']), p['mois'] * mw
+            ax.add_patch(FancyBboxPatch((xa + 0.015, yc - hb / 2), w - 0.03, hb, boxstyle='round,pad=0.008', fc=colors.get(p['nom'], COLORS['accent']), ec='none', zorder=2))
+            court = p.get('court') or p['nom']
+            court = court[:1].upper() + court[1:]
+            nm = p['nom'] if w > len(p['nom']) * 0.058 else court
+            if w < len(nm) * 0.05:
+                nm = nm.replace(' et ', ' et\n', 1).replace(', ', ',\n', 1)
+            if w >= len(nm.split('\n')[0]) * 0.05:
+                ax.text(xa + w / 2, yc, f"{nm}\n{p['mois']} mois", ha='center', va='center', fontsize=(6.3 if w > 0.9 else 5.6), fontweight='bold',
+                        color='white', zorder=3, linespacing=1.05)
+            else:
+                # phase trop courte pour son nom : durée dans la barre, nom en dessous
+                ax.text(xa + w / 2, yc, f"{p['mois']} mois", ha='center', va='center', fontsize=5.6, fontweight='bold', color='white', zorder=3)
+                ax.text(xa + w / 2, yc - hb / 2 - 0.1, court, ha='center', va='center', fontsize=5.4, color=COLORS['text'], zorder=3)
+    ax.text(W / 2, 0.16, '⚠ Saison des pluies (juin – octobre) : prévoir terrassement et fondations en saison sèche ; permis : 2 à 4 mois selon la commune',
+            ha='center', va='center', fontsize=6.4, fontstyle='italic', color=COLORS['orange'])
     _save_exact(fig, path)
 
 
 # ── Slide 20 : carte du scénario recommandé (9,50 × 1,30) ───────────────────────
 def generate_recap_fit(sc, label, path):
     col = COLORS.get(label, COLORS['C'])
+    proj = int(sc.get('duree_projet_mois', 0) or 0)
+    trav = int(sc.get('duree_chantier_mois', 0) or 0)
     kpis = [('Surface de plancher', f"{_sp(sc.get('sdp_m2', 0) or 0)} m²"), ('Surface utile', f"{_sp(sc.get('surface_habitable_m2', 0) or 0)} m²"),
             ('Unités', f"{int(sc.get('total_units', 0) or 0)}"), ('Coût des travaux', f"{_m(sc.get('cost_total_fcfa', 0))} FCFA"),
-            ('Durée du chantier', f"{int(sc.get('duree_chantier_mois', 0) or 0)} mois"), ('Score de la grille', f"{int(sc.get('recommendation_score', 0) or 0)}/100")]
+            (f'Délai total, dont {trav} mois de travaux' if proj else 'Durée des travaux', f"{proj or trav} mois"),
+            ('Score de la grille', f"{int(sc.get('recommendation_score', 0) or 0)}/100")]
     fig = _fig('recap_card')
     W, H = SLOTS['recap_card']
     ax = fig.add_axes([0, 0, 1, 1])
@@ -1272,7 +1376,7 @@ def generate_recap_fit(sc, label, path):
         x = 0.15 + i * (bw + 0.12)
         ax.add_patch(FancyBboxPatch((x, 0.14), bw, 0.66, boxstyle='round,pad=0.02', fc='white', ec=COLORS['grid'], lw=0.6))
         ax.text(x + bw / 2, 0.55, val, ha='center', va='center', fontsize=10, fontweight='bold', color=COLORS['dark'])
-        ax.text(x + bw / 2, 0.27, lab, ha='center', va='center', fontsize=6.5, color=COLORS['muted'])
+        ax.text(x + bw / 2, 0.27, lab, ha='center', va='center', fontsize=(6.5 if len(lab) < 24 else 5.6), color=COLORS['muted'])
     _save_exact(fig, path)
 
 
