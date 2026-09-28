@@ -753,9 +753,10 @@ def generate_risk_panel(risk_scores: dict, recommendation_score: float,
     gauge_path = os.path.join(output_dir, f'risk_gauge_{scenario_label}.png')
     bars_path  = os.path.join(output_dir, f'risk_bars_{scenario_label}.png')
 
-    generate_radar(risk_scores, scenario_label, radar_path)
-    generate_gauge(recommendation_score, 100, scenario_label, gauge_path, recommended)
-    generate_risk_bars(risk_scores, scenario_label, bars_path)
+    # v13.2 — au format exact de la zone (3 graphiques côte à côte)
+    generate_radar_fit(risk_scores, scenario_label, radar_path)
+    generate_gauge_fit(recommendation_score, scenario_label, gauge_path, recommended)
+    generate_bars_fit(risk_scores, scenario_label, bars_path)
 
     return {'radar': radar_path, 'gauge': gauge_path, 'bars': bars_path}
 
@@ -921,6 +922,360 @@ def generate_budget_position_gauge(scenario: dict, label: str, budget_fcfa_value
     _save(fig, output_path)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# v13.2 — GRAPHIQUES AU FORMAT EXACT DE LEUR ZONE DANS LA SLIDE
+# Chaque graphique est dessiné à la taille réelle de son emplacement (pouces) : il n'est ni étiré ni
+# réduit, et ses textes ont leur vraie taille à l'écran. generate_pptx.py lit SLOTS pour les poser.
+# ═══════════════════════════════════════════════════════════════════════════════
+SLOTS = {
+    'risk_cell':    (3.30, 2.35),   # slides 8/11/14 : radar, jauge, barres côte à côte (zone 10 × 2,35)
+    'arbitrage':    (9.45, 2.62),   # slide 16
+    'comparatif':   (9.50, 4.75),   # slide 15
+    'cost_calc':    (9.00, 1.10),   # slides 7/10/13
+    'budget_gauge': (9.00, 1.00),   # slides 7/10/13
+    'timeline':     (9.50, 1.60),   # slide 19
+    'recap_card':   (9.50, 1.30),   # slide 20
+}
+# Positions (pouces) des graphiques posés hors emplacement du modèle
+SLOT_POS = {
+    'comparatif':   (0.25, 0.45),
+    'cost_calc':    (0.50, 3.00),
+    'budget_gauge': (0.50, 4.40),
+    'timeline':     (0.25, 3.80),
+    'recap_card':   (0.25, 4.00),
+}
+BRAND_GREEN = '#1F5E55'
+# Libellés courts du radar (zone étroite) ; les barres voisines portent les libellés complets
+RADAR_SHORT = {'budget_fit': 'Budget', 'programme_match': 'Programme', 'setback_encroachment': 'Retraits', 'cos_conformity': 'COS',
+               'phase_flexibility': 'Phasage', 'structure_simplicity': 'Structure', 'standing_match': 'Standing'}
+BRAND_PINK = '#E94B78'
+
+
+def _fig(slot):
+    w, h = SLOTS[slot]
+    fig = plt.figure(figsize=(w, h), dpi=DPI)
+    fig.patch.set_facecolor('none')
+    return fig
+
+
+def _save_exact(fig, path):
+    """Taille exacte de la figure (pas de recadrage 'tight' qui changerait les proportions)."""
+    fig.savefig(path, dpi=DPI, facecolor='none', edgecolor='none')
+    plt.close(fig)
+
+
+def _m(v):
+    v = float(v or 0)
+    return f"{v / 1e6:.0f} M" if v >= 1e6 else (f"{v / 1e3:.0f} k" if v >= 1e3 else f"{v:.0f}")
+
+
+def _sp(n):
+    return f'{int(round(n)):,}'.replace(',', ' ')
+
+
+# ── Slides 8/11/14 : radar, jauge, barres (3,30 × 2,35 chacun) ──────────────────
+def generate_radar_fit(risk_scores, label, path):
+    cats = list(risk_scores.keys())
+    if not cats:
+        return
+    vals = [risk_scores[k] for k in cats]
+    labs = [RADAR_SHORT.get(k) or RISK_LABELS_FR.get(k, k).replace(chr(10), ' ') for k in cats]
+    fig = _fig('risk_cell')
+    ax = fig.add_axes([0.2, 0.1, 0.6, 0.7], polar=True)
+    ang = np.linspace(0, 2 * np.pi, len(cats), endpoint=False).tolist()
+    col = COLORS.get(label, COLORS['accent'])
+    ax.fill(ang + ang[:1], vals + vals[:1], color=col, alpha=0.13)
+    ax.plot(ang + ang[:1], vals + vals[:1], color=col, lw=1.6, marker='o', ms=3.5, mfc='white', mec=col, mew=1.2)
+    for a, v in zip(ang, vals):
+        ax.text(a, v + 12 if v < 75 else v - 17, str(int(v)), ha='center', va='center', fontsize=6, fontweight='bold', color=col,
+                path_effects=[pe.withStroke(linewidth=2, foreground='white')])
+    ax.set_ylim(0, 100)
+    ax.set_yticks([25, 50, 75, 100])
+    ax.set_yticklabels([])
+    ax.set_xticks(ang)
+    ax.set_xticklabels(labs, fontsize=5.8, color=COLORS['text'], fontweight='bold')
+    ax.tick_params(axis='x', pad=3)
+    ax.spines['polar'].set_visible(False)
+    ax.grid(color=COLORS['grid'], lw=0.5)
+    ax.set_facecolor('white')
+    fig.text(0.5, 0.955, f'Profil des 7 critères — scénario {label}', ha='center', va='center', fontsize=7.5,
+             fontweight='bold', color=COLORS['dark'])
+    _save_exact(fig, path)
+
+
+def generate_gauge_fit(score, label, path, recommended=False):
+    pct = max(0.0, min(float(score or 0) / 100.0, 1.0))
+    fig = _fig('risk_cell')
+    ax = fig.add_axes([0.05, 0.02, 0.9, 0.84])
+    ax.set_xlim(-1.35, 1.35)
+    ax.set_ylim(-0.62, 1.12)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    n = 120
+    for i in range(n):
+        t = 1 - i / n
+        if t < 0.5:
+            r, g, b = 0x1E + (0xD4 - 0x1E) * t * 2, 0x84 + (0x85 - 0x84) * t * 2, 0x49 + (0x0E - 0x49) * t * 2
+        else:
+            r, g, b = 0xD4 + (0xC0 - 0xD4) * (t - 0.5) * 2, 0x85 + (0x39 - 0x85) * (t - 0.5) * 2, 0x0E + (0x2B - 0x0E) * (t - 0.5) * 2
+        th = np.linspace(np.pi * (1 - i / n), np.pi * (1 - (i + 1) / n), 4)
+        ax.fill(np.concatenate([1.0 * np.cos(th), 0.74 * np.cos(th[::-1])]), np.concatenate([1.0 * np.sin(th), 0.74 * np.sin(th[::-1])]),
+                color=f'#{int(r):02x}{int(g):02x}{int(b):02x}', alpha=0.9, lw=0)
+    na = np.pi * (1 - pct)
+    ax.annotate('', xy=(0.88 * np.cos(na), 0.88 * np.sin(na)), xytext=(0, 0), arrowprops=dict(arrowstyle='-|>', color=COLORS['dark'], lw=1.8))
+    ax.plot(0, 0, 'o', color=COLORS['dark'], ms=5, zorder=5)
+    ax.text(0, -0.2, f'{int(round(score))}', fontsize=17, fontweight='bold', ha='center', va='center', color=COLORS['dark'])
+    ax.text(0.42, -0.2, '/100', fontsize=7, ha='left', va='center', color=COLORS['muted'])
+    if recommended:
+        lab, lc = 'Recommandé', COLORS['green']
+    elif pct >= 0.75:
+        lab, lc = 'Favorable', COLORS['green']
+    elif pct >= 0.6:
+        lab, lc = 'Correct', COLORS['orange']
+    else:
+        lab, lc = 'Fragile', COLORS['red']
+    ax.text(0, -0.5, lab, fontsize=7.5, fontweight='bold', ha='center', va='center', color=lc)
+    ax.text(-0.87, -0.1, '0', fontsize=5.5, ha='center', color=COLORS['muted'])
+    ax.text(0.87, -0.1, '100', fontsize=5.5, ha='center', color=COLORS['muted'])
+    fig.text(0.5, 0.955, f'Score global — scénario {label}', ha='center', va='center', fontsize=7.5, fontweight='bold', color=COLORS['dark'])
+    _save_exact(fig, path)
+
+
+def generate_bars_fit(risk_scores, label, path):
+    cats = list(risk_scores.keys())
+    if not cats:
+        return
+    vals = [risk_scores[k] for k in cats]
+    labs = [RISK_LABELS_FR.get(k, k).replace('\n', ' ') for k in cats]
+    fig = _fig('risk_cell')
+    ax = fig.add_axes([0.42, 0.05, 0.5, 0.8])
+    y = np.arange(len(cats))
+    cols = [_severity_color(v, scale=100) for v in vals]
+    ax.barh(y, [100] * len(cats), color=COLORS['grid'], height=0.58, alpha=0.5, zorder=1)
+    ax.barh(y, vals, color=cols, height=0.58, zorder=2)
+    for yy, v, c in zip(y, vals, cols):
+        ax.text(v + 2, yy, f'{int(v)}', va='center', fontsize=6, fontweight='bold', color=c)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labs, fontsize=6, color=COLORS['text'])
+    ax.set_xlim(0, 112)
+    ax.set_xticks([])
+    ax.invert_yaxis()
+    for s in ('top', 'right', 'bottom'):
+        ax.spines[s].set_visible(False)
+    ax.spines['left'].set_color(COLORS['grid'])
+    ax.tick_params(axis='y', length=0, pad=3)
+    fig.text(0.5, 0.955, 'Note de chaque critère (100 = favorable)', ha='center', va='center', fontsize=7.5, fontweight='bold', color=COLORS['dark'])
+    _save_exact(fig, path)
+
+
+# ── Slide 16 : arbitrage (9,45 × 2,62) ──────────────────────────────────────────
+def generate_arbitrage_fit(scenarios, path):
+    labels = ['A', 'B', 'C']
+    colors = [COLORS[l] for l in labels]
+    crit = [('Coût des travaux', 'cost_total_fcfa', 1e6, ' M'), ('Surface de plancher', 'sdp_m2', 1, ' m²'),
+            ('Unités', 'total_units', 1, ''), ('Score', 'recommendation_score', 1, '/100')]
+    fig = _fig('arbitrage')
+    for i, (title, key, div, suf) in enumerate(crit):
+        ax = fig.add_axes([0.03 + i * 0.245, 0.14, 0.2, 0.62])
+        vals = [float((scenarios.get(l) or {}).get(key, 0) or 0) / div for l in labels]
+        mx = max(vals) if max(vals) > 0 else 1
+        bars = ax.bar(labels, vals, color=colors, width=0.58, edgecolor='white', lw=1)
+        for b_, v, c in zip(bars, vals, colors):
+            ax.text(b_.get_x() + b_.get_width() / 2, v + mx * 0.05, f'{v:.0f}{suf}', ha='center', va='bottom', fontsize=7, fontweight='bold', color=c)
+        ax.set_ylim(0, mx * 1.3)
+        ax.yaxis.set_visible(False)
+        for s in ('top', 'right', 'left'):
+            ax.spines[s].set_visible(False)
+        ax.spines['bottom'].set_color(COLORS['grid'])
+        ax.tick_params(axis='x', labelsize=7.5, colors=COLORS['text'], length=0)
+        fig.text(0.03 + i * 0.245 + 0.1, 0.86, title, ha='center', va='center', fontsize=8, fontweight='bold', color=COLORS['dark'])
+    _save_exact(fig, path)
+
+
+# ── Slide 15 : comparatif (9,50 × 4,75) ─────────────────────────────────────────
+def generate_comparatif_fit(scenarios, path):
+    crit = [('Surface de plancher (SDP)', 'sdp_m2', 'm²', 'max'), ('Surface utile', 'surface_habitable_m2', 'm²', 'max'),
+            ("Nombre d'unités", 'total_units', '', 'max'), ('Niveaux', 'levels', '', None),
+            ('Coût des travaux', 'cost_total_fcfa', 'FCFA', 'min'), ('Coût au m² de SDP', 'cost_per_m2_sdp', 'FCFA', 'min'),
+            ('Score de la grille', 'recommendation_score', '/100', 'max'), ('Durée de chantier', 'duree_chantier_mois', 'mois', 'min')]
+    labels = ['A', 'B', 'C']
+    rows = []
+    for name, key, unit, best in crit:
+        vals = [(scenarios.get(l) or {}).get(key) for l in labels]
+        if all(v in (None, '', 0) for v in vals):
+            continue
+        rows.append((name, key, unit, best, vals))
+    fig = _fig('comparatif')
+    W, H = SLOTS['comparatif']
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(0, H)
+    ax.axis('off')
+    rec = next((l for l in labels if (scenarios.get(l) or {}).get('recommended')), None)
+    cols_x = [0.05, 3.05, 5.2, 7.35]
+    col_w = [2.95, 2.1, 2.1, 2.1]
+    top = H - 0.12
+    rh = min(0.44, (H - 0.75) / (len(rows) + 1))
+    hdr = ['Critère'] + [f'Scénario {l}' + ('  ★' if l == rec else '') for l in labels]
+    hcol = [COLORS['dark'], COLORS['A'], COLORS['B'], COLORS['C']]
+    for j in range(4):
+        ax.add_patch(FancyBboxPatch((cols_x[j], top - rh), col_w[j] - 0.06, rh - 0.05, boxstyle='round,pad=0.01', fc=hcol[j], ec='none'))
+        ax.text(cols_x[j] + col_w[j] / 2 - 0.03, top - rh / 2 - 0.02, hdr[j], ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+    for i, (name, key, unit, best, vals) in enumerate(rows):
+        yb = top - (i + 2) * rh
+        bg = 'white' if i % 2 == 0 else COLORS['light']
+        nums = [(k, float(v)) for k, v in enumerate(vals) if isinstance(v, (int, float))]
+        bi = None
+        if best and len(nums) >= 2 and len({v for _, v in nums}) > 1:
+            bi = (max if best == 'max' else min)(nums, key=lambda t: t[1])[0]
+        ax.add_patch(FancyBboxPatch((cols_x[0], yb), col_w[0] - 0.06, rh - 0.05, boxstyle='round,pad=0.01', fc=bg, ec=COLORS['grid'], lw=0.5))
+        ax.text(cols_x[0] + 0.12, yb + rh / 2 - 0.02, name, ha='left', va='center', fontsize=8.5, fontweight='bold', color=COLORS['text'])
+        for k, v in enumerate(vals):
+            j = k + 1
+            good = k == bi
+            ax.add_patch(FancyBboxPatch((cols_x[j], yb), col_w[j] - 0.06, rh - 0.05, boxstyle='round,pad=0.01', fc=('#E8F5E9' if good else bg),
+                                        ec=(COLORS['green'] if good else COLORS['grid']), lw=(1.0 if good else 0.5)))
+            if isinstance(v, (int, float)):
+                txt = (_m(v) + ' FCFA') if unit == 'FCFA' and v >= 1e6 else (f'{_sp(v)} FCFA' if unit == 'FCFA' else f'{_sp(v)} {unit}'.strip())
+                if unit == '/100':
+                    txt = f'{int(round(v))}/100'
+            else:
+                txt = str(v if v not in (None, '') else '—')
+            ax.text(cols_x[j] + col_w[j] / 2 - 0.03, yb + rh / 2 - 0.02, txt, ha='center', va='center', fontsize=8.5,
+                    fontweight=('bold' if good else 'normal'), color=(COLORS['green'] if good else COLORS['text']))
+    yl = top - (len(rows) + 1) * rh - 0.18
+    ax.text(cols_x[0], yl, 'En vert : la valeur la plus favorable des trois scénarios.' + ('  ★ : scénario recommandé.' if rec else ''),
+            ha='left', va='top', fontsize=7, color=COLORS['muted'], fontstyle='italic')
+    _save_exact(fig, path)
+
+
+# ── Slides 7/10/13 : calcul du coût (9,00 × 1,10) ───────────────────────────────
+def generate_cost_calc_fit(sc, label, path):
+    sdp = float(sc.get('sdp_m2', 0) or 0)
+    total = float(sc.get('cost_total_fcfa', 0) or 0)
+    cm2 = float(sc.get('cost_per_m2_sdp', 0) or 0) or (total / sdp if sdp > 0 else 0)
+    acc = COLORS.get(label, COLORS['dark'])
+    fig = _fig('cost_calc')
+    blocks = [(0.0, 0.3, f'{_sp(sdp)}', 'm² de surface de plancher', COLORS['light'], COLORS['dark']),
+              (0.35, 0.3, _m(cm2), 'FCFA / m² (VRD compris)', COLORS['light'], COLORS['dark']),
+              (0.70, 0.30, _m(total), 'FCFA de travaux', acc, 'white')]
+    for x, w, big, small, fc, tc in blocks:
+        ax = fig.add_axes([x + 0.005, 0.06, w - 0.01, 0.88])
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor(fc)
+        for s in ax.spines.values():
+            s.set_color(COLORS['grid'] if fc != acc else acc)
+            s.set_linewidth(0.6)
+        ax.text(0.5, 0.6, big, ha='center', va='center', fontsize=20, fontweight='bold', color=tc)
+        ax.text(0.5, 0.2, small, ha='center', va='center', fontsize=7.5, color=(tc if fc == acc else COLORS['muted']))
+    for x, sym in ((0.325, '×'), (0.675, '=')):
+        fig.text(x, 0.5, sym, ha='center', va='center', fontsize=20, fontweight='bold', color=acc)
+    _save_exact(fig, path)
+
+
+# ── Slides 7/10/13 : coût face à la fourchette du client (9,00 × 1,00) ──────────
+def generate_budget_range_fit(sc, label, path, budget_single=0):
+    cost = float(sc.get('cost_total_fcfa', 0) or 0)
+    need = float(sc.get('budget_needed_fcfa', 0) or 0) or cost
+    bmin = float(sc.get('budget_min_fcfa', 0) or 0)
+    bmax = float(sc.get('budget_max_fcfa', 0) or 0)
+    if not bmax and budget_single:
+        bmin = bmax = float(budget_single)
+    fit = str(sc.get('budget_fit_label') or sc.get('budget_fit') or '')
+    fig = _fig('budget_gauge')
+    ax = fig.add_axes([0.02, 0.05, 0.96, 0.9])
+    scale = max(bmax * 1.35, need * 1.08, cost * 1.08, 1)
+    ax.set_xlim(0, scale)
+    ax.set_ylim(0, 1)
+    ax.axis('off')
+    y0, hb = 0.36, 0.26
+    ax.add_patch(mpatches.Rectangle((0, y0), scale, hb, fc=COLORS['grid'], ec='none'))
+    if bmax:
+        ax.add_patch(mpatches.Rectangle((bmin if bmin < bmax else bmax * 0.9, y0 - 0.06), (bmax - bmin) if bmin < bmax else bmax * 0.1, hb + 0.12,
+                                        fc='#C8E6C9', ec=COLORS['green'], lw=0.8, zorder=1))
+    status = {'DANS_BUDGET': ('Dans le bas de votre fourchette', COLORS['green']),
+              'BUDGET_TENDU': ('Dans le haut de votre fourchette', COLORS['orange']),
+              'HORS_BUDGET': ('Au-dessus de votre fourchette', COLORS['red'])}.get(fit, ('Budget non renseigné', COLORS['muted']) if not bmax else ('', COLORS['dark']))
+    col = status[1] if bmax else COLORS['dark']
+    ax.add_patch(mpatches.Rectangle((0, y0 + 0.05), cost, hb - 0.1, fc=col, ec='none', zorder=2))
+    ax.text(min(cost, scale) / 2, y0 + hb / 2, f'Travaux {_m(cost)} FCFA', ha='center', va='center', fontsize=8, fontweight='bold', color='white', zorder=3)
+    if need > cost * 1.005:
+        ax.plot([need, need], [y0 - 0.02, y0 + hb + 0.02], color=COLORS['dark'], lw=1.4, zorder=4)
+        ax.text(need, y0 - 0.05, f'avec réserve : {_m(need)}', ha='center', va='top', fontsize=6.5, color=COLORS['dark'])
+    if bmax:
+        txt = f'Votre fourchette : {_m(bmin)} – {_m(bmax)} FCFA' if bmin < bmax else f'Votre budget : {_m(bmax)} FCFA'
+        ax.text((bmin + bmax) / 2 if bmin < bmax else bmax, y0 + hb + 0.1, txt, ha='center', va='bottom', fontsize=7, fontweight='bold', color=COLORS['green'])
+    ax.text(scale, 0.02, status[0], ha='right', va='bottom', fontsize=8, fontweight='bold', color=status[1])
+    _save_exact(fig, path)
+
+
+# ── Slide 19 : phasage du chantier (9,50 × 1,60) ────────────────────────────────
+def generate_timeline_fit(sc, path):
+    base = [('Études & permis', 3, COLORS['dark']), ('Terrassement & fondations', 2, '#2E7D6F'), ('Gros œuvre', 4, COLORS['B']),
+            ('Second œuvre', 3, '#B07D3A'), ('Finitions & réception', 1, COLORS['C'])]
+    duree = int(sc.get('duree_chantier_mois', 13) or 13)
+    tot = sum(p[1] for p in base)
+    phases = [(n, max(1, round(m * duree / tot)), c) for n, m, c in base]
+    diff = duree - sum(p[1] for p in phases)
+    if diff:
+        n, m, c = phases[2]
+        phases[2] = (n, max(1, m + diff), c)
+    total = sum(p[1] for p in phases)
+    fig = _fig('timeline')
+    W, H = SLOTS['timeline']
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(0, H)
+    ax.axis('off')
+    x0, x1 = 0.08, W - 0.08
+    ax.text(W / 2, H - 0.13, f'Phasage du chantier — durée estimée : {total} mois', ha='center', va='center', fontsize=9, fontweight='bold', color=COLORS['dark'])
+    yb, hb = 0.52, 0.5
+    x, cum = x0, 0
+    for name, m, c in phases:
+        w = (x1 - x0) * m / total
+        ax.add_patch(FancyBboxPatch((x + 0.02, yb), w - 0.04, hb, boxstyle='round,pad=0.01', fc=c, ec='none'))
+        lines = name if w > 1.6 else name.replace(' & ', ' &\n')
+        ax.text(x + w / 2, yb + hb / 2, lines, ha='center', va='center', fontsize=(7.2 if w > 0.9 else 6), fontweight='bold', color='white', linespacing=1.05)
+        ax.text(x + w / 2, yb - 0.1, f'{m} mois', ha='center', va='center', fontsize=6.8, color=COLORS['text'])
+        ax.text(x + 0.03, yb + hb + 0.08, f'M{cum + 1}', ha='left', va='center', fontsize=5.8, color=COLORS['muted'])
+        cum += m
+        x += w
+    if phases[-1][1] > 1:   # fin de chantier, si elle ne tombe pas sur le début de la dernière phase
+        ax.text(x1, yb + hb + 0.08, f'M{total}', ha='right', va='center', fontsize=5.8, color=COLORS['muted'])
+    ax.text(W / 2, 0.12, '⚠ Saison des pluies (juin – octobre) : éviter terrassement et fondations', ha='center', va='center',
+            fontsize=6.8, fontstyle='italic', color=COLORS['orange'])
+    _save_exact(fig, path)
+
+
+# ── Slide 20 : carte du scénario recommandé (9,50 × 1,30) ───────────────────────
+def generate_recap_fit(sc, label, path):
+    col = COLORS.get(label, COLORS['C'])
+    kpis = [('Surface de plancher', f"{_sp(sc.get('sdp_m2', 0) or 0)} m²"), ('Surface utile', f"{_sp(sc.get('surface_habitable_m2', 0) or 0)} m²"),
+            ('Unités', f"{int(sc.get('total_units', 0) or 0)}"), ('Coût des travaux', f"{_m(sc.get('cost_total_fcfa', 0))} FCFA"),
+            ('Durée du chantier', f"{int(sc.get('duree_chantier_mois', 0) or 0)} mois"), ('Score de la grille', f"{int(sc.get('recommendation_score', 0) or 0)}/100")]
+    fig = _fig('recap_card')
+    W, H = SLOTS['recap_card']
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(0, H)
+    ax.axis('off')
+    ax.add_patch(FancyBboxPatch((0.04, 0.04), W - 0.08, H - 0.08, boxstyle='round,pad=0.02', fc=col, ec='none', alpha=0.08))
+    ax.add_patch(FancyBboxPatch((0.04, H - 0.34), W - 0.08, 0.28, boxstyle='round,pad=0.02', fc=col, ec='none'))
+    ax.text(W / 2, H - 0.2, f'SCÉNARIO {label} — RECOMMANDÉ', ha='center', va='center', fontsize=9.5, fontweight='bold', color='white')
+    n = len(kpis)
+    bw = (W - 0.3 - 0.12 * (n - 1)) / n
+    for i, (lab, val) in enumerate(kpis):
+        x = 0.15 + i * (bw + 0.12)
+        ax.add_patch(FancyBboxPatch((x, 0.14), bw, 0.66, boxstyle='round,pad=0.02', fc='white', ec=COLORS['grid'], lw=0.6))
+        ax.text(x + bw / 2, 0.55, val, ha='center', va='center', fontsize=10, fontweight='bold', color=COLORS['dark'])
+        ax.text(x + bw / 2, 0.27, lab, ha='center', va='center', fontsize=6.5, color=COLORS['muted'])
+    _save_exact(fig, path)
+
+
 def generate_all_charts(data: dict, output_dir: str) -> dict:
     """
     data : payload JSON complet de /generate-pptx
@@ -953,12 +1308,12 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
 
     # Tableau comparatif (slide 15)
     comp_path = os.path.join(output_dir, 'comparatif_table.png')
-    generate_comparatif_table(scenarios, comp_path)
+    generate_comparatif_fit(scenarios, comp_path)
     chart_paths['tableau_comparative_charts'] = comp_path
 
     # Graphiques d'arbitrage (slide 16)
     arb_path = os.path.join(output_dir, 'arbitrage_graphs.png')
-    generate_arbitrage_graphs(scenarios, arb_path)
+    generate_arbitrage_fit(scenarios, arb_path)
     chart_paths['arbitrage_graph_'] = arb_path
 
     # Ventilation coûts (slide 17)
@@ -991,7 +1346,7 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
         # 1. Calcul visuel SDP × cost/m² = total
         calc_path = os.path.join(output_dir, f'scenario_{label}_cost_calc.png')
         try:
-            generate_cost_calc_visual(sc, label, calc_path)
+            generate_cost_calc_fit(sc, label, calc_path)
             chart_paths[f'scenario_{label}_cost_calc'] = calc_path
         except Exception as e:
             print(f"[CHARTS v2.0] Erreur cost_calc {label}: {e}", file=sys.stderr)
@@ -1005,7 +1360,7 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
         # 3. Jauge vs budget client
         gauge_path = os.path.join(output_dir, f'scenario_{label}_budget_gauge.png')
         try:
-            generate_budget_position_gauge(sc, label, budget_value, gauge_path)
+            generate_budget_range_fit(sc, label, gauge_path, budget_value)
             chart_paths[f'scenario_{label}_budget_gauge'] = gauge_path
         except Exception as e:
             print(f"[CHARTS v2.0] Erreur budget_gauge {label}: {e}", file=sys.stderr)
@@ -1013,13 +1368,13 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
     # Timeline (slide 19)
     if rec_sc:
         timeline_path = os.path.join(output_dir, 'timeline.png')
-        generate_timeline(rec_sc, timeline_path)
+        generate_timeline_fit(rec_sc, timeline_path)
         chart_paths['timeline'] = timeline_path
 
     # Recap card (slide 20)
     if rec_sc:
         recap_path = os.path.join(output_dir, 'recap_card.png')
-        generate_recap_card(rec_sc, rec_label, recap_path)
+        generate_recap_fit(rec_sc, rec_label, recap_path)
         chart_paths['recap_card'] = recap_path
 
     print(f"[CHARTS v2.0] Total charts générés : {len(chart_paths)}", file=sys.stderr)

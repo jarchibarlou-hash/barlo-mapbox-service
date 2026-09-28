@@ -11,7 +11,7 @@ from pptx import Presentation
 from pptx.util import Inches, Emu, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
-from generate_charts import generate_all_charts
+from generate_charts import generate_all_charts, SLOTS, SLOT_POS
 
 # v75.2 — matplotlib (deja utilise par generate_charts) pour dessiner le plan d'implantation
 import matplotlib
@@ -286,6 +286,28 @@ def replace_shape_with_image(slide, shape, image_path, override_bounds=None, mai
             print(f"WARNING: Could not load image for aspect ratio: {e}", file=sys.stderr)
     slide.shapes.add_picture(image_path, left, top, width, height)
 
+def add_picture_fit(slide, image_path, left, top, width, height):
+    """v13.2 — pose une image dans la zone (EMU) SANS la déformer : proportions respectées, centrée.
+    Les graphiques v13.2 sont dessinés au format exact de leur zone : ils la remplissent."""
+    if not image_path or not os.path.exists(image_path):
+        return None
+    try:
+        from PIL import Image
+        iw, ih = Image.open(image_path).size
+        ratio = iw / ih if ih else 1.0
+    except Exception:
+        return slide.shapes.add_picture(image_path, left, top, width, height)
+    w, h = width, int(width / ratio)
+    if h > height:
+        h, w = height, int(height * ratio)
+    return slide.shapes.add_picture(image_path, int(left + (width - w) / 2), int(top + (height - h) / 2), w, h)
+
+
+def _slot_emu(key):
+    (x, y), (w, h) = SLOT_POS[key], SLOTS[key]
+    return Emu(int(x * 914400)), Emu(int(y * 914400)), Emu(int(w * 914400)), Emu(int(h * 914400))
+
+
 def replace_shape_with_multiple_images(slide, shape, image_paths, maintain_aspect_ratio=True):
     """v74.13 — par défaut maintain_aspect_ratio=True pour eviter la distorsion
     des charts (radar, barres, jauge) inseres cote-a-cote. Calcule pour chaque
@@ -355,12 +377,8 @@ def _handle_slide_15(slide, chart_paths):
     for shape in shapes_to_remove:
         sp_element = shape._element
         sp_element.getparent().remove(sp_element)
-    # Full width with small margins
-    left = Emu(200000)
-    top = Emu(391320)
-    width = Emu(8700000)
-    height = Emu(4400000)
-    slide.shapes.add_picture(chart_path, left, top, width, height)
+    # v13.2 — zone de la slide, proportions respectées
+    add_picture_fit(slide, chart_path, *_slot_emu('comparatif'))
 
 # -------------------------------------------------------------
 # RISK CHART FALLBACK (SLIDES 8, 11, 14)
@@ -1254,14 +1272,10 @@ def assemble_pptx(data, template_path, output_path):
         calc = chart_paths.get(f'scenario_{label_fin}_cost_calc')
         # Calc visuel : top=3.0", left=0.5", w=9.0", h=1.1"
         if calc and os.path.exists(calc):
-            slide_fin.shapes.add_picture(calc,
-                Emu(457200), Emu(2743200),  # left=0.5", top=3.0"
-                Emu(8229600), Emu(1005840)) # 9.0" × 1.1"
+            add_picture_fit(slide_fin, calc, *_slot_emu('cost_calc'))   # v13.2
         # Gauge budget : top=4.4", left=0.5", w=9.0", h=1.0" (gap 0.3" entre les deux)
         if gauge and os.path.exists(gauge):
-            slide_fin.shapes.add_picture(gauge,
-                Emu(457200), Emu(4023360),  # left=0.5", top=4.4"
-                Emu(8229600), Emu(914400))  # 9.0" × 1.0"
+            add_picture_fit(slide_fin, gauge, *_slot_emu('budget_gauge'))   # v13.2
         print(f"v74.18: Inserted financial charts on slide {slide_num_fin} ({label_fin})", file=sys.stderr)
 
     # Slide 17 -- Budget comparison table (bottom-left, next to pie chart)
@@ -1378,8 +1392,7 @@ def assemble_pptx(data, template_path, output_path):
     if timeline_chart and os.path.exists(timeline_chart) and len(slides_list) >= 19:
         slide19 = slides_list[18]
         # left=0.2", top=3.8", width=9.5", height=1.6" → bottom=5.4"
-        slide19.shapes.add_picture(timeline_chart,
-            Emu(182880), Emu(3474720), Emu(8686800), Emu(1463040))
+        add_picture_fit(slide19, timeline_chart, *_slot_emu('timeline'))   # v13.2
         print("Inserted timeline chart on slide 19", file=sys.stderr)
 
     # Slide 20 -- Recap card (below text)
@@ -1387,8 +1400,7 @@ def assemble_pptx(data, template_path, output_path):
     if recap_chart and os.path.exists(recap_chart) and len(slides_list) >= 20:
         slide20 = slides_list[19]
         # left=0.2", top=4.0", width=9.5", height=1.3" → bottom=5.3"
-        slide20.shapes.add_picture(recap_chart,
-            Emu(182880), Emu(3657600), Emu(8686800), Emu(1188720))
+        add_picture_fit(slide20, recap_chart, *_slot_emu('recap_card'))   # v13.2
         print("Inserted recap card on slide 20", file=sys.stderr)
 
     # v12.17 — plus de passe de réduction à 80 % : les textes sont calibrés pour tenir (lib/ppt-fit.js)

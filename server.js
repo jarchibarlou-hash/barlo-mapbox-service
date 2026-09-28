@@ -11035,6 +11035,12 @@ app.post("/generate-pptx", async (req, res) => {
         cos_compliance: sc.cos_compliance || "",
         accent_color: sc.accent_color || "#888888",
         budget_fit_label: sc.budget_fit || "",
+        // v13.2 — graphiques : fourchette du client, besoin réserve comprise, scénario recommandé
+        budget_fit: sc.budget_fit || "",
+        budget_min_fcfa: sc.budget_min_fcfa || 0,
+        budget_max_fcfa: sc.budget_max_fcfa || 0,
+        budget_needed_fcfa: sc.budget_needed_fcfa || 0,
+        recommended: !!sc.recommended,
         parking_detail: sc.parking_detail || {},
         free_ground_m2: sc.free_ground_m2 || 0,
         circulation_ratio_pct: sc.circulation_ratio_pct || 0,
