@@ -987,10 +987,17 @@ def merci(slide):
     for sh in slide.shapes:
         if sh.has_text_frame and 'immodiaspo' in sh.text_frame.text:
             for p in sh.text_frame.paragraphs:
-                if 'immodiaspo' in ''.join(r.text for r in p.runs):
+                full = ''.join(r.text for r in p.runs)
+                if 'immodiaspo' in full:
                     pPr = p._p.get_or_add_pPr()
                     if 'marR' in pPr.attrib:
                         del pPr.attrib['marR']
+                    # un seul lien (le modèle le découpait en trois morceaux, coupés à l'affichage)
+                    runs = p.runs
+                    runs[0].text = full.strip()
+                    runs[0].font.size = Pt(18)
+                    for r in runs[1:]:
+                        r._r.getparent().remove(r._r)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
