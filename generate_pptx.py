@@ -1253,7 +1253,11 @@ def assemble_pptx(data, template_path, output_path):
             try:
                 if not shp.has_text_frame:
                     continue
-                if shp.top is None or shp.top < Emu(700000):  # skip title (top<0.77")
+                if shp.top is None or shp.top < Emu(457200):  # skip title (top<0.5")
+                    continue
+                # v13.2 — seulement une zone qui porte du texte : jamais les bandeaux vert / rose du bas
+                # (vides), qu'on agrandissait en grand rectangle vert sur la moitié de la slide
+                if not (shp.text_frame.text or '').strip():
                     continue
                 text_shapes.append((shp.height, shp))
             except Exception:
