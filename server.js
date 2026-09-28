@@ -12240,29 +12240,15 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     });
   });
   const vertexGeoJSON = { type: "FeatureCollection", features: vertexFeatures };
-  // Étiquettes unités : Mapbox v2 pose les symboles au sol ; on les remonte à l'écran de la hauteur
-  // projetée du volume (sommet × sin(pitch) / mètres-par-pixel) pour qu'elles tiennent au-dessus du toit.
-  const MASSING_PITCH = 58;
-  const LABEL_SIZE = 18;
-  const metersPerPx = 78271.517 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
-  const labelFeatures = unitsData.map((u, i) => {
-    const n = u.polygonGeo.length;
-    return {
-      type: "Feature",
-      properties: { uid: `u${i}`, text: u.labelText || u.name || "" },
-      geometry: {
-        type: "Point",
-        coordinates: [u.polygonGeo.reduce((s, p) => s + p.lon, 0) / n, u.polygonGeo.reduce((s, p) => s + p.lat, 0) / n]
-      }
-    };
-  });
-  const labelGeoJSON = { type: "FeatureCollection", features: labelFeatures };
-  const labelOffsetExpr = ["match", ["get", "uid"]];
-  unitsData.forEach((u, i) => {
-    const liftPx = (u.topM || 3) * Math.sin(MASSING_PITCH * Math.PI / 180) / metersPerPx + 10;
-    labelOffsetExpr.push(`u${i}`, ["literal", [0, -liftPx / LABEL_SIZE]]);
-  });
-  labelOffsetExpr.push(["literal", [0, 0]]);
+  // v12.23 — Étiquettes unités : une ligne par unité (nom · niveaux · options), posée À L'EXTÉRIEUR du
+  // bâtiment, à la hauteur du niveau de l'unité et reliée à sa façade par un trait (calque HTML au-dessus
+  // de la carte, placé avec la projection 3D de la carte, pris dans la capture d'écran).
+  const unitLabels = unitsData.map(u => ({
+    text: String(u.labelText || u.name || "").replace(/\s*\n\s*/g, " · "),
+    color: u.colorHex || "#7098c8",
+    poly: (u.polygonGeo || []).map(p => [p.lon, p.lat]),
+    ground: Number(u.groundM) || 0, base: Number(u.baseM) || 0, top: Number(u.topM) || 3
+  }));
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
@@ -12374,28 +12360,115 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
         'circle-opacity': 0.95
       }
     });
-    // v11.37 : etiquette par unite (nom + R+X, pilotis, sous-sols, rez-de-jardin, parking, terrasse, balcons)
-    map.addSource('unit-labels', { type: 'geojson', data: ${JSON.stringify(labelGeoJSON)} });
-    map.addLayer({ id: 'unit-labels-text', type: 'symbol', source: 'unit-labels',
-      layout: {
-        'text-field': ['get', 'text'],
-        'text-size': ${LABEL_SIZE},
-        'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-        'text-anchor': 'bottom',
-        'text-offset': ${JSON.stringify(labelOffsetExpr)},
-        'text-justify': 'center',
-        'text-line-height': 1.25,
-        'text-max-width': 40,
-        'text-allow-overlap': true,
-        'text-ignore-placement': true
-      },
-      paint: {
-        'text-color': '#1a1a1a',
-        'text-halo-color': '#ffffff',
-        'text-halo-width': 2.2
-      }
-    });
   });
+  // v12.23 : etiquettes des unites hors du batiment, chacune a cote de son niveau (voir drawUnitLabels)
+  const UNIT_LABELS = ${JSON.stringify(unitLabels)};
+  const PITCH_DEG = 58;
+  window.__LABEL_DIAG = { method: null, labels: 0 };
+  // Point (lon, lat, altitude en m) -> pixel ecran. Projection exacte de la carte si disponible
+  // (verifiee contre map.project au sol et contre l'approximation en hauteur), sinon approximation.
+  function makeProjector() {
+    function approx(lon, lat, alt) {
+      const g = map.project([lon, lat]);
+      const n = map.project([lon, lat + 1 / 111320]);
+      const lift = alt * Math.abs(g.y - n.y) * Math.tan(PITCH_DEG * Math.PI / 180);
+      return { x: g.x, y: g.y - lift };
+    }
+    function exact(lon, lat, alt) {
+      const tr = map.transform;
+      const c = mapboxgl.MercatorCoordinate.fromLngLat([lon, lat], alt);
+      const p = tr._coordinatePoint ? tr._coordinatePoint(c, false) : tr.coordinatePoint(c, alt);
+      return { x: p.x, y: p.y };
+    }
+    try {
+      const ll = UNIT_LABELS.length && UNIT_LABELS[0].poly.length ? UNIT_LABELS[0].poly[0] : [${center.lon}, ${center.lat}];
+      const g = map.project(ll), e0 = exact(ll[0], ll[1], 0), e10 = exact(ll[0], ll[1], 10), a10 = approx(ll[0], ll[1], 10);
+      const liftE = g.y - e10.y, liftA = g.y - a10.y;
+      if (Math.abs(e0.x - g.x) < 2 && Math.abs(e0.y - g.y) < 2 && liftA > 0 && liftE / liftA > 0.7 && liftE / liftA < 1.4) {
+        window.__LABEL_DIAG.method = 'exact';
+        return exact;
+      }
+    } catch (_) {}
+    window.__LABEL_DIAG.method = 'approx';
+    return approx;
+  }
+  function drawUnitLabels() {
+    if (!UNIT_LABELS.length || document.getElementById('unit-labels-layer')) return;
+    const proj = makeProjector();
+    const W = 1280, H = 1280, GAP = 36, MARGIN = 14, SPACING = 8;
+    const layer = document.createElement('div');
+    layer.id = 'unit-labels-layer';
+    layer.style.cssText = 'position:absolute;left:0;top:0;width:' + W + 'px;height:' + H + 'px;pointer-events:none;z-index:5';
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.style.cssText = 'position:absolute;left:0;top:0';
+    layer.appendChild(svg);
+    document.body.appendChild(layer);
+    // Emprise ecran de tout le bati projete (du sol au toit) : les etiquettes se rangent en dehors
+    let minX = Infinity, maxX = -Infinity;
+    const items = UNIT_LABELS.map(function (u) {
+      const mid = (u.base + u.top) / 2;
+      [u.ground, u.top].forEach(function (alt) {
+        u.poly.forEach(function (p) { const q = proj(p[0], p[1], alt); minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x); });
+      });
+      const pts = u.poly.map(function (p) { return proj(p[0], p[1], mid); });
+      const cx = pts.reduce(function (s, q) { return s + q.x; }, 0) / pts.length;
+      const right = pts.reduce(function (a, b) { return b.x > a.x ? b : a; });
+      const left = pts.reduce(function (a, b) { return b.x < a.x ? b : a; });
+      return { u: u, cx: cx, right: right, left: left };
+    });
+    const span = Math.max(1, maxX - minX);
+    items.forEach(function (it) {
+      it.side = it.cx < minX + span / 3 ? 'L' : 'R';
+      const el = document.createElement('div');
+      el.textContent = it.u.text;
+      el.style.cssText = 'position:absolute;white-space:nowrap;font:700 19px Arial,Helvetica,"Liberation Sans","DejaVu Sans",sans-serif;color:#1a1a1a;'
+        + 'background:rgba(255,255,255,0.95);border-left:7px solid ' + it.u.color + ';border-radius:4px;padding:5px 10px;box-shadow:0 1px 5px rgba(0,0,0,0.28)';
+      layer.appendChild(el);
+      it.el = el; it.w = el.offsetWidth; it.h = el.offsetHeight;
+    });
+    // Cote gauche / droit selon la place disponible
+    items.forEach(function (it) {
+      if (it.side === 'R' && maxX + GAP + it.w > W - MARGIN && minX - GAP - it.w >= MARGIN) it.side = 'L';
+      else if (it.side === 'L' && minX - GAP - it.w < MARGIN) it.side = 'R';
+    });
+    ['L', 'R'].forEach(function (side) {
+      const group = items.filter(function (it) { return it.side === side; });
+      group.forEach(function (it) { it.anchor = side === 'R' ? it.right : it.left; it.ty = it.anchor.y; });
+      group.sort(function (a, b) { return a.ty - b.ty; });
+      // Chaque etiquette a hauteur de son niveau, sans se chevaucher
+      group.forEach(function (it, i) {
+        it.ly = i === 0 ? it.ty : Math.max(it.ty, group[i - 1].ly + group[i - 1].h / 2 + SPACING + it.h / 2);
+      });
+      if (group.length) {
+        const shift = group.reduce(function (s, it) { return s + (it.ly - it.ty); }, 0) / group.length;
+        let dy = -shift;
+        const top = group[0].ly - group[0].h / 2 + dy, last = group[group.length - 1];
+        const bottom = last.ly + last.h / 2 + dy;
+        if (top < MARGIN) dy += MARGIN - top;
+        if (bottom > H - MARGIN) dy -= bottom - (H - MARGIN);
+        group.forEach(function (it) { it.ly += dy; });
+      }
+      group.forEach(function (it) {
+        const lx = side === 'R' ? Math.min(maxX + GAP, W - MARGIN - it.w) : Math.max(minX - GAP - it.w, MARGIN);
+        it.el.style.left = Math.round(lx) + 'px';
+        it.el.style.top = Math.round(it.ly - it.h / 2) + 'px';
+        const ex = side === 'R' ? lx : lx + it.w;
+        const knee = side === 'R' ? ex - 12 : ex + 12;
+        const line = document.createElementNS(NS, 'polyline');
+        line.setAttribute('points', it.anchor.x + ',' + it.anchor.y + ' ' + knee + ',' + it.ly + ' ' + ex + ',' + it.ly);
+        line.setAttribute('fill', 'none'); line.setAttribute('stroke', '#1a1a1a'); line.setAttribute('stroke-width', '1.8');
+        svg.appendChild(line);
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', it.anchor.x); dot.setAttribute('cy', it.anchor.y); dot.setAttribute('r', '4.5');
+        dot.setAttribute('fill', it.u.color); dot.setAttribute('stroke', '#1a1a1a'); dot.setAttribute('stroke-width', '1.5');
+        svg.appendChild(dot);
+      });
+    });
+    window.__LABEL_DIAG.labels = items.length;
+  }
+  map.once('load', function () { try { drawUnitLabels(); } catch (e) { window.__LABEL_DIAG.error = e.message; } });
   // v11.23 : detection intersect robuste (querySourceFeatures + composite ID synthetique)
   // v11.32 : hiddenLabels = numeros 1,2,3,4 des batis a masquer (ancien cockpit)
   // v12.22 : maskSpec = masquage valide du terrain (centres des batis masques / gardes visibles) ;
@@ -12890,7 +12963,7 @@ async function prepareMassingScene(body, sb) {
     if (fp.parking_ss) tags.push("parking");
     if (fp.terrasse) tags.push("terrasse");
     if (fp.balcon) tags.push("balcons");
-    const labelText = `${row.unit_name || row.unit_type || "Unité"}\n${tags.join(" · ")}`;
+    const labelText = `${row.unit_name || row.unit_type || "Unité"} · ${tags.join(" · ")}`;   // v12.23 : une ligne
     unitsData.push({
       id: row.unit_index,
       name: row.unit_name || `Unit ${row.unit_index}`,
