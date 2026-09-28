@@ -72,7 +72,7 @@ test("recommandation à égalité : dite, pas « meilleur score »", () => {
   const reco = sc.diagnostic.constats_v12.find(c => c.code === "RECOMMANDATION");
   if (reco.chiffres.egalite_avec.length) {
     assert.doesNotMatch(t.conclusion_positioning_text, /Meilleur score/);
-    assert.match(t.conclusion_positioning_text, /à égalité avec/);
+    assert.match(t.conclusion_positioning_text, /à moins de 3 points de/);
   }
   assert.match(t.slide_5_text, new RegExp(`programme de \\*\\*${sc[rec].total_units} unité`), "unités du scénario recommandé");
   assert.deepEqual(S.validateProjectAnalysisV12(t, sc).issues, []);

@@ -444,7 +444,7 @@
 </head>
 <body>
 <header class="topbar">
-    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v12.23-ETIQUETTES</span></div>
+    <div class="topbar-left"><div class="logo">BARLO<span>.</span></div><span class="version">STUDIO v13.0-GRILLE</span></div>
     <div class="topbar-right">
         <div class="poll-info"><div class="poll-dot"></div><span id="pollStatus">Polling 15s</span></div>
         <div class="status-badge"><div class="status-dot" id="statusDot"></div><span id="statusText">...</span></div>
@@ -6271,10 +6271,11 @@ function renderV12Strip(L) {
       ${v12RulesLine(m, eng)}`;
     const badge = $(`cBadge${L}`);
     if (badge && eng.score != null) {
-        const conforme = !((eng.score_detail && eng.score_detail.cos_conformity && eng.score_detail.cos_conformity.score < 0.5));
+        // v13 — conforme = recommandable (aucun débord côté rue / hors parcelle, COS tenu, pas de superposition)
+        const conforme = eng.eligible !== false;
         badge.textContent = `${eng.recommended ? "★ " : ""}${eng.score}`;
         badge.className = "c-badge-coh " + (conforme ? "good" : "warn");
-        badge.title = `Score ${eng.score}/100${eng.recommended ? " — scénario recommandé" : ""}${conforme ? "" : " — non conforme en l'état (retraits ou COS)"}`;
+        badge.title = `Score ${eng.score}/100${eng.recommended ? " — scénario recommandé" : ""}${conforme ? (eng.facade_aveugle ? " — conforme si les façades en débord restent aveugles" : "") : " — à corriger : " + (eng.a_corriger || []).join(", ")}`;
     }
     const tabState = $(`cTabState${L}`);
     if (tabState) {
@@ -6333,16 +6334,25 @@ function renderV12Findings() {
         list.map(c => `<li class="${escAttr(c.niveau)}">${esc(c.message)}</li>`).join("")}</ul></details>`;
 }
 
-// v12.11 — Score du moteur (7 critères mesurés sur le contenu réel) + recommandation ; détail au survol
-const V12_CRITERIA_LABEL = { budget_fit: "Budget", risk_alignment: "Risque / posture", cos_conformity: "Conformité (COS, retraits)",
-    capacity_adequacy: "Capacité", cost_efficiency: "Efficacité coût", standing_match: "Standing", phase_flexibility: "Phasage" };
+// v13 — Score de la grille BARLO (7 critères distincts, mesurés sur le contenu réel) ; détail au survol
+const V12_CRITERIA_LABEL = { budget_fit: "Budget", programme_match: "Réponse au programme", setback_encroachment: "Empiètement sur les retraits",
+    cos_conformity: "Occupation au sol (COS)", phase_flexibility: "Possibilité de phasage", structure_simplicity: "Simplicité constructive", standing_match: "Standing" };
+const V12_POSTURE_LABEL = { EQUILIBREE: "équilibrée", PRUDENTE: "prudente", AMBITIEUSE: "ambitieuse" };
 function v12ScoreBadge(eng) {
     if (eng.score == null) return "";
     const d = eng.score_detail || {};
-    const lines = Object.keys(V12_CRITERIA_LABEL).filter(k => d[k]).map(k =>
-        `${V12_CRITERIA_LABEL[k]} (${Math.round(d[k].poids * 100)} %) : ${Math.round(d[k].score * 100)}/100 — ${d[k].explication}`);
-    const tip = `Score sur 100, 7 critères mesurés sur le contenu réel du scénario :\n${lines.join("\n")}`;
-    return `<span class="v12-score${eng.recommended ? " rec" : ""}" title="${escAttr(tip)}">${eng.recommended ? "★ Recommandé · " : ""}${eng.score}/100</span>`;
+    const lines = Object.keys(V12_CRITERIA_LABEL).filter(k => d[k]).map(k => d[k].score == null
+        ? `${V12_CRITERIA_LABEL[k]} : non noté — ${d[k].explication}`
+        : `${V12_CRITERIA_LABEL[k]} (${Math.round(d[k].poids * 100)} %) : ${Math.round(d[k].score * 100)}/100 — ${d[k].explication}`);
+    const rv = eng.recommandation;
+    const notes = [];
+    if (eng.eligible === false) notes.push(`À corriger (ne peut pas être recommandé) : ${(eng.a_corriger || []).join(", ")}`);
+    if (rv && rv.proches && rv.proches.length) notes.push(`Score proche de ${rv.proches.join(" et ")} (moins de 3 points) : départagé par la posture`);
+    if (rv && rv.sous_reserve) notes.push("Aucun scénario conforme : recommandation sous réserve");
+    if (rv && !rv.robuste && !(rv.proches || []).length && rv.bascules[0]) notes.push(`Choix sensible aux poids : ${rv.bascules[0].vers} passe devant si « ${rv.bascules[0].critere} » pèse ${Math.abs(rv.bascules[0].delta_points)} points de ${rv.bascules[0].delta_points > 0 ? "plus" : "moins"}`);
+    const tip = `Score sur 100, grille BARLO (posture ${V12_POSTURE_LABEL[eng.score_posture] || "équilibrée"}) :\n${lines.join("\n")}${notes.length ? "\n\n" + notes.join("\n") : ""}`;
+    const tag = eng.recommended ? "★ Recommandé · " : eng.eligible === false ? "⚠ À corriger · " : "";
+    return `<span class="v12-score${eng.recommended ? " rec" : ""}" title="${escAttr(tip)}">${tag}${eng.score}/100</span>`;
 }
 
 // v12.9 — Chiffres affichés : ceux de la géométrie VALIDÉE s'il y en a une (dessinée dans le cockpit),
@@ -6376,9 +6386,11 @@ function v12RulesLine(m, engShown) {
     if (m.actual) {
         const act = m.actual;
         const when = act.computed_at ? new Date(act.computed_at).toLocaleDateString("fr-FR") : "";
-        const lines = (act.checks || []).map(c =>
-            `<span style="color:${c.level === "error" ? "var(--brick2)" : "var(--amber)"};font-weight:700">⚠ ${esc(c.message)}</span>`);
-        const ok = lines.length ? "" : `<span style="color:var(--forest);font-weight:700">✓ Géométrie conforme : zone constructible, COS, pas de superposition.</span> `;
+        // v13 — erreur = à corriger ; avertissement = légal sous condition ou structure plus chère ; info = tolérance de dessin
+        const lines = (act.checks || []).map(c => c.level === "info"
+            ? `<span style="color:var(--text2)">ℹ ${esc(c.message)}</span>`
+            : `<span style="color:${c.level === "error" ? "var(--brick2)" : "var(--amber)"};font-weight:700">⚠ ${esc(c.message)}</span>`);
+        const ok = (act.checks || []).some(c => c.level === "error" || c.level === "warning") ? "" : `<span style="color:var(--forest);font-weight:700">✓ Géométrie conforme : zone constructible, COS, pas de superposition.</span> `;
         const head = `Chiffres issus de ta géométrie validée${m.revision ? ` (révision ${m.revision}${when ? ", " + when : ""})` : ""}${m.status === "OUTDATED" ? " · la suggestion BARLO a changé depuis : à revoir" : ""}`;
         return `<div class="c-hint" style="margin-top:.4rem" title="${escAttr(act.conventions || "")}">${ok}${lines.join(" ")}${lines.length ? "<br>" : ""}${esc(head)}</div>`;
     }

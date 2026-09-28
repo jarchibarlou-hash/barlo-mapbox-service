@@ -1989,14 +1989,55 @@ function refreshBudgetFit(sc, range) {
   sc.cost_final_fcfa = sc.cost_total_fcfa + p2;
   sc.final_budget_fit = p2 ? ScenarioRules.budgetStatus(Math.round(sc.cost_final_fcfa / target), range) : sc.budget_fit;
 }
-// ═══ v12.11 — SCORING DES SCÉNARIOS sur leur contenu RÉEL ═══
-// Mêmes 7 critères et mêmes poids qu'avant (décision de Jeremy), mais chacun mesure le scénario
-// tel qu'il est (réglages et géométrie validée compris), plus jamais sa seule lettre A/B/C.
-const SCORE_WEIGHTS_V12 = Object.freeze({
-  budget_fit: 0.25, risk_alignment: 0.20, cos_conformity: 0.12, capacity_adequacy: 0.13,
-  cost_efficiency: 0.12, standing_match: 0.08, phase_flexibility: 0.10,
+// ═══ v13 — GRILLE DE NOTATION BARLO (Jeremy, 28/09/2026) ═══
+// 7 critères distincts, chacun mesuré UNE seule fois sur le contenu réel du scénario (géométrie validée
+// comprise), sur une échelle continue : un détail de dessin ne fait jamais sauter une note.
+// La conformité est une CONDITION de recommandation, pas une note que d'autres critères compensent : un
+// scénario « à corriger » (débord côté rue ou hors parcelle, COS dépassé, volumes superposés) n'est jamais
+// recommandé s'il existe une alternative. Un débord sur un autre côté reste légal si la façade est aveugle,
+// mais coûte des points. Un critère sans donnée fiable n'est pas noté : son poids est réparti sur les autres.
+// La posture du client déplace des poids (affichés), jamais les formules.
+const CRITERES_V13 = Object.freeze([
+  { key: "budget_fit", label: "Budget", court: "budget" },
+  { key: "programme_match", label: "Réponse au programme", court: "réponse au programme" },
+  { key: "setback_encroachment", label: "Empiètement sur les retraits", court: "respect des retraits" },
+  { key: "cos_conformity", label: "Occupation au sol (COS)", court: "occupation au sol (COS)" },
+  { key: "phase_flexibility", label: "Possibilité de phasage", court: "phasage" },
+  { key: "structure_simplicity", label: "Simplicité constructive", court: "simplicité de la structure" },
+  { key: "standing_match", label: "Standing", court: "standing" },
+]);
+const SCORE_WEIGHTS_V13 = Object.freeze({
+  EQUILIBREE: Object.freeze({ budget_fit: 0.30, programme_match: 0.20, setback_encroachment: 0.15, cos_conformity: 0.10, phase_flexibility: 0.10, structure_simplicity: 0.10, standing_match: 0.05 }),
+  PRUDENTE: Object.freeze({ budget_fit: 0.35, programme_match: 0.10, setback_encroachment: 0.15, cos_conformity: 0.10, phase_flexibility: 0.15, structure_simplicity: 0.10, standing_match: 0.05 }),
+  AMBITIEUSE: Object.freeze({ budget_fit: 0.25, programme_match: 0.30, setback_encroachment: 0.15, cos_conformity: 0.10, phase_flexibility: 0.05, structure_simplicity: 0.10, standing_match: 0.05 }),
 });
+const ECART_PROCHES_V13 = 0.03;    // moins de 3 points sur 100 : scénarios « proches », départagés par la posture
+const TOLERANCE_DESSIN_PCT_V13 = 2; // imprécision de dessin tolérée : 2 % de l'emprise au sol
 const clamp01 = x => Math.max(0, Math.min(1, x));
+function postureKeyV13(posture) {
+  const p = String(posture || "").toUpperCase();
+  return /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(p) ? "PRUDENTE" : /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(p) ? "AMBITIEUSE" : "EQUILIBREE";
+}
+// Ordre de préférence entre scénarios proches : prudente C, B, A ; ambitieuse A, B, C ; équilibrée B, A, C
+function postureOrderV13(posture) {
+  return { PRUDENTE: ["C", "B", "A"], AMBITIEUSE: ["A", "B", "C"], EQUILIBREE: ["B", "A", "C"] }[postureKeyV13(posture)];
+}
+// Note sur 10 par interpolation linéaire entre des repères [valeur, note], bornée aux extrémités
+function noteLineaireV13(x, pts) {
+  if (!(x > pts[0][0])) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    if (x <= pts[i][0]) { const [x0, y0] = pts[i - 1], [x1, y1] = pts[i]; return y0 + (y1 - y0) * (x - x0) / (x1 - x0); }
+  }
+  return pts[pts.length - 1][1];
+}
+// Besoin de financement (réserve comprise) face à la fourchette : 10 au bas, 6 au haut, 0 à +30 % au-dessus
+function noteBudgetV13(need, range) {
+  if (!range || !(range.max > 0) || !(need > 0)) return null;
+  const pts = range.open_ended ? [[range.min, 10], [range.min * 2, 7]]
+    : range.min < range.max ? [[range.min, 10], [range.max, 6], [range.max * 1.3, 0]]
+    : [[range.max, 10], [range.max * 1.3, 0]];
+  return noteLineaireV13(need, pts);
+}
 // Libellé du standing dans les textes (grille de Jeremy)
 function standingLabelFr(standing) {
   return { ECONOMIQUE: "économique", STANDARD: "standard", HAUT: "haut standing", PREMIUM: "très haut standing" }[standingGridKey(standing)];
@@ -2008,150 +2049,294 @@ function standingGridKey(standing) {
   if (/ECO|BAS/.test(s)) return "ECONOMIQUE";
   return "STANDARD";
 }
-// Risque propre au scénario (0 = faible, 1 = élevé) : budget, hauteur, conformité réglementaire
-function scenarioRiskV12(sc) {
-  const rBudget = { DANS_BUDGET: 0, BUDGET_TENDU: 0.5, HORS_BUDGET: 1 }[sc.budget_fit] ?? 0.3;
-  const lv = Number(sc.levels) || 1;
-  const rHeight = lv <= 2 ? 0 : lv === 3 ? 0.3 : lv === 4 ? 0.6 : 1;
-  const geoErrors = (sc.geometry_checks_v12 || []).filter(c => c.level === "error").length;
-  const rReg = (geoErrors > 0 || sc.cos_compliance === "AMBITIEUX_HORS_COS") ? 1 : (Number(sc.cos_ratio_pct) > 90 ? 0.5 : 0);
-  return { total: 0.5 * rBudget + 0.25 * rHeight + 0.25 * rReg, budget: rBudget, height: rHeight, reg: rReg, geoErrors };
+// Deux familles : logement, activité (commerce, bureaux, ateliers : le questionnaire ne les distingue pas)
+function familleV13(type) {
+  const t = String(type || "").toUpperCase();
+  if (/^T\d/.test(t) || t === "STUDIO" || t === "LOGEMENT") return "logement";
+  return ["COMMERCE", "BUREAU", "ATELIER"].includes(t) ? "activite" : null;
 }
-function scoreScenariosV12(rr, ctx) {
-  const W = SCORE_WEIGHTS_V12;
-  const posture = String(ctx.feasibility_posture || "BALANCED").toUpperCase();
-  const prudent = /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(posture);
-  const ambitious = /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(posture);
-  const postureFr = prudent ? "prudente" : ambitious ? "ambitieuse" : "équilibrée";
-  const target = Math.max(1, Number(ctx.target_units) || 1);
-  const stdKey = standingGridKey(ctx.standing_level);
-  const phaseSc = Number(ctx.phase_score) || 0;
-  const labels = ["A", "B", "C"].filter(l => rr[l] && !rr[l].unsupported);
-  const cpu = sc => (Number(sc.cost_total_fcfa || sc.estimated_cost) || 0) / Math.max(1, Number(sc.total_units) || 1);
-  const cpus = labels.map(l => cpu(rr[l]));
-  const minCpu = Math.min(...cpus), maxCpu = Math.max(...cpus);
-  const M = v => `${Math.round(v / 1e6)}M`;
-  // Tension budgétaire réelle : le programme du client (A) tient-il dans sa fourchette ?
-  // Sans tension, l'efficacité coût ne départage pas (C est toujours le moins cher par construction).
-  const refFit = rr.A && !rr.A.unsupported ? rr.A.budget_fit : null;
-  const tension = { DANS_BUDGET: 0, BUDGET_TENDU: 0.5, HORS_BUDGET: 1 }[refFit] ?? 0.5;
-  for (const label of labels) {
-    const sc = rr[label];
-    // 1. BUDGET (25 %) — position dans la fourchette, réserve du rôle comprise
-    let budget = 0.5;
-    if (sc.budget_fit === "DANS_BUDGET") budget = 1;
-    else if (sc.budget_fit === "BUDGET_TENDU") budget = 0.6;
-    else if (sc.budget_fit === "HORS_BUDGET") budget = ambitious ? 0.35 : prudent ? 0 : 0.15;
-    const explBudget = sc.budget_fit === "DANS_BUDGET" ? "Tient dans le bas de votre fourchette budgétaire, réserve pour imprévus comprise."
-      : sc.budget_fit === "BUDGET_TENDU" ? "Tient seulement si vous vous placez dans le haut de votre fourchette budgétaire."
-      : sc.budget_fit === "HORS_BUDGET" ? `Au-dessus de votre fourchette${sc.budget_gap_pct > 0 ? ` de ${sc.budget_gap_pct} %` : ""} : financement complémentaire, phasage ou programme à revoir.`
-      : "Budget non renseigné : critère neutre.";
-    // 2. ALIGNEMENT RISQUE (20 %) — risque réel du scénario face à la posture du client
-    const risk = scenarioRiskV12(sc);
-    const riskAlign = clamp01(prudent ? 1 - risk.total : ambitious ? 1 - Math.max(0, risk.total - 0.6) * 1.5 : 1 - Math.max(0, risk.total - 0.3) * 1.2);
-    const riskLevel = risk.total < 0.25 ? "faible" : risk.total < 0.55 ? "modéré" : "élevé";
-    const riskWhy = [risk.budget >= 0.5 ? "budget" : "", risk.height >= 0.3 ? `hauteur R+${Math.max(0, (Number(sc.levels) || 1) - 1)}` : "", risk.reg >= 0.5 ? "conformité réglementaire" : ""].filter(Boolean).join(", ");
-    const explRisk = `Risque ${riskLevel}${riskWhy ? ` (${riskWhy})` : ""} : ${riskAlign >= 0.8 ? "adapté" : riskAlign >= 0.5 ? "acceptable" : "trop élevé"} pour une posture ${postureFr}.`;
-    // 3. CONFORMITÉ (12 %) — COS (occupation au sol), retraits, superpositions
-    const overBuildable = sc.sdp_limits_v12 && sc.sdp_limits_v12.buildable_area != null && !sc._v12_validated
-      && Number(sc.fp_m2) > Number(sc.sdp_limits_v12.buildable_area) + 0.5;
-    let conform = 1;
-    if (risk.geoErrors > 0 || sc.cos_compliance === "AMBITIEUX_HORS_COS" || overBuildable) conform = 0.1;
-    else if (Number(sc.cos_ratio_pct) > 90) conform = 0.8;
-    const explConform = conform >= 0.9 ? "Conforme : COS (occupation au sol) et retraits respectés."
-      : conform >= 0.5 ? "Conforme, mais emprise au sol proche du maximum autorisé par le COS."
-      : risk.geoErrors > 0 ? `Non conforme en l'état : ${risk.geoErrors} point(s) de la géométrie validée à corriger (retraits, superpositions ou COS).`
-      : overBuildable ? "Emprise au sol superieure a la zone constructible (retraits) : à revoir."
-      : "Dépassement du COS (occupation au sol) : risque de refus de permis.";
-    // 4. CAPACITÉ (13 %) — unités livrées face au besoin ; celles de la phase 2 (prévues, pas livrées)
-    //    comptent pour moitié
-    const p2 = sc.phase_2_v12;
-    const p2Units = p2 ? (p2.logements || []).reduce((s, t) => s + (Number(t.count) || 0), 0) + (Number(p2.commerce) || 0) : 0;
-    const units = (Number(sc.total_units) || 0) + p2Units;
-    const ratio = ((Number(sc.total_units) || 0) + 0.5 * p2Units) / target;
-    let capacity;
-    if (ratio >= 0.85 && ratio <= 1.20) capacity = 1 - Math.abs(ratio - 1) * 0.5;
-    else if (ratio >= 0.70 && ratio < 0.85) capacity = 0.7 - (0.85 - ratio) * 2;
-    else if (ratio > 1.20 && ratio <= 1.50) capacity = 0.7 - (ratio - 1.20) * 1.5;
-    else capacity = Math.max(0, 0.3 - Math.abs(ratio - 1) * 0.2);
-    const explCapacity = `${units} unité${units > 1 ? "s" : ""} pour un besoin de ${target}${p2Units ? ` (dont ${p2Units} prévue${p2Units > 1 ? "s" : ""} en phase 2, comptée${p2Units > 1 ? "s" : ""} pour moitié)` : ""} : ${capacity >= 0.9 ? "correspond au besoin" : ratio < 1 ? "en dessous du besoin" : "au-dessus du besoin"}.`;
-    // 5. EFFICACITÉ COÛT (12 %) — coût des travaux par unité, comparé aux autres scénarios, pondéré par
-    //    la tension budgétaire réelle (neutre quand le programme du client tient dans le budget)
-    const c = cpu(sc);
-    const rawEff = maxCpu > minCpu ? 1 - 0.7 * (c - minCpu) / (maxCpu - minCpu) : 0.85;
-    const costEff = 0.7 + (rawEff - 0.7) * tension;
-    const explCost = `${M(c)} FCFA de travaux par unité : ${rawEff >= 0.95 ? "le plus bas des 3 scénarios" : rawEff <= 0.35 ? "le plus élevé des 3 scénarios" : "intermédiaire"}`
-      + (tension === 0 ? " (peu déterminant : votre budget couvre le programme)." : ".");
-    // 6. STANDING (8 %) — surfaces réelles des logements face à la grille du standing visé
-    const logts = ScenarioModel.parseUnitMixDetail(sc.unit_mix_detail).filter(u => u.type in UNIT_SIZES_V73 && u.type !== "COMMERCE");
-    let sizeRatio = null;
-    if (logts.length) {
-      const num = logts.reduce((s, u) => s + u.count * u.size_m2, 0);
-      const den = logts.reduce((s, u) => s + u.count * (UNIT_SIZES_V73[u.type][stdKey] || UNIT_SIZES_V73[u.type].STANDARD), 0);
-      sizeRatio = den > 0 ? num / den : null;
+const FAMILLE_FR_V13 = { logement: "logement", activite: "activité (commerce, bureaux)" };
+const frNum = v => String(v).replace(".", ",");
+const round1 = v => Math.round(v * 10) / 10;
+
+// 1. BUDGET — coût des travaux engagé (phase 1 si le projet est phasé), réserve du rôle comprise
+function critBudgetV13(sc, ctx) {
+  const range = ctx.budget_range;
+  const need = Number(sc.budget_needed_fcfa) || 0;
+  const note = noteBudgetV13(need, range);
+  if (note == null) return { note: null, expl: "Budget non renseigné : critère non noté." };
+  const p1 = sc.phase_2_v12 && sc.phase_2_v12.cost_fcfa ? " (phase 1)" : "";
+  const gap = Math.round((need / range.max - 1) * 100);
+  const expl = need <= range.min || (range.min >= range.max && need <= range.max)
+    ? `Tient dans le bas de votre fourchette${p1}, réserve pour imprévus comprise.`
+    : need <= range.max || range.open_ended
+      ? `Tient dans votre fourchette${p1} mais vers le haut (${Math.round((need - range.min) / Math.max(1, range.max - range.min) * 100)} % de l'écart entre le bas et le haut) : marge réduite.`
+      : `Au-dessus de votre fourchette de ${gap} %${p1} : financement complémentaire, phasage ou programme à revoir.`;
+  return { note, expl };
+}
+// 2. RÉPONSE AU PROGRAMME — surface visée par le client, fonctions demandées (phase 2 comptée pour moitié)
+function famillesDemandeesV13(sc) {
+  const pr = sc.client_program_v12;
+  if (!pr) return [];
+  const out = [];
+  if ((pr.logements || []).some(x => Number(x.count) > 0)) out.push("logement");
+  if (Number(pr.commerce) > 0) out.push("activite");
+  return out;
+}
+function famillesOffertesV13(sc) {
+  const g = sc.geom_v12;
+  const types = g && Array.isArray(g.units) && g.units.length ? g.units.map(u => u.type)
+    : ScenarioModel.parseUnitMixDetail(sc.unit_mix_detail).map(u => u.type);
+  const p2 = sc.phase_2_v12;
+  if (p2) { (p2.logements || []).forEach(x => types.push(x.type)); if (Number(p2.commerce) > 0) types.push("COMMERCE"); }
+  return [...new Set(types.map(familleV13).filter(Boolean))];
+}
+function critProgrammeV13(sc, ctx) {
+  const COURBE = [[0.45, 0], [0.95, 10], [1.10, 10], [1.50, 6], [2.00, 1]];   // −2 par 10 % en dessous, −1 par 10 % au-dessus
+  const p2 = sc.phase_2_v12;
+  const p2Sdp = p2 ? Number(p2.sdp_m2) || 0 : 0;
+  const surf = (Number(sc.sdp_m2) || 0) + 0.5 * p2Sdp;
+  const T = Number(ctx.target_surface_m2) || 0;
+  const offertes = famillesOffertesV13(sc);
+  let note = null, base = "", ratio = null;
+  if (T > 0 && surf > 0) {
+    ratio = surf / T;
+    note = noteLineaireV13(ratio, COURBE);
+    base = `${Math.round(surf)} m² de surface de plancher${p2Sdp ? ` (dont ${Math.round(p2Sdp)} m² en phase 2, comptés pour moitié)` : ""} pour ${Math.round(T)} m² visés`;
+  } else if (Number(ctx.target_units) > 0 && offertes.length === 1 && offertes[0] === "logement") {
+    const p2Units = p2 ? (p2.logements || []).reduce((s, t) => s + (Number(t.count) || 0), 0) : 0;
+    const units = (Number(sc.total_units) || 0) + 0.5 * p2Units;
+    ratio = units / Number(ctx.target_units);
+    note = noteLineaireV13(ratio, COURBE);
+    base = `${Math.round(units * 10) / 10} logement${units > 1 ? "s" : ""}${p2Units ? " (phase 2 comptée pour moitié)" : ""} pour ${ctx.target_units} visés`;
+  }
+  const demandees = famillesDemandeesV13(sc);
+  const manquantes = demandees.filter(f => !offertes.includes(f));
+  if (note == null && !demandees.length) return { note: null, expl: "Surface visée non renseignée : critère non noté." };
+  if (note == null) note = 10;
+  note -= 3 * manquantes.length;
+  const verdict = ratio == null ? "" : note >= 9 ? " : répond au programme" : ratio < 1 ? " : en dessous du programme" : " : au-delà du programme (surface et coût en plus)";
+  const manque = manquantes.length ? `${base ? " ; " : ""}fonction demandée absente : ${manquantes.map(f => FAMILLE_FR_V13[f]).join(", ")}` : "";
+  return { note, expl: `${base}${verdict}${manque}.`.replace(/^./, c => c.toUpperCase()) };
+}
+// 3. EMPIÈTEMENT SUR LES RETRAITS — part de l'emprise hors zone constructible, nature du débord
+function critRetraitsV13(sc) {
+  const g = sc.geom_v12 || null;
+  const d = g && g.debord;
+  if (d) {
+    const cotes = list => list.map(c => c.cote).join(", ");
+    if (d.a_corriger) {
+      const m2 = Math.round(d.rue_m2 + d.hors_parcelle_m2 + (d.rue_indiquee === false ? d.limite_m2 : 0));
+      const raison = d.hors_parcelle_m2 >= 0.5 ? "hors de la parcelle" : d.rue_indiquee === false ? "sur les retraits, côté rue non indiqué" : "sur le recul côté rue";
+      return { note: 0, a_corriger: `débord de ${m2} m² ${raison}`,
+        expl: `Déborde de ${m2} m² ${raison} (${frNum(d.pct_emprise)} % de l'emprise) : à corriger, une façade aveugle ne suffit pas.` };
     }
-    let standing = 0.7;
-    if (sizeRatio != null) standing = stdKey === "ECONOMIQUE"
-      ? (sizeRatio >= 0.8 ? 1 : sizeRatio >= 0.7 ? 0.7 : 0.4)
-      : (sizeRatio >= 0.95 ? 1 : sizeRatio >= 0.85 ? 0.8 : sizeRatio >= 0.75 ? 0.6 : 0.4);
-    const explStanding = sizeRatio == null ? "Pas de logement a comparer : critère neutre."
-      : `Surfaces des logements à ${Math.round(sizeRatio * 100)} % de la grille ${standingLabelFr(ctx.standing_level)} : ${standing >= 0.9 ? "cohérent avec le standing visé" : standing >= 0.6 ? "un peu compactes pour ce standing" : "trop compactes pour ce standing"}.`;
-    // 7. PHASAGE (10 %) — phasage prévu, ou construction par niveaux possible
-    const lv = Number(sc.levels) || 1;
-    let phase = p2 ? 1 : lv >= 2 ? 0.7 : 0.5;
-    phase = phase * (0.5 + phaseSc * 0.5) + (1 - phase) * (1 - phaseSc) * 0.3;
-    const explPhase = p2 ? "Phasage prévu : phase 1 financée, phase 2 anticipée dans la structure."
-      : lv >= 2 ? "Construction par niveaux possible (surélévation à anticiper dès les fondations)."
-      : "Bâtiment de plain-pied : peu de marge de phasage.";
-    const parts = { budget_fit: [budget, explBudget], risk_alignment: [riskAlign, explRisk], cos_conformity: [conform, explConform],
-      capacity_adequacy: [capacity, explCapacity], cost_efficiency: [costEff, explCost], standing_match: [standing, explStanding], phase_flexibility: [phase, explPhase] };
+    if (d.facade_aveugle) {
+      const c = (d.cotes || []).filter(x => x.type !== "rue");
+      return { note: noteLineaireV13(d.pct_emprise, [[TOLERANCE_DESSIN_PCT_V13, 7], [10, 4], [25, 1], [40, 0]]), aveugle: true,
+        expl: `Déborde de ${Math.round(d.limite_m2)} m² (${frNum(d.pct_emprise)} % de l'emprise) sur le retrait${c.length ? " côté " + cotes(c) : ""} : légal si cette façade reste aveugle, au prix de la lumière et de la ventilation.` };
+    }
+    return { note: noteLineaireV13(d.pct_emprise, [[0, 10], [TOLERANCE_DESSIN_PCT_V13, 9]]),
+      expl: d.pct_emprise > 0 ? `Débord de ${frNum(d.pct_emprise)} % de l'emprise, dans la tolérance de dessin de 2 %.` : "Aucun débord sur les retraits." };
+  }
+  if (sc._v12_validated) {   // géométrie validée avant la grille v13 : ses contrôles font foi
+    const hz = (sc.geometry_checks_v12 || []).filter(c => c.level === "error" && c.code === "HORS_ZONE_CONSTRUCTIBLE");
+    if (hz.length) return { note: 0, a_corriger: "débord sur les retraits", expl: `Déborde sur les retraits (${hz.length} unité${hz.length > 1 ? "s" : ""}) : à corriger.` };
+    return { note: 10, expl: "Aucun débord sur les retraits." };
+  }
+  const lim = sc.sdp_limits_v12 || {};
+  const fp = Number(sc.fp_m2) || 0;
+  if (lim.buildable_area != null && fp > Number(lim.buildable_area) + 0.5) {
+    const pct = round1((fp - Number(lim.buildable_area)) / fp * 100);
+    if (pct <= TOLERANCE_DESSIN_PCT_V13) return { note: 9, expl: `Emprise dépassant la zone constructible de ${frNum(pct)} %, dans la tolérance de 2 %.` };
+    return { note: 0, a_corriger: "emprise supérieure à la zone constructible", expl: `Emprise de ${Math.round(fp)} m² pour ${lim.buildable_area} m² constructibles après retraits : à reprendre.` };
+  }
+  return { note: 10, expl: "Volumes dans la zone constructible : retraits respectés." };
+}
+// 4. OCCUPATION AU SOL (COS) — emprise face au maximum autorisé ; au-delà de la tolérance : à corriger
+function critCosV13(sc) {
+  const g = sc.geom_v12;
+  const raw = g ? g.cos_ratio_pct : sc.cos_ratio_pct;
+  const ratio = raw != null && raw !== "" ? Number(raw) : null;
+  if (ratio == null || !isFinite(ratio) || ratio <= 0) return { note: null, expl: "COS non applicable (plafond levé par dérogation assumée) : critère non noté." };
+  if (ratio > 100 + TOLERANCE_DESSIN_PCT_V13) return { note: 0, a_corriger: `COS dépassé (${ratio} % de l'emprise autorisée)`,
+    expl: `Emprise à ${ratio} % du maximum autorisé par le COS : dépassement, refus de permis probable.` };
+  const note = noteLineaireV13(ratio, [[85, 10], [100, 6], [100 + TOLERANCE_DESSIN_PCT_V13, 5]]);
+  const expl = ratio <= 85 ? `Emprise à ${ratio} % du maximum autorisé par le COS : marge confortable.`
+    : ratio <= 100 ? `Emprise à ${ratio} % du maximum autorisé par le COS : conforme, peu de marge.`
+    : `Emprise à ${ratio} % du maximum autorisé par le COS : dans la tolérance de dessin de 2 %.`;
+  return { note, expl };
+}
+// 5. POSSIBILITÉ DE PHASAGE — découpage sans démolir (moitié de la note) et financement de la première
+//    tranche dans la fourchette (autre moitié)
+function critPhasageV13(sc, ctx) {
+  const g = sc.geom_v12;
+  const p2 = sc.phase_2_v12;
+  let dec, comment, part;
+  if (p2 && p2.cost_fcfa) { dec = 1; comment = "phase 2 prévue et chiffrée"; part = null; }
+  else if (g && Array.isArray(g.units) && g.units.length) {
+    const auSol = u => (Number(u.start_level) || 0) <= (u.pilotis ? 1 : 0);
+    const sdpU = u => Number(u.sdp_m2) || (Number(u.area_m2) || 0) * (Number(u.floors) || 1);
+    const tot = g.units.reduce((s, u) => s + sdpU(u), 0) || 1;
+    const sol = g.units.filter(auSol), haut = g.units.filter(u => !auSol(u));
+    if (sol.length && haut.length) { dec = 1; comment = "par niveaux : les étages s'ajoutent plus tard, fondations et structure prévues dès la phase 1"; part = sol.reduce((s, u) => s + sdpU(u), 0) / tot; }
+    else if (sol.length >= 2) { dec = 1; comment = "par volumes : les unités du rez-de-chaussée se construisent l'une après l'autre"; part = Math.max(...sol.map(sdpU)) / tot; }
+    else if (g.units.length === 1 && (Number(g.units[0].floors) || 1) > 1) { dec = 0.4; comment = "un seul volume sur plusieurs niveaux : surélévation seulement si la structure la prévoit"; part = 1 / Number(g.units[0].floors); }
+    else { dec = 0.2; comment = "un seul volume : pas de découpage naturel"; part = 1; }
+  } else {
+    const lv = Number(sc.levels) || 1, units = Number(sc.total_units) || 1;
+    if (lv >= 2) { dec = 1; comment = "par niveaux : les étages s'ajoutent plus tard, fondations et structure prévues dès la phase 1"; part = 1 / lv; }
+    else if (units >= 2) { dec = 0.8; comment = "par volumes : les unités se construisent l'une après l'autre"; part = 0.5; }
+    else { dec = 0.2; comment = "un seul volume : pas de découpage naturel"; part = 1; }
+  }
+  const need = Number(sc.budget_needed_fcfa) || 0;
+  const fin = noteBudgetV13(part == null ? need : need * part, ctx.budget_range);
+  const note = fin == null ? dec * 10 : 5 * dec + fin / 2;
+  const finTxt = fin == null ? "" : fin >= 9.5 ? " ; la première tranche tient dans le bas de votre fourchette"
+    : fin >= 6 ? " ; la première tranche tient dans votre fourchette" : " ; même la première tranche dépasse votre fourchette";
+  return { note, expl: `${dec >= 0.8 ? "Découpable" : "Peu découpable"} ${comment}${finTxt}.` };
+}
+// 6. SIMPLICITÉ CONSTRUCTIVE — étages portés par le niveau du dessous, dalles alignées
+function critStructureV13(sc, ctx) {
+  const PORTE = [[0.5, 0], [1, 10]];   // −2 par tranche de 10 % d'étage en porte-à-faux
+  const sup = (sc.geometry_checks_v12 || []).filter(c => c.code === "SUPERPOSITION" && c.level === "error");
+  if (sup.length) return { note: 0, a_corriger: "volumes superposés au même niveau",
+    expl: `${sup.length} superposition${sup.length > 1 ? "s" : ""} de volumes au même niveau : implantation incohérente, à corriger.` };
+  const g = sc.geom_v12;
+  if (g && g.appui) {
+    const part = Number(g.appui.part_portee);
+    const pf = Number(g.appui.porte_a_faux_m2) || 0;
+    const dec = (g.niveaux_decales || []).length;
+    const note = noteLineaireV13(isFinite(part) ? part : 1, PORTE) - (dec ? 2 : 0);
+    if (part >= 0.999 && !dec) return { note, expl: Number(g.appui.etages_m2) > 0
+      ? "Chaque étage repose sur le niveau du dessous : descente de charges directe." : "Volumes de plain-pied ou sur pilotis : structure directe." };
+    const pbs = [pf >= 0.5 ? `${Math.round(pf)} m² d'étage en porte-à-faux (${Math.round((1 - part) * 100)} % des étages)` : "",
+      dec ? `${dec} empilement${dec > 1 ? "s" : ""} avec des hauteurs d'étage différentes (dalles décalées)` : ""].filter(Boolean);
+    return { note, expl: `${pbs.join(" ; ")} : structure plus complexe et plus chère.`.replace(/^./, c => c.toUpperCase()) };
+  }
+  if (sc._v12_validated) return { note: null, expl: "Géométrie validée avant la grille actuelle : revalider l'implantation pour noter la structure." };
+  const lv = Number(sc.levels) || 1, rdc = Number(sc.fp_rdc_m2) || 0, et = Number(sc.fp_etages_m2) || 0;
+  const part = lv >= 2 && rdc > 0 && et > rdc ? rdc / et : 1;
+  return { note: noteLineaireV13(part, PORTE), expl: part >= 0.999
+    ? (lv >= 2 ? "Étages superposés au rez-de-chaussée : descente de charges directe." : "Bâtiment de plain-pied : structure directe.")
+    : `Étages plus larges que le rez-de-chaussée (${Math.round((1 - part) * 100)} % en porte-à-faux) : structure plus complexe.` };
+}
+// 7. STANDING — surfaces des logements face à la grille du standing, hauteur d'étage
+function critStandingV13(sc, ctx) {
+  const stdKey = standingGridKey(ctx.standing_level);
+  const g = sc.geom_v12;
+  const logts = g && Array.isArray(g.units) && g.units.length
+    ? g.units.filter(u => UNIT_SIZES_V73[u.type] && familleV13(u.type) === "logement").map(u => ({ type: u.type, count: 1, size_m2: Number(u.sdp_m2) || Number(u.area_m2) || 0 }))
+    : ScenarioModel.parseUnitMixDetail(sc.unit_mix_detail).filter(u => u.type in UNIT_SIZES_V73 && u.type !== "COMMERCE");
+  if (!logts.length) return { note: null, expl: "Pas de logement à comparer à la grille du standing : critère non noté." };
+  const num = logts.reduce((s, u) => s + u.count * u.size_m2, 0);
+  const den = logts.reduce((s, u) => s + u.count * (UNIT_SIZES_V73[u.type][stdKey] || UNIT_SIZES_V73[u.type].STANDARD), 0);
+  if (!(den > 0)) return { note: null, expl: "Grille de surfaces indisponible : critère non noté." };
+  const ratio = num / den;
+  let note = stdKey === "ECONOMIQUE" ? noteLineaireV13(ratio, [[0.6, 4], [0.8, 10]]) : noteLineaireV13(ratio, [[0.6, 2], [0.75, 6], [0.85, 8], [0.95, 10]]);
+  const hMin = g && g.hauteur_min_m != null ? Number(g.hauteur_min_m) : (Number(ctx.floor_height) || 3);
+  const seuil = stdKey === "HAUT" || stdKey === "PREMIUM" ? 3.0 : 2.7;
+  const basse = hMin < seuil - 0.005;
+  if (basse) note -= 2;
+  const verdict = note >= 9 ? "cohérent avec le standing visé" : note >= 6 ? "un peu en dessous du standing visé" : "en dessous du standing visé";
+  return { note, expl: `Surfaces des logements à ${Math.round(ratio * 100)} % de la grille ${standingLabelFr(ctx.standing_level)}${basse ? ` ; hauteur d'étage de ${hMin} m, sous les ${String(seuil).replace(".", ",")} m attendus` : ""} : ${verdict}.` };
+}
+const CRITERE_FN_V13 = { budget_fit: critBudgetV13, programme_match: critProgrammeV13, setback_encroachment: critRetraitsV13,
+  cos_conformity: critCosV13, phase_flexibility: critPhasageV13, structure_simplicity: critStructureV13, standing_match: critStandingV13 };
+
+// Score de chaque scénario (0-1) + détail par critère ; ctx : { feasibility_posture, budget_range,
+// target_surface_m2, target_units, standing_level, floor_height }
+function scoreScenariosV12(rr, ctx) {
+  const postureKey = postureKeyV13(ctx.feasibility_posture);
+  const W = SCORE_WEIGHTS_V13[postureKey];
+  for (const label of ["A", "B", "C"].filter(l => rr[l] && !rr[l].unsupported)) {
+    const sc = rr[label];
+    const res = {};
+    for (const c of CRITERES_V13) {
+      try { res[c.key] = CRITERE_FN_V13[c.key](sc, ctx) || { note: null, expl: "Critère non noté." }; }
+      catch (e) { console.warn(`[SCORE v13] ${label}/${c.key} : ${e.message}`); res[c.key] = { note: null, expl: "Critère non noté (donnée illisible)." }; }
+    }
+    const wSum = CRITERES_V13.filter(c => res[c.key].note != null).reduce((s, c) => s + W[c.key], 0) || 1;
     let total = 0;
     const detail = {};
-    for (const [k, [s, expl]] of Object.entries(parts)) {
-      const sClamped = clamp01(s);
-      total += sClamped * W[k];
-      detail[k] = { score: Math.round(sClamped * 100) / 100, poids: W[k], contribution: Math.round(sClamped * W[k] * 1000) / 1000, explication: expl };
+    for (const c of CRITERES_V13) {
+      const r = res[c.key];
+      const s = r.note == null ? null : clamp01(r.note / 10);
+      const poids = s == null ? 0 : W[c.key] / wSum;
+      if (s != null) total += s * poids;
+      detail[c.key] = { score: s == null ? null : Math.round(s * 100) / 100, poids: Math.round(poids * 1000) / 1000, poids_grille: W[c.key],
+        contribution: s == null ? 0 : Math.round(s * poids * 1000) / 1000, explication: r.expl, evalue: s != null, label: c.label };
     }
     detail.total = Math.round(total * 1000) / 1000;
     sc.recommendation_score = detail.total;
     sc.score_detail = detail;
-    sc.risque_v12 = { niveau: riskLevel, total: Math.round(risk.total * 100) / 100 };
+    sc.score_posture_v13 = postureKey;
+    sc.a_corriger_v13 = CRITERES_V13.map(c => res[c.key].a_corriger).filter(Boolean);
+    sc.eligible_v13 = sc.a_corriger_v13.length === 0;
+    sc.facade_aveugle_v13 = !!res.setback_encroachment.aveugle;
   }
 }
-// Meilleur score ; à égalité (< 0,5 point), l'ordre de préférence suit la posture du client
-// (prudente : C, B, A ; ambitieuse : A, B, C ; équilibrée : B, A, C) — jamais l'ordre alphabétique.
-function pickRecommendedV12(rr, posture) {
-  const p = String(posture || "").toUpperCase();
-  const order = /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(p) ? ["C", "B", "A"]
-    : /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(p) ? ["A", "B", "C"] : ["B", "A", "C"];
-  let best = null;
-  for (const l of order) {
-    const sc = rr[l];
-    if (!sc || sc.unsupported) continue;
-    if (!best || (Number(sc.recommendation_score) || 0) > (Number(rr[best].recommendation_score) || 0) + 0.005) best = l;
+// Total d'un scénario sous d'autres poids (mêmes critères notés, poids répartis de la même façon)
+function totalAvecPoidsV13(detail, W) {
+  let t = 0, s = 0;
+  for (const c of CRITERES_V13) {
+    const d = detail && detail[c.key];
+    if (!d || d.score == null) continue;
+    t += d.score * W[c.key]; s += W[c.key];
   }
-  best = best || "A";
-  for (const l of ["A", "B", "C"]) if (rr[l]) rr[l].recommended = l === best;
-  return best;
+  return s > 0 ? t / s : 0;
+}
+function choisirV13(rr, labels, order, scoreOf) {
+  const elig = labels.filter(l => rr[l].eligible_v13 !== false);
+  const pool = elig.length ? elig : labels;
+  const best = Math.max(...pool.map(scoreOf));
+  const proches = order.filter(l => pool.includes(l) && scoreOf(l) >= best - ECART_PROCHES_V13 - 1e-9);
+  return { rec: proches[0], proches, elig };
+}
+// Recommandation : meilleur scénario CONFORME ; sous 3 points d'écart, la posture départage ; test de
+// sensibilité (chaque poids ± 5 points) pour dire si la recommandation tient ou dépend des pondérations.
+function pickRecommendedV12(rr, posture) {
+  const order = postureOrderV13(posture);
+  const labels = order.filter(l => rr[l] && !rr[l].unsupported);
+  for (const l of ["A", "B", "C"]) if (rr[l]) { rr[l].recommended = false; delete rr[l].recommandation_v13; }
+  if (!labels.length) return "A";
+  const W = SCORE_WEIGHTS_V13[postureKeyV13(posture)];
+  const base = choisirV13(rr, labels, order, l => totalAvecPoidsV13(rr[l].score_detail, W));
+  const bascules = [];
+  for (const c of CRITERES_V13) for (const delta of [-0.05, 0.05]) {
+    const W2 = Object.assign({}, W, { [c.key]: Math.max(0, W[c.key] + delta) });
+    const alt = choisirV13(rr, labels, order, l => totalAvecPoidsV13(rr[l].score_detail, W2));
+    if (alt.rec !== base.rec) bascules.push({ critere: c.court, delta_points: Math.round(delta * 100), vers: alt.rec });
+  }
+  rr[base.rec].recommended = true;
+  rr[base.rec].recommandation_v13 = {
+    proches: base.proches.filter(l => l !== base.rec),
+    sous_reserve: base.elig.length === 0,
+    ecartes: base.elig.length ? labels.filter(l => !base.elig.includes(l)) : [],
+    robuste: bascules.length === 0,
+    bascules,
+    posture: postureKeyV13(posture),
+  };
+  return base.rec;
 }
 
 // ═══ v12.12 — CONSTATS STRUCTURÉS : faits vérifiés, seule base de la rédaction ═══
 // Chaque constat : { code, niveau: "bloquant"|"attention"|"info"|"atout", portee: "projet"|"A"|"B"|"C",
 // message (phrase prête à écrire), chiffres }. Rien n'est affirmé sans la donnée qui le prouve.
-const CRITERE_LABEL_V12 = { budget_fit: "budget", risk_alignment: "risque maîtrisé", cos_conformity: "conformité (COS, retraits)",
-  capacity_adequacy: "nombre d'unités face au besoin", cost_efficiency: "coût par unité", standing_match: "surfaces conformes au standing", phase_flexibility: "phasage" };
+const CRITERE_LABEL_V12 = Object.fromEntries(CRITERES_V13.map(c => [c.key, c.court]));
+// Conforme = recommandable (v13) : aucun débord côté rue / hors parcelle, COS tenu, pas de superposition
 function scenarioConformeV12(sc) {
-  const d = sc && sc.score_detail && sc.score_detail.cos_conformity;
-  return d ? d.score >= 0.5 : sc.cos_compliance !== "AMBITIEUX_HORS_COS";
+  if (sc && sc.eligible_v13 != null) return sc.eligible_v13;
+  return !!sc && sc.cos_compliance !== "AMBITIEUX_HORS_COS" && !(sc.geometry_checks_v12 || []).some(c => c.level === "error");
 }
 function scenarioForcesV12(sc, n) {
   const d = (sc && sc.score_detail) || {};
-  return Object.keys(CRITERE_LABEL_V12).filter(k => d[k] && d[k].score >= 0.8)
+  return Object.keys(CRITERE_LABEL_V12).filter(k => d[k] && d[k].score != null && d[k].score >= 0.8)
     .sort((a, b) => d[b].contribution - d[a].contribution).slice(0, n || 2).map(k => CRITERE_LABEL_V12[k]);
 }
 function scenarioFaiblesseV12(sc) {
   const d = (sc && sc.score_detail) || {};
-  const k = Object.keys(CRITERE_LABEL_V12).filter(x => d[x] && d[x].score < 0.6).sort((a, b) => d[a].score - d[b].score)[0];
+  const k = Object.keys(CRITERE_LABEL_V12).filter(x => d[x] && d[x].score != null && d[x].score < 0.6).sort((a, b) => d[a].score - d[b].score)[0];
   return k ? { critere: CRITERE_LABEL_V12[k], explication: d[k].explication } : null;
 }
 function buildFindingsV12(rr, ctx) {
@@ -2209,6 +2394,11 @@ function buildFindingsV12(rr, ctx) {
   for (const l of labels) {
     const sc = rr[l];
     for (const c of (sc.geometry_checks_v12 || []).filter(x => x.level === "error")) add("bloquant", l, c.code, `Scénario ${l} : ${c.message.split(" : ")[0]}.`);
+    // v13 — légal sous condition (façade aveugle) ou structure plus chère : à surveiller, pas bloquant
+    for (const c of (sc.geometry_checks_v12 || []).filter(x => x.level === "warning" && ["FACADE_AVEUGLE", "PORTE_A_FAUX", "NIVEAUX_DECALES"].includes(x.code)))
+      add("attention", l, c.code, `Scénario ${l} : ${c.message.replace(/\s*\(retrait [\d.,]+ m\)/g, "")}.`);
+    if (sc._v12_validated && !sc.geom_v12) add("attention", l, "A_REVALIDER",
+      `Scénario ${l} : implantation validée avant la grille de notation actuelle et modifiée depuis ; la revalider dans le cockpit pour noter retraits, structure et phasage.`);
     const lim = sc.sdp_limits_v12 || {};
     const empriseV12 = Math.max(Number(sc.fp_m2) || 0, Number(sc.emprise_sol_m2) || 0);
     if (!sc._v12_validated && lim.buildable_area != null && empriseV12 > Number(lim.buildable_area) + 0.5)
@@ -2221,7 +2411,7 @@ function buildFindingsV12(rr, ctx) {
     if (sc.budget_fit === "HORS_BUDGET") add("attention", l, "HORS_BUDGET",
       `Scénario ${l} : ${M(sc.cost_total_fcfa)} de travaux, au-dessus de votre fourchette${sc.budget_gap_pct > 0 ? ` de ${sc.budget_gap_pct} %` : ""}.`);
     const std = sc.score_detail && sc.score_detail.standing_match;
-    if (std && std.score < 0.6) add("attention", l, "SURFACES_COMPACTES", `Scénario ${l} : ${std.explication.charAt(0).toLowerCase()}${std.explication.slice(1)}`);
+    if (std && std.score != null && std.score < 0.6) add("attention", l, "SURFACES_COMPACTES", `Scénario ${l} : ${std.explication.charAt(0).toLowerCase()}${std.explication.slice(1)}`);
     if (sc.phase_2_v12 && sc.phase_2_v12.cost_fcfa) add("info", l, "PHASE_2",
       `Scénario ${l} : phase 1 à ${M(sc.cost_total_fcfa)}, phase 2 prévue à ${M(sc.phase_2_v12.cost_fcfa)} (coût final ${M(sc.cost_final_fcfa)}, prix actuels).`);
     if (!sc._v12_validated) add("info", l, "NON_VALIDE", `Scénario ${l} : implantation pas encore validée dans le cockpit (chiffres issus de la suggestion ou des réglages).`);
@@ -2232,14 +2422,19 @@ function buildFindingsV12(rr, ctx) {
     const forces = scenarioForcesV12(rr[rec], 2);
     const faible = scenarioFaiblesseV12(rr[rec]);
     const recScore = Math.round((rr[rec].recommendation_score || 0) * 100);
-    // v12.15 — égalité de score : dire que c'est la posture du client qui départage
-    const egaux = labels.filter(l => l !== rec && Math.round((rr[l].recommendation_score || 0) * 100) === recScore);
-    const p = String(ctx.posture || "").toUpperCase();
-    const postureTxt = /PRUDENT|CONSERVATIVE|DEFENSIVE?/.test(p) ? "prudente" : /AMBITIEUX|OFFENSIVE?|AGGRESSIVE/.test(p) ? "ambitieuse" : "équilibrée";
-    const egaliteTxt = egaux.length ? ` ; à égalité avec ${egaux.join(" et ")}, départagé par votre posture ${postureTxt}` : "";
-    add(scenarioConformeV12(rr[rec]) ? "atout" : "attention", rec, "RECOMMANDATION",
-      `Scénario ${rec} recommandé (${recScore}/100)${forces.length ? ` : points forts ${forces.join(" et ")}` : ""}${faible ? ` ; point faible : ${faible.critere}` : ""}${egaliteTxt}.`,
-      { score: rr[rec].recommendation_score, egalite_avec: egaux });
+    // v13 — scores proches (moins de 3 points) : c'est la posture du client qui départage ; recommandation
+    // sous réserve si aucun scénario n'est conforme ; sensibilité aux pondérations dite quand elle existe
+    const rv = rr[rec].recommandation_v13 || { proches: [], ecartes: [], sous_reserve: false, robuste: true, bascules: [] };
+    const egaux = rv.proches || [];
+    const postureTxt = { PRUDENTE: "prudente", AMBITIEUSE: "ambitieuse", EQUILIBREE: "équilibrée" }[rv.posture || postureKeyV13(ctx.posture)];
+    const egaliteTxt = egaux.length ? ` ; score proche de ${egaux.join(" et ")} (moins de 3 points d'écart), départagé par votre posture ${postureTxt}` : "";
+    const ecartesTxt = (rv.ecartes || []).length ? ` ; ${rv.ecartes.join(" et ")} ${rv.ecartes.length > 1 ? "écartés" : "écarté"} tant que ${rv.ecartes.length > 1 ? "leur implantation n'est pas corrigée" : "son implantation n'est pas corrigée"}` : "";
+    const reserveTxt = rv.sous_reserve ? " ; aucun scénario n'est conforme en l'état : recommandation sous réserve de corriger l'implantation" : "";
+    const b0 = (rv.bascules || [])[0];
+    const sensibleTxt = !egaux.length && b0 ? ` ; choix sensible aux pondérations (${b0.vers} passerait devant si le critère « ${b0.critere} » pesait ${Math.abs(b0.delta_points)} points de ${b0.delta_points > 0 ? "plus" : "moins"})` : "";
+    add(!rv.sous_reserve && scenarioConformeV12(rr[rec]) ? "atout" : "attention", rec, "RECOMMANDATION",
+      `Scénario ${rec} recommandé (${recScore}/100)${forces.length ? ` : points forts ${forces.join(" et ")}` : ""}${faible ? ` ; point faible : ${faible.critere}` : ""}${egaliteTxt}${ecartesTxt}${reserveTxt}${sensibleTxt}.`,
+      { score: rr[rec].recommendation_score, egalite_avec: egaux, proches: egaux, ecartes: rv.ecartes || [], sous_reserve: !!rv.sous_reserve, robuste: rv.robuste !== false, bascules: rv.bascules || [] });
   }
   const ordre = { bloquant: 0, attention: 1, atout: 2, info: 3 };
   return out.sort((a, b) => ordre[a.niveau] - ordre[b.niveau]);
@@ -4864,8 +5059,7 @@ function computeSmartScenarios({
     if (scoreDet && scoreDet.budget_fit) {
       const criteres = [];
       const labels = {
-        budget_fit: "Budget", risk_alignment: "Risque", cos_conformity: "Conformite COS",
-        capacity_adequacy: "Capacite", cost_efficiency: "Efficacite cout", standing_match: "Standing", phase_flexibility: "Phasabilite"
+        ...Object.fromEntries(CRITERES_V13.map(c => [c.key, c.label]))   // v13 : mêmes libellés que la grille
       };
       let bestCrit = "", bestVal = 0, bestExpl = "";
       let worstCrit = "", worstVal = 1, worstExpl = "";
@@ -4979,20 +5173,22 @@ function computeSmartScenarios({
   // capacity adequacy (15%), standing (10%), phase (10%)
   // v12.11 — scoring sur le contenu réel des scénarios (mêmes 7 critères et poids, cf. scoreScenariosV12).
   // Calculé ici sur la suggestion, puis recalculé après les réglages et géométries validées (fin de fonction).
-  const scoreCtxV12 = { feasibility_posture, target_units, standing_level, phase_score: phaseSc };
+  // v13 — grille de notation : fourchette de budget, surface visée, standing, hauteur d'étage, posture
+  const scoreCtxV12 = { feasibility_posture, target_units, target_surface_m2, standing_level, phase_score: phaseSc,
+    budget_range: budgetRangeV12, floor_height };
   scoreScenariosV12(r, scoreCtxV12);
   // Find best scenario (v12.11 : même règle avant et après réglages / géométries validées)
   let recommended = pickRecommendedV12(r, feasibility_posture);
+  // v13 — raison = points forts de la grille ; réserve si aucun scénario n'est conforme ; scores proches
   function recommendationReasonV12(rec) {
     const recSc = r[rec];
     const reasons = [];
-    if (recSc.budget_fit === "DANS_BUDGET") reasons.push("tient dans le bas de la fourchette budgetaire");
-    else if (recSc.budget_fit === "BUDGET_TENDU") reasons.push("tient dans le haut de la fourchette budgetaire");
-    if (recSc.cos_compliance === "CONFORME" && !(recSc.geometry_checks_v12 || []).some(c => c.level === "error")) reasons.push("conforme (COS et retraits)");
-    if (recSc.phase_2_v12) reasons.push("phasage prevu");
-    const units = Number(recSc.total_units) || 0;
-    if (units >= target_units * 0.85 && units <= target_units * 1.20) reasons.push("proche du besoin exprime");
-    return reasons.length > 0 ? reasons.join(", ") : "meilleur compromis multicritere";
+    if (!scenarioConformeV12(recSc)) reasons.push("sous reserve de corriger l'implantation");
+    const forces = scenarioForcesV12(recSc, 3);
+    if (forces.length) reasons.push(`points forts : ${forces.join(", ")}`);
+    const rv = recSc.recommandation_v13;
+    if (rv && rv.proches.length) reasons.push(`score proche de ${rv.proches.join(" et ")}, departage par la posture`);
+    return reasons.length > 0 ? reasons.join(" ; ") : "meilleur compromis multicritere";
   }
   let recommendation_reason = recommendationReasonV12(recommended);
   const meta = {
@@ -5498,6 +5694,7 @@ function applyConstraintsToScenarios(scenarios, constraints) {
         sc._v12_validated = true;
         sc.phase_2_v12 = null;
         sc.geometry_checks_v12 = ov.checks || [];
+        sc.geom_v12 = ov.geom || null;   // v13 — mesures de la grille de notation
         if (ov.sous_sols_m2 > 0 && typeof sc.cost_total_fcfa === "number") {
           sc.cost_total_fcfa += Math.round(ov.sous_sols_m2 * (Number(sc.cost_per_m2) || 0) * 1.05);
           sc.sous_sols_m2 = Math.round(ov.sous_sols_m2);
@@ -9236,7 +9433,14 @@ function buildTemplateTexts(flat, scenarios) {
     const geoErrV12 = (scObjV12.geometry_checks_v12 || []).filter(c => c.level === "error");
     const limV12 = scObjV12.sdp_limits_v12 || {};
     const horsZoneV12 = !scObjV12._v12_validated && limV12.buildable_area != null && empriseOf(sc) > Number(limV12.buildable_area) + 0.5;
-    if (geoErrV12.length) {
+    // v13 — débord sur un retrait latéral ou de fond : légal si la façade reste aveugle
+    const aveugleV12 = (scObjV12.geometry_checks_v12 || []).filter(c => c.code === "FACADE_AVEUGLE");
+    if (!geoErrV12.length && aveugleV12.length) {
+      const m2Av = aveugleV12.reduce((s, c) => s + (Number(c.m2) || Number((String(c.message).match(/(\d+)\s*m²/) || [])[1]) || 0), 0);
+      const nomsAv = aveugleV12.map(c => c.unit ? `« ${c.unit} »` : "").filter(Boolean).join(", ") || "une unité";
+      const plurielAv = aveugleV12.length > 1;
+      urbanismeBullet = `Implantation **conforme sous condition** : ${nomsAv} ${plurielAv ? "empiètent" : "empiète"} de **${m2Av} m²** sur un retrait latéral ou de fond, autorisé si ${plurielAv ? "ces façades restent aveugles" : "cette façade reste aveugle"} (sans fenêtre), au prix de la lumière et de la ventilation. Emprise à **${cosPct} %** du maximum autorisé par le COS.`;
+    } else if (geoErrV12.length) {
       const horsZoneErr = geoErrV12.filter(c => c.code === "HORS_ZONE_CONSTRUCTIBLE");
       const detailHZ = horsZoneErr.map(c => { const m = c.message.match(/«\s*([^»]+?)\s*»[^0-9]*(\d+)\s*m²/); return m ? `« ${m[1]} » ${m[2]} m²` : null; });
       const autresErr = geoErrV12.filter(c => c.code !== "HORS_ZONE_CONSTRUCTIBLE").map(c => c.message.split(" : ")[0]);
@@ -9337,7 +9541,11 @@ function buildTemplateTexts(flat, scenarios) {
   // Égalité en tête : la recommandation est départagée par la posture du client (constat RECOMMANDATION)
   const recConstatV12 = constatsV12.find(c => c.code === "RECOMMANDATION") || {};
   const egauxRecV12 = (recConstatV12.chiffres && recConstatV12.chiffres.egalite_avec) || [];
-  const egaliteRecTxt = egauxRecV12.length ? `, à égalité avec ${egauxRecV12.join(" et ")} et départagé par votre posture ${f("feasibility_posture_fr") || "équilibrée"}` : "";
+  const egaliteRecTxt = egauxRecV12.length ? `, à moins de 3 points de ${egauxRecV12.join(" et ")} et départagé par votre posture ${f("feasibility_posture_fr") || "équilibrée"}` : "";
+  // v13 — poids de la grille réellement appliqués (posture du client) : affichés tels quels dans le PPT
+  const grilleV13 = SCORE_WEIGHTS_V13[(recScV12 && recScV12.score_posture_v13) || postureKeyV13(f("feasibility_posture"))] || SCORE_WEIGHTS_V13.EQUILIBREE;
+  const grilleTxtV13 = CRITERES_V13.map(c => `${c.court} ${Math.round(grilleV13[c.key] * 100)} %`).join(" · ");
+  const sousReserveV12 = !!(recConstatV12.chiffres && recConstatV12.chiffres.sous_reserve);
   // ═══ BUILD ALL TEXT KEYS ═══
   const texts = {};
   // ── SLIDE 3: Introduction ──
@@ -9405,7 +9613,7 @@ function buildTemplateTexts(flat, scenarios) {
   // ── SLIDE 16: Arbitrage stratégique ──
   // Cross-ref aux 4 graphiques d'arbitrage
   // v74.12 — arbitrage clair : posture, scoring résumé, comparatif chiffré, recommandation directe
-  texts.strategic_arbitrage_text = `Programme **${f("program_main")}** en standing ${standingTxt}, posture **${f("feasibility_posture_fr")}**, enveloppe **${f("budget_fcfa")}**.\n**Score sur 100**, 7 critères pondérés : budget 25 % · risque 20 % · nombre d'unités 13 % · COS et retraits 12 % · coût par unité 12 % · phasage 10 % · surfaces 8 %.\n**Scores** : A **${f("A_score")}** · B **${f("B_score")}** · C **${f("C_score")}** — budget : A ${positionBudgetV12(scenarios && scenarios.A && scenarios.A.budget_fit)}, B ${positionBudgetV12(scenarios && scenarios.B && scenarios.B.budget_fit)}, C ${positionBudgetV12(scenarios && scenarios.C && scenarios.C.budget_fit)}.\n**Notre recommandation : Scénario ${rec} (${f("rec_score")}/100${egaliteRecTxt})** — points forts : ${forcesTxtV12}${recFaibleV12 ? ` ; point faible : ${recFaibleV12.critere}` : ""}.${pointsALeverV12}`;
+  texts.strategic_arbitrage_text = `Programme **${f("program_main")}** en standing ${standingTxt}, posture **${f("feasibility_posture_fr")}**, enveloppe **${f("budget_fcfa")}**.\n**Score sur 100**, 7 critères pondérés : ${grilleTxtV13} ; seul un scénario conforme peut être recommandé.\n**Scores** : A **${f("A_score")}** · B **${f("B_score")}** · C **${f("C_score")}** — budget : A ${positionBudgetV12(scenarios && scenarios.A && scenarios.A.budget_fit)}, B ${positionBudgetV12(scenarios && scenarios.B && scenarios.B.budget_fit)}, C ${positionBudgetV12(scenarios && scenarios.C && scenarios.C.budget_fit)}.\n**Notre recommandation : Scénario ${rec} (${f("rec_score")}/100${egaliteRecTxt})** — points forts : ${forcesTxtV12}${recFaibleV12 ? ` ; point faible : ${recFaibleV12.critere}` : ""}.${pointsALeverV12}`;
   // ── SLIDE 17: Conditions de réussite (donut chart à droite) ──
   // v74.19 — textes courts, bullets, bold sur chiffres et concepts clés
   texts.invisible_intro_text = `**Conditions de réussite** — maîtriser le coût, le phasage et les délais.`;
@@ -9435,7 +9643,7 @@ function buildTemplateTexts(flat, scenarios) {
   const recSdp = f(`${rec}_sdp`) || f("rec_sdp");
   // v12.12 — verdict fondé sur les constats (budget, conformité, forces et faiblesse du scénario)
   const recNivV12 = (parseInt(f("rec_levels")) || 0) + 1;
-  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² SDP** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${f("rec_cost_total")}**, ${recPositionV12} (**${f("budget_fcfa")}**)\n- **Conformité** : ${recConformeV12 ? "COS et retraits respectés" : "**implantation à reprendre** avant le permis"}\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
+  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² SDP** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${f("rec_cost_total")}**, ${recPositionV12} (**${f("budget_fcfa")}**)\n- **Conformité** : ${recConformeV12 ? (recScV12.facade_aveugle_v13 ? "conforme **si les façades en débord restent aveugles**" : "COS et retraits respectés") : "**implantation à reprendre** avant le permis"}${sousReserveV12 ? " (aucun scénario conforme en l'état : **recommandation sous réserve**)" : ""}\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
   texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** ${egauxRecV12.length ? `Score multicritère de **${f("rec_score")}/100**${egaliteRecTxt}` : `Meilleur score multicritère (**${f("rec_score")}/100**)`}, porté par : **${forcesTxtV12}**. Coût des travaux **${f("rec_cost_total")}** (${recPositionV12}) pour **${plural(parseInt(recUnits) || 0, "unité")} sur ${recSdp} m² SDP**, ${niveauxTxt(recNivV12)}.`;
   texts.conclusion_projection_text = `**Horizon de livraison** : études et permis (**4 à 7 mois** : APS, APD, étude de sol, instruction) puis chantier (**${f("rec_duree_chantier")}**), sous réserve d'obtention du permis dans les délais.\n\n**Calendrier optimal** :\n- Démarrage **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**`;
   console.log(`│ ✅ TEMPLATE ENGINE v2.0 PREMIUM: ${Object.keys(texts).length} textes générés (accents, conditionnel, cross-ref charts)`);
@@ -10768,16 +10976,13 @@ app.post("/generate-pptx", async (req, res) => {
       // et les sous-clés ont le suffixe _fcfa
       const vent = sc.cout_ventilation || {};
       const costTotal = sc.cost_total_fcfa || sc.estimated_cost || 0;
-      // Risk metrics: score_detail scores are 0.0–1.0 → convert to 0–100
-      const riskMetrics = {
-        budget_fit: Math.round(((sd.budget_fit || {}).score || 0.5) * 100),
-        complexite_structurelle: Math.round(((sd.risk_alignment || {}).score || 0.5) * 100),
-        risque_permis: Math.round(((sd.cos_conformity || {}).score || 0.5) * 100),
-        ratio_efficacite: Math.round(((sd.cost_efficiency || {}).score || 0.5) * 100),
-        densite_cos: Math.round(((sd.capacity_adequacy || {}).score || 0.5) * 100),
-        phasabilite: Math.round(((sd.phase_flexibility || {}).score || 0.5) * 100),
-        cout_m2: Math.round(((sd.standing_match || {}).score || 0.5) * 100),
-      };
+      // v13 — les 7 critères de la grille (0-100), dans l'ordre de la grille ; un critère non noté
+      // (donnée absente) n'apparaît pas sur le radar plutôt que d'y figurer avec une valeur inventée
+      const riskMetrics = {};
+      for (const c of CRITERES_V13) {
+        const d = sd[c.key];
+        if (d && d.score != null) riskMetrics[c.key] = Math.round(d.score * 100);
+      }
       // v72.93: Cost breakdown — 4 categories ALIGNED with template text
       // OLD: split gros_oeuvre into fondations+GO and merged VRD+lots_tech → mismatch with text
       // NEW: same 4 categories as text: GO, SO, Lots Tech, VRD
@@ -11270,7 +11475,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "12.17";
+const V12_ENGINE_VERSION = "13.0";   // v13 : grille de notation du 28/09/2026
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -11292,7 +11497,14 @@ function actualToScenarioOverride(actual) {
     units_detail: (actual.units || []).map(u => ({ type: u.type, size_m2: Math.round(Number(u.area_m2) || 0) })),
     sous_sols_m2: Number(actual.sous_sols_m2) || 0,
     // contrôles de la géométrie (retraits, superpositions, COS) : pris en compte par le scoring
-    checks: (actual.checks || []).map(c => ({ code: c.code, level: c.level, message: c.message })),
+    checks: (actual.checks || []).map(c => ({ code: c.code, level: c.level, message: c.message, unit: c.unit || null, m2: c.m2 != null ? c.m2 : null })),
+    // v13 — mesures de la grille de notation (absentes d'une géométrie validée avant la v13)
+    geom: Number(actual.geometry_version) >= 13 ? {
+      debord: actual.debord || null, appui: actual.appui || null, niveaux_decales: actual.niveaux_decales || [],
+      hauteur_min_m: actual.hauteur_min_m != null ? Number(actual.hauteur_min_m) : null,
+      cos_ratio_pct: actual.cos_ratio_pct != null ? Number(actual.cos_ratio_pct) : null,
+      units: (actual.units || []).map(u => ({ type: u.type, area_m2: u.area_m2, sdp_m2: u.sdp_m2, floors: u.floors, start_level: u.start_level, pilotis: !!u.pilotis })),
+    } : null,
     from_actual: true,
   };
 }
@@ -11429,6 +11641,12 @@ function scenarioModelView(letter, row, engineScenario, siteArea, lead) {
         score: e.recommendation_score != null ? Math.round(e.recommendation_score * 100) : null,
         score_detail: e.score_detail || null,
         recommended: !!e.recommended,
+        // v13 — conformité exigée pour être recommandé ; façade aveugle ; scores proches, sensibilité
+        a_corriger: e.a_corriger_v13 || [],
+        eligible: e.eligible_v13 !== false,
+        facade_aveugle: !!e.facade_aveugle_v13,
+        score_posture: e.score_posture_v13 || null,
+        recommandation: e.recommandation_v13 || null,
         unit_mix_detail: e.unit_mix_detail || null,
         // COS (vocabulaire de Jeremy) = occupation au sol : emprise au sol / terrain, et part de l'emprise permise
         cos: site > 0 && (e.emprise_sol_m2 || e.fp_m2) ? Math.round(((e.emprise_sol_m2 || e.fp_m2) / site) * 1000) / 1000 : null,
@@ -11494,6 +11712,43 @@ async function saveScenarioSet(sb, ref, hash, inputs, scenarios, rows, suggestio
   }
 }
 
+// v13 — géométries validées avant la grille v13 : leurs mesures (débords par nature, étages portés,
+// hauteurs) sont recalculées depuis les unités enregistrées, SEULEMENT si ces unités redonnent la même
+// géométrie (même SDP et même emprise, à 1 m² près) ; sinon le scénario garde ses chiffres et reste à revalider.
+async function upgradeActualsV13(sb, ref, p, rows, leadRules) {
+  const todo = ["A", "B", "C"].filter(k => rows[k] && rows[k].actual && Number(rows[k].actual.geometry_version || 0) < 13);
+  if (!todo.length || !(p.site_polygon || p.site_polygon_points)) return rows;
+  const { data, error } = await sb.from("sb_lead_units").select("scenario, unit_index, unit_type, unit_name, footprint_json").eq("lead_ref", ref);
+  if (error) { console.warn(`[V13] ${ref} : unités illisibles, mise à niveau reportée : ${error.message}`); return rows; }
+  const lc = parseLeadConstraints(stripLegacyOverrides(p));
+  const cosSol = (lc.regulatory && lc.regulatory.ignore_cos) ? 0 : ScenarioRules.cosSolForZone(p.zoning_type).value;
+  for (const k of todo) {
+    const units = (data || []).filter(u => String(u.scenario || "").toUpperCase() === k)
+      .sort((a, b) => (Number(a.unit_index) || 0) - (Number(b.unit_index) || 0))
+      .map(u => Object.assign({ unit_name: u.unit_name, unit_type: u.unit_type }, u.footprint_json || {}))
+      .filter(u => Array.isArray(u.polygon) && u.polygon.length >= 3);
+    if (!units.length) continue;
+    const g = SiteGeometry.scenarioActual(units, {
+      site_polygon: String(p.site_polygon || p.site_polygon_points || ""), segments: engineSegments(leadRules),
+      site_area: Number(p.site_area) || 0, cos_sol: cosSol,
+    });
+    const old = rows[k].actual;
+    if (Math.abs(g.sdp_m2 - Number(old.sdp_m2)) > 1 || Math.abs(g.emprise_sol_m2 - Number(old.emprise_sol_m2)) > 1) {
+      console.log(`[V13] ${ref}/${k} : géométrie modifiée depuis la validation (SDP ${old.sdp_m2} → ${g.sdp_m2}), à revalider dans le cockpit`);
+      continue;
+    }
+    const actual = Object.assign({}, old, {
+      geometry_version: 13, units: g.units, checks: g.checks, debord: g.debord, appui: g.appui, niveaux_decales: g.niveaux_decales,
+      hauteur_min_m: g.hauteur_min_m, outside_buildable_m2: g.outside_buildable_m2, cos_ratio_pct: g.cos_ratio_pct, occupation_sol_pct: g.occupation_sol_pct,
+    });
+    const { error: upErr } = await sb.from("sb_scenarios").update({ actual }).eq("lead_ref", ref).eq("scenario", k);
+    if (upErr) { console.warn(`[V13] ${ref}/${k} : mise à niveau non enregistrée : ${upErr.message}`); continue; }
+    rows[k] = Object.assign({}, rows[k], { actual });
+    console.log(`[V13] ${ref}/${k} : géométrie validée mise à niveau (débords, étages portés, hauteurs)`);
+  }
+  return rows;
+}
+
 // Relit le résultat du moteur si les entrées n'ont pas changé, sinon recalcule et enregistre.
 // p = body lead (déjà fusionné avec les overrides PIPELINE). force = recalcul systématique.
 async function getOrComputeScenarioSet(p, { force = false } = {}) {
@@ -11511,6 +11766,8 @@ async function getOrComputeScenarioSet(p, { force = false } = {}) {
     // Retraits du cockpit : à défaut, règle BARLO (le calcul reste possible, l'empreinte le distingue)
     try { leadRules = await loadLeadRules(sb, ref); }
     catch (e) { console.warn(`[V12] ${ref} : règles du terrain illisibles, règle par défaut : ${e.message}`); }
+    try { rows = await upgradeActualsV13(sb, ref, p, rows, leadRules); }
+    catch (e) { console.warn(`[V13] ${ref} : mise à niveau des géométries validées impossible : ${e.message}`); }
   }
   const inputs = scenarioEngineInputs(p, costOverridesFromRows(rows), leadRules, rows);
   const hash = ScenarioModel.hashInputs(inputs);

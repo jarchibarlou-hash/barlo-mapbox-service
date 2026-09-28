@@ -54,7 +54,15 @@ COLORS = {
 # (avant : « Densité COS » affichait la capacité, « Coût au m² » le standing, etc.).
 # Échelle 0-100 : 100 = favorable.
 RISK_LABELS_FR = {
+    # v13 — grille BARLO du 28/09/2026 (clés = critères envoyés par le serveur)
     'budget_fit':              'Budget',
+    'programme_match':         'Réponse au\nprogramme',
+    'setback_encroachment':    'Retraits',
+    'cos_conformity':          'Occupation\nau sol (COS)',
+    'phase_flexibility':       'Phasage',
+    'structure_simplicity':    'Simplicité\nconstructive',
+    'standing_match':          'Standing',
+    # anciennes clés (avant v13)
     'complexite_structurelle': 'Risque /\nposture',
     'risque_permis':           'Conformité\n(COS, retraits)',
     'ratio_efficacite':        'Efficacité\ncoût',
