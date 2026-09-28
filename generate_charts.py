@@ -57,8 +57,8 @@ RISK_LABELS_FR = {
     # v13 — grille BARLO du 28/09/2026 (clés = critères envoyés par le serveur)
     'budget_fit':              'Budget',
     'programme_match':         'Réponse au\nprogramme',
-    'setback_encroachment':    'Retraits',
-    'cos_conformity':          'Occupation\nau sol (COS)',
+    'setback_encroachment':    'Marges de recul',
+    'cos_conformity':          'Emprise\nau sol',
     'phase_flexibility':       'Phasage',
     'structure_simplicity':    'Simplicité\nconstructive',
     'standing_match':          'Standing',
@@ -948,7 +948,7 @@ SLOT_POS = {
 }
 BRAND_GREEN = '#1F5E55'
 # Libellés courts du radar (zone étroite) ; les barres voisines portent les libellés complets
-RADAR_SHORT = {'budget_fit': 'Budget', 'programme_match': 'Programme', 'setback_encroachment': 'Retraits', 'cos_conformity': 'COS',
+RADAR_SHORT = {'budget_fit': 'Budget', 'programme_match': 'Programme', 'setback_encroachment': 'Reculs', 'cos_conformity': 'Emprise',
                'phase_flexibility': 'Phasage', 'structure_simplicity': 'Structure', 'standing_match': 'Standing'}
 BRAND_PINK = '#E94B78'
 
@@ -1159,7 +1159,7 @@ def generate_comparatif_fit(scenarios, path):
     crit = [('Surface de plancher (SDP)', 'sdp_m2', 'm²', 'max'), ('Surface utile', 'surface_habitable_m2', 'm²', 'max'),
             ("Nombre d'unités", 'total_units', '', 'max'), ('Niveaux', 'levels', '', None),
             ('Coût des travaux', 'cost_total_fcfa', 'FCFA', 'min'), ('Coût au m² de SDP', 'cost_per_m2_sdp', 'FCFA', 'min'),
-            ('Score de la grille', 'recommendation_score', '/100', 'max'), ('Durée des travaux', 'duree_chantier_mois', 'mois', 'min'),
+            ('Note globale', 'recommendation_score', '/100', 'max'), ('Durée des travaux', 'duree_chantier_mois', 'mois', 'min'),
             ('Délai total du projet', 'duree_projet_mois', 'mois', 'min')]
     labels = ['A', 'B', 'C']
     rows = []
@@ -1250,7 +1250,7 @@ def generate_cost_calc_fit(sc, label, path):
     acc = COLORS.get(label, COLORS['dark'])
     fig = _fig('cost_calc')
     blocks = [(0.0, 0.3, f'{_sp(sdp)}', 'm² de surface de plancher', COLORS['light'], COLORS['dark']),
-              (0.35, 0.3, _m(cm2), 'FCFA / m² (VRD compris)', COLORS['light'], COLORS['dark']),
+              (0.35, 0.3, _m(cm2), 'FCFA / m² (raccordements compris)', COLORS['light'], COLORS['dark']),
               (0.70, 0.30, _m(total), 'FCFA de travaux', acc, 'white')]
     for x, w, big, small, fc, tc in blocks:
         ax = fig.add_axes([x + 0.005, 0.06, w - 0.01, 0.88])
@@ -1368,7 +1368,7 @@ def generate_recap_fit(sc, label, path):
     kpis = [('Surface de plancher', f"{_sp(sc.get('sdp_m2', 0) or 0)} m²"), ('Surface utile', f"{_sp(sc.get('surface_habitable_m2', 0) or 0)} m²"),
             ('Unités', f"{int(sc.get('total_units', 0) or 0)}"), ('Coût des travaux', f"{_m(sc.get('cost_total_fcfa', 0))} FCFA"),
             (f'Délai total, dont {trav} mois de travaux' if proj else 'Durée des travaux', f"{proj or trav} mois"),
-            ('Score de la grille', f"{int(sc.get('recommendation_score', 0) or 0)}/100")]
+            ('Note globale', f"{int(sc.get('recommendation_score', 0) or 0)}/100")]
     fig = _fig('recap_card')
     W, H = SLOTS['recap_card']
     ax = fig.add_axes([0, 0, 1, 1])
@@ -1390,10 +1390,10 @@ def generate_recap_fit(sc, label, path):
 
 # ── PPT premium : répartition des travaux d'un scénario (4,70 × 2,30) ───────────
 def generate_cost_donut_fit(sc, label, path):
-    parts = [('Gros œuvre et structure', float(sc.get('cost_gros_oeuvre_structure', 0) or 0), COLORS['pie_go']),
-             ('Second œuvre et finitions', float(sc.get('cost_second_oeuvre_finitions', 0) or 0), COLORS['pie_so']),
-             ('Lots techniques', float(sc.get('cost_lots_techniques', 0) or 0), COLORS['pie_lt']),
-             ('VRD et aménagements', float(sc.get('cost_vrd_amenagements', 0) or 0), COLORS['pie_vrd'])]
+    parts = [('Gros œuvre (structure)', float(sc.get('cost_gros_oeuvre_structure', 0) or 0), COLORS['pie_go']),
+             ('Finitions', float(sc.get('cost_second_oeuvre_finitions', 0) or 0), COLORS['pie_so']),
+             ('Installations techniques', float(sc.get('cost_lots_techniques', 0) or 0), COLORS['pie_lt']),
+             ('Raccordements et abords', float(sc.get('cost_vrd_amenagements', 0) or 0), COLORS['pie_vrd'])]
     tot = sum(v for _, v, _ in parts)
     if tot <= 0:
         return False
@@ -1415,7 +1415,7 @@ def generate_cost_donut_fit(sc, label, path):
         fig.patches.append(FancyBboxPatch((x0, yy - 0.04), 0.022, 0.08, boxstyle='round,pad=0.002', transform=fig.transFigure, fc=c, ec='none'))
         fig.text(x0 + 0.035, yy, nm, ha='left', va='center', fontsize=6.6, color=COLORS['text'])
         fig.text(0.99, yy, f'{v / tot * 100:.0f} %  ·  {_m(v)}', ha='right', va='center', fontsize=7, fontweight='bold', color=COLORS['dark'])
-    fig.text(x0, 0.03, 'Montants en FCFA, travaux et VRD compris', ha='left', va='bottom', fontsize=5.4, color=COLORS['muted'], fontstyle='italic')
+    fig.text(x0, 0.03, 'Montants en FCFA, raccordements extérieurs compris', ha='left', va='bottom', fontsize=5.4, color=COLORS['muted'], fontstyle='italic')
     _save_exact(fig, path)
     return True
 
