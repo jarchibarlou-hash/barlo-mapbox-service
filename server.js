@@ -11178,6 +11178,11 @@ app.post("/generate-pptx", async (req, res) => {
     }
     // Step 6: Return PPTX file
     const pptxBuffer = fs.readFileSync(outputPath);
+    // v13.1 — diagnostic des planches (données envoyées, lignes [PLAN] de Python), lisible sans les journaux
+    try {
+      const planLines = pyOutput.split("\n").filter(l => /\[PLAN/.test(l)).join(" | ").slice(0, 1500);
+      res.setHeader("X-Barlo-Plans", encodeURIComponent(`data=${plansV13 ? Object.keys(plansV13).join("") : "aucune"} ; ${planLines}`));
+    } catch (_) {}
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     res.setHeader("Content-Disposition", `attachment; filename="diagnostic_${p.client_name || "barlo"}.pptx"`);
     res.send(pptxBuffer);
