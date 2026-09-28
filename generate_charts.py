@@ -936,6 +936,7 @@ SLOTS = {
     'budget_gauge': (9.00, 1.00),   # slides 7/10/13
     'timeline':     (9.50, 2.20),   # slide 19 : calendrier études + permis + travaux
     'recap_card':   (9.50, 1.30),   # slide 20
+    'donut':        (4.70, 2.30),   # PPT premium : répartition des travaux par scénario
 }
 # Positions (pouces) des graphiques posés hors emplacement du modèle
 SLOT_POS = {
@@ -965,13 +966,19 @@ def _save_exact(fig, path):
     plt.close(fig)
 
 
+def _r(x):
+    """Arrondi commercial (0,5 → au-dessus), comme Math.round côté serveur : 262 500 → 263 k partout."""
+    x = float(x or 0)
+    return int(x + 0.5) if x >= 0 else -int(-x + 0.5)
+
+
 def _m(v):
     v = float(v or 0)
-    return f"{v / 1e6:.0f} M" if v >= 1e6 else (f"{v / 1e3:.0f} k" if v >= 1e3 else f"{v:.0f}")
+    return f"{_r(v / 1e6)} M" if v >= 1e6 else (f"{_r(v / 1e3)} k" if v >= 1e3 else f"{_r(v)}")
 
 
 def _sp(n):
-    return f'{int(round(n)):,}'.replace(',', ' ')
+    return f'{_r(n):,}'.replace(',', ' ')
 
 
 # ── Slides 8/11/14 : radar, jauge, barres (3,30 × 2,35 chacun) ──────────────────
@@ -1379,6 +1386,38 @@ def generate_recap_fit(sc, label, path):
         ax.text(x + bw / 2, 0.55, val, ha='center', va='center', fontsize=10, fontweight='bold', color=COLORS['dark'])
         ax.text(x + bw / 2, 0.27, lab, ha='center', va='center', fontsize=(6.5 if len(lab) < 24 else 5.6), color=COLORS['muted'])
     _save_exact(fig, path)
+
+
+# ── PPT premium : répartition des travaux d'un scénario (4,70 × 2,30) ───────────
+def generate_cost_donut_fit(sc, label, path):
+    parts = [('Gros œuvre et structure', float(sc.get('cost_gros_oeuvre_structure', 0) or 0), COLORS['pie_go']),
+             ('Second œuvre et finitions', float(sc.get('cost_second_oeuvre_finitions', 0) or 0), COLORS['pie_so']),
+             ('Lots techniques', float(sc.get('cost_lots_techniques', 0) or 0), COLORS['pie_lt']),
+             ('VRD et aménagements', float(sc.get('cost_vrd_amenagements', 0) or 0), COLORS['pie_vrd'])]
+    tot = sum(v for _, v, _ in parts)
+    if tot <= 0:
+        return False
+    W, H = SLOTS['donut']
+    fig = _fig('donut')
+    side = H * 0.92 / W
+    ax = fig.add_axes([0.01, 0.04, side, 0.92])
+    ax.pie([v for _, v, _ in parts], colors=[c for _, _, c in parts], startangle=90, counterclock=False,
+           wedgeprops=dict(width=0.33, edgecolor='white', linewidth=1.6))
+    ax.set_aspect('equal')
+    total = float(sc.get('cost_total_fcfa', 0) or 0) or tot
+    ax.text(0, 0.1, _m(total), ha='center', va='center', fontsize=14, fontweight='bold', color=COLORS['dark'])
+    ax.text(0, -0.2, 'FCFA de travaux', ha='center', va='center', fontsize=5.8, color=COLORS['muted'])
+    x0 = 0.01 + side + 0.05
+    fig.text(x0, 0.88, 'Répartition des travaux', ha='left', va='center', fontsize=8.2, fontweight='bold', color=COLORS['dark'])
+    fig.text(x0, 0.77, f'Scénario {label}', ha='left', va='center', fontsize=6.6, color=COLORS['muted'])
+    for i, (nm, v, c) in enumerate(parts):
+        yy = 0.6 - i * 0.155
+        fig.patches.append(FancyBboxPatch((x0, yy - 0.04), 0.022, 0.08, boxstyle='round,pad=0.002', transform=fig.transFigure, fc=c, ec='none'))
+        fig.text(x0 + 0.035, yy, nm, ha='left', va='center', fontsize=6.6, color=COLORS['text'])
+        fig.text(0.99, yy, f'{v / tot * 100:.0f} %  ·  {_m(v)}', ha='right', va='center', fontsize=7, fontweight='bold', color=COLORS['dark'])
+    fig.text(x0, 0.03, 'Montants en FCFA, travaux et VRD compris', ha='left', va='bottom', fontsize=5.4, color=COLORS['muted'], fontstyle='italic')
+    _save_exact(fig, path)
+    return True
 
 
 def generate_all_charts(data: dict, output_dir: str) -> dict:
