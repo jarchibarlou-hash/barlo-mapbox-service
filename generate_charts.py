@@ -1185,14 +1185,15 @@ def generate_comparatif_fit(scenarios, path):
         yb = top - (i + 2) * rh
         bg = 'white' if i % 2 == 0 else COLORS['light']
         nums = [(k, float(v)) for k, v in enumerate(vals) if isinstance(v, (int, float))]
-        bi = None
+        bests = set()   # toutes les valeurs les plus favorables (égalités comprises) ; aucune si tout est égal
         if best and len(nums) >= 2 and len({v for _, v in nums}) > 1:
-            bi = (max if best == 'max' else min)(nums, key=lambda t: t[1])[0]
+            bv = (max if best == 'max' else min)(v for _, v in nums)
+            bests = {k for k, v in nums if abs(v - bv) < 1e-9}
         ax.add_patch(FancyBboxPatch((cols_x[0], yb), col_w[0] - 0.06, rh - 0.04, boxstyle='round,pad=0.008', fc=bg, ec=COLORS['grid'], lw=0.5))
         ax.text(cols_x[0] + 0.12, yb + rh / 2 - 0.02, name, ha='left', va='center', fontsize=fs, fontweight='bold', color=COLORS['text'])
         for k, v in enumerate(vals):
             j = k + 1
-            good = k == bi
+            good = k in bests
             ax.add_patch(FancyBboxPatch((cols_x[j], yb), col_w[j] - 0.06, rh - 0.04, boxstyle='round,pad=0.008', fc=('#E8F5E9' if good else bg),
                                         ec=(COLORS['green'] if good else COLORS['grid']), lw=(1.0 if good else 0.5)))
             if isinstance(v, (int, float)):
