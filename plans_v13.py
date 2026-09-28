@@ -202,11 +202,12 @@ def _draw_plan(ax, d, cut, w_in, h_in):
         area = abs(_area_signed(u['poly']))
         name = '\n'.join(textwrap.wrap(str(u.get('name') or u.get('type') or ''), 13)[:2])
         ax.text(lx, ly, f"{name}\n{_fr(area, 0)} m²" + ('\nsur pilotis' if pil else ''), fontsize=(6.2 if rad >= 1.4 else 5.2),
-                color=('white' if not pil else INK), fontweight='bold', ha='center', va='center', zorder=8, family=FONT, linespacing=1.1)
+                color=('white' if not pil else INK), fontweight='bold', ha='center', va='center', zorder=8, family=FONT, linespacing=1.1,
+                bbox=dict(boxstyle='round,pad=0.15', fc=(u['color'] if not pil else 'white'), ec='none', alpha=0.9))
     # ligne de coupe A–A'
     if cut:
         (p0, p1) = cut['plan_line']
-        ax.plot([p0[0], p1[0]], [p0[1], p1[1]], color=PINK, lw=1.0, ls=(0, (6, 2, 1.5, 2)), zorder=9)
+        ax.plot([p0[0], p1[0]], [p0[1], p1[1]], color=PINK, lw=1.0, ls=(0, (6, 2, 1.5, 2)), zorder=7)   # sous les étiquettes
         for pt, lab in ((p0, 'A'), (p1, "A'")):
             ax.text(pt[0], pt[1], lab, fontsize=6.3, color='white', fontweight='bold', ha='center', va='center', zorder=10,
                     family=FONT, bbox=dict(boxstyle='circle,pad=0.2', fc=PINK, ec='none'))
