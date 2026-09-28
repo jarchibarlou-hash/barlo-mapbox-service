@@ -63,7 +63,25 @@ test("coquilles et renvois fragiles", () => {
   const { t } = render();
   const all = Object.values(t).join("\n");
   assert.doesNotMatch(all, /\/m²\/m²|en slide \d|slide 1\d\)|unité\(s\)|economique|equilibree/);
-  assert.match(t.scenario_A_risk_text, /3 unités empiètent sur les retraits/);
+  assert.match(t.scenario_A_risk_text, /trois unités débordent sur les marges de recul/);
+});
+
+// v13.5 — encadrés rédigés pour le client : pas de nom d'outil, pas de sigle non expliqué, unités situées
+test("lecture financière et exposition : lisibles sans jargon", () => {
+  const { t } = render();
+  for (const k of ["A", "B", "C"]) {
+    const txt = t[`scenario_${k}_financial_text`] + "\n" + t[`scenario_${k}_risk_text`];
+    assert.doesNotMatch(txt, /BARLO|grille|\bSDP\b|\bVRD\b|\bCOS\b|\bAPS\b|\bAPD\b|maîtrise d'œuvre|lots techniques|empiète/, k);
+    assert.match(t[`scenario_${k}_financial_text`], /^\*\*Coût estimé des travaux : \d+ M FCFA\*\*/, k);
+  }
+  assert.match(t.scenario_A_risk_text, /Le plan est à corriger avant le dépôt du permis de construire/);
+  // géométrie v13 (niveaux connus) : chaque unité citée avec son niveau et sa surface
+  const a = JSON.parse(JSON.stringify(ROWS.A));
+  Object.assign(a.actual, { geometry_version: 13, debord: { total_m2: 47, rue_m2: 0, limite_m2: 47, hors_parcelle_m2: 0, a_corriger: true, rue_indiquee: false } });
+  a.actual.units.forEach(u => Object.assign(u, { floors: 1, start_level: 0, sdp_m2: u.area_m2 }));
+  a.actual.checks.forEach((c, i) => Object.assign(c, { unit: a.actual.units[i].name, m2: [19, 13, 15][i] }));
+  const t13 = renderLead(LEAD, { A: a });
+  assert.match(t13.scenario_A_risk_text, /Commerce \(RDC · 36 m²\) sur 19 m²/, t13.scenario_A_risk_text);
 });
 
 test("recommandation à égalité : dite, pas « meilleur score »", () => {

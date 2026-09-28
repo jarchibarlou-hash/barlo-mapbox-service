@@ -9439,127 +9439,140 @@ function buildTemplateTexts(flat, scenarios) {
     // v12.17 — mitoyenneté et exposition sont communes aux trois scénarios : dites une fois (slide 5)
     return `Le **Scénario ${sc}** ${philosophieDe(sc)}.\n\n**${plural(units, "unité")}** sur **${sdp} m² SDP** — bâtiment **${niveauxTxt(totalNiv)}**, ${surfTxt}, ${empriseText}.\n\n${narrativeArchi}\n\n**Programme :**\n${unitBullets}`;
   }
-  // ── Scenario financial builder (slides 7/10/13) ──
-  // Directive BARLO : "EXPLIQUER DE FAÇON ACCESSIBLE LE RAISONNEMENT DES CALCULS",
-  //                   "TOUJOURS PARLER AU CONDITIONNEL", "MONTRER LES RATIOS"
+  // ── Lecture financière (slides 7/10/13) ──
+  // v13.5 (Jeremy, 29/09) : rédigé pour le client — des phrases, des ordres de grandeur, sans jargon ni nom d'outil
+  const cap1TT = x => String(x || "").replace(/^./, ch => ch.toUpperCase());
+  const pourStanding = /standing/.test(standingTxt) ? `de ${standingTxt}` : `de standing ${standingTxt}`;
+  const milliersTT = v => String(Math.round((Number(v) || 0) / 1000) * 1000).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const mFcfaTT = v => `${Math.round((Number(v) || 0) / 1e6)} M FCFA`;
+  const fourchetteTT = () => String(f("budget_fcfa") || "").replace(/\s*[–-]\s*/, " à ");
   function buildFinancial(sc) {
-    const standing = standingTxt;
-    const city = f("city");
-    const sdp = f(`${sc}_sdp`);
-    const costM2 = String(f(`${sc}_cost_m2`)).replace(/\/m²$/, "");
-    const gridM2 = Number(scObj(sc).market_cost_per_m2) || 0, appliedM2 = Number(scObj(sc).cost_per_m2) || 0;
-    const marcheTxt = gridM2 > 0 && appliedM2 > 0 && Math.abs(appliedM2 - gridM2) / gridM2 > 0.1
-      ? `coût au m² retenu pour ce scénario (**${Math.round(appliedM2 / 1000)}k FCFA/m²**) ${appliedM2 > gridM2 ? "au-dessus" : "en dessous"} de la grille BARLO pour un standing ${standing} (${Math.round(gridM2 / 1000)}k FCFA/m²)`
-      : `dans la grille BARLO pour un standing ${standing} à ${city}`;
-    const nbUnitsFin = parseInt(f(`${sc}_units`)) || 0;
-    const costTotal = f(`${sc}_cost_total`);
-    const ventGo = f(`${sc}_ventil_go`);
-    const ventGoPct = f(`${sc}_ventil_go_pct`);
-    const ventSo = f(`${sc}_ventil_so`);
-    const ventSoPct = f(`${sc}_ventil_so_pct`);
-    const ventLt = f(`${sc}_ventil_lt`);
-    const ventLtPct = f(`${sc}_ventil_lt_pct`);
-    const ventVrd = f(`${sc}_ventil_vrd`);
-    const ventVrdPct = f(`${sc}_ventil_vrd_pct`);
-    const fourchette = f(`${sc}_fourchette_text`);
-    const honoBas = f(`${sc}_hono_bas_M`);
-    const honoHaut = f(`${sc}_hono_haut_M`);
-    const honoTauxBas = f(`${sc}_hono_taux_bas`);
-    const honoTauxHaut = f(`${sc}_hono_taux_haut`);
-    const budgetFcfa = f("budget_fcfa");
-    const budgetFit = tradBudgetFit(f(`${sc}_budget_fit`));
-    const costUnit = f(`${sc}_cost_unit`);
-    const units = f(`${sc}_units`);
-    // v74.16 — texte allégé : les 2 charts (calc + gauge) portent l'info chiffrée
-    // Le texte reste pour la ventilation par lot, le coût/unité, les honoraires
-    return `**${costM2}/m² de SDP** (travaux et VRD) — ${marcheTxt}.\n\n**Répartition des travaux** : gros œuvre et structure ${ventGoPct} · second œuvre et finitions ${ventSoPct} · lots techniques ${ventLtPct} · VRD ${ventVrdPct}.\n\n**Coût par unité** : ${costUnit} (${costTotal} ÷ ${plural(nbUnitsFin, "unité")}). **Honoraires de maîtrise d'œuvre** : ${honoBas}M à ${honoHaut}M FCFA (${honoTauxBas} à ${honoTauxHaut} des travaux), en plus du coût des travaux.\n\nLes graphiques ci-dessous détaillent le calcul et la position face à votre fourchette de **${budgetFcfa}**. Chiffres à affiner en APS / APD.`;
+    const so = scObj(sc);
+    const city = f("city") || "Douala";
+    const total = Number(so.cost_total_fcfa) || 0;
+    const sdp = parseInt(f(`${sc}_sdp`)) || Number(so.sdp_m2) || 0;
+    const m2Tout = Number(so.cost_per_m2_sdp) || (sdp > 0 ? total / sdp : 0);
+    const gridM2 = Number(so.market_cost_per_m2) || 0, appliedM2 = Number(so.cost_per_m2) || 0;
+    const ecart = gridM2 > 0 && appliedM2 > 0 ? Math.round((appliedM2 - gridM2) / gridM2 * 100) : 0;
+    const prixTxt = Math.abs(ecart) > 10
+      ? `Le prix de construction retenu (${milliersTT(appliedM2)} FCFA/m²) est ${ecart > 0 ? "supérieur" : "inférieur"} d'environ ${Math.abs(ecart)} % aux prix courants à ${city} pour une construction ${pourStanding} (environ ${milliersTT(gridM2)} FCFA/m²).`
+      : `C'est un niveau de prix courant à ${city} pour une construction ${pourStanding}.`;
+    const pct = k => String(f(`${sc}_ventil_${k}_pct`) || "").replace(/(\d)\s*%/, "$1 %");
+    const repartition = pct("go") && pct("so")
+      ? `Le gros œuvre (fondations, structure, murs) en représente ${pct("go")}, les finitions ${pct("so")}, les installations techniques (électricité, plomberie) ${pct("lt")} et les raccordements et abords extérieurs ${pct("vrd")}.`
+      : "";
+    const nbUnits = parseInt(f(`${sc}_units`)) || 0;
+    const parUnite = nbUnits > 1 && total > 0 ? `Cela représente environ ${mFcfaTT(total / nbUnits)} par unité. ` : "";
+    const hb = parseInt(f(`${sc}_hono_bas_M`)) || 0, hh = parseInt(f(`${sc}_hono_haut_M`)) || 0;
+    const tb = String(f(`${sc}_hono_taux_bas`) || "10%").replace(/\s*%$/, ""), th = String(f(`${sc}_hono_taux_haut`) || "15%").replace(/\s*%$/, "");
+    const hono = hh > 0
+      ? `S'y ajoutent les honoraires de l'architecte et des ingénieurs (conception, permis, suivi du chantier) : ${hb === hh ? hb : `${hb} à ${hh}`} M FCFA, soit ${tb} à ${th} % des travaux. `
+      : "";
+    return `**Coût estimé des travaux : ${mFcfaTT(total)}**, soit environ ${milliersTT(m2Tout)} FCFA par m² de plancher, raccordements extérieurs compris. ${prixTxt}`
+      + (repartition ? `\n\n${repartition}` : "")
+      + `\n\n${parUnite}${hono}Ces montants sont des ordres de grandeur, à préciser pendant les études de conception.`;
   }
-  // ── Scenario risk builder (slides 8/11/14) ──
-  // Directive BARLO : "ÊTRE SPÉCIFIQUE SUR LES RISQUES, pas de phrase générique"
-  // Cross-ref : radar, gauge, barres horizontales
+  // ── Exposition et fragilités (slides 8/11/14) ──
+  // v13.5 : une phrase par sujet, sans code ni sigle ; chaque unité citée avec son niveau et sa surface
+  const lvNameTT = k => k <= 0 ? "RDC" : `R+${k}`;
+  function uniteTT(sc, nom) {   // « Cabinet d'avocat (RDC · 49 m²) »
+    const g = scObj(sc).geom_v12, u = g && Array.isArray(g.units) ? g.units.find(x => x.name === nom) : null;
+    if (!u) return nom;
+    const fl = Math.max(1, Number(u.floors) || 1), st = Number(u.start_level) || 0;
+    const niv = fl > 1 ? `${lvNameTT(st)} à ${lvNameTT(st + fl - 1)}` : lvNameTT(st);
+    return `${nom} (${niv} · ${Math.round(Number(u.area_m2) || 0)} m²)`;
+  }
+  const nombreTT = k => ["", "une", "deux", "trois", "quatre", "cinq", "six"][k] || String(k);
+  const listeTT = arr => arr.length <= 1 ? (arr[0] || "") : `${arr.slice(0, -1).join(", ")} et ${arr[arr.length - 1]}`;
   function buildRisk(sc) {
-    const score = f(`${sc}_score`);
-    const cosPct = f(`${sc}_cos_pct`);
-    const cosRegl = f("site_cos_regl");
-    const m2Logt = f(`${sc}_m2_par_logt`);
-    const budgetFit = tradBudgetFit(f(`${sc}_budget_fit`));
-    const parking = parkingText(sc);
-    const units = f(`${sc}_units`);
-    const levels = f(`${sc}_levels`);
-    const standing = standingTxt;
-    const profil = qualifProfil(score);
-    const risqueCompacite = qualifRisqueCompacite(m2Logt);
-    const sdp = f(`${sc}_sdp`);
-    const sdpMax = f("site_sdp_max");
-    const costTotal = f(`${sc}_cost_total`);
-    const budgetFcfa = f("budget_fcfa");
-    // v74.28 — Push 8 : adoucir le ton COS si dérogation assumée par le client
+    const so = scObj(sc);
+    const score = parseInt(f(`${sc}_score`)) || Math.round((Number(so.recommendation_score) || 0) * 100);
+    const cosPct = parseInt(f(`${sc}_cos_pct`)) || 0;
+    const checks = so.geometry_checks_v12 || [];
+    const geoErr = checks.filter(c => c.level === "error");
+    const lim = so.sdp_limits_v12 || {};
+    const emprise = empriseOf(sc);
+    const autorise = parseInt(f("site_emprise_max")) || 0;
+    const horsZone = !so._v12_validated && lim.buildable_area != null && emprise > Number(lim.buildable_area) + 0.5;
     const ignoreCos = String(f("override_ignore_cos")).toUpperCase() === "Y";
     const cosCompliance = String(f(`${sc}_cos_compliance`) || "").toUpperCase();
-    const cosPctNum = parseInt(cosPct) || 0;
-    let urbanismeBullet;
-    // v12.12 — conformité réelle : erreurs de la géométrie validée, emprise hors zone constructible
-    const scObjV12 = (scenarios && scenarios[sc]) || {};
-    const geoErrV12 = (scObjV12.geometry_checks_v12 || []).filter(c => c.level === "error");
-    const limV12 = scObjV12.sdp_limits_v12 || {};
-    const horsZoneV12 = !scObjV12._v12_validated && limV12.buildable_area != null && empriseOf(sc) > Number(limV12.buildable_area) + 0.5;
-    // v13 — débord sur un retrait latéral ou de fond : légal si la façade reste aveugle
-    const aveugleV12 = (scObjV12.geometry_checks_v12 || []).filter(c => c.code === "FACADE_AVEUGLE");
-    if (!geoErrV12.length && aveugleV12.length) {
-      const m2Av = aveugleV12.reduce((s, c) => s + (Number(c.m2) || Number((String(c.message).match(/(\d+)\s*m²/) || [])[1]) || 0), 0);
-      const nomsAv = aveugleV12.map(c => c.unit ? `« ${c.unit} »` : "").filter(Boolean).join(", ") || "une unité";
-      const plurielAv = aveugleV12.length > 1;
-      urbanismeBullet = `Implantation **conforme sous condition** : ${nomsAv} ${plurielAv ? "empiètent" : "empiète"} de **${m2Av} m²** sur un retrait latéral ou de fond, autorisé si ${plurielAv ? "ces façades restent aveugles" : "cette façade reste aveugle"} (sans fenêtre), au prix de la lumière et de la ventilation. Emprise à **${cosPct} %** du maximum autorisé par le COS.`;
-    } else if (geoErrV12.length) {
-      const horsZoneErr = geoErrV12.filter(c => c.code === "HORS_ZONE_CONSTRUCTIBLE");
-      const detailHZ = horsZoneErr.map(c => { const m = c.message.match(/«\s*([^»]+?)\s*»[^0-9]*(\d+)\s*m²/); return m ? `« ${m[1]} » ${m[2]} m²` : null; });
-      const autresErr = geoErrV12.filter(c => c.code !== "HORS_ZONE_CONSTRUCTIBLE").map(c => c.message.split(" : ")[0]);
-      const hzTxt = horsZoneErr.length > 1 && detailHZ.every(Boolean)
-        ? [`${horsZoneErr.length} unités empiètent sur les retraits (${detailHZ.join(", ")})`]
-        : horsZoneErr.map(c => c.message.split(" : ")[0]);
-      urbanismeBullet = `Implantation **non conforme en l'état** : ${hzTxt.concat(autresErr).join(" ; ")}. À corriger avant le dépôt du permis.`;
-    } else if (horsZoneV12) {
-      urbanismeBullet = `Emprise de **${empriseOf(sc)} m²** supérieure à la zone constructible (**${limV12.buildable_area} m²** après retraits) : implantation à reprendre.`;
-    } else if (ignoreCos && cosPctNum > 100) {
-      urbanismeBullet = `COS à **${cosPct} %** du maximum autorisé — **dérogation assumée** par le client (déjà discutée avec la maîtrise d'ouvrage). À instruire en phase permis.`;
+    const debordOf = c => {   // nom et m² d'un débord (champs du contrôle, sinon lus dans le message)
+      if (c.unit) return { nom: c.unit, m2: Math.round(Number(c.m2) || 0) };
+      const m = String(c.message || "").match(/«\s*([^»]+?)\s*»[^0-9]*(\d+)\s*m²/);
+      return m ? { nom: m[1], m2: parseInt(m[2]) } : null;
+    };
+    let implantation;
+    const aveugles = checks.filter(c => c.code === "FACADE_AVEUGLE").map(debordOf).filter(Boolean);
+    if (geoErr.length) {
+      const phrases = [];
+      const hz = geoErr.filter(c => c.code === "HORS_ZONE_CONSTRUCTIBLE").map(debordOf).filter(Boolean);
+      if (hz.length) {
+        const items = hz.map(d => `${uniteTT(sc, d.nom)} sur ${d.m2} m²`);
+        phrases.push(hz.length > 1
+          ? `${nombreTT(hz.length)} unités débordent sur les marges de recul à respecter par rapport aux limites du terrain : ${listeTT(items)}`
+          : `une unité déborde sur les marges de recul à respecter par rapport aux limites du terrain : ${items[0]}`);
+      }
+      if (geoErr.some(c => c.code === "COS_DEPASSE"))
+        phrases.push(`l'emprise au sol atteint ${emprise} m²${autorise ? ` pour ${autorise} m² autorisés sur ce terrain` : ", au-delà du maximum autorisé"}`);
+      for (const c of geoErr.filter(c => c.code === "SUPERPOSITION"))
+        phrases.push(`deux unités se chevauchent au même niveau (${c.m2 || "quelques"} m²)`);
+      if (geoErr.some(c => c.code === "ZONE_CONSTRUCTIBLE_VIDE")) phrases.push("les marges de recul ne laissent aucune surface constructible");
+      if (!phrases.length) phrases.push(geoErr.map(c => String(c.message).split(" : ")[0]).join(" ; "));
+      implantation = `En l'état, ${phrases.join(" ; ")}. Le plan est à corriger avant le dépôt du permis de construire.`;
+    } else if (aveugles.length) {
+      const plur = aveugles.length > 1;
+      implantation = `Conforme sous condition : ${listeTT(aveugles.map(d => `${uniteTT(sc, d.nom)} sur ${d.m2} m²`))} ${plur ? "débordent" : "déborde"} sur une marge de recul latérale ou arrière. C'est admis si ${plur ? "ces façades restent aveugles" : "cette façade reste aveugle"} (sans fenêtre), au prix d'un peu de lumière et de ventilation de ce côté.`;
+    } else if (horsZone) {
+      implantation = `L'emprise prévue (${emprise} m²) dépasse la zone constructible (${lim.buildable_area} m² une fois les marges de recul déduites) : l'implantation est à reprendre.`;
+    } else if (ignoreCos && cosPct > 100) {
+      implantation = `L'emprise au sol dépasse de ${cosPct - 100} % le maximum autorisé ; ce dépassement, assumé, devra faire l'objet d'une demande de dérogation lors du permis.`;
     } else if (cosCompliance === "AMBITIEUX_HORS_COS") {
-      urbanismeBullet = `COS à **${cosPct} %** — dépassement significatif du plafond réglementaire, dérogation à instruire au cas par cas.`;
+      implantation = `L'emprise au sol dépasse nettement le maximum autorisé (${cosPct} %) : une dérogation serait nécessaire, sans garantie de l'obtenir.`;
     } else if (cosCompliance === "DEROGATION_POSSIBLE") {
-      urbanismeBullet = `COS à **${cosPct} %** — légèrement au-dessus du plafond, dérogation envisageable.`;
+      implantation = `L'emprise au sol dépasse légèrement le maximum autorisé (${cosPct} %) : une dérogation est envisageable.`;
+    } else if (lim.buildable_area != null) {
+      implantation = `Le bâtiment reste dans la zone constructible (${emprise} m² au sol pour ${lim.buildable_area} m² disponibles) et ${cosPct < 80 ? "n'utilise que" : "utilise"} ${cosPct} % de l'emprise autorisée : il respecte les règles d'urbanisme.`;
     } else {
-      urbanismeBullet = limV12.buildable_area != null
-        ? `Emprise au sol de **${empriseOf(sc)} m²**, dans la zone constructible (${limV12.buildable_area} m²) et à **${cosPct} %** du maximum autorisé par le COS : conforme.`
-        : `Emprise au sol à **${cosPct} %** du maximum autorisé par le COS.`;
+      implantation = `Le bâtiment occupe ${cosPct} % de l'emprise au sol autorisée par le règlement.`;
     }
-    // Détails budgétaires spécifiques
-    // v12.12 — position réelle dans la fourchette du client, avec la réserve propre au scénario
-    let budgetAnalysis = "";
-    const resV12 = reservePctV12(scObjV12);
-    const resTxtV12 = resV12 ? `réserve pour imprévus de ${resV12} % comprise` : "sans réserve pour imprévus : en prévoir une en plus";
-    if (budgetFit === "hors budget") {
-      budgetAnalysis = `Le coût des travaux de ${costTotal} dépasse votre fourchette de ${budgetFcfa} (${resTxtV12}). Il faudrait revoir le programme, le phaser ou compléter le financement.`;
-    } else if (budgetFit === "dans le haut de votre fourchette") {
-      budgetAnalysis = `Le coût des travaux de ${costTotal} ne tient que dans le haut de votre fourchette de ${budgetFcfa} (${resTxtV12}). La marge de manœuvre est réduite.`;
-    } else if (budgetFit === "dans le budget") {
-      budgetAnalysis = `Le coût des travaux de ${costTotal} tient dans le bas de votre fourchette de ${budgetFcfa} (${resTxtV12}).`;
-    } else {
-      budgetAnalysis = `Budget non renseigné : le coût des travaux de ${costTotal} n'a pas pu être comparé à une enveloppe.`;
-    }
-    // v12.16 — surfaces des logements jugées par la grille du standing (même critère que le score)
-    const stdV12 = scObjV12.score_detail && scObjV12.score_detail.standing_match;
+    // Logements : taille moyenne jugée par rapport au standing visé (même mesure que la note)
+    const std = so.score_detail && so.score_detail.standing_match;
     const lgM2 = logementsM2(sc);
-    let compaciteAnalysis;
-    if (lgM2 == null) compaciteAnalysis = "Pas de logement dans ce scénario.";
-    else if (stdV12 && stdV12.score < 0.6) compaciteAnalysis = `${stdV12.explication.replace(/\.\s*$/, "")} (${lgM2} m² en moyenne) ; à agrandir en APS.`;
-    else compaciteAnalysis = stdV12 ? `${stdV12.explication.replace(/\.\s*$/, "")} (${lgM2} m² en moyenne par logement).` : `${lgM2} m² en moyenne par logement.`;
-    // v74.14 — buildRisk raccourci : 5 sections compactes, taille 12pt sans auto-shrink
-    // v74.36 PUSH 20 : nomenclature "X niveaux" (Niv 1 = RDC, levels stocke = R+X)
-    const totalNivRisk = (parseInt(levels) || 0) + 1;
-    const pilotisRisk = !!scObjV12.has_pilotis;
-    const complexite = totalNivRisk <= 1 ? "structure simple de plain-pied" : totalNivRisk <= 3
-      ? `structure courante sur ${totalNivRisk} niveaux (poteaux-poutres en béton armé, maîtrisés localement)`
-      : `structure sur ${totalNivRisk} niveaux : fondations et circulation verticale à dimensionner avec soin`;
-    return `**Score global ${score}/100** — profil ${profil}.\n**1. Urbanisme** — ${urbanismeBullet}\n**2. Surfaces des logements** — ${compaciteAnalysis}\n**3. Budget** — ${budgetAnalysis}\n**4. Stationnement** — ${parking}.\n**5. Constructibilité** — ${complexite}${pilotisRisk ? " ; pilotis à dimensionner" : ""}.`;
+    let logements = "";
+    if (lgM2 != null) {
+      const sN = std && std.score != null ? Number(std.score) : null;
+      const verdict = sN == null ? "" : sN >= 0.9 ? ` : une taille adaptée à une construction ${pourStanding}`
+        : sN >= 0.6 ? ` : un peu en dessous de ce qu'on attend pour une construction ${pourStanding}`
+          : ` : nettement en dessous de ce qu'on attend pour une construction ${pourStanding}, à agrandir pendant les études`;
+      const hMatch = std && String(std.explication || "").match(/hauteur d'étage de ([\d.,]+) m/);
+      logements = `\n**Logements** — ${lgM2} m² en moyenne${verdict}.${hMatch ? ` La hauteur d'étage prévue (${hMatch[1].replace(".", ",")} m) est faible pour ce standing.` : ""}`;
+    }
+    // Budget : position dans la fourchette, avec la réserve pour imprévus propre au scénario
+    const res = reservePctV12(so);
+    const cout = mFcfaTT(so.cost_total_fcfa);
+    const fourchette = fourchetteTT();
+    const fit = String(so.budget_fit || f(`${sc}_budget_fit`) || "").toUpperCase();
+    let budget;
+    if (fit === "DANS_BUDGET") budget = `Estimés à ${cout}, les travaux tiennent dans le bas de votre fourchette (${fourchette})${res ? `, y compris la réserve de ${res} % pour imprévus prévue dans ce scénario` : " ; prévoir en plus une réserve pour imprévus"}.`;
+    else if (fit === "BUDGET_TENDU") budget = `Estimés à ${cout}, les travaux se situent dans le haut de votre fourchette (${fourchette})${res ? ` une fois ajoutée la réserve de ${res} % pour imprévus` : ", sans réserve pour imprévus"} : la marge de manœuvre est faible.`;
+    else if (fit === "HORS_BUDGET") budget = `Estimés à ${cout}, les travaux dépassent votre fourchette (${fourchette})${res ? ` une fois ajoutée la réserve de ${res} % pour imprévus` : ""} : il faudrait réduire le programme, le réaliser en plusieurs phases ou compléter le financement.`;
+    else budget = `Aucun budget n'a été indiqué : le coût des travaux (${cout}) n'a pas pu être comparé à une enveloppe.`;
+    // Stationnement
+    const places = parseInt(f(`${sc}_parking_places`)) || 0, manque = n(`${sc}_parking_deficit`);
+    const pl = k => k > 1 ? "s" : "";
+    const stationnement = manque > 0
+      ? (places > 0 ? `${places} place${pl(places)} possible${pl(places)} sur le terrain, ${manque} de moins que nécessaire : prévoir une solution à proximité.` : `Pas de place possible sur le terrain : prévoir ${manque} place${pl(manque)} à proximité.`)
+      : places > 0 ? `${places} place${pl(places)} sur le terrain, suffisante${pl(places)} pour le programme.` : "Pas de besoin de stationnement identifié pour ce programme.";
+    // Construction
+    const niv = totalNivOf(sc);
+    let construction = niv <= 1 ? "Un seul niveau, sans escalier ni plancher d'étage : la construction la plus simple."
+      : niv <= 3 ? `${cap1TT(nombreTT(niv))} niveaux en béton armé (poteaux et poutres) : une technique courante, bien maîtrisée par les entreprises locales.`
+        : `${niv} niveaux : fondations, escalier et structure demandent une étude d'ingénieur attentive.`;
+    if (so.has_pilotis) construction += " Les pilotis sont à dimensionner par un ingénieur structure.";
+    if (checks.some(c => c.code === "PORTE_A_FAUX")) construction += " Une partie de l'étage avance au-delà du niveau inférieur, sans appui direct : à vérifier par l'ingénieur.";
+    const profil = geoErr.length ? "un scénario intéressant sur le papier, mais dont le plan doit être corrigé"
+      : score >= 75 ? "un scénario solide" : score >= 60 ? "un scénario correct, avec des points à surveiller" : "un scénario fragile, qui demande des ajustements";
+    return `**Note globale : ${score}/100** — ${profil}.\n**Implantation** — ${implantation}${logements}\n**Budget** — ${budget}\n**Stationnement** — ${stationnement}\n**Construction** — ${construction}`;
   }
   // ── Recommended scenario shortcuts ──
   const rec = f("rec_scenario") || "C";
@@ -13317,6 +13330,9 @@ async function prepareMassingScene(body, sb) {
     const startLv = Math.round(groundM / fh) + (pilotisOn ? 1 : 0), endLv = startLv + levels - 1;
     const lvName = n => n <= 0 ? "RDC" : `R+${n}`;
     const tags = [levels > 1 ? `${lvName(startLv)} → ${lvName(endLv)}` : lvName(startLv)];
+    // v13.5 — surface de l'unité après son niveau (par niveau si elle en occupe plusieurs)
+    const aireLbl = Math.round(Math.abs(polyM.reduce((t, p, i) => { const q = polyM[(i + 1) % polyM.length]; return t + p.x * q.y - q.x * p.y; }, 0)) / 2) || Math.round(Number(row.unit_size_m2) || 0);
+    if (aireLbl > 0) tags.push(levels > 1 ? `${aireLbl} m² par niveau` : `${aireLbl} m²`);
     if (pilotisOn) tags.push("pilotis");
     const sousSols = Math.max(0, Math.round(Number(fp.sous_sols) || 0));
     if (sousSols > 0) tags.push(`${sousSols} SS`);
