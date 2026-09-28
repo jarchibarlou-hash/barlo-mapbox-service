@@ -139,9 +139,10 @@ def generate_radar(risk_scores: dict, scenario_label: str, output_path: str):
             marker='o', markersize=7, markerfacecolor='white',
             markeredgecolor=color, markeredgewidth=2)
 
-    # Valeurs sur chaque point
+    # Valeurs sur chaque point (v13 : à l'intérieur du radar quand la note est haute, pour ne pas
+    # chevaucher le libellé du critère)
     for angle, val in zip(angles, values):
-        ax.text(angle, val + 6, str(int(val)), ha='center', va='center',
+        ax.text(angle, val + 8 if val < 80 else val - 13, str(int(val)), ha='center', va='center',
                 fontsize=8, fontweight='bold', color=color,
                 path_effects=[pe.withStroke(linewidth=3, foreground='white')])
 
@@ -150,7 +151,7 @@ def generate_radar(risk_scores: dict, scenario_label: str, output_path: str):
     ax.set_yticklabels(['20', '40', '60', '80', '100'], fontsize=6.5, color=COLORS['muted'])
     ax.set_xticks(angles)
     ax.set_xticklabels(labels, **FONT_LABEL)
-    ax.tick_params(axis='x', pad=14)   # v12.17b — libellés décollés des valeurs
+    ax.tick_params(axis='x', pad=18)   # v12.17b / v13 — libellés décollés des valeurs
 
     ax.spines['polar'].set_visible(False)
     ax.grid(color=COLORS['grid'], linewidth=0.6, alpha=0.8)
