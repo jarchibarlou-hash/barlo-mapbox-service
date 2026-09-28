@@ -950,12 +950,24 @@ def _plan_maybe_insert_all(prs, data, chart_dir):
     print(f"[PLAN v75.2] Indices slides massing détectés : {indices}", file=sys.stderr)
 
     # Générer les 3 images d'abord (dans chart_dir pour partager le cleanup)
+    # v13.1 — scénario dessiné : planche plan du RDC + axonométrie + coupe (plans_v13.py) ; sinon ancien plan
+    plans_v13 = data.get('plans_v13') or {}
     plan_images = {}
+    plan_titles = {}
     for label in ('A', 'B', 'C'):
+        out_png = os.path.join(chart_dir, f'plan_scenario_{label}.png')
+        if plans_v13.get(label):
+            try:
+                from plans_v13 import draw_composite
+                if draw_composite(plans_v13[label], out_png):
+                    plan_images[label] = out_png
+                    plan_titles[label] = f"Scénario {label} — Plan, axonométrie et coupe"
+                    continue
+            except Exception as e:
+                print(f"[PLAN v13] Planche scénario {label} impossible, ancien plan : {e}", file=sys.stderr)
         units = units_by_scenario.get(label) or []
         if not units:
             continue
-        out_png = os.path.join(chart_dir, f'plan_scenario_{label}.png')
         try:
             path = _plan_generate_image(label, polygon, units, site_area, out_png)
             if path:
@@ -971,7 +983,7 @@ def _plan_maybe_insert_all(prs, data, chart_dir):
         if target_idx is None or not img:
             continue
         try:
-            new_idx = _plan_insert_slide_after(prs, target_idx, img, _SCENARIO_TITLES[label])
+            new_idx = _plan_insert_slide_after(prs, target_idx, img, plan_titles.get(label) or _SCENARIO_TITLES[label])
             print(f"[PLAN v75.2] Slide plan {label} insérée à index {new_idx} (après massing index {target_idx})", file=sys.stderr)
             inserted += 1
         except Exception as e:

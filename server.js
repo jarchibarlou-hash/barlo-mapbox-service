@@ -9338,7 +9338,7 @@ function buildTemplateTexts(flat, scenarios) {
     const fpPct = siteArea > 0 ? Math.round(emprise / siteArea * 100) : 0;
     let narrativeArchi;
     if (validated) {
-      narrativeArchi = `**Implantation dessinée et validée sur plan** (voir le plan d'implantation)${totalNiv <= 1 ? " : toutes les unités au rez-de-chaussée, la solution la plus simple à construire" : ""}.`;
+      narrativeArchi = `**Implantation dessinée et validée sur plan** (voir la planche : plan, axonométrie et coupe)${totalNiv <= 1 ? " : toutes les unités au rez-de-chaussée, la solution la plus simple à construire" : ""}.`;
     } else if (isSplit) {
       narrativeArchi = `Le bâti se découpe en **deux volumes distincts** : le **commerce** en façade et un **bâtiment de logements en retrait**${hasPilotis ? " **sur pilotis** (rez-de-chaussée libéré pour le stationnement et les circulations)" : ""}. Cette dissociation donne de la visibilité au commerce et préserve l'intimité des logements.`;
     } else if (totalNiv <= 1) {
@@ -9357,14 +9357,27 @@ function buildTemplateTexts(flat, scenarios) {
         : `\n\n**Toutes les façades sont dégagées** (aucune mitoyenneté) : conditions optimales pour la lumière naturelle et la ventilation traversante en climat tropical.`;
     const placement = isComm => totalNiv <= 1 ? " au rez-de-chaussée" : validated ? "" : isComm ? " au rez-de-chaussée"
       : isSplit ? " dans le bâtiment arrière" : totalNiv === 2 ? " à l'étage" : " aux étages";
-    const unitBullets = unitsOf(sc).map(u => {
-      const lb = TYPE_LABEL_TT[u.type] || [u.type, u.type];
-      return `- **${u.count} ${u.count > 1 ? lb[1] : lb[0]}** de **${u.m2} m²**${u.count > 1 ? " chacun" : ""}${placement(NON_LOGEMENT.test(u.type))}`;
-    }).join("\n") || (f(`${sc}_unit_summary`) ? `- ${f(`${sc}_unit_summary`)}` : "");
+    // v13.1 — implantation dessinée : une ligne par unité, avec son nom et ses niveaux (comme sur la planche)
+    const geomUnits = validated && so.geom_v12 && Array.isArray(so.geom_v12.units) && so.geom_v12.units.length
+      && so.geom_v12.units.every(u => u.name) ? so.geom_v12.units : null;
+    const lvName = n => n <= 0 ? "RDC" : `R+${n}`;
+    const unitBullets = geomUnits
+      ? geomUnits.slice().sort((a, b) => ((Number(a.start_level) || 0) - (Number(b.start_level) || 0)) || String(a.name).localeCompare(String(b.name), "fr"))
+        .map(u => {
+          const fl = Math.max(1, Number(u.floors) || 1), st = Number(u.start_level) || 0;
+          const niv = fl > 1 ? `${lvName(st)} → ${lvName(st + fl - 1)}` : lvName(st);
+          return `- **${u.name}** · ${niv}${u.pilotis ? " (sur pilotis)" : ""} · **${Math.round(Number(u.area_m2) || 0)} m²**${fl > 1 ? ` par niveau (${Math.round(Number(u.sdp_m2) || 0)} m² au total)` : ""}`;
+        }).join("\n")
+      : unitsOf(sc).map(u => {
+        const lb = TYPE_LABEL_TT[u.type] || [u.type, u.type];
+        return `- **${u.count} ${u.count > 1 ? lb[1] : lb[0]}** de **${u.m2} m²**${u.count > 1 ? " chacun" : ""}${placement(NON_LOGEMENT.test(u.type))}`;
+      }).join("\n") || (f(`${sc}_unit_summary`) ? `- ${f(`${sc}_unit_summary`)}` : "");
     const expositionText = nbMitoyTT >= 2
       ? `Avec deux côtés mitoyens, **seules les façades libres** captent la lumière naturelle. En climat tropical, l'apport solaire le plus défavorable vient de l'**ouest** (soleil de fin d'après-midi). À privilégier : **claustras** ou **auvents profonds** sur les façades exposées, pièces de vie côté nord / sud-est lorsque possible. La **ventilation traversante** reste l'élément clé du confort thermique sans climatisation.`
       : `Plusieurs façades libres permettent une **bonne distribution lumineuse**. En climat tropical, prévoir des **protections solaires** (auvents, claustras) sur les façades ouest et sud-ouest pour éviter la surchauffe en fin d'après-midi. La **ventilation traversante** est toujours à privilégier pour le confort thermique.`;
-    const surfTxt = commM2 > 0 && habTotal > commM2 ? `surface utile **${habTotal} m²** (dont ${commM2} m² de commerce)` : `surface utile **${habTotal} m²**`;
+    // v13.1 — cabinets, bureaux, ateliers : « locaux d'activité », pas « commerce »
+    const seulCommerce = unitsOf(sc).filter(u => NON_LOGEMENT.test(u.type)).every(u => u.type === "COMMERCE");
+    const surfTxt = commM2 > 0 && habTotal > commM2 ? `surface utile **${habTotal} m²** (dont ${commM2} m² ${seulCommerce ? "de commerce" : "de locaux d'activité"})` : `surface utile **${habTotal} m²**`;
     const empriseText = `emprise au sol **${emprise} m²** (${fpPct} % du terrain)${hasPilotis ? ", rez-de-chaussée sous pilotis laissé libre (stationnement, circulation)" : ""}`;
     // v12.17 — mitoyenneté et exposition sont communes aux trois scénarios : dites une fois (slide 5)
     return `Le **Scénario ${sc}** ${philosophieDe(sc)}.\n\n**${plural(units, "unité")}** sur **${sdp} m² SDP** — bâtiment **${niveauxTxt(totalNiv)}**, ${surfTxt}, ${empriseText}.\n\n${narrativeArchi}\n\n**Programme :**\n${unitBullets}`;
@@ -11072,6 +11085,14 @@ app.post("/generate-pptx", async (req, res) => {
         console.warn(`[GENERATE-PPTX] override_units_detail_${scen} parse failed: ${e.message}`);
       }
     }
+    // v13.1 — planche plan du RDC + axonométrie + coupe (retraits réglés dans le cockpit)
+    let plansV13 = null;
+    try {
+      let segsV13 = null;
+      const sbV13 = getLeadUnitsSupabase();
+      if (sbV13 && leadRefForUnits) { try { segsV13 = engineSegments(await loadLeadRules(sbV13, leadRefForUnits)); } catch (_) {} }
+      plansV13 = buildPlansV13(p.site_polygon || p.site_polygon_points, segsV13, unitsByScenario);
+    } catch (e) { console.warn(`[GENERATE-PPTX] planches v13 indisponibles : ${e.message}`); }
     const totalUnitsPptx = (unitsByScenario.A.length || 0) + (unitsByScenario.B.length || 0) + (unitsByScenario.C.length || 0);
     const totalCustomShapes = ["A","B","C"].reduce((s, k) => s + (unitsByScenario[k]||[]).filter(u => u.polygon || u.width_m).length, 0);
     console.log(`[GENERATE-PPTX] v75.11.1 : leadRef="${leadRefForUnits}", units total=${totalUnitsPptx}, custom shapes=${totalCustomShapes}, polygon pts=${parcelPolygon.length}`);
@@ -11119,6 +11140,7 @@ app.post("/generate-pptx", async (req, res) => {
       units_by_scenario: unitsByScenario,
       parcel_polygon: parcelPolygon,
       lead_ref: leadRefForUnits,
+      plans_v13: plansV13,
     };
     // Step 5: Write data to temp file and call Python
     const tmpDir = `/tmp/pptx_${Date.now()}`;
@@ -11380,6 +11402,60 @@ function getLeadUnitsSupabase() {
 // v75.2 / v11.8-P0.3 — Lit sb_lead_units + footprint_json et retourne { A:[], B:[], C:[] }
 // pour injection dans le body Python. Fusionne les colonnes plates + JSONB.
 // leadRef : ex "BARLO-FMM4". Retourne {A:[],B:[],C:[]} vide si Supabase absent/table manquante.
+// v13.1 — Planche d'implantation (plan du RDC + axonométrie + coupe, generate_pptx.py → plans_v13.py) :
+// parcelle, zone constructible et côtés dans le repère du cockpit (mètres, y = nord), unités avec leurs
+// altitudes (même calcul que l'image 3D). Scénario dont une unité n'est pas dessinée : ancien plan.
+const UNIT_COLOR_V13 = t => {
+  const T = String(t || "").toUpperCase();
+  if (T === "COMMERCE") return "#e07830";
+  if (T === "BUREAU") return "#8B5CF6";
+  if (T === "ATELIER") return "#6B7280";
+  if (T.startsWith("T")) return "#3a7ac0";
+  return "#7098c8";
+};
+function unitVerticalV13(u) {
+  const fh = Number(u.hauteur_niveau) > 0 ? Number(u.hauteur_niveau) : 3;
+  let ground = 0;
+  if (u.altitude_base_m != null && u.altitude_base_m !== "" && isFinite(Number(u.altitude_base_m))) ground = Number(u.altitude_base_m);
+  else if (u.niveau_depart_etage != null && u.niveau_depart_etage !== "" && isFinite(Number(u.niveau_depart_etage))) ground = Number(u.niveau_depart_etage) * fh;
+  ground = Math.max(0, ground);
+  const floors = SiteGeometry.unitFloors(u);
+  const base = ground + (u.pilotis ? fh : 0);
+  return { fh, floors, start: SiteGeometry.unitStartLevel(u), ground, base, top: base + floors * fh };
+}
+function buildPlansV13(sitePolygonRaw, segments, unitsByScenario) {
+  if (!sitePolygonRaw) return null;
+  const site = SiteGeometry.siteBuildable(String(sitePolygonRaw), segments, 0);
+  if (!site || site.parcel.length < 3) return null;
+  const r2 = v => Math.round(v * 100) / 100;
+  const n = site.parcel.length;
+  const segType = {};
+  for (const s of segments || []) segType[s.index] = s.type;
+  const letter = i => i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(65 + Math.floor(i / 26) - 1) + String.fromCharCode(65 + (i % 26));
+  const sides = site.parcel.map((q, i) => {
+    const b = site.parcel[(i + 1) % n];
+    return { a: [r2(q.x), r2(q.y)], b: [r2(b.x), r2(b.y)], type: segType[i] || "libre", retrait_m: site.retraits[i], name: `${letter(i)}–${letter((i + 1) % n)}` };
+  });
+  const out = {};
+  for (const k of ["A", "B", "C"]) {
+    const us = unitsByScenario[k] || [];
+    // polygones absolus {x, y} du cockpit seulement (les anciens {x_m, y_m} sont relatifs à l'unité)
+    if (!us.length || us.some(u => !Array.isArray(u.polygon) || u.polygon.length < 3 || u.polygon[0].x == null)) continue;
+    out[k] = {
+      parcel: site.parcel.map(q => [r2(q.x), r2(q.y)]),
+      buildable: (site.buildable || []).map(q => [r2(q.x), r2(q.y)]),
+      sides,
+      units: us.map(u => {
+        const v = unitVerticalV13(u);
+        return { name: u.name || u.type || "", type: u.type || "", color: UNIT_COLOR_V13(u.type),
+          poly: u.polygon.map(q => [r2(Number(q.x)), r2(Number(q.y))]),
+          start_level: v.start, floors: v.floors, ground_m: v.ground, base_m: v.base, top_m: v.top, fh: v.fh, pilotis: !!u.pilotis };
+      }),
+    };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 async function fetchLeadUnitsForPptx(leadRef) {
   const empty = { A: [], B: [], C: [] };
   if (!leadRef) return empty;
@@ -11441,7 +11517,12 @@ async function fetchLeadUnitsForPptx(leadRef) {
         terrasse: fp.terrasse || false,
         balcon: fp.balcon || false,
         parking_ss: fp.parking_ss || false,
-        notes_tech: fp.notes_tech || ""
+        notes_tech: fp.notes_tech || "",
+        // v13.1 — niveau de départ et hauteurs : plan du RDC, axonométrie et coupe
+        niveau_depart_etage: fp.niveau_depart_etage != null ? Number(fp.niveau_depart_etage) : null,
+        altitude_base_m: fp.altitude_base_m != null ? Number(fp.altitude_base_m) : null,
+        hauteur_niveau: fp.hauteur_niveau != null ? Number(fp.hauteur_niveau) : null,
+        rez_jardin: !!fp.rez_jardin
       });
     }
     if (geomCount > 0) {
@@ -11503,7 +11584,7 @@ function actualToScenarioOverride(actual) {
       debord: actual.debord || null, appui: actual.appui || null, niveaux_decales: actual.niveaux_decales || [],
       hauteur_min_m: actual.hauteur_min_m != null ? Number(actual.hauteur_min_m) : null,
       cos_ratio_pct: actual.cos_ratio_pct != null ? Number(actual.cos_ratio_pct) : null,
-      units: (actual.units || []).map(u => ({ type: u.type, area_m2: u.area_m2, sdp_m2: u.sdp_m2, floors: u.floors, start_level: u.start_level, pilotis: !!u.pilotis })),
+      units: (actual.units || []).map(u => ({ name: u.name, type: u.type, area_m2: u.area_m2, sdp_m2: u.sdp_m2, floors: u.floors, start_level: u.start_level, pilotis: !!u.pilotis })),
     } : null,
     from_actual: true,
   };
