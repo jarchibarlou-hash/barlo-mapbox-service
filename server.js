@@ -2134,7 +2134,7 @@ function critRetraitsV13(sc) {
     if (d.facade_aveugle) {
       const c = (d.cotes || []).filter(x => x.type !== "rue");
       return { note: noteLineaireV13(d.pct_emprise, [[TOLERANCE_DESSIN_PCT_V13, 7], [10, 4], [25, 1], [40, 0]]), aveugle: true,
-        expl: `Déborde de ${Math.round(d.limite_m2)} m² (${frNum(d.pct_emprise)} % de l'emprise) sur le retrait${c.length ? " côté " + cotes(c) : ""} : légal si cette façade reste aveugle, au prix de la lumière et de la ventilation.` };
+        expl: `Déborde de ${Math.round(d.limite_m2)} m² (${frNum(d.pct_emprise)} % de l'emprise) sur le retrait${c.length ? " côté " + cotes(c) : ""} : légal si ${c.length > 1 ? "ces façades restent aveugles" : "cette façade reste aveugle"}, au prix de la lumière et de la ventilation.` };
     }
     return { note: noteLineaireV13(d.pct_emprise, [[0, 10], [TOLERANCE_DESSIN_PCT_V13, 9]]),
       expl: d.pct_emprise > 0 ? `Débord de ${frNum(d.pct_emprise)} % de l'emprise, dans la tolérance de dessin de 2 %.` : "Aucun débord sur les retraits." };
