@@ -10897,16 +10897,9 @@ app.post("/generate-texts", async (req, res) => {
 const { execSync, exec } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-app.post("/generate-pptx", async (req, res) => {
-  const t0 = Date.now();
-  console.log(`\n═══ /generate-pptx v3.0-PREMIUM ═══`);
-  const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
-  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
-    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
-  }
-  // v74.35 PUSH 19 : re-merge lead-specific overrides depuis PIPELINE
-  await mergeLeadOverridesFromPipeline(p);
-  try {
+// ─── v13.4 — données du PPT (standard et premium) : un seul constructeur ─────────────────────
+// Résultat moteur v12 (source de vérité), textes déterministes, graphiques, unités, planches v13.
+async function buildPptxPayloadV13(p) {
     // Step 1: v12 — résultat moteur unique (relu si les entrées n'ont pas changé depuis 8D)
     const { scenarios, fromStore } = await getOrComputeScenarioSet(p);
     console.log(`[PPTX] scénarios ${fromStore ? "relus (source de vérité v12)" : "calculés"}`);
@@ -11223,6 +11216,22 @@ app.post("/generate-pptx", async (req, res) => {
       lead_ref: leadRefForUnits,
       plans_v13: plansV13,
     };
+    return { pptxData, plansV13, flat, scenarios };
+}
+
+app.post("/generate-pptx", async (req, res) => {
+  const t0 = Date.now();
+  console.log(`\n═══ /generate-pptx v3.0-PREMIUM ═══`);
+  const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
+  if (!p.site_area || !p.envelope_w || !p.envelope_d) {
+    return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
+  }
+  // v74.35 PUSH 19 : re-merge lead-specific overrides depuis PIPELINE
+  await mergeLeadOverridesFromPipeline(p);
+  try {
+    const { pptxData, plansV13 } = await buildPptxPayloadV13(p);
+    // v13.4 — ?dump=json : renvoie les données envoyées à Python (contrôle et mise au point des gabarits)
+    if (String(req.query.dump || "") === "json") return res.json(pptxData);
     // Step 5: Write data to temp file and call Python
     const tmpDir = `/tmp/pptx_${Date.now()}`;
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -11340,13 +11349,12 @@ app.get("/pptx-premium/:leadId", async (req, res) => {
     res.status(500).send(`Erreur: ${e.message}`);
   }
 });
-// ─── ENDPOINT /generate-pptx-premium (Push 22.1) ─────────────────────────────
-// Variante de /generate-pptx qui utilise le template Canva premium au lieu
-// du template Python classique. Phase 22.1 : substitution textes uniquement.
-// Phase 22.2 substitution images BARLO. Phase 22.3 charts restyles.
+// ─── ENDPOINT /generate-pptx-premium (v13.4) ─────────────────────────────────
+// Version premium du diagnostic : structure et charte du modèle Canva (22 slides), contenus identiques
+// au PPT standard (mêmes textes v13, graphiques, planches, images du lead) — aucune donnée d'exemple.
 app.post("/generate-pptx-premium", async (req, res) => {
   const t0 = Date.now();
-  console.log(`\n═══ /generate-pptx-premium v22.1 (Canva template) ═══`);
+  console.log(`\n═══ /generate-pptx-premium v13.4 (charte Canva, contenus v13) ═══`);
   const p = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch(e) { return {}; } })() : (req.body || {});
   if (!p.site_area || !p.envelope_w || !p.envelope_d) {
     return res.status(400).json({ error: "site_area, envelope_w, envelope_d obligatoires" });
@@ -11354,90 +11362,14 @@ app.post("/generate-pptx-premium", async (req, res) => {
   // Re-merge lead overrides depuis PIPELINE (Push 19)
   await mergeLeadOverridesFromPipeline(p);
   try {
-    // Step 1 : v12.10 — même résultat moteur que /generate-pptx et le cockpit (géométries validées
-    // comprises) ; l'ancien calcul autonome ci-dessous n'est plus qu'un repli si le magasin est absent.
-    const scenarios = (await getOrComputeScenarioSet(p).then(r => r.scenarios).catch(e => {
-      console.warn(`[PPTX-PREMIUM] résultat v12 indisponible, calcul autonome : ${e.message}`);
-      return null;
-    })) || computeSmartScenarios({
-      site_area: Number(p.site_area), envelope_w: Number(p.envelope_w), envelope_d: Number(p.envelope_d),
-      envelope_area: Number(p.envelope_area) || undefined,
-      zoning_type: p.zoning_type || "URBAIN", floor_height: Number(p.floor_height) || 3.2,
-      primary_driver: p.primary_driver || "MAX_CAPACITE",
-      max_floors: Number(p.max_floors) || 99, max_height_m: Number(p.max_height_m) || 99,
-      program_main: p.program_main || p.project_type || "",
-      target_surface_m2: Number(p.target_surface_m2) || 0,
-      target_units: Number(p.target_units) || 0,
-      site_saturation_level: p.site_saturation_level || "MEDIUM",
-      financial_rigidity_score: Number(p.financial_rigidity_score) || 0,
-      density_band: p.density_band || "", risk_adjusted: Number(p.risk_adjusted) || 0,
-      feasibility_posture: p.feasibility_posture || "BALANCED",
-      scenario_A_role: p.scenario_A_role || "", scenario_B_role: p.scenario_B_role || "", scenario_C_role: p.scenario_C_role || "",
-      budget_range: Number(p.budget_range) || 0, budget_range_raw: String(p.budget_range || ""),
-      budget_band: p.budget_band || "", budget_tension: p.budget_tension || 0,
-      standing_level: p.standing_level || "STANDARD",
-      rent_score: Number(p.rent_score) || 0, capacity_score: Number(p.capacity_score) || 0,
-      mix_score: Number(p.mix_score) || 0, phase_score: Number(p.phase_score) || 0, risk_score: Number(p.risk_score) || 0,
-      density_pressure_factor: Number(p.density_pressure_factor) || 1,
-      driver_intensity: p.driver_intensity || "MEDIUM", strategic_position: p.strategic_position || "",
-      layout_mode: p.layout_mode || "SUPERPOSE", commerce_depth_m: Number(p.commerce_depth_m) || 6,
-      retrait_inter_volumes_m: Number(p.retrait_inter_volumes_m) || 4,
-      input_typologies: p.input_typologies || "", commerce_size_m2: Number(p.commerce_size_m2) || 0,
-      _leadConstraints: parseLeadConstraints(stripLegacyOverrides(p)),
-    });
-    // (plus de seconde application des réglages PIPELINE : le moteur les applique déjà, et elle
-    //  écraserait la géométrie validée)
-    // Step 2 : build flat (meme structure que /generate-pptx)
-    const diag = scenarios.diagnostic || {};
-    const sA = scenarios.A || {};
-    const sB = scenarios.B || {};
-    const sC = scenarios.C || {};
-    const profil = diag.profil_client || {};
-    const retr = diag.retraits_reglementaires || {};
-    const orient = diag.orientation_solaire || {};
-    const flat = {
-      client_name: p.client_name || "",
-      city: p.city || p.project_city || "Douala",
-      project_address: p.project_address || "",
-      site_area: String(p.site_area || 0),
-      site_cos_regl: cosSolLabel(diag.site),
-      site_emprise_max: `${(diag.site || {}).emprise_max_m2 || 0} m²`,
-      site_ces_regl: String((diag.site || {}).ces_reglementaire_pct || (diag.site || {}).ces_regl_pct || "60"),
-      retrait_avant: retraitAvantLabel(retr),
-      retrait_lateral: `${retr.lateral_m || 0}m`,
-      retrait_arriere: `${retr.arriere_m || 0}m`,
-      retrait_mitoyennete: String(retr.mitoyennete_cotes || 0),
-      retrait_emprise_constructible: `${retr.emprise_constructible_m2 || 0} m²`,
-      orient_zone: orient.zone_climatique || "TROPICAL",
-      program_main: p.program_main || "Petit collectif",
-      target_units: String(p.target_units || 0),
-      standing_level: p.standing_level || "ECONOMIQUE",
-      budget_fcfa: budgetRangeLabel(p.budget_range),   // v12.15 — fourchette du client, comme /generate-pptx
-      rec_scenario: (diag.recommandation || {}).scenario || "B",
-      rec_score: Math.round(((diag.recommandation || {}).score || 0) * 100),
-      rec_levels: String(Math.max(0, ((scenarios[(diag.recommandation || {}).scenario || "B"] || {}).levels || 1) - 1)),
-      rec_duree_chantier: `${(scenarios[(diag.recommandation || {}).scenario || "B"] || {}).duree_chantier_mois || 0} mois`,
-      _has_constraints: parseLeadConstraints(stripLegacyOverrides(p)).isEmpty ? "" : "Y",
-    };
-    // Per-scenario fields
-    for (const [key, s] of [["A", sA], ["B", sB], ["C", sC]]) {
-      flat[`${key}_role`] = s.role || "";
-      flat[`${key}_fp`] = String(s.fp_m2 || 0);
-      flat[`${key}_levels`] = String(Math.max(0, (s.levels || 1) - 1));
-      flat[`${key}_sdp`] = String(s.sdp_m2 || 0);
-      flat[`${key}_units`] = String(s.total_units || 0);
-      flat[`${key}_cost_total`] = `${s.cost_total_fcfa ? Math.round(s.cost_total_fcfa / 1e6) : 0}M FCFA`;
-      // v12.7 — coût final (C : phase 1 + phase 2 aux prix actuels ; sinon = coût total)
-      flat[`${key}_cost_final`] = `${Math.round((s.cost_final_fcfa || s.cost_total_fcfa || 0) / 1e6)}M FCFA`;
-      flat[`${key}_cost_unit`] = `${s.cost_per_unit ? Math.round(s.cost_per_unit / 1e6) : 0}M FCFA`;
-      flat[`${key}_score`] = String(Math.round((s.recommendation_score || 0) * 100));
-    }
-    flat.rec_cost_total = flat[`${flat.rec_scenario}_cost_total`] || "0M FCFA";
-    // Step 3 : write data.json + call Python script
+    const { pptxData } = await buildPptxPayloadV13(p);
+    pptxData.city = p.city || p.project_city || "";
+    pptxData.budget_label = budgetRangeLabel(p.budget_range);
+    if (String(req.query.dump || "") === "json") return res.json(pptxData);
     const tmpDir = `/tmp/pptx_premium_${Date.now()}`;
     fs.mkdirSync(tmpDir, { recursive: true });
     const dataPath = path.join(tmpDir, "data.json");
-    fs.writeFileSync(dataPath, JSON.stringify({ flat, scenarios }, null, 2));
+    fs.writeFileSync(dataPath, JSON.stringify(pptxData, null, 2));
     const scriptDir = __dirname;
     const templatePath = path.join(scriptDir, "template_diagnostic_premium.pptx");
     if (!fs.existsSync(templatePath)) {
@@ -11448,7 +11380,7 @@ app.post("/generate-pptx-premium", async (req, res) => {
     console.log(`[GENERATE-PPTX-PREMIUM] Running: ${pythonCmd}`);
     let pyOutput;
     try {
-      pyOutput = execSync(pythonCmd, { timeout: 120000, maxBuffer: 50 * 1024 * 1024 }).toString();
+      pyOutput = execSync(pythonCmd, { timeout: 180000, maxBuffer: 50 * 1024 * 1024 }).toString();
     } catch (pyErr) {
       const stderr = pyErr.stderr ? pyErr.stderr.toString() : "";
       const stdout = pyErr.stdout ? pyErr.stdout.toString() : "";
@@ -11464,6 +11396,11 @@ app.post("/generate-pptx-premium", async (req, res) => {
       return res.status(500).json({ error: "Premium PPTX generation failed — no output file" });
     }
     const pptxBuffer = fs.readFileSync(outputPath);
+    // contrôle final du générateur (restes de l'exemple, textes trop longs) lisible sans les journaux
+    try {
+      const qa = pyOutput.split("\n").filter(l => /\[PREMIUM-QA\]/.test(l)).join(" | ").slice(0, 1500);
+      if (qa) res.setHeader("X-Barlo-Premium-QA", encodeURIComponent(qa));
+    } catch (_) {}
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     res.setHeader("Content-Disposition", `attachment; filename="diagnostic_premium_${p.client_name || "barlo"}.pptx"`);
     res.send(pptxBuffer);
