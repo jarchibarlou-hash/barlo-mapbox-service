@@ -11642,7 +11642,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "13.0";   // v13 : grille de notation du 28/09/2026
+const V12_ENGINE_VERSION = "13.3";   // v13.3 : calendrier du projet (études + permis + travaux)
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
