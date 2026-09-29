@@ -794,7 +794,7 @@ class Deck:
 
     # ── 19 · Étude de faisabilité : les étapes du projet ───────────────────
     PHASE_DESC = {
-        'Études de conception': 'Esquisse, APS, APD et étude de sol : plans, structure et budget affinés.',
+        'Études de conception': 'Esquisse, avant-projet et étude de sol : plans, structure et budget affinés.',
         'Permis et consultation des entreprises': 'Dépôt et instruction du permis ; appel d\'offres et choix de l\'entreprise.',
         'Terrassement et fondations': 'Implantation, terrassement et fondations, de préférence en saison sèche.',
         'Gros œuvre': 'Structure en béton armé, élévations, planchers et toiture : bâtiment hors d\'eau.',
