@@ -722,12 +722,26 @@ class Deck:
     def _budget_table(self, s, x, y, w, h):
         d = self.data
         fit_lbl = {'DANS_BUDGET': 'Bas de votre fourchette', 'BUDGET_TENDU': 'Haut de votre fourchette', 'HORS_BUDGET': 'Au-dessus de votre fourchette'}
-        hdr = ['Scénario', 'Surface de plancher', 'Coût / m² (grille)', 'Coût / m² retenu', 'Coût des travaux', 'Position budget']
+        hdr = ['Scénario', 'Surface de plancher', 'Prix courant / m²', 'Prix retenu / m²', 'Coût des travaux', 'Position budget']
+
+        def milliers(v):   # « 250k » → « 250 000 FCFA »
+            m = re.match(r'^\s*(\d+)\s*k', str(v or ''))
+            return f"{m.group(1)}\u00a0000 FCFA" if m else (f"{v} FCFA" if v else '—')
+
+        def position(l):   # v13.6 — position réelle (bas / milieu / haut), la même que dans les textes
+            p = str(d.get(f'{l}_budget_position', '') or '')
+            if p and p != 'budget non renseigné':
+                return cap1(p)
+            return fit_lbl.get(str(d.get(f'{l}_budget_fit', '')), '—')
+
+        def cout(v):   # « 57M FCFA » → « 57 M FCFA »
+            return re.sub(r'(\d)\s*M\s*FCFA', '\\1\u00a0M\u00a0FCFA', str(v or '—'))
+
         rows = []
         for l in 'ABC':
-            rows.append([f'Scénario {l}' + ('  ★' if l == self.rec else ''), f"{d.get(f'{l}_sdp', '—')} m²",
-                         f"{d.get(f'{l}_cost_m2_marche', '—')} FCFA", f"{d.get(f'{l}_cost_m2_ajuste', '—')} FCFA",
-                         str(d.get(f'{l}_cost_total', '—')), fit_lbl.get(str(d.get(f'{l}_budget_fit', '')), '—')])
+            rows.append([f'Scénario {l}' + ('  ★' if l == self.rec else ''), f"{d.get(f'{l}_sdp', '—')}\u00a0m²",
+                         milliers(d.get(f'{l}_cost_m2_marche')), milliers(d.get(f'{l}_cost_m2_ajuste')),
+                         cout(d.get(f'{l}_cost_total')), position(l)])
         n = len(rows) + 1
         rh = min(0.58, h / n)
         gt = s.shapes.add_table(n, len(hdr), Inches(x), Inches(y), Inches(w), Inches(rh * n))
@@ -784,8 +798,8 @@ class Deck:
         'Permis et consultation des entreprises': 'Dépôt et instruction du permis ; appel d\'offres et choix de l\'entreprise.',
         'Terrassement et fondations': 'Implantation, terrassement et fondations, de préférence en saison sèche.',
         'Gros œuvre': 'Structure en béton armé, élévations, planchers et toiture : bâtiment hors d\'eau.',
-        'Second œuvre et lots techniques': 'Cloisons, menuiseries, électricité, plomberie, ventilation.',
-        'Finitions, VRD et réception': 'Revêtements, peinture, raccordements extérieurs, réception des travaux.',
+        'Second œuvre et installations techniques': 'Cloisons, menuiseries, électricité, plomberie, ventilation.',
+        'Finitions, raccordements et réception': 'Revêtements, peinture, raccordements extérieurs, réception des travaux.',
     }
 
     def faisabilite(self):
@@ -1066,8 +1080,8 @@ def build(data, template_path, output_path):
         d.terrain()
         d.contraintes()
         for l in 'ABC':
+            d.planche(l)       # v13.6 — ordre retenu par Jeremy : la planche, puis la fiche du scénario
             d.volumetrie(l)
-            d.planche(l)
             d.financier(l)
             d.risques(l)
         d.comparatif()

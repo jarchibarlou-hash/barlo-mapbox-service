@@ -744,7 +744,7 @@ def generate_recap_card(scenario: dict, label: str, output_path: str):
 # 9. PANEL RISQUE — 3 charts séparés pour un scénario
 # ═══════════════════════════════════════════════════════════════
 def generate_risk_panel(risk_scores: dict, recommendation_score: float,
-                        scenario_label: str, output_dir: str, recommended: bool = False):
+                        scenario_label: str, output_dir: str, recommended: bool = False, a_corriger: bool = False):
     """
     Génère 3 PNG séparés : radar, gauge, barres.
     Retourne dict des chemins. Données RÉELLES uniquement.
@@ -755,7 +755,7 @@ def generate_risk_panel(risk_scores: dict, recommendation_score: float,
 
     # v13.2 — au format exact de la zone (3 graphiques côte à côte)
     generate_radar_fit(risk_scores, scenario_label, radar_path)
-    generate_gauge_fit(recommendation_score, scenario_label, gauge_path, recommended)
+    generate_gauge_fit(recommendation_score, scenario_label, gauge_path, recommended, a_corriger)
     generate_bars_fit(risk_scores, scenario_label, bars_path)
 
     return {'radar': radar_path, 'gauge': gauge_path, 'bars': bars_path}
@@ -1011,7 +1011,7 @@ def generate_radar_fit(risk_scores, label, path):
     _save_exact(fig, path)
 
 
-def generate_gauge_fit(score, label, path, recommended=False):
+def generate_gauge_fit(score, label, path, recommended=False, a_corriger=False):
     pct = max(0.0, min(float(score or 0) / 100.0, 1.0))
     fig = _fig('risk_cell')
     ax = fig.add_axes([0.05, 0.02, 0.9, 0.84])
@@ -1034,7 +1034,10 @@ def generate_gauge_fit(score, label, path, recommended=False):
     ax.plot(0, 0, 'o', color=COLORS['dark'], ms=5, zorder=5)
     ax.text(0, -0.2, f'{int(round(score))}', fontsize=17, fontweight='bold', ha='center', va='center', color=COLORS['dark'])
     ax.text(0.42, -0.2, '/100', fontsize=7, ha='left', va='center', color=COLORS['muted'])
-    if recommended:
+    if a_corriger:
+        # v13.6 — scénario non conforme : la jauge ne dit pas « Correct » quand le plan doit être corrigé
+        lab, lc = 'À corriger', COLORS['red']
+    elif recommended:
         lab, lc = 'Recommandé', COLORS['green']
     elif pct >= 0.75:
         lab, lc = 'Favorable', COLORS['green']
@@ -1156,9 +1159,9 @@ LEVEL_COLORS = ['#1F5E55', '#3E8A7E', '#6FB0A4', '#A4CFC6', '#D3E9E4', '#EAF4F1'
 
 
 def generate_comparatif_fit(scenarios, path):
-    crit = [('Surface de plancher (SDP)', 'sdp_m2', 'm²', 'max'), ('Surface utile', 'surface_habitable_m2', 'm²', 'max'),
+    crit = [('Surface de plancher', 'sdp_m2', 'm²', 'max'), ('Surface utile (estimée)', 'surface_habitable_m2', 'm²', 'max'),
             ("Nombre d'unités", 'total_units', '', 'max'), ('Niveaux', 'levels', '', None),
-            ('Coût des travaux', 'cost_total_fcfa', 'FCFA', 'min'), ('Coût au m² de SDP', 'cost_per_m2_sdp', 'FCFA', 'min'),
+            ('Coût des travaux', 'cost_total_fcfa', 'FCFA', 'min'), ('Coût au m² de plancher', 'cost_per_m2_sdp', 'FCFA', 'min'),
             ('Note globale', 'recommendation_score', '/100', 'max'), ('Durée des travaux', 'duree_chantier_mois', 'mois', 'min'),
             ('Délai total du projet', 'duree_projet_mois', 'mois', 'min')]
     labels = ['A', 'B', 'C']
@@ -1238,7 +1241,9 @@ def generate_comparatif_fit(scenarios, path):
                 elif w > 0.3:
                     ax.text(left + w / 2, yy, p.get('niveau'), ha='center', va='center', fontsize=6, fontweight='bold', color=('white' if k < 3 else COLORS['dark']))
                 left += w
-            ax.text(left + 0.08, yy, f"{int(sum(p.get('m2', 0) for p in niv[l]))} m²", ha='left', va='center', fontsize=7, fontweight='bold', color=COLORS['text'])
+            # v13.6 — total = surface de plancher du tableau (les niveaux arrondis un à un faisaient 160 pour 162)
+            tot_l = float((scenarios.get(l) or {}).get('sdp_m2') or 0) or sum(p.get('m2', 0) for p in niv[l])
+            ax.text(left + 0.08, yy, f"{_sp(tot_l)} m²", ha='left', va='center', fontsize=7, fontweight='bold', color=COLORS['text'])
     _save_exact(fig, path)
 
 
@@ -1292,6 +1297,11 @@ def generate_budget_range_fit(sc, label, path, budget_single=0):
     status = {'DANS_BUDGET': ('Dans le bas de votre fourchette', COLORS['green']),
               'BUDGET_TENDU': ('Dans le haut de votre fourchette', COLORS['orange']),
               'HORS_BUDGET': ('Au-dessus de votre fourchette', COLORS['red'])}.get(fit, ('Budget non renseigné', COLORS['muted']) if not bmax else ('', COLORS['dark']))
+    # v13.6 — position réelle calculée par le serveur (bas / milieu / haut), la même que dans les textes
+    pos = sc.get('budget_position') or {}
+    if pos.get('label'):
+        pcol = {'BAS': COLORS['green'], 'MILIEU': COLORS['orange'], 'HAUT': COLORS['orange'], 'AU_DESSUS': COLORS['red']}.get(pos.get('code'), COLORS['muted'])
+        status = (pos['label'][:1].upper() + pos['label'][1:], pcol)
     col = status[1] if bmax else COLORS['dark']
     ax.add_patch(mpatches.Rectangle((0, y0 + 0.05), cost, hb - 0.1, fc=col, ec='none', zorder=2))
     ax.text(min(cost, scale) / 2, y0 + hb / 2, f'Travaux {_m(cost)} FCFA', ha='center', va='center', fontsize=8, fontweight='bold', color='white', zorder=3)
@@ -1335,8 +1345,8 @@ def generate_timeline_fit(sc, path):
     ax.plot([X(total + 1), X(total + 1)], [0.34, ya - 0.06], color=COLORS['grid'], lw=0.5, zorder=0)
     rows = [('etudes', 'Études et autorisations', H - 0.82), ('travaux', 'Travaux', H - 1.37)]
     colors = {'Études de conception': COLORS['dark'], 'Permis et consultation des entreprises': '#6B7280',
-              'Terrassement et fondations': '#2E7D6F', 'Gros œuvre': COLORS['B'], 'Second œuvre et lots techniques': '#B07D3A',
-              'Finitions, VRD et réception': COLORS['C']}
+              'Terrassement et fondations': '#2E7D6F', 'Gros œuvre': COLORS['B'], 'Second œuvre et installations techniques': '#B07D3A',
+              'Finitions, raccordements et réception': COLORS['C']}
     hb = 0.42
     for grp, name, yc in rows:
         ax.text(x0 - 0.1, yc, name, ha='right', va='center', fontsize=7.4, fontweight='bold', color=COLORS['text'])
@@ -1354,7 +1364,10 @@ def generate_timeline_fit(sc, path):
             else:
                 # phase trop courte pour son nom : durée dans la barre, nom en dessous
                 ax.text(xa + w / 2, yc, f"{p['mois']} mois", ha='center', va='center', fontsize=5.6, fontweight='bold', color='white', zorder=3)
-                ax.text(xa + w / 2, yc - hb / 2 - 0.1, court, ha='center', va='center', fontsize=5.4, color=COLORS['text'], zorder=3)
+                # v13.6 — le nom reste dans le cadre (« Finitions, réceptio » était coupé au bord droit)
+                half = len(court) * 0.021
+                xc = min(max(xa + w / 2, half + 0.05), W - half - 0.05)
+                ax.text(xc, yc - hb / 2 - 0.1, court, ha='center', va='center', fontsize=5.4, color=COLORS['text'], zorder=3)
     ax.text(W / 2, 0.16, '⚠ Saison des pluies (juin – octobre) : prévoir terrassement et fondations en saison sèche ; permis : 2 à 4 mois selon la commune',
             ha='center', va='center', fontsize=6.4, fontstyle='italic', color=COLORS['orange'])
     _save_exact(fig, path)
@@ -1365,7 +1378,7 @@ def generate_recap_fit(sc, label, path):
     col = COLORS.get(label, COLORS['C'])
     proj = int(sc.get('duree_projet_mois', 0) or 0)
     trav = int(sc.get('duree_chantier_mois', 0) or 0)
-    kpis = [('Surface de plancher', f"{_sp(sc.get('sdp_m2', 0) or 0)} m²"), ('Surface utile', f"{_sp(sc.get('surface_habitable_m2', 0) or 0)} m²"),
+    kpis = [('Surface de plancher', f"{_sp(sc.get('sdp_m2', 0) or 0)} m²"), ('Surface utile estimée', f"{_sp(sc.get('surface_habitable_m2', 0) or 0)} m²"),
             ('Unités', f"{int(sc.get('total_units', 0) or 0)}"), ('Coût des travaux', f"{_m(sc.get('cost_total_fcfa', 0))} FCFA"),
             (f'Délai total, dont {trav} mois de travaux' if proj else 'Durée des travaux', f"{proj or trav} mois"),
             ('Note globale', f"{int(sc.get('recommendation_score', 0) or 0)}/100")]
@@ -1442,7 +1455,7 @@ def generate_all_charts(data: dict, output_dir: str) -> dict:
               f"rec_score={rec_score}", file=sys.stderr)
 
         if risk_scores:
-            paths = generate_risk_panel(risk_scores, rec_score, label, output_dir, bool(sc.get('recommended')))
+            paths = generate_risk_panel(risk_scores, rec_score, label, output_dir, bool(sc.get('recommended')), bool(sc.get('a_corriger')))
             chart_paths[f'scenario_{label}_risk_radar'] = paths['radar']
             chart_paths[f'scenario_{label}_risk_gauge'] = paths['gauge']
             chart_paths[f'scenario_{label}_risk_bars']  = paths['bars']

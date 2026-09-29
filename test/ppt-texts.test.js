@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { loadServer } = require("./harness");
+const { loadServer, sansInsecables } = require("./harness");
 
 // Relecture du PPT FMM4 (24/09) : chaque test correspond à une erreur réellement trouvée dans le PPT généré
 const S = loadServer(["computeSmartScenarios", "scenarioEngineInputs", "enrichFlatForTemplates", "buildTemplateTexts",
@@ -33,7 +33,7 @@ function render() {
       [`${k}_cost_unit`]: `${Math.round(s.cost_per_unit / 1e6)}M FCFA`, [`${k}_duree_chantier`]: `${s.duree_chantier_mois} mois` });
   }
   S.enrichFlatForTemplates(flat, LEAD, sc);
-  return { sc, t: S.buildTemplateTexts(flat, sc) };
+  return { sc, t: sansInsecables(S.buildTemplateTexts(flat, sc)) };
 }
 
 test("terrain : la surface du terrain, pas une enveloppe rectangulaire", () => {
@@ -123,7 +123,7 @@ function renderLead(lead, rows) {
       [`${k}_hono_bas_M`]: "12", [`${k}_hono_haut_M`]: "18", [`${k}_hono_taux_bas`]: "10%", [`${k}_hono_taux_haut`]: "15%" });
   }
   S.enrichFlatForTemplates(flat, lead, sc);
-  return S.buildTemplateTexts(flat, sc);
+  return sansInsecables(S.buildTemplateTexts(flat, sc));
 }
 
 test("PPT FMM4 : chaque texte tient dans sa zone sans réduction de police", () => {

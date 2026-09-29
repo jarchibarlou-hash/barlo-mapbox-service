@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 const G = require("../lib/site-geometry");
-const { loadServer } = require("./harness");
+const { loadServer, sansInsecables } = require("./harness");
 
 // v13.1 — planche plan du RDC + axonométrie + coupe, et programme par unité sur la slide volumétrie
 const S = loadServer(["buildPlansV13", "computeSmartScenarios", "scenarioEngineInputs", "buildTemplateTexts"]);
@@ -37,7 +37,7 @@ test("slide volumétrie : une ligne par unité dessinée, avec son nom et son ni
   const actual = G.scenarioActual([mk("Cabinet médical", "COMMERCE", 0), mk("Co-working", "BUREAU", 1)], { site_polygon: FMM4, site_area: 250, cos_sol: 0.6 });
   const sc = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}, null, { A: { actual } }));
   const flat = { rec_scenario: sc.diagnostic.recommandation.scenario, A_sdp: String(sc.A.sdp_m2), A_units: "2", A_levels: "1" };
-  const t = S.buildTemplateTexts(flat, sc);
+  const t = sansInsecables(S.buildTemplateTexts(flat, sc));
   const txt = t.scenario_A_summary_text || "";
   assert.match(txt, /\*\*Cabinet médical\*\* · RDC · \*\*36 m²\*\*/);
   assert.match(txt, /\*\*Co-working\*\* · R\+1/);

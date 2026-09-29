@@ -1989,6 +1989,30 @@ function refreshBudgetFit(sc, range) {
   sc.cost_final_fcfa = sc.cost_total_fcfa + p2;
   sc.final_budget_fit = p2 ? ScenarioRules.budgetStatus(Math.round(sc.cost_final_fcfa / target), range) : sc.budget_fit;
 }
+// v13.6 — position RÉELLE du besoin (coût + réserve du scénario) dans la fourchette du client, identique
+// dans tous les textes et graphiques. « BUDGET_TENDU » couvre toute la fourchette au-dessus de son minimum :
+// l'appeler « haut de fourchette » était faux pour 39 M dans 33–66 M (18 % de la fourchette).
+function budgetPositionV13(sc) {
+  const need = Number(sc && (sc.budget_needed_fcfa || sc.cost_total_fcfa)) || 0;
+  const min = Number(sc && sc.budget_min_fcfa) || 0, max = Number(sc && sc.budget_max_fcfa) || 0;
+  const fit = String((sc && sc.budget_fit) || "").toUpperCase();
+  if (fit === "HORS_BUDGET") return { code: "AU_DESSUS", label: "au-dessus de votre fourchette", ratio: null };
+  if (fit === "DANS_BUDGET") return { code: "BAS", label: "dans le bas de votre fourchette", ratio: 0 };
+  if (fit !== "BUDGET_TENDU" || !(need > 0)) return { code: "NA", label: "budget non renseigné", ratio: null };
+  if (!(max > min)) return { code: "HAUT", label: "dans le haut de votre fourchette", ratio: 1 };
+  const r = Math.max(0, Math.min(1, (need - min) / (max - min)));
+  if (r < 1 / 3) return { code: "BAS", label: "dans le bas de votre fourchette", ratio: r };
+  if (r < 2 / 3) return { code: "MILIEU", label: "au milieu de votre fourchette", ratio: r };
+  return { code: "HAUT", label: "dans le haut de votre fourchette", ratio: r };
+}
+// v13.6 — surface utile ESTIMÉE : surface de plancher moins murs et cloisons (≈ 10 %) et cage d'escalier
+// (≈ 8 m² par niveau dès qu'il y a un étage). Elle n'est plus égale à la surface de plancher.
+function surfaceUtileV13(sc) {
+  const sdp = Number(sc && sc.sdp_m2) || 0;
+  if (!(sdp > 0)) return 0;
+  const niv = Math.max(1, Number(sc.levels) || 1);
+  return Math.max(0, Math.round(sdp * 0.9 - (niv > 1 ? 8 * niv : 0)));
+}
 // ═══ v13 — GRILLE DE NOTATION BARLO (Jeremy, 28/09/2026) ═══
 // 7 critères distincts, chacun mesuré UNE seule fois sur le contenu réel du scénario (géométrie validée
 // comprise), sur une échelle continue : un détail de dessin ne fait jamais sauter une note.
@@ -2800,7 +2824,7 @@ function projectScheduleV13(sc) {
   const lv = Math.max(1, Number(sc.levels) || 1);
   const D = DUREE_CHANTIER_MOIS_PAR_NIVEAU;
   const parts = [["Terrassement et fondations", D.fondations_terrassement, "fondations"], ["Gros œuvre", lv * D.par_niveau, "gros œuvre"],
-    ["Second œuvre et lots techniques", D.finitions, "second œuvre, lots"], ["Finitions, VRD et réception", D.vrd_ext, "finitions, réception"]];
+    ["Second œuvre et installations techniques", D.finitions, "second œuvre, installations"], ["Finitions, raccordements et réception", D.vrd_ext, "finitions, réception"]];
   const brut = parts.reduce((s, p) => s + p[1], 0);
   const travaux = Math.ceil(brut * (1 + MARGE_DELAIS_V13) - 1e-9);
   // répartition en mois entiers (plus forts restes), chaque phase d'au moins 1 mois
@@ -5730,7 +5754,9 @@ function applyConstraintsToScenarios(scenarios, constraints) {
       // v75.1 — target_sdp force la SDP cible et recalcule fp en conséquence
       if (ov.target_sdp > 0) {
         sc.sdp_m2 = Math.round(ov.target_sdp);
-        if (sc.levels > 0) sc.fp_m2 = Math.round(sc.sdp_m2 / sc.levels);
+        // v13.6 — géométrie dessinée : l'emprise est celle du plan (unités au RDC), jamais SDP ÷ niveaux
+        // (FMM4 : 218 m² sur 2 niveaux donnait 109 m² au lieu des 158 m² dessinés au sol)
+        if (sc.levels > 0 && !(ov.from_actual && ov.fp > 0)) sc.fp_m2 = Math.round(sc.sdp_m2 / sc.levels);
         console.log(`│ [CONSTRAINTS] ${lbl} target_sdp forcé : ${sc.sdp_m2}m² (fp recalculé : ${sc.fp_m2}m²)`);
       }
       const sdpScale = oldSdp > 0 ? sc.sdp_m2 / oldSdp : 1;
@@ -9364,8 +9390,11 @@ function buildTemplateTexts(flat, scenarios) {
   const progSigTT = l => unitsOf(l).reduce((o, u) => (o[u.type] = (o[u.type] || 0) + u.count, o), {});
   const memeProgramme = (x, y) => JSON.stringify(Object.entries(progSigTT(x)).sort()) === JSON.stringify(Object.entries(progSigTT(y)).sort());
   const TYPE_LABEL_TT = { COMMERCE: ["commerce", "commerces"], BUREAU: ["bureau", "bureaux"], T1: ["studio T1", "studios T1"],
-    T2: ["logement T2", "logements T2"], T3: ["logement T3", "logements T3"], T4: ["logement T4", "logements T4"], T5: ["logement T5", "logements T5"] };
-  const progDesc = l => Object.entries(progSigTT(l)).map(([type, count]) => { const lb = TYPE_LABEL_TT[type] || [type, type]; return `${count} ${count > 1 ? lb[1] : lb[0]}`; }).join(" + ");
+    T2: ["logement T2", "logements T2"], T3: ["logement T3", "logements T3"], T4: ["logement T4", "logements T4"], T5: ["logement T5", "logements T5"],
+    // v13.6 — types d'activité en toutes lettres (plus de « 1 ATELIER » en capitales)
+    ATELIER: ["atelier", "ateliers"], ACTIVITE: ["local d'activité", "locaux d'activité"], LOCAL: ["local", "locaux"], CABINET: ["cabinet", "cabinets"] };
+  const typeLabelTT = type => TYPE_LABEL_TT[type] || [String(type).toLowerCase().replace(/_/g, " "), String(type).toLowerCase().replace(/_/g, " ")];
+  const progDesc = l => Object.entries(progSigTT(l)).map(([type, count]) => { const lb = typeLabelTT(type); return `${count} ${count > 1 ? lb[1] : lb[0]}`; }).join(" + ");
   const totalNivOf = l => (parseInt(f(`${l}_levels`)) || 0) + 1;
   const empriseOf = l => Math.round(Number(scObj(l).emprise_sol_m2) || Number(scObj(l).fp_m2) || parseInt(f(`${l}_fp`)) || 0);
   const nbMitoyTT = parseInt(f("retrait_mitoyennete")) || 0;
@@ -9426,7 +9455,7 @@ function buildTemplateTexts(flat, scenarios) {
           return `- **${u.name}** · ${niv}${u.pilotis ? " (sur pilotis)" : ""} · **${Math.round(Number(u.area_m2) || 0)} m²**${fl > 1 ? ` par niveau (${Math.round(Number(u.sdp_m2) || 0)} m² au total)` : ""}`;
         }).join("\n")
       : unitsOf(sc).map(u => {
-        const lb = TYPE_LABEL_TT[u.type] || [u.type, u.type];
+        const lb = typeLabelTT(u.type);
         return `- **${u.count} ${u.count > 1 ? lb[1] : lb[0]}** de **${u.m2} m²**${u.count > 1 ? " chacun" : ""}${placement(NON_LOGEMENT.test(u.type))}`;
       }).join("\n") || (f(`${sc}_unit_summary`) ? `- ${f(`${sc}_unit_summary`)}` : "");
     const expositionText = nbMitoyTT >= 2
@@ -9434,10 +9463,14 @@ function buildTemplateTexts(flat, scenarios) {
       : `Plusieurs façades libres permettent une **bonne distribution lumineuse**. En climat tropical, prévoir des **protections solaires** (auvents, claustras) sur les façades ouest et sud-ouest pour éviter la surchauffe en fin d'après-midi. La **ventilation traversante** est toujours à privilégier pour le confort thermique.`;
     // v13.1 — cabinets, bureaux, ateliers : « locaux d'activité », pas « commerce »
     const seulCommerce = unitsOf(sc).filter(u => NON_LOGEMENT.test(u.type)).every(u => u.type === "COMMERCE");
-    const surfTxt = commM2 > 0 && habTotal > commM2 ? `surface utile **${habTotal} m²** (dont ${commM2} m² ${seulCommerce ? "de commerce" : "de locaux d'activité"})` : `surface utile **${habTotal} m²**`;
+    // v13.6 — surface de plancher (dessinée) et surface utile ESTIMÉE (murs et escalier déduits), sans sigle
+    const sdpN = parseInt(sdp) || 0;
+    const dontTxt = commM2 > 0 && sdpN > commM2 ? ` (dont ${commM2} m² ${seulCommerce ? "de commerce" : "de locaux d'activité"})` : "";
+    const utile = surfaceUtileV13(so);
+    const utileTxt = utile > 0 ? `, environ **${utile} m² utiles**` : "";
     const empriseText = `emprise au sol **${emprise} m²** (${fpPct} % du terrain)${hasPilotis ? ", rez-de-chaussée sous pilotis laissé libre (stationnement, circulation)" : ""}`;
     // v12.17 — mitoyenneté et exposition sont communes aux trois scénarios : dites une fois (slide 5)
-    return `Le **Scénario ${sc}** ${philosophieDe(sc)}.\n\n**${plural(units, "unité")}** sur **${sdp} m² SDP** — bâtiment **${niveauxTxt(totalNiv)}**, ${surfTxt}, ${empriseText}.\n\n${narrativeArchi}\n\n**Programme :**\n${unitBullets}`;
+    return `Le **Scénario ${sc}** ${philosophieDe(sc)}.\n\n**${plural(units, "unité")}**, **${sdp} m² de plancher**${dontTxt}${utileTxt} — bâtiment **${niveauxTxt(totalNiv)}**, ${empriseText}.\n\n${narrativeArchi}\n\n**Programme :**\n${unitBullets}`;
   }
   // ── Lecture financière (slides 7/10/13) ──
   // v13.5 (Jeremy, 29/09) : rédigé pour le client — des phrases, des ordres de grandeur, sans jargon ni nom d'outil
@@ -9457,6 +9490,10 @@ function buildTemplateTexts(flat, scenarios) {
     const prixTxt = Math.abs(ecart) > 10
       ? `Le prix de construction retenu (${milliersTT(appliedM2)} FCFA/m²) est ${ecart > 0 ? "supérieur" : "inférieur"} d'environ ${Math.abs(ecart)} % aux prix courants à ${city} pour une construction ${pourStanding} (environ ${milliersTT(gridM2)} FCFA/m²).`
       : `C'est un niveau de prix courant à ${city} pour une construction ${pourStanding}.`;
+    // v13.6 — pourquoi le prix au m² diffère d'un scénario à l'autre : hypothèses propres au scénario
+    const prixA = Number(scObj("A").cost_per_m2) || 0;
+    const baisse = sc !== "A" && prixA > 0 && appliedM2 > 0 ? Math.round((1 - appliedM2 / prixA) * 100) : 0;
+    const roleTxt = baisse >= 5 ? ` Ce prix est inférieur de ${baisse} % à celui du scénario A : il suppose ${sc === "B" ? "des plans optimisés et des prestations maîtrisées" : "des plans compacts et des prestations sobres"}.` : "";
     const pct = k => String(f(`${sc}_ventil_${k}_pct`) || "").replace(/(\d)\s*%/, "$1 %");
     const repartition = pct("go") && pct("so")
       ? `Le gros œuvre (fondations, structure, murs) en représente ${pct("go")}, les finitions ${pct("so")}, les installations techniques (électricité, plomberie) ${pct("lt")} et les raccordements et abords extérieurs ${pct("vrd")}.`
@@ -9468,7 +9505,7 @@ function buildTemplateTexts(flat, scenarios) {
     const hono = hh > 0
       ? `S'y ajoutent les honoraires de l'architecte et des ingénieurs (conception, permis, suivi du chantier) : ${hb === hh ? hb : `${hb} à ${hh}`} M FCFA, soit ${tb} à ${th} % des travaux. `
       : "";
-    return `**Coût estimé des travaux : ${mFcfaTT(total)}**, soit environ ${milliersTT(m2Tout)} FCFA par m² de plancher, raccordements extérieurs compris. ${prixTxt}`
+    return `**Coût estimé des travaux : ${mFcfaTT(total)}**, soit environ ${milliersTT(m2Tout)} FCFA par m² de plancher, raccordements extérieurs compris. ${prixTxt}${roleTxt}`
       + (repartition ? `\n\n${repartition}` : "")
       + `\n\n${parUnite}${hono}Ces montants sont des ordres de grandeur, à préciser pendant les études de conception.`;
   }
@@ -9484,6 +9521,32 @@ function buildTemplateTexts(flat, scenarios) {
   }
   const nombreTT = k => ["", "une", "deux", "trois", "quatre", "cinq", "six"][k] || String(k);
   const listeTT = arr => arr.length <= 1 ? (arr[0] || "") : `${arr.slice(0, -1).join(", ")} et ${arr[arr.length - 1]}`;
+  // v13.6 — taille des logements dite avec leur typologie et la surface courante de ce type
+  // (un même logement de 40 m² n'est pas jugé pareil en T2 et en T3 : le client doit voir pourquoi)
+  function logementsClientTT(sc) {
+    const so = scObj(sc);
+    const std = so.score_detail && so.score_detail.standing_match;
+    const sN = std && std.score != null ? Number(std.score) : null;
+    const niveau = sN == null ? null : sN >= 0.9 ? "ok" : sN >= 0.6 ? "un_peu" : "nettement";
+    const hMatch = std && String(std.explication || "").match(/hauteur d'étage de ([\d.,]+) m/);
+    const hauteur = hMatch ? ` La hauteur d'étage prévue (${hMatch[1].replace(".", ",")} m) est faible pour ce standing.` : "";
+    const stdKey = standingGridKey(f("standing_level"));
+    const g = so.geom_v12;
+    const lg = g && Array.isArray(g.units) ? g.units.filter(u => UNIT_SIZES_V73[u.type] && familleV13(u.type) === "logement") : [];
+    if (lg.length) {
+      const it = lg.map(u => ({ type: u.type, m2: Math.round(Number(u.sdp_m2) || Number(u.area_m2) || 0), ref: UNIT_SIZES_V73[u.type][stdKey] || UNIT_SIZES_V73[u.type].STANDARD }));
+      const types = [...new Set(it.map(i => i.type))];
+      const desc = it.length === 1 ? `Le logement (${it[0].type}) fait ${it[0].m2} m²` : `Les ${it.length} logements font ${listeTT(it.map(i => `${i.m2} m² (${i.type})`))}`;
+      const ref = types.length === 1 ? `${it.length > 1 ? "des" : "un"} ${types[0]} courant${it.length > 1 ? "s" : ""} ${pourStanding} (environ ${it[0].ref} m²)` : `les surfaces courantes ${pourStanding}`;
+      const v = niveau === "ok" ? `, une taille conforme à ${ref}` : niveau === "un_peu" ? `, un peu moins que ${ref}` : niveau === "nettement" ? `, nettement moins que ${ref} : à agrandir pendant les études` : "";
+      return `${desc}${v}.${hauteur}`;
+    }
+    const m = logementsM2(sc);
+    if (m == null) return "";
+    const v = niveau === "ok" ? ` : une taille adaptée à une construction ${pourStanding}` : niveau === "un_peu" ? ` : un peu en dessous de ce qu'on attend pour une construction ${pourStanding}`
+      : niveau === "nettement" ? ` : nettement en dessous de ce qu'on attend pour une construction ${pourStanding}, à agrandir pendant les études` : "";
+    return `${m} m² en moyenne${v}.${hauteur}`;
+  }
   function buildRisk(sc) {
     const so = scObj(sc);
     const score = parseInt(f(`${sc}_score`)) || Math.round((Number(so.recommendation_score) || 0) * 100);
@@ -9535,27 +9598,20 @@ function buildTemplateTexts(flat, scenarios) {
     } else {
       implantation = `Le bâtiment occupe ${cosPct} % de l'emprise au sol autorisée par le règlement.`;
     }
-    // Logements : taille moyenne jugée par rapport au standing visé (même mesure que la note)
-    const std = so.score_detail && so.score_detail.standing_match;
-    const lgM2 = logementsM2(sc);
-    let logements = "";
-    if (lgM2 != null) {
-      const sN = std && std.score != null ? Number(std.score) : null;
-      const verdict = sN == null ? "" : sN >= 0.9 ? ` : une taille adaptée à une construction ${pourStanding}`
-        : sN >= 0.6 ? ` : un peu en dessous de ce qu'on attend pour une construction ${pourStanding}`
-          : ` : nettement en dessous de ce qu'on attend pour une construction ${pourStanding}, à agrandir pendant les études`;
-      const hMatch = std && String(std.explication || "").match(/hauteur d'étage de ([\d.,]+) m/);
-      logements = `\n**Logements** — ${lgM2} m² en moyenne${verdict}.${hMatch ? ` La hauteur d'étage prévue (${hMatch[1].replace(".", ",")} m) est faible pour ce standing.` : ""}`;
-    }
-    // Budget : position dans la fourchette, avec la réserve pour imprévus propre au scénario
+    // Logements : typologie et surface, comparées à la surface courante du type (même mesure que la note)
+    const lgTxt = logementsClientTT(sc);
+    const logements = lgTxt ? `\n**Logements** — ${lgTxt}` : "";
+    // Budget : position RÉELLE dans la fourchette (bas / milieu / haut), réserve pour imprévus du scénario comprise
     const res = reservePctV12(so);
     const cout = mFcfaTT(so.cost_total_fcfa);
     const fourchette = fourchetteTT();
-    const fit = String(so.budget_fit || f(`${sc}_budget_fit`) || "").toUpperCase();
+    const pos = budgetPositionV13(so);
+    const avecRes = res ? ` une fois ajoutée la réserve de ${res} % pour imprévus prévue dans ce scénario` : "";
     let budget;
-    if (fit === "DANS_BUDGET") budget = `Estimés à ${cout}, les travaux tiennent dans le bas de votre fourchette (${fourchette})${res ? `, y compris la réserve de ${res} % pour imprévus prévue dans ce scénario` : " ; prévoir en plus une réserve pour imprévus"}.`;
-    else if (fit === "BUDGET_TENDU") budget = `Estimés à ${cout}, les travaux se situent dans le haut de votre fourchette (${fourchette})${res ? ` une fois ajoutée la réserve de ${res} % pour imprévus` : ", sans réserve pour imprévus"} : la marge de manœuvre est faible.`;
-    else if (fit === "HORS_BUDGET") budget = `Estimés à ${cout}, les travaux dépassent votre fourchette (${fourchette})${res ? ` une fois ajoutée la réserve de ${res} % pour imprévus` : ""} : il faudrait réduire le programme, le réaliser en plusieurs phases ou compléter le financement.`;
+    if (pos.code === "BAS") budget = `Estimés à ${cout}, les travaux se situent dans le bas de votre fourchette (${fourchette})${avecRes}${res ? " : la marge reste confortable" : " ; prévoir en plus une réserve pour imprévus"}.`;
+    else if (pos.code === "MILIEU") budget = `Estimés à ${cout}, les travaux se situent au milieu de votre fourchette (${fourchette})${avecRes || ", sans réserve pour imprévus"} : la marge reste correcte.`;
+    else if (pos.code === "HAUT") budget = `Estimés à ${cout}, les travaux se situent dans le haut de votre fourchette (${fourchette})${avecRes || ", sans réserve pour imprévus"} : la marge de manœuvre est faible.`;
+    else if (pos.code === "AU_DESSUS") budget = `Estimés à ${cout}, les travaux dépassent votre fourchette (${fourchette})${avecRes} : il faudrait réduire le programme, le réaliser en plusieurs phases ou compléter le financement.`;
     else budget = `Aucun budget n'a été indiqué : le coût des travaux (${cout}) n'a pas pu être comparé à une enveloppe.`;
     // Stationnement
     const places = parseInt(f(`${sc}_parking_places`)) || 0, manque = n(`${sc}_parking_deficit`);
@@ -9580,8 +9636,24 @@ function buildTemplateTexts(flat, scenarios) {
   const constatsV12 = (scenarios && scenarios.diagnostic && scenarios.diagnostic.constats_v12) || [];
   const recScV12 = (scenarios && scenarios[rec]) || {};
   const recConformeV12 = scenarioConformeV12(recScV12);
-  const recForcesV12 = scenarioForcesV12(recScV12, 3);
-  const recFaibleV12 = scenarioFaiblesseV12(recScV12);
+  // v13.6 — critères nommés pour le client (pas de « retraits », « COS », « standing » tout court)
+  const CRIT_CLIENT_TT = { budget_fit: "budget", programme_match: "réponse à votre programme", setback_encroachment: "respect des marges de recul",
+    cos_conformity: "emprise au sol", phase_flexibility: "possibilité de phasage", structure_simplicity: "simplicité de construction", standing_match: "taille des logements" };
+  const recForcesV12 = (() => {
+    const d = recScV12.score_detail || {};
+    return Object.keys(CRIT_CLIENT_TT).filter(k => d[k] && d[k].score != null && d[k].score >= 0.8)
+      .sort((a, b) => d[b].contribution - d[a].contribution).slice(0, 3).map(k => CRIT_CLIENT_TT[k]);
+  })();
+  const recFaibleV12 = (() => {
+    const d = recScV12.score_detail || {};
+    const k = Object.keys(CRIT_CLIENT_TT).filter(x => d[x] && d[x].score != null && d[x].score < 0.6).sort((a, b) => d[a].score - d[b].score)[0];
+    if (!k) return null;
+    let explication = String(d[k].explication || "");
+    if (k === "standing_match") explication = logementsClientTT(rec);
+    else explication = explication.replace(/\bretraits\b/g, "marges de recul").replace(/\bpar le COS\b/g, "").replace(/\bCOS\b/g, "emprise autorisée")
+      .replace("de surface de plancher", "de plancher").replace(/\s*:\s*en dessous du programme\.?$/, ".");
+    return { critere: CRIT_CLIENT_TT[k], explication: explication.replace(/^./, c => c.toLowerCase()) };
+  })();
   const recReserveV12 = reservePctV12(recScV12);
   // v13.3 — calendrier du scénario recommandé : études, permis, travaux (marge de 20 % comprise)
   const schV13 = (recScV12 && recScV12.schedule_v13) || null;
@@ -9594,34 +9666,42 @@ function buildTemplateTexts(flat, scenarios) {
     const pct = v => Math.round((Number(v) || 0) / tot * 100);
     const go = pct(cv.gros_oeuvre_fcfa), so = pct((Number(cv.second_oeuvre_fcfa) || 0) + (Number(cv.lots_techniques_fcfa) || 0));
     const rng = (a, b) => a.debut === b.fin ? `M${a.debut}` : `M${a.debut}–M${b.fin}`;
-    return `\n\n**Décaissements des travaux** :\n- **${rng(ph[0], ph[1])}** : ${go} % (fondations, gros œuvre)\n- **${rng(ph[2], ph[2])}** : ${so} % (second œuvre, lots techniques)\n- **${rng(ph[3], ph[3])}** : ${Math.max(0, 100 - go - so)} % (VRD, finitions, solde)`;
+    return `\n\n**Décaissements des travaux** :\n- **${rng(ph[0], ph[1])}** : ${go} % (fondations, gros œuvre)\n- **${rng(ph[2], ph[2])}** : ${so} % (second œuvre, installations techniques)\n- **${rng(ph[3], ph[3])}** : ${Math.max(0, 100 - go - so)} % (raccordements, finitions, solde)`;
   })();
   const bloquantsV12 = constatsV12.filter(c => c.niveau === "bloquant");
-  const positionBudgetV12 = fit => ({ DANS_BUDGET: "dans le bas de votre fourchette", BUDGET_TENDU: "dans le haut de votre fourchette",
-    HORS_BUDGET: "au-dessus de votre fourchette" })[fit] || "budget non renseigné";
-  const recPositionV12 = positionBudgetV12(recScV12.budget_fit);
-  function regrouperV12(list) {   // « Scénario A : 3 unités dépassent la zone constructible (… ) »
+  // v13.6 — même position budgétaire partout (bas / milieu / haut de la fourchette, calculée)
+  const positionBudgetV12 = x => budgetPositionV13(x && typeof x === "object" ? x : { budget_fit: x }).label;
+  const recPositionV12 = positionBudgetV12(recScV12);
+  // v13.6 — points bloquants dits pour le client : unités qui débordent, emprise au-delà du maximum, chevauchements
+  function regrouperV12(list) {
     const parScn = {}, autres = [];
     for (const c of list) {
-      if (c.code === "HORS_ZONE_CONSTRUCTIBLE" && /^[ABC]$/.test(c.portee)) (parScn[c.portee] = parScn[c.portee] || []).push(c);
-      else autres.push(c.message);
+      if (/^[ABC]$/.test(c.portee) && ["HORS_ZONE_CONSTRUCTIBLE", "COS_DEPASSE", "SUPERPOSITION"].includes(c.code)) (parScn[c.portee] = parScn[c.portee] || []).push(c);
+      else autres.push(String(c.message).replace(/\bretraits\b/g, "marges de recul").replace(/\bzone constructible\b/g, "zone constructible"));
     }
     const groupes = Object.keys(parScn).sort().map(l => {
-      const arr = parScn[l];
-      const parts = arr.map(c => { const m = c.message.match(/«\s*([^»]+?)\s*»[^0-9]*(\d+)\s*m²/); return m ? `« ${m[1]} » ${m[2]} m²` : null; });
-      if (arr.length === 1 || parts.some(p => !p)) return arr.map(c => c.message).join(" ");
-      return `Scénario ${l} : ${arr.length} unités dépassent la zone constructible (${parts.join(", ")}) : implantation à reprendre.`;
+      const arr = parScn[l], parts = [];
+      const hz = arr.filter(c => c.code === "HORS_ZONE_CONSTRUCTIBLE").map(c => {
+        const m = String(c.message).match(/«\s*([^»]+?)\s*»[^0-9]*(\d+)\s*m²/); return m ? `${m[1]} sur ${m[2]} m²` : null; }).filter(Boolean);
+      if (hz.length) parts.push(`${hz.length > 1 ? `${nombreTT(hz.length)} unités débordent` : "une unité déborde"} sur les marges de recul (${hz.join(", ")})`);
+      const cos = arr.find(c => c.code === "COS_DEPASSE");
+      if (cos) {
+        const m = String(cos.message).match(/(\d+)\s*m²\s*>[^(]*\((\d+)\s*m²/);
+        parts.push(m ? `l'emprise au sol dépasse le maximum autorisé (${m[1]} m² pour ${m[2]} m²)` : "l'emprise au sol dépasse le maximum autorisé");
+      }
+      if (arr.some(c => c.code === "SUPERPOSITION")) parts.push("deux unités se chevauchent au même niveau");
+      return `Scénario ${l} : ${parts.join(" ; ")}.`;
     });
     return groupes.concat(autres);
   }
   const pointsALeverV12 = bloquantsV12.length
-    ? `\n**Points à lever avant le permis** : ${regrouperV12(bloquantsV12).slice(0, 3).join(" ")}` : "";
+    ? `\n**À corriger avant le permis de construire** : ${regrouperV12(bloquantsV12).slice(0, 3).join(" ")}` : "";
   const bloquantsRecV12 = bloquantsV12.filter(c => c.portee === rec || c.portee === "projet");
   const aConfirmerV12 = constatsV12.filter(c => c.niveau === "attention" && c.portee === "projet"
     && ["FACADE_RUE_NON_INDIQUEE", "PROGRAMME_ECART_BESOIN", "ZONE_NON_RENSEIGNEE", "BUDGET_INCONNU"].includes(c.code));
-  const pointsRecV12 = (bloquantsRecV12.length ? `\n**Points à lever avant le permis** : ${regrouperV12(bloquantsRecV12).slice(0, 2).join(" ")}` : "")
+  const pointsRecV12 = (bloquantsRecV12.length ? `\n**À corriger avant le permis de construire** : ${regrouperV12(bloquantsRecV12).slice(0, 2).join(" ")}` : "")
     + (aConfirmerV12.length ? `\n**À confirmer** : ${aConfirmerV12.slice(0, 2).map(c => c.message).join(" ")}` : "");
-  const forcesTxtV12 = recForcesV12.length ? recForcesV12.join(", ") : "meilleur score multicritère";
+  const forcesTxtV12 = recForcesV12.length ? recForcesV12.join(", ") : "meilleure note sur l'ensemble des critères";
   const reserveTxtV12 = recReserveV12
     ? `la **réserve pour imprévus de ${recReserveV12} %** est déjà intégrée à la comparaison au budget`
     : "ce scénario **n'intègre pas de réserve pour imprévus** : prévoir au moins 10 % du coût des travaux";
@@ -9637,10 +9717,12 @@ function buildTemplateTexts(flat, scenarios) {
   // Égalité en tête : la recommandation est départagée par la posture du client (constat RECOMMANDATION)
   const recConstatV12 = constatsV12.find(c => c.code === "RECOMMANDATION") || {};
   const egauxRecV12 = (recConstatV12.chiffres && recConstatV12.chiffres.egalite_avec) || [];
-  const egaliteRecTxt = egauxRecV12.length ? `, à moins de 3 points de ${egauxRecV12.join(" et ")} et départagé par votre posture ${f("feasibility_posture_fr") || "équilibrée"}` : "";
+  const egaliteRecTxt = egauxRecV12.length ? `, à moins de 3 points de ${egauxRecV12.join(" et ")} et départagé par votre approche ${f("feasibility_posture_fr") || "équilibrée"}` : "";
   // v13 — poids de la grille réellement appliqués (posture du client) : affichés tels quels dans le PPT
   const grilleV13 = SCORE_WEIGHTS_V13[(recScV12 && recScV12.score_posture_v13) || postureKeyV13(f("feasibility_posture"))] || SCORE_WEIGHTS_V13.EQUILIBREE;
-  const grilleTxtV13 = CRITERES_V13.map(c => `${c.court} ${Math.round(grilleV13[c.key] * 100)} %`).join(" · ");
+  const CRIT_COURT_TT = { budget_fit: "budget", programme_match: "programme", setback_encroachment: "marges de recul", cos_conformity: "emprise au sol",
+    phase_flexibility: "phasage", structure_simplicity: "simplicité", standing_match: "taille des logements" };
+  const grilleTxtV13 = CRITERES_V13.map(c => `${CRIT_COURT_TT[c.key] || c.court} ${Math.round(grilleV13[c.key] * 100)} %`).join(" · ");
   const sousReserveV12 = !!(recConstatV12.chiffres && recConstatV12.chiffres.sous_reserve);
   // ═══ BUILD ALL TEXT KEYS ═══
   const texts = {};
@@ -9649,7 +9731,7 @@ function buildTemplateTexts(flat, scenarios) {
   // v74.18 — slide 3 : roles purs sans SDP (chiffres reveles dans les slides scenario detaillees)
   // v74.30 PUSH 11 — prefixer l'intro slide 3 par le bloc alerte si contraintes lead
   const constraintsAlertPrefix = flat._constraints_alert_text ? `${flat._constraints_alert_text}\n\n` : "";
-  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${plural(parseInt(f("target_units")) || parseInt(f("A_units")) || 0, "unité")}** en standing ${standingTxt}, budget de référence **${f("budget_fcfa")}**.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : ${memeProgramme("B", "A") ? "le même programme en plans optimisés (surfaces réduites de 5 à 10 % selon la typologie)" : `une variante optimisée du programme (${progDesc("B")})`}, ${memeProgramme("B", "A") ? "comparé" : "comparée"} à votre budget avec une réserve de 10 % pour les imprévus.\n- **Scénario C — la prudence** : ${memeProgramme("C", "A") ? "le même programme en plans compacts (surfaces réduites de 10 à 20 %)" : `une variante compacte du programme (${progDesc("C")})`}, avec une réserve de 20 % ; si le budget ne suffit pas, le projet est réalisé en deux phases, sans renoncer à vos typologies. Chacun est lu sous trois angles : **architectural**, **financier**, **réglementaire**.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Zone constructible (après retraits) : **${f("retrait_emprise_constructible")}**\n- COS **${f("site_cos_regl")}** (part du terrain que le bâtiment peut couvrir) : emprise au sol maximale **${f("site_emprise_max")}**\n- Budget : **${f("budget_fcfa")}** | Standing : ${standingTxt}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${mitoyCourt}**`;
+  texts.slide_3_intro_text = constraintsAlertPrefix + `**${f("site_area")} m²** à ${f("city")}, programme **${f("program_main")}** pour **${plural(parseInt(f("target_units")) || parseInt(f("A_units")) || 0, "unité")}** en standing ${standingTxt}, budget de référence **${f("budget_fcfa")}**.\n\n**Trois scénarios** ont été chiffrés pour vous aider à arbitrer :\n- **Scénario A — votre demande** : le programme tel que vous l'avez décrit, avec son coût réel, sans ajustement.\n- **Scénario B — l'équilibre** : ${memeProgramme("B", "A") ? "le même programme en plans optimisés (surfaces réduites de 5 à 10 % selon la typologie)" : `une variante optimisée du programme (${progDesc("B")})`}, ${memeProgramme("B", "A") ? "comparé" : "comparée"} à votre budget avec une réserve de 10 % pour les imprévus.\n- **Scénario C — la prudence** : ${memeProgramme("C", "A") ? "le même programme en plans compacts (surfaces réduites de 10 à 20 %)" : `une variante compacte du programme (${progDesc("C")})`}, avec une réserve de 20 % ; si le budget ne suffit pas, le projet est réalisé en deux phases, sans renoncer à vos typologies. Chacun est lu sous trois angles : **architectural**, **financier**, **réglementaire**.\n\n**Données clés du projet :**\n- Terrain : **${f("site_area")} m²** | Zone constructible (après les marges de recul) : **${f("retrait_emprise_constructible")}**\n- Emprise au sol autorisée : **${f("site_emprise_max")}**${parseInt(f("site_cos_regl")) ? ` (${parseInt(f("site_cos_regl"))} % du terrain : la part que le bâtiment peut couvrir)` : ""}\n- Budget : **${f("budget_fcfa")}** | Standing : ${standingTxt}\n- Zone climatique : ${(f("orient_zone") || "tropical").toLowerCase()} | Mitoyenneté : **${mitoyCourt}**`;
   texts.slide_3_programme_text = "";
   // ── SLIDE 4: Terrain ──
   // v74.14 — slide 4 : focus EMPRISE (déduit slide 3), sans COS/CES (déjà mentionnés)
@@ -9660,9 +9742,9 @@ function buildTemplateTexts(flat, scenarios) {
   const cosMaxTT = parseInt(f("site_emprise_max")) || 0;
   const reductionTT = siteAreaTT > 0 && zoneTT > 0 ? Math.round((1 - zoneTT / siteAreaTT) * 100) : null;
   const limiteTT = zoneTT && cosMaxTT ? (zoneTT <= cosMaxTT
-    ? ` Ici, ce sont les **retraits** qui limitent l'emprise (${zoneTT} m²), plus que le COS (${cosMaxTT} m²).`
-    : ` Ici, c'est le **COS** qui limite l'emprise (${cosMaxTT} m²), plus que les retraits (${zoneTT} m²).`) : "";
-  texts.slide_4_text = `${geomTxtV12} de **${siteAreaTT} m²**.\n\n**Comment se construit la surface utilisable**\n\nLes retraits réglementaires délimitent la "zone constructible" — l'espace réellement disponible pour bâtir, une fois les distances obligatoires aux limites du terrain respectées :\n\n- Recul **avant** (côté rue) : **${metres(f("retrait_avant"))}**\n- Recul **latéral** (chaque côté) : **${metres(f("retrait_lateral"))}**\n- Recul **arrière** : **${metres(f("retrait_arriere"))}**\n- Mitoyenneté : **${mitoyCourt}**\n\n${reductionTT != null ? `Ces retraits **réduisent la surface constructible au sol de ${reductionTT} %** : sur les ${siteAreaTT} m² du terrain, **${zoneTT} m²** sont constructibles au sol.` : `Zone constructible au sol : **${f("retrait_emprise_constructible")}**.`}${limiteTT}\n\nC'est cette zone qui dimensionne le projet : elle conditionne directement la taille de l'empreinte au sol, le nombre d'étages possibles et donc le programme final.`;
+    ? ` Ici, ce sont les **marges de recul** qui limitent l'emprise (${zoneTT} m²), plus que le règlement (${cosMaxTT} m² autorisés).`
+    : ` Ici, c'est le **maximum autorisé** par le règlement qui limite l'emprise (${cosMaxTT} m²), plus que les marges de recul (${zoneTT} m²).`) : "";
+  texts.slide_4_text = `${geomTxtV12} de **${siteAreaTT} m²**.\n\n**Comment se construit la surface utilisable**\n\nLes marges de recul imposées par le règlement délimitent la « zone constructible », l'espace réellement disponible pour bâtir :\n\n- Recul **avant** (côté rue) : **${metres(f("retrait_avant"))}**\n- Recul **latéral** (chaque côté) : **${metres(f("retrait_lateral"))}**\n- Recul **arrière** : **${metres(f("retrait_arriere"))}**\n- Mitoyenneté : **${mitoyCourt}**\n\n${reductionTT != null ? `Ces marges **réduisent la surface constructible au sol de ${reductionTT} %** : sur les ${siteAreaTT} m² du terrain, **${zoneTT} m²** sont constructibles au sol.` : `Zone constructible au sol : **${f("retrait_emprise_constructible")}**.`}${limiteTT}\n\nC'est cette zone qui dimensionne le projet : elle conditionne directement la taille de l'empreinte au sol, le nombre d'étages possibles et donc le programme final.`;
   // ── SLIDE 5: Contexte quartier (base déterministe — GPT reformule uniquement) ──
   // v74.14 — slide 5 : contexte + bioclimat, SANS COS/CES (déjà slide 3)
   // v12.12 — base factuelle (l'IA la reformule avec le contexte du quartier) : rien d'inventé sur le quartier
@@ -9676,24 +9758,24 @@ function buildTemplateTexts(flat, scenarios) {
   // B vs A comparison
   const costOfTT = l => Number(scObj(l).cost_total_fcfa) || 0;
   const bVsA_sdpDelta = n("A_sdp") - n("B_sdp");
-  const bVsA_verbe = bVsA_sdpDelta > 0 ? `réduirait la SDP de ${bVsA_sdpDelta} m²` : bVsA_sdpDelta < 0 ? `augmenterait la SDP de ${-bVsA_sdpDelta} m²` : "garderait la même SDP";
+  const bVsA_verbe = bVsA_sdpDelta > 0 ? `réduirait la surface de plancher de ${bVsA_sdpDelta} m²` : bVsA_sdpDelta < 0 ? `augmenterait la surface de plancher de ${-bVsA_sdpDelta} m²` : "garderait la même surface de plancher";
   const costM2OfTT = l => Math.round((Number(scObj(l).cost_per_m2_sdp) || 0) / 1000);
   const coutInverseTT = (n("B_sdp") < n("A_sdp") && costOfTT("B") > costOfTT("A")) || (n("B_sdp") > n("A_sdp") && costOfTT("B") < costOfTT("A"));
   const lgA = logementsM2("A"), lgB = logementsM2("B");
   const bVsA_comparison = `\n\n**Par rapport à A :**\n`
     + (memeProgramme("B", "A") ? "" : `- Programme de A : ${progDesc("A")}\n`)
-    + `- SDP ${f("B_sdp")} m² contre ${f("A_sdp")} m² ; travaux ${f("B_cost_total")} contre ${f("A_cost_total")}`
-    + (coutInverseTT ? ` (coût au m² retenu : ${costM2OfTT("B")}k contre ${costM2OfTT("A")}k FCFA)` : "")
+    + `- Plancher ${f("B_sdp")} m² contre ${f("A_sdp")} m² ; travaux ${mFcfaTT(costOfTT("B"))} contre ${mFcfaTT(costOfTT("A"))}`
+    + (coutInverseTT ? ` (prix au m² retenu : ${costM2OfTT("B")} 000 contre ${costM2OfTT("A")} 000 FCFA)` : "")
     + (empriseOf("B") === empriseOf("A") ? `\n- Même emprise au sol (${empriseOf("B")} m²)` : `\n- Emprise ${empriseOf("B")} m² contre ${empriseOf("A")} m²`)
     + (lgA && lgB ? (lgA === lgB ? ` ; même surface par logement (${lgB} m²)` : ` ; ${lgB} m² par logement contre ${lgA} m²`) : "")
-    + `\n- Score ${f("B_score")}/100 contre ${f("A_score")}/100`;
+    + `\n- Note ${f("B_score")}/100 contre ${f("A_score")}/100`;
   texts.scenario_B_summary_text = buildSummary("B") + bVsA_comparison;
   // C vs A+B comparison
   // v12.12 — comparaison factuelle : chaque « plus / moins » est vérifié sur les chiffres
   const costOfV12 = l => Number(scenarios && scenarios[l] && scenarios[l].cost_total_fcfa) || 0;
   const cMoinsCherV12 = costOfV12("C") > 0 && costOfV12("C") <= costOfV12("A") && costOfV12("C") <= costOfV12("B");
   const phase2CV12 = scenarios && scenarios.C && scenarios.C.phase_2_v12;
-  const cVsAB_comparison = `\n\n**Par rapport à A et B :**\n- ${cMoinsCherV12 ? "Le moins cher des trois" : "Pas le moins cher des trois"} : travaux ${f("C_cost_total")}${phase2CV12 ? " (phase 1)" : ""} contre ${f("A_cost_total")} (A) et ${f("B_cost_total")} (B)${phase2CV12 ? `\n- Phase 2 : ${Math.round((phase2CV12.cost_fcfa || 0) / 1e6)}M FCFA aux prix actuels, coût final ${Math.round(((scenarios.C.cost_final_fcfa) || 0) / 1e6)}M FCFA` : ""}\n- Emprise ${empriseOf("C")} m² (B : ${empriseOf("B")} m², A : ${empriseOf("A")} m²)\n- Score ${f("C_score")}/100 : ${scoreRangV12("C")}`;
+  const cVsAB_comparison = `\n\n**Par rapport à A et B :**\n- ${cMoinsCherV12 ? "Le moins cher des trois" : "Pas le moins cher des trois"} : travaux ${mFcfaTT(costOfV12("C"))}${phase2CV12 ? ` en phase 1 (${mFcfaTT(scenarios.C.cost_final_fcfa)} avec la phase 2, aux prix actuels)` : ""} contre ${mFcfaTT(costOfV12("A"))} (A) et ${mFcfaTT(costOfV12("B"))} (B)\n- Emprise ${empriseOf("C")} m² (B : ${empriseOf("B")}, A : ${empriseOf("A")} m²) ; note ${f("C_score")}/100, ${scoreRangV12("C").replace("le plus élevé", "la plus élevée").replace("le plus bas", "la plus basse").replace("intermédiaire", "entre les deux autres")}`;
   texts.scenario_C_summary_text = buildSummary("C") + cVsAB_comparison;
   // ── SLIDES 7/10/13: Financial ──
   texts.scenario_A_financial_text = buildFinancial("A");
@@ -9705,43 +9787,49 @@ function buildTemplateTexts(flat, scenarios) {
   texts.scenario_C_risk_text = buildRisk("C");
   // ── SLIDE 15: Comparatif intro ──
   // Cross-ref au tableau comparatif chart
-  texts.comparatif_intro_text = `Le tableau comparatif ci-dessous synthétise les indicateurs clés des trois scénarios : SDP, surfaces utiles, coûts, scores de recommandation et durées de chantier. Les cellules vertes indiquent la meilleure valeur pour chaque critère, permettant une lecture rapide des forces et faiblesses de chaque option.`;
+  texts.comparatif_intro_text = `Le tableau ci-dessous met côte à côte les trois scénarios : surfaces, coût des travaux, note globale et délais. En vert, la valeur la plus favorable de chaque ligne : les forces et les faiblesses de chaque option se lisent d'un coup d'œil.`;
   // ── SLIDE 16: Arbitrage stratégique ──
   // Cross-ref aux 4 graphiques d'arbitrage
   // v74.12 — arbitrage clair : posture, scoring résumé, comparatif chiffré, recommandation directe
-  texts.strategic_arbitrage_text = `Programme **${f("program_main")}** en standing ${standingTxt}, posture **${f("feasibility_posture_fr")}**, enveloppe **${f("budget_fcfa")}**.\n**Score sur 100**, 7 critères pondérés : ${grilleTxtV13} ; seul un scénario conforme peut être recommandé.\n**Scores** : A **${f("A_score")}** · B **${f("B_score")}** · C **${f("C_score")}** — budget : A ${positionBudgetV12(scenarios && scenarios.A && scenarios.A.budget_fit)}, B ${positionBudgetV12(scenarios && scenarios.B && scenarios.B.budget_fit)}, C ${positionBudgetV12(scenarios && scenarios.C && scenarios.C.budget_fit)}.\n**Notre recommandation : Scénario ${rec} (${f("rec_score")}/100${egaliteRecTxt})** — points forts : ${forcesTxtV12}${recFaibleV12 ? ` ; point faible : ${recFaibleV12.critere}` : ""}.${pointsALeverV12}`;
+  texts.strategic_arbitrage_text = `Votre projet : **${f("program_main")}** ${pourStanding}, budget **${fourchetteTT()}**, approche **${f("feasibility_posture_fr") || "équilibrée"}**.\n**Note sur 100**, 7 critères pondérés selon votre approche : ${grilleTxtV13} ; seul un scénario conforme peut être recommandé.\n**Notes** : A **${f("A_score")}** · B **${f("B_score")}** · C **${f("C_score")}** — budget : A ${positionBudgetV12(scenarios && scenarios.A)}, B ${positionBudgetV12(scenarios && scenarios.B)}, C ${positionBudgetV12(scenarios && scenarios.C)}.\n**Notre recommandation : Scénario ${rec} (${f("rec_score")}/100${egaliteRecTxt})** — points forts : ${forcesTxtV12}${recFaibleV12 ? ` ; point faible : ${recFaibleV12.critere}` : ""}.${pointsALeverV12}`;
   // ── SLIDE 17: Conditions de réussite (donut chart à droite) ──
   // v74.19 — textes courts, bullets, bold sur chiffres et concepts clés
   texts.invisible_intro_text = `**Conditions de réussite** — maîtriser le coût, le phasage et les délais.`;
   // v12.17d — 3 colonnes de la slide 17 : une ligne par point (zones de 2,5" de haut)
-  texts.invisible_technical_text = `**Ventilation — Scénario ${rec}** (${f("rec_cost_total")}) :\n- **Gros œuvre** ${f("rec_ventil_go_pct")} : structure, fondations\n- **Second œuvre** ${f("rec_ventil_so_pct")} : finitions\n- **Lots techniques** ${f("rec_ventil_lt_pct")} : réseaux intérieurs\n- **VRD** ${f("rec_ventil_vrd_pct")} : raccordements extérieurs${schV13 ? `\n\n**Calendrier** (${schV13.total_mois} mois, dont ${schV13.travaux_mois} de travaux) :\n${phasageLignesV13}` : `\n\n**Travaux** : ${f("rec_duree_chantier")}`}`;
-  texts.invisible_financial_text = `**Coût des travaux** : ${f("rec_cost_total")} (fourchette ${f("budget_fcfa")}).\n\n**À prévoir en plus** :\n- **Architecte** : ${f("rec_hono_bas")}M-${f("rec_hono_haut")}M FCFA (${f("rec_hono_taux_bas")}-${f("rec_hono_taux_haut")})\n- **Permis et taxes** : ~1-2 % des travaux\n- **Étude de sol** : 300k-500k FCFA\n- **Notaire, administratif** : variable\n- **Assurance dommage-ouvrage** : ~2 %\n\n${recReserveV12 ? `**Réserve pour imprévus** : ${recReserveV12} %, déjà comptée dans la comparaison au budget.` : "**Réserve pour imprévus** : au moins 10 % du coût des travaux, à ajouter."}`;
-  texts.invisible_strategic_text = `**Calendrier** (pluies de juin à octobre à ${f("city")}) :\n- **Travaux** : ${schV13 ? `à partir de M${schV13.phases.find(p => p.groupe === "travaux").debut}, ` : ""}démarrage en saison sèche (novembre-janvier)\n- **Fondations** : hors saison des pluies\n- **Finitions** : avant les pluies suivantes${decaissementsV13}`;
-  // ── SLIDE 18: Ce qu'on ne voit pas encore — points techniques + checklist + jalons ──
-  // v74.19 — différenciée de slide 17 : col financier = checklist actions, col stratégique = jalons décisionnels
+  // v13.6 — colonnes « conditions de réussite », checklist, étapes et conclusion : même règle que les encadrés
+  // (des mots du client, pas de sigles ; chiffres et positions budgétaires identiques partout)
+  const recCoutTT = mFcfaTT(recScV12.cost_total_fcfa);
+  const recTauxBas = String(f("rec_hono_taux_bas") || "10%").replace(/\s*%$/, ""), recTauxHaut = String(f("rec_hono_taux_haut") || "15%").replace(/\s*%$/, "");
+  texts.invisible_technical_text = `**Coût du scénario ${rec}** (${recCoutTT}) :\n- **Gros œuvre** ${f("rec_ventil_go_pct")} : structure\n- **Second œuvre** ${f("rec_ventil_so_pct")} : finitions\n- **Réseaux intérieurs** ${f("rec_ventil_lt_pct")}\n- **Raccordements extérieurs** ${f("rec_ventil_vrd_pct")}${schV13 ? `\n\n**Calendrier** (${schV13.total_mois} mois, dont ${schV13.travaux_mois} de travaux) :\n${phasageLignesV13}` : `\n\n**Travaux** : ${f("rec_duree_chantier")}`}`;
+  texts.invisible_financial_text = `**Coût des travaux** : ${recCoutTT} (fourchette ${fourchetteTT()}).\n\n**À prévoir en plus** :\n- **Architecte, ingénieurs** : ${f("rec_hono_bas")} à ${f("rec_hono_haut")} M FCFA (${recTauxBas} à ${recTauxHaut} %)\n- **Permis et taxes** : 1 à 2 % des travaux\n- **Étude de sol** : 300 000 à 500 000 FCFA\n- **Notaire, administratif** : variable\n- **Assurance dommage-ouvrage** : environ 2 %\n\n${recReserveV12 ? `**Réserve pour imprévus** : ${recReserveV12} %, déjà comptée dans la comparaison au budget.` : "**Réserve pour imprévus** : au moins 10 % du coût des travaux, à ajouter."}`;
+  texts.invisible_strategic_text = `**Calendrier** (pluies de juin à octobre à ${f("city")}) :\n- **Travaux** : ${schV13 ? `à partir de M${schV13.phases.find(p => p.groupe === "travaux").debut}, ` : ""}démarrage en saison sèche (novembre à janvier)\n- **Fondations** : hors saison des pluies\n- **Finitions** : avant les pluies suivantes${decaissementsV13}`;
+  // ── Points clés & checklist ──
   texts.success_intro_text = recConformeV12
-    ? `*Le **Scénario ${rec}** ressort en tête pour : **${forcesTxtV12}** (${f("rec_cost_total")} de travaux, ${recPositionV12}).*`
+    ? `*Le **Scénario ${rec}** ressort en tête pour : **${forcesTxtV12}** (${recCoutTT} de travaux, ${recPositionV12}).*`
     : `*Le **Scénario ${rec}** ressort en tête (${forcesTxtV12}), mais son **implantation doit être reprise** pour respecter les règles du terrain avant le permis.*`;
-  texts.success_technical_text = `**Points techniques à anticiper :**\n\n- **Structure ${totalNivOf(rec) <= 1 ? "de plain-pied" : `sur ${totalNivOf(rec)} niveaux`}** béton armé : système poteau-poutre classique, maîtrisé localement\n- **Fondations** : étude géotechnique **indispensable**${nbMitoyTT > 0 ? ` (mitoyenneté sur ${plural(nbMitoyTT, "côté")} : fondations en limite de parcelle)` : ""}\n- **Empreinte ${empriseOf(rec)} m²** : ${totalNivOf(rec) > 1 ? "circulations verticales à optimiser" : "circulations de plain-pied, accès direct"}\n- **Ventilation naturelle** : ouvertures traversantes sur façades libres\n- **Étanchéité toiture terrasse** : critique en climat tropical humide`;
-  texts.success_financial_text = `**Checklist actions financières — avant lancement :**\n\n- ☐ **Validation budget total** (travaux + annexes) avec votre conseil financier\n- ☐ **Mise en place de la trésorerie** par tranches selon échéancier de décaissement\n- ☐ **Devis comparatifs** auprès de **3 entreprises minimum** pour chaque lot majeur\n- ☐ **Provision imprévus** : ${recReserveV12 ? `${recReserveV12} % déjà intégrés au scénario ${rec}, à isoler dès le départ` : "au moins 10 % du coût des travaux, à isoler dès le départ"}\n- ☐ **Mode de financement** : autofinancement, prêt bancaire ou mixte ?\n- ☐ **Modalités de paiement** : avances, situations mensuelles, retenue de garantie\n- ☐ **Suivi budgétaire mensuel** par lot pour détecter les dérives à temps`;
-  texts.success_strategic_text = `**Jalons décisionnels — décisions à prendre dans l'ordre :**\n\n- **Go/no-go terrain** : valider la maîtrise foncière et les actes\n- **Choix architecte** : appel d'offres restreint ou consultation directe\n- **Lancement APS/APD** : 3-4 + 4-6 semaines, base du chiffrage définitif\n- **Étude géotechnique** : 2-3 semaines, indispensable avant permis\n- **Dépôt permis de construire** : instruction **2-4 mois** selon commune\n- **Consultation entreprises** : 3-4 semaines pour devis\n- **Sélection entreprise** + signature des marchés\n- **Démarrage chantier** : viser saison sèche pour les fondations`;
-  // ── SLIDE 19: Next steps — études et démarches APS/APD ──
-  // v74.19 — bullets concis avec phases en bold
-  texts.next_step_intro_text = `**Suite à la recommandation du Scénario ${rec}**, voici les études et démarches à engager pour passer à la phase opérationnelle. Le phasage du chantier ci-dessous illustre l'enchaînement.`;
-  texts.next_step_scope_text = `**Périmètre des études à lancer :**\n- **APS** (avant-projet sommaire, **3-4 semaines**) : volumes, implantation, choix structurels ; valide la faisabilité et affine le budget.\n- **APD** (avant-projet définitif, **4-6 semaines**) : plans détaillés, structure, matériaux ; base du chiffrage définitif.\n- **Étude géotechnique** (**2-3 semaines**) : sondages pour dimensionner les fondations, **indispensable** avant le permis.\n- **Permis de construire** (instruction **2-4 mois** selon la commune) : dossier administratif complet.\n- **Consultation des entreprises** (**3-4 semaines**) : appel d'offres restreint, analyse des devis, sélection.`;
-  texts.next_step_outcome_text = `**Livrables attendus** : APS validé, budget affiné à ±10 %, rapport géotechnique, dossier de permis prêt pour dépôt.`;
-  // ── SLIDE 20: Conclusion premium ──
-  // v74.19 — verdict premium, dynamique, appel à l'action clair
-  // v74.20 FIX : utiliser rec_units (le programme reel livre par le scenario recommande)
-  // au lieu de A_units (l'ambition initiale du client) pour eviter le mismatch
-  // (ex: client veut 3 unites, scenario C en livre 2 → conclusion doit dire 2)
+  texts.success_technical_text = `**Points techniques à anticiper :**\n\n- **Structure ${totalNivOf(rec) <= 1 ? "de plain-pied" : `sur ${totalNivOf(rec)} niveaux`}** en béton armé : poteaux et poutres, une technique bien maîtrisée localement\n- **Fondations** : étude de sol **indispensable**${nbMitoyTT > 0 ? ` (mitoyenneté sur ${plural(nbMitoyTT, "côté")} : fondations en limite de parcelle)` : ""}\n- **Emprise de ${empriseOf(rec)} m² au sol** : ${totalNivOf(rec) > 1 ? "l'escalier occupe une part importante de chaque niveau, à optimiser" : "tout au rez-de-chaussée, accès direct"}\n- **Ventilation naturelle** : ouvertures traversantes sur les façades libres\n- **Étanchéité de la toiture terrasse** : essentielle en climat tropical humide`;
+  texts.success_financial_text = `**Checklist financière — avant de lancer le projet :**\n\n- ☐ **Valider le budget total** (travaux + frais annexes) avec votre conseiller financier\n- ☐ **Organiser la trésorerie** par tranches, selon le calendrier des paiements\n- ☐ **Comparer les devis** d'au moins **3 entreprises** pour chaque grand poste\n- ☐ **Réserve pour imprévus** : ${recReserveV12 ? `${recReserveV12} % déjà intégrés au scénario ${rec}, à mettre de côté dès le départ` : "au moins 10 % du coût des travaux, à mettre de côté dès le départ"}\n- ☐ **Mode de financement** : fonds propres, prêt bancaire ou les deux ?\n- ☐ **Modalités de paiement** : acomptes, paiements mensuels selon l'avancement, retenue de garantie\n- ☐ **Suivi mensuel des dépenses** par poste, pour détecter les dérives à temps`;
+  texts.success_strategic_text = `**Jalons décisionnels — dans l'ordre :**\n\n- **Terrain** : vérifier la propriété et les actes\n- **Choix de l'architecte** : consultation directe ou mise en concurrence\n- **Études de conception** (esquisse, avant-projet) : 7 à 10 semaines, base du chiffrage définitif\n- **Étude de sol** : 2 à 3 semaines, indispensable avant le permis\n- **Dépôt du permis de construire** : instruction de **2 à 4 mois** selon la commune\n- **Consultation des entreprises** : 3 à 4 semaines pour obtenir les devis\n- **Choix de l'entreprise** et signature des contrats\n- **Démarrage du chantier** : en saison sèche pour les fondations`;
+  // ── Prochaines étapes ──
+  texts.next_step_intro_text = `**Suite à la recommandation du Scénario ${rec}**, voici les études et démarches à engager pour passer à la réalisation. Le calendrier ci-dessous montre leur enchaînement avec le chantier.`;
+  texts.next_step_scope_text = `**Périmètre des études à lancer :**\n- **Esquisse et avant-projet sommaire** (**3-4 semaines**) : volumes, implantation, principe de structure ; confirme la faisabilité et affine le budget.\n- **Avant-projet définitif** (**4-6 semaines**) : plans détaillés, structure, matériaux ; base du chiffrage définitif.\n- **Étude de sol** (**2-3 semaines**) : sondages pour dimensionner les fondations, **indispensable** avant le permis.\n- **Permis de construire** (instruction **2-4 mois** selon la commune) : dossier administratif complet.\n- **Consultation des entreprises** (**3-4 semaines**) : mise en concurrence, analyse des devis, choix de l'entreprise.`;
+  texts.next_step_outcome_text = `**Livrables attendus** : avant-projet validé, budget affiné à ±10 %, rapport d'étude de sol, dossier de permis prêt à déposer.`;
+  // ── Conclusion ──
   const recUnits = f(`${rec}_units`) || f("rec_units") || f("A_units");
   const recSdp = f(`${rec}_sdp`) || f("rec_sdp");
   // v12.12 — verdict fondé sur les constats (budget, conformité, forces et faiblesse du scénario)
   const recNivV12 = (parseInt(f("rec_levels")) || 0) + 1;
-  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² SDP** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${f("rec_cost_total")}**, ${recPositionV12} (**${f("budget_fcfa")}**)\n- **Conformité** : ${recConformeV12 ? (recScV12.facade_aveugle_v13 ? "conforme **si les façades en débord restent aveugles**" : "COS et retraits respectés") : "**implantation à reprendre** avant le permis"}${sousReserveV12 ? " (aucun scénario conforme en l'état : **recommandation sous réserve**)" : ""}\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
-  texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** ${egauxRecV12.length ? `Score multicritère de **${f("rec_score")}/100**${egaliteRecTxt}` : `Meilleur score multicritère (**${f("rec_score")}/100**)`}, porté par : **${forcesTxtV12}**. Coût des travaux **${f("rec_cost_total")}** (${recPositionV12}) pour **${plural(parseInt(recUnits) || 0, "unité")} sur ${recSdp} m² SDP**, ${niveauxTxt(recNivV12)}.`;
+  texts.conclusion_summary_text = `**Le verdict de ce diagnostic** : le **Scénario ${rec}** est recommandé (**${f("rec_score")}/100**${egaliteRecTxt}).\n- **Programme** : **${plural(parseInt(recUnits) || 0, "unité")}** sur **${recSdp} m² de plancher** (${niveauxCourt(recNivV12)})\n- **Coût des travaux** : **${recCoutTT}**, ${recPositionV12} (**${fourchetteTT()}**)\n- **Urbanisme** : ${recConformeV12 ? (recScV12.facade_aveugle_v13 ? "respectées **si les façades en débord restent aveugles**" : "marges de recul et emprise au sol respectées") : "**implantation à reprendre** avant le permis"}${sousReserveV12 ? " (aucun scénario conforme en l'état : **recommandation sous réserve**)" : ""}\n${recFaibleV12 ? `Point de vigilance : ${recFaibleV12.critere} — ${recFaibleV12.explication}` : `Les deux autres scénarios restent disponibles si vos priorités évoluent.`}${pointsRecV12}`;
+  texts.conclusion_positioning_text = `**Pourquoi ${rec} ?** ${egauxRecV12.length ? `Note de **${f("rec_score")}/100**${egaliteRecTxt}` : `Meilleure note des trois scénarios (**${f("rec_score")}/100**)`}, portée par : **${forcesTxtV12}**. Coût des travaux **${recCoutTT}** (${recPositionV12}) pour **${plural(parseInt(recUnits) || 0, "unité")} sur ${recSdp} m² de surface de plancher**, ${niveauxTxt(recNivV12)}.`;
   texts.conclusion_projection_text = `**Horizon de livraison** : ${schV13 ? `environ **${schV13.total_mois} mois** — études de conception (**${schV13.etudes_mois} mois**), permis et consultation des entreprises (**${schV13.permis_mois} mois**, jusqu'à 4 selon la commune), puis travaux (**${schV13.travaux_mois} mois**, marge d'aléas de 20 % comprise)` : `études et permis, puis chantier (**${f("rec_duree_chantier")}**)`}.\n\n**Calendrier optimal** :\n- Démarrage des travaux **novembre-janvier** (saison sèche)\n- Fondations sécurisées avant les pluies\n- Réception **avant la prochaine saison des pluies**`;
+  // v13.6 — typographie : un nombre et son unité ne se séparent jamais en fin de ligne (« 66 M FCFA », « 40 m² »)
+  for (const k of Object.keys(texts)) {
+    if (typeof texts[k] !== "string") continue;
+    texts[k] = texts[k]
+      .replace(/(\d)\s*M FCFA/g, "$1 M FCFA")
+      .replace(/(\d) (m²|%|mois|semaines|FCFA|niveaux|unités|places)/g, "$1 $2")
+      .replace(/(\d)%/g, "$1 %");
+  }
   console.log(`│ ✅ TEMPLATE ENGINE v2.0 PREMIUM: ${Object.keys(texts).length} textes générés (accents, conditionnel, cross-ref charts)`);
   return texts;
 }
@@ -10976,6 +11064,7 @@ async function buildPptxPayloadV13(p) {
       flat[`${key}_cost_m2_marche`] = `${s.market_cost_per_m2 ? Math.round(s.market_cost_per_m2 / 1000) : 0}k`;
       flat[`${key}_cost_m2_ajuste`] = `${s.cost_per_m2 ? Math.round(s.cost_per_m2 / 1000) : 0}k`;
       flat[`${key}_budget_fit`] = s.budget_fit || "";
+      flat[`${key}_budget_position`] = budgetPositionV13(s).label;   // v13.6 — même libellé partout
       flat[`${key}_cos_pct`] = String(s.cos_ratio_pct || 0);
       flat[`${key}_cos_compliance`] = s.cos_compliance || "";
       flat[`${key}_duree_chantier`] = `${s.duree_chantier_mois || 0} mois`;
@@ -11092,7 +11181,10 @@ async function buildPptxPayloadV13(p) {
         risk_scores: { ...riskMetrics },
         recommendation_score: Math.round((sc.recommendation_score || 0.5) * 100),
         sdp_m2: sc.sdp_m2 || 0,
-        surface_habitable_m2: sc.surface_habitable_m2 || sc.hab_m2_total || 0,
+        // v13.6 — surface utile estimée (murs et escalier déduits), plus jamais égale à la surface de plancher
+        surface_habitable_m2: surfaceUtileV13(sc) || sc.surface_habitable_m2 || sc.hab_m2_total || 0,
+        budget_position: budgetPositionV13(sc),
+        a_corriger: sc.eligible_v13 === false,
         niveaux: sc.levels || 0,
         levels: sc.levels || 0,
         total_units: sc.total_units || 0,
@@ -11592,7 +11684,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "13.3";   // v13.3 : calendrier du projet (études + permis + travaux)
+const V12_ENGINE_VERSION = "13.6";   // v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).

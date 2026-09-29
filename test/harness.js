@@ -48,4 +48,8 @@ function loadServer(exportNames, opts) {
   return sandboxModule.exports;
 }
 
-module.exports = { loadServer };
+// v13.6 — les textes du PPT lient nombre et unité par des espaces insécables : les tests lisent le contenu
+function sansInsecables(texts) {
+  return Object.fromEntries(Object.entries(texts || {}).map(([k, v]) => [k, typeof v === "string" ? v.replace(/ /g, " ") : v]));
+}
+module.exports = { loadServer, sansInsecables };

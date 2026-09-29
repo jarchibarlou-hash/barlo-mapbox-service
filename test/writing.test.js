@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { loadServer } = require("./harness");
+const { loadServer, sansInsecables } = require("./harness");
 
 const S = loadServer(["computeSmartScenarios", "scenarioEngineInputs", "enrichFlatForTemplates", "buildTemplateTexts", "validateProjectAnalysisV12"]);
 const FMM4 = "4.0450260,9.6953230|4.0451076,9.6953619|4.0450701,9.6954531|4.0449738,9.6954183|4.0449444,9.6954236|4.0448360,9.6953700|4.0448494,9.6953512";
@@ -18,7 +18,7 @@ function texts(lead) {
   const sc = S.computeSmartScenarios(S.scenarioEngineInputs(lead, {}, null, ROWS));
   const flat = { rec_scenario: sc.diagnostic.recommandation.scenario };
   S.enrichFlatForTemplates(flat, lead, sc);
-  return { sc, flat, texts: S.buildTemplateTexts(flat, sc) };
+  return { sc, flat, texts: sansInsecables(S.buildTemplateTexts(flat, sc)) };
 }
 
 test("constats : faits vérifiés, triés du bloquant à l'info", () => {

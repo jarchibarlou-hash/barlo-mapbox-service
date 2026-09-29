@@ -1302,6 +1302,10 @@ def assemble_pptx(data, template_path, output_path):
                     'BUDGET_TENDU': 'HAUT DE FOURCHETTE',
                     'HORS_BUDGET': 'AU-DESSUS',
                 }.get(budget_fit, budget_fit)
+                # v13.6 \u2014 position r\u00e9elle dans la fourchette (bas / milieu / haut), la m\u00eame que dans les textes
+                pos_lbl = str(flat_data.get(f'{sc_key}_budget_position', '') or '')
+                if pos_lbl and pos_lbl != 'budget non renseign\u00e9':
+                    fit_label = pos_lbl.replace('de votre fourchette', 'de fourchette').replace('dans le ', '').replace('au ', '').upper()
                 table_rows.append([sc_key, f'{sdp_val}m\u00b2', cost_m2_marche, cost_m2_ajuste, cost_total, fit_label])
 
             # Position: bottom-left, left-aligned under text columns
@@ -1322,7 +1326,7 @@ def assemble_pptx(data, template_path, output_path):
                 tbl.columns[i].width = w
 
             # Header row
-            headers = ['Sc\u00e9nario', 'SDP', 'Co\u00fbt/m\u00b2\ngrille', 'Co\u00fbt/m\u00b2\nretenu', 'Co\u00fbt\ntravaux', 'Budget']
+            headers = ['Sc\u00e9nario', 'Plancher', 'Prix courant\n/m\u00b2', 'Prix retenu\n/m\u00b2', 'Co\u00fbt\ntravaux', 'Budget']
             DARK_GREEN = RGBColor(0x2C, 0x5F, 0x2D)
             WHITE = RGBColor(0xFF, 0xFF, 0xFF)
             LIGHT_BG = RGBColor(0xF5, 0xF5, 0xF0)
