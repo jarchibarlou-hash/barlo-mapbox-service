@@ -61,7 +61,7 @@ RISK_LABELS_FR = {
     'cos_conformity':          'Emprise\nau sol',
     'phase_flexibility':       'Phasage',
     'structure_simplicity':    'Simplicité\nconstructive',
-    'standing_match':          'Standing',
+    'standing_match':          'Taille des\nlogements',
     # anciennes clés (avant v13)
     'complexite_structurelle': 'Risque /\nposture',
     'risque_permis':           'Conformité\n(COS, retraits)',
@@ -949,7 +949,7 @@ SLOT_POS = {
 BRAND_GREEN = '#1F5E55'
 # Libellés courts du radar (zone étroite) ; les barres voisines portent les libellés complets
 RADAR_SHORT = {'budget_fit': 'Budget', 'programme_match': 'Programme', 'setback_encroachment': 'Reculs', 'cos_conformity': 'Emprise',
-               'phase_flexibility': 'Phasage', 'structure_simplicity': 'Structure', 'standing_match': 'Standing'}
+               'phase_flexibility': 'Phasage', 'structure_simplicity': 'Structure', 'standing_match': 'Logements'}
 BRAND_PINK = '#E94B78'
 
 

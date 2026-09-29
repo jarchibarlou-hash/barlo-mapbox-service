@@ -94,6 +94,15 @@ def _fr(v, nd=1):
     return s.replace('.', ',')
 
 
+def _axo_label(u):
+    """v13.6 — « Nom · R+1 · 49 m² » : même étiquette que les vues 3D (surface après le niveau)."""
+    base = f"{u.get('name') or u.get('type')} · {_unit_levels(u)}"
+    poly = u.get('poly')
+    if poly and len(poly) >= 3:
+        base += f" · {_fr(abs(_area_signed(poly)), 0)} m²"
+    return base
+
+
 def _alt(v):
     return ('±' if abs(v) < 0.005 else '+') + f'{abs(v):.2f}'.replace('.', ',')
 
@@ -326,7 +335,7 @@ def _draw_axo(ax, d, w_in, h_in):
     X0, X1 = min(p[0] for p in allp), max(p[0] for p in allp)
     Y0, Y1 = min(p[1] for p in allp), max(p[1] for p in allp)
     fs = 6.2
-    texts = [f"{u.get('name') or u.get('type')} · {_unit_levels(u)}" for _, _, u, _ in prisms]
+    texts = [_axo_label(u) for _, _, u, _ in prisms]
     lab_in = (max((len(t) for t in texts), default=0) * fs * 0.56 + 12) / 72
     gap_in = 0.25
     s = max((X1 - X0) / max(0.8, w_in - lab_in - gap_in - 0.1), (Y1 - Y0) / (h_in - 0.15)) * 1.03
@@ -348,7 +357,7 @@ def _draw_axo(ax, d, w_in, h_in):
             cands += [((fx + q[0]) / 2, (fy + q[1]) / 2) for q in f]
         cands.sort(key=lambda q: -q[0])            # de préférence du côté des étiquettes
         anchor = next((q for q in cands if visible(q, vi)), cands[0] if cands else (0, 0))
-        items.append({'ty': anchor[1], 'anchor': anchor, 'text': f"{u.get('name') or u.get('type')} · {_unit_levels(u)}", 'color': u['color']})
+        items.append({'ty': anchor[1], 'anchor': anchor, 'text': _axo_label(u), 'color': u['color']})
     lx = X1 + gap_in * s
     yl0, yl1 = ax.get_ylim()
     for it in _stack_labels(items, fs * 2.2 / 72 * s, yl0 + 0.15 * s, yl1 - 0.15 * s):

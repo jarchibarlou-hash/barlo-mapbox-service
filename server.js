@@ -9538,7 +9538,8 @@ function buildTemplateTexts(flat, scenarios) {
       const types = [...new Set(it.map(i => i.type))];
       const desc = it.length === 1 ? `Le logement (${it[0].type}) fait ${it[0].m2} m²` : `Les ${it.length} logements font ${listeTT(it.map(i => `${i.m2} m² (${i.type})`))}`;
       const ref = types.length === 1 ? `${it.length > 1 ? "des" : "un"} ${types[0]} courant${it.length > 1 ? "s" : ""} ${pourStanding} (environ ${it[0].ref} m²)` : `les surfaces courantes ${pourStanding}`;
-      const v = niveau === "ok" ? `, une taille conforme à ${ref}` : niveau === "un_peu" ? `, un peu moins que ${ref}` : niveau === "nettement" ? `, nettement moins que ${ref} : à agrandir pendant les études` : "";
+      const que = r => /^(un|une)\b/.test(r) ? `qu'${r}` : `que ${r}`;   // « qu'un T3 », « que des T2 »
+      const v = niveau === "ok" ? `, une taille conforme à ${ref}` : niveau === "un_peu" ? `, un peu moins ${que(ref)}` : niveau === "nettement" ? `, nettement moins ${que(ref)} : à agrandir pendant les études` : "";
       return `${desc}${v}.${hauteur}`;
     }
     const m = logementsM2(sc);
