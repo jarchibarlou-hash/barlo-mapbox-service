@@ -119,6 +119,17 @@ def _shade(color, k):
     return (r * k, g * k, b * k)
 
 
+def _on_color(color):
+    """Texte lisible posé sur la couleur d'une unité (v13.7, une couleur par typologie) : blanc sur
+    les couleurs foncées, encre sur les claires (T5 jaune, bureau lilas) — contraste >= 3 sinon encre."""
+    try:
+        lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in _hex_rgb(color)]
+    except (ValueError, TypeError, AttributeError):
+        return 'white'
+    lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    return 'white' if 1.05 / (lum + 0.05) >= 3 else INK
+
+
 def _is_ground(u):
     return float(u.get('ground_m') or 0) < 0.01
 
@@ -211,7 +222,7 @@ def _draw_plan(ax, d, cut, w_in, h_in):
         area = abs(_area_signed(u['poly']))
         name = '\n'.join(textwrap.wrap(str(u.get('name') or u.get('type') or ''), 13)[:2])
         ax.text(lx, ly, f"{name}\n{_fr(area, 0)} m²" + ('\nsur pilotis' if pil else ''), fontsize=(6.2 if rad >= 1.4 else 5.2),
-                color=('white' if not pil else INK), fontweight='bold', ha='center', va='center', zorder=8, family=FONT, linespacing=1.1,
+                color=(_on_color(u['color']) if not pil else INK), fontweight='bold', ha='center', va='center', zorder=8, family=FONT, linespacing=1.1,
                 bbox=dict(boxstyle='round,pad=0.15', fc=(u['color'] if not pil else 'white'), ec='none', alpha=0.9))
     # ligne de coupe A–A'
     if cut:
@@ -495,7 +506,7 @@ def _draw_coupe(ax, d, cut, w_in, h_in):
             while fs > 4.4 and (max(len(x) for x in lines) * fs * 0.58 > w_pt - 3 or len(lines) * fs * 1.2 > h_pt - 1):
                 fs -= 0.3
             if max(len(x) for x in lines) * fs * 0.58 <= w_pt - 3 and len(lines) * fs * 1.2 <= h_pt - 1:
-                ax.text((lo + hi) / 2, (base + top) / 2, '\n'.join(lines), fontsize=fs, color='white', fontweight='bold',
+                ax.text((lo + hi) / 2, (base + top) / 2, '\n'.join(lines), fontsize=fs, color=_on_color(u['color']), fontweight='bold',
                         ha='center', va='center', zorder=8, family=FONT, linespacing=1.05)
                 break
     # repères de coupe, orientation

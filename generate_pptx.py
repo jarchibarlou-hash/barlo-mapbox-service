@@ -487,6 +487,20 @@ _UNIT_COLOR = {
     'RESI':     '#22C55E',
 }
 
+# v13.7 — Une couleur par typologie, identique à server.js (UNIT_TYPE_COLORS) : 3D, planche, cockpit.
+# Remplace _UNIT_COLOR (par catégorie, tous les logements en vert) sur ce plan de secours.
+_UNIT_TYPE_COLOR = {
+    'T1': '#2E9C94', 'T2': '#3A7AC0', 'T3': '#2F7D32', 'T4': '#C2557E', 'T5': '#F2C14E',
+    'COMMERCE': '#E07830', 'BUREAU': '#C084FC', 'ATELIER': '#334155', 'AUTRE': '#57534E',
+}
+
+
+def _plan_unit_type_key(t):
+    t = str(t or '').upper().strip()
+    if t in _UNIT_TYPE_COLOR:
+        return t
+    return 'T5' if (len(t) >= 2 and t[0] == 'T' and t[1].isdigit()) else 'AUTRE'
+
 # 8 secteurs cardinaux : (angle_from_north_deg, sens horaire) au centre du secteur
 _SECTOR_CENTER_DEG = {
     'N':  0.0,   'NE': 45.0,  'E':  90.0, 'SE': 135.0,
@@ -659,7 +673,7 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
     for u in units:
         area_m2 = max(4.0, float(u.get('size_m2') or 20.0))
         cat = _plan_categorize_unit_type(u.get('type', ''))
-        color = _UNIT_COLOR.get(cat, '#22C55E')
+        color = _UNIT_TYPE_COLOR[_plan_unit_type_key(u.get('type', ''))]   # v13.7 : par typologie
 
         # v75.11.1 : utilise polygone custom s'il existe (formes L/T/U/circle etc.)
         custom_polygon = u.get('polygon')
@@ -791,10 +805,10 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
     # --- Titre + légende types ---
     # v12.17b — titre porté par la diapo (master), plus répété dans l'image
 
-    # Légende types présents
+    # Légende des typologies présentes (v13.7 : une couleur par typologie)
     present_cats = []
     for u in units:
-        c = _plan_categorize_unit_type(u.get('type', ''))
+        c = _plan_unit_type_key(u.get('type', ''))
         if c not in present_cats:
             present_cats.append(c)
     if present_cats:
@@ -803,8 +817,8 @@ def _plan_generate_image(scenario_label, polygon_latlon, units, site_area_m2, ou
         for i, c in enumerate(present_cats):
             yy = legend_y + i * max_span * 0.045
             ax.add_patch(MplRectangle((legend_x, yy), max_span * 0.03, max_span * 0.02,
-                                       facecolor=_UNIT_COLOR[c], edgecolor='#F8FAFC', linewidth=0.8, zorder=8))
-            ax.text(legend_x + max_span * 0.04, yy + max_span * 0.01, {'RESI': 'Logement', 'COMMERCE': 'Commerce', 'BUREAU': 'Bureau', 'ATELIER': 'Atelier'}.get(c, c.title()),
+                                       facecolor=_UNIT_TYPE_COLOR[c], edgecolor='#F8FAFC', linewidth=0.8, zorder=8))
+            ax.text(legend_x + max_span * 0.04, yy + max_span * 0.01, {'COMMERCE': 'Commerce', 'BUREAU': 'Bureau', 'ATELIER': 'Atelier', 'AUTRE': 'Autre'}.get(c, c),
                     color='#F8FAFC', fontsize=8, ha='left', va='center', zorder=8)
 
     # Info parcelle (superficie affichée en bas)

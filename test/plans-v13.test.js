@@ -27,11 +27,33 @@ test("planche : parcelle, zone constructible, côtés et altitudes des unités (
   assert.deepEqual([cab.base_m, cab.top_m, cab.start_level], [0, 3, 0]);
   assert.deepEqual([log.ground_m, log.base_m, log.top_m, log.start_level, log.floors], [3.5, 3.5, 10.5, 1, 2]);
   assert.deepEqual([pil.ground_m, pil.base_m, pil.top_m, pil.start_level], [0, 3, 6, 1]);
-  assert.equal(cab.color, "#8B5CF6");
+  assert.equal(cab.color, "#C084FC");   // v13.7 : bureau = lilas
+  // v13.7 — une couleur par typologie : T2 et T3 (et les autres logements) ne se confondent plus
+  assert.notEqual(log.color, pil.color);
 });
 
-test("slide volumétrie : une ligne par unité dessinée, avec son nom et son niveau", () => {
-  const body = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "ppt_fmm4", "body.json"), "utf8"));
+test("v13.7 : une couleur distincte par typologie, partout la même", () => {
+  const C = loadServer(["UNIT_COLOR_V13"]).UNIT_COLOR_V13;
+  const types = ["T1", "T2", "T3", "T4", "T5", "COMMERCE", "BUREAU", "ATELIER", "AUTRE"];
+  const colors = types.map(t => C(t));
+  assert.equal(new Set(colors).size, types.length, "chaque typologie a sa couleur");
+  assert.equal(C("t3"), C("T3"), "insensible à la casse");
+  assert.equal(C("COMMERCE"), "#E07830", "le commerce garde son orange");
+  assert.equal(C(""), C("AUTRE"));
+  // studio.html (plan du cockpit) utilise exactement la même palette
+  const html = fs.readFileSync(path.join(__dirname, "..", "studio.html"), "utf8");
+  const block = html.match(/const UNIT_COLORS = \{([\s\S]*?)\};/)[1];
+  for (const t of types) {
+    const m = block.match(new RegExp(`\\b${t}: "(#[0-9A-Fa-f]{6})"`));
+    assert.ok(m, `UNIT_COLORS.${t} présent dans studio.html`);
+    assert.equal(m[1].toUpperCase(), C(t).toUpperCase(), `couleur ${t} identique cockpit / serveur`);
+  }
+});
+
+// Fixture locale (corps réel d'un lead, hors dépôt : données client) — test sauté si absente.
+const BODY_FIXTURE = path.join(__dirname, "..", "..", "ppt_fmm4", "body.json");
+test("slide volumétrie : une ligne par unité dessinée, avec son nom et son niveau", { skip: !fs.existsSync(BODY_FIXTURE) && "fixture ppt_fmm4/body.json absente (hors dépôt)" }, () => {
+  const body = JSON.parse(fs.readFileSync(BODY_FIXTURE, "utf8"));
   const lead = Object.assign({}, body, { lead_id: "T" });
   const mk = (n, t, lv) => ({ unit_name: n, unit_type: t, polygon: sq, etages_unit: 0, niveau_depart_etage: lv });
   const actual = G.scenarioActual([mk("Cabinet médical", "COMMERCE", 0), mk("Co-working", "BUREAU", 1)], { site_polygon: FMM4, site_area: 250, cos_sol: 0.6 });

@@ -11534,13 +11534,26 @@ function getLeadUnitsSupabase() {
 // v13.1 — Planche d'implantation (plan du RDC + axonométrie + coupe, generate_pptx.py → plans_v13.py) :
 // parcelle, zone constructible et côtés dans le repère du cockpit (mètres, y = nord), unités avec leurs
 // altitudes (même calcul que l'image 3D). Scénario dont une unité n'est pas dessinée : ancien plan.
+// v13.7 — Une couleur par typologie (Jeremy 16/10/2026 : « que chaque unité ait sa propre couleur, pour
+// repérer et identifier chaque typologie »). Avant : tous les logements T1 à T5 dans le même bleu.
+// MÊME palette partout : aperçu 3D du cockpit et image 3D du PPT (bordure des étiquettes comprise),
+// planche (plan, axonométrie, coupe) et plan du cockpit (studio.html, UNIT_COLORS).
+// Choisie pour rester distincte en vision normale, pour les daltonismes rouge-vert (écart ΔE2000 ≥ 8
+// entre toutes les paires) et par rapport aux bâtiments voisins blancs (#f0ede8).
+const UNIT_TYPE_COLORS = {
+  T1: "#2E9C94",        // turquoise
+  T2: "#3A7AC0",        // bleu (l'ancien bleu logement)
+  T3: "#2F7D32",        // vert
+  T4: "#C2557E",        // framboise
+  T5: "#F2C14E",        // jaune doré
+  COMMERCE: "#E07830",  // orange (inchangé)
+  BUREAU: "#C084FC",    // lilas
+  ATELIER: "#334155",   // ardoise
+  AUTRE: "#57534E",     // taupe
+};
 const UNIT_COLOR_V13 = t => {
-  const T = String(t || "").toUpperCase();
-  if (T === "COMMERCE") return "#e07830";
-  if (T === "BUREAU") return "#8B5CF6";
-  if (T === "ATELIER") return "#6B7280";
-  if (T.startsWith("T")) return "#3a7ac0";
-  return "#7098c8";
+  const T = String(t || "").toUpperCase().trim();
+  return UNIT_TYPE_COLORS[T] || (/^T\d/.test(T) ? UNIT_TYPE_COLORS.T5 : UNIT_TYPE_COLORS.AUTRE);
 };
 function unitVerticalV13(u) {
   const fh = Number(u.hauteur_niveau) > 0 ? Number(u.hauteur_niveau) : 3;
@@ -11685,7 +11698,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "13.6";   // v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
+const V12_ENGINE_VERSION = "13.7";   // v13.7 : une couleur par typologie ; v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -13371,15 +13384,9 @@ async function prepareMassingScene(body, sb) {
   const cLon = centStudio.lon;
   console.log(`[REGEN-3D] Origine (moyenne arith. studio) : lat=${cLat.toFixed(7)}, lon=${cLon.toFixed(7)}`);
 
-  // 4. Palette couleurs par typologie
-  const colorByType = (t) => {
-    const T = String(t || "").toUpperCase();
-    if (T === "COMMERCE") return "#e07830";
-    if (T === "BUREAU") return "#8B5CF6";
-    if (T === "ATELIER") return "#6B7280";
-    if (T.startsWith("T")) return "#3a7ac0"; // T1/T2/T3/T4/T5 = logements bleu
-    return "#7098c8";
-  };
+  // 4. Palette couleurs par typologie — v13.7 : une couleur par typologie, partagée avec la planche
+  //    et le cockpit (UNIT_TYPE_COLORS)
+  const colorByType = UNIT_COLOR_V13;
 
   // 5. Construit unitsData : polygonGeo (mètres → GPS via fromM), hauteur (étages × 3m + pilotis)
   const unitsData = [];

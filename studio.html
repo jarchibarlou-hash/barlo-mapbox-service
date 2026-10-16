@@ -1015,10 +1015,20 @@ function splitScenarioIntoN(label, n) {
 }
 
 // ═══ v75.1.1 — Preview SVG de la parcelle avec 8 secteurs + boussole + unités ═══
+// v13.7 — Une couleur par typologie, IDENTIQUE à server.js (UNIT_TYPE_COLORS) : plan du cockpit,
+// aperçu 3D, image 3D et planche du PPT. Avant, T1 à T5 étaient tous du même bleu.
 const UNIT_COLORS = {
-    T1: "#3498DB", T2: "#3498DB", T3: "#3498DB", T4: "#3498DB", T5: "#3498DB",
-    COMMERCE: "#E67E22", BUREAU: "#9B59B6", ATELIER: "#95A5A6", AUTRE: "#7F8C8D"
+    T1: "#2E9C94", T2: "#3A7AC0", T3: "#2F7D32", T4: "#C2557E", T5: "#F2C14E",
+    COMMERCE: "#E07830", BUREAU: "#C084FC", ATELIER: "#334155", AUTRE: "#57534E"
 };
+// Texte lisible posé sur la couleur d'une unité : blanc sur les couleurs foncées, encre sur les
+// claires (T5 jaune, bureau lilas) — contraste ≥ 3 sinon encre.
+function unitTextColor(hex) {
+    const c = [1, 3, 5].map(i => parseInt(String(hex).slice(i, i + 2), 16) / 255)
+        .map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    const L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    return 1.05 / (L + 0.05) >= 3 ? "#fff" : "#1f2328";
+}
 const SECTOR_LIST = ["N","NE","E","SE","S","SW","W","NW"];
 
 // v75.4.0 — Références SVG par scénario, mises à jour dans renderParcelSvg (utilisées par drag handlers)
@@ -3891,8 +3901,8 @@ function renderParcelSvg(label) {
         const fsArea = Math.max(5, Math.min(8, charSize * 0.75));
         const divergence = Math.abs(realArea - areaM2) / Math.max(1, areaM2);
         const areaLabel = (divergence > 0.02) ? `${areaM2} m² · ${realArea} eff.` : `${areaM2} m²`;
-        unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs - fsName * 0.4).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" pointer-events="none">${esc(label2)}</text>`;
-        unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs + fsName * 0.7).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
+        unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs - fsName * 0.4).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${unitTextColor(color)}" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" pointer-events="none">${esc(label2)}</text>`;
+        unitsHtml += `<text x="${cxAbs.toFixed(1)}" y="${(cyAbs + fsName * 0.7).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${unitTextColor(color)}" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         // v9.1 — Arêtes cliquables : ligne épaisse transparente sous chaque edge (hitTest facile)
         // data-role="edge" + data-vi = index du 1er vertex de l'arête (l'arête va de vi à vi+1 mod N)
         polyPx.forEach((v, vi) => {
@@ -4115,9 +4125,9 @@ function renderParcelSvg(label) {
         }
         const divergence = Math.abs(realAreaM2 - areaM2) / Math.max(1, areaM2);
         // v8.3.0 : cible TOUJOURS affichée + effective au rendu (jamais alarmiste)
-        const areaTextColor = "#fff";
+        const areaTextColor = unitTextColor(color);
         const areaLabel = (divergence > 0.05) ? `${areaM2} m² · ${realAreaM2} eff.` : `${areaM2} m²`;
-        unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
+        unitsHtml += `<text x="0" y="${(-uH * 0.14).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${areaTextColor}" font-size="${fsName.toFixed(1)}" font-weight="700" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none">${esc(label2)}</text>`;
         unitsHtml += `<text x="0" y="${(uH * 0.18).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${areaTextColor}" font-size="${fsArea.toFixed(1)}" font-weight="600" font-family="Inter" transform="rotate(${(-rotDeg).toFixed(0)})" pointer-events="none" opacity="0.92">${areaLabel}</text>`;
         unitsHtml += `<line class="rot-link" x1="0" y1="${(-uH/2).toFixed(1)}" x2="0" y2="${(-handleDist).toFixed(1)}"/>`;
         unitsHtml += `<circle class="rot-handle" data-scn="${label}" data-uidx="${globalIdx}" data-role="rotate" cx="0" cy="${(-handleDist).toFixed(1)}" r="4"/>`;
