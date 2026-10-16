@@ -440,7 +440,8 @@ def fetch_images(data, tmp):
             else:
                 qa(f"image illisible : {k}")
         except Exception as e:
-            qa(f"image non téléchargée : {k} ({e})")
+            if not k.endswith('_back'):   # v13.8 : pas de vue opposée pour les images d'avant, normal
+                qa(f"image non téléchargée : {k} ({e})")
     return out
 
 
@@ -593,6 +594,13 @@ class Deck:
         img = self.imgs.get(f'scenario_{l}_massing')
         if img:
             pic_cover(s, img, 0, 0, SH, SH, zoom=1.25)
+            # v13.8 — vue opposée du bâtiment (cap + 180°) en médaillon, en bas à gauche de la vue principale
+            back = self.imgs.get(f'scenario_{l}_massing_back')
+            if back:
+                ins = 4.0
+                bx, by = 0.45, SH - 0.45 - ins
+                rect(s, bx - 0.07, by - 0.07, ins + 0.14, ins + 0.14, WHITE, shadowed=True)
+                pic_cover(s, back, bx, by, ins, ins, zoom=1.25)
         else:
             qa(f"volumétrie 3D du scénario {l} absente")
             rect(s, 0, 0, SH, SH, PANEL)

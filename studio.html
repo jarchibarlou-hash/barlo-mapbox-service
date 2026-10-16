@@ -7403,6 +7403,7 @@ async function openMassingEditor(label) {
                 <div class="me-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94A3B8;font-size:.8rem;text-align:center;padding:1rem;z-index:2">⏳ Chargement de l'aperçu 3D…</div>
             </div>
             <div class="me-caption" style="color:#94A3B8;margin-top:.5rem;font-size:.68rem;text-align:center;max-width:${S}px">Aperçu en direct, même cadrage que l'image du PPT. Clique un bâtiment ou son numéro pour le masquer ou l'afficher.</div>
+            <button class="me-flip" disabled style="margin-top:.45rem;padding:.35rem .9rem;background:transparent;color:#CBD5E1;border:1px solid #334155;border-radius:4px;cursor:pointer;font-size:.68rem">↻ Voir de l'autre côté (vue depuis le nord)</button>
         </div>
         <div style="width:300px;display:flex;flex-direction:column;gap:.5rem;color:#F8FAFC">
             <div style="font-size:.8rem;font-weight:700;color:#A78BFA">🏢 Bâtiments voisins · scénario ${label}</div>
@@ -7468,12 +7469,32 @@ async function openMassingEditor(label) {
             initial = new Set(masked);
             ready = true;
             loading.style.display = "none";
+            flipBtn.disabled = false;
             render();
         } else if (m.type === "toggle") {
             toggle(String(m.id));
+        } else if (m.type === "view") {
+            flipBtn.disabled = false;
+            flipLabel();
         }
     }
     window.addEventListener("message", onMsg);
+    // v13.8 — Vue opposée : la caméra tourne de 180°, comme la 2e image du PPT (même masquage)
+    let viewBearing = 0;
+    const flipBtn = $(".me-flip");
+    const flipLabel = () => {
+        flipBtn.textContent = viewBearing === 0
+            ? "↻ Voir de l'autre côté (vue depuis le nord)"
+            : "↺ Revenir à la vue principale (vue depuis le sud)";
+    };
+    flipBtn.addEventListener("click", () => {
+        if (!ready || !iframe || !iframe.contentWindow) return;
+        viewBearing = viewBearing === 0 ? 180 : 0;
+        flipBtn.disabled = true;
+        flipBtn.textContent = "⏳ La caméra tourne…";
+        iframe.contentWindow.postMessage({ source: "barlo-studio", type: "set-view", bearing: viewBearing }, "*");
+        setTimeout(() => { if (flipBtn.disabled) { flipBtn.disabled = false; flipLabel(); } }, 20000);
+    });
     function close() { window.removeEventListener("message", onMsg); overlay.remove(); }
     $(".me-close").addEventListener("click", () => {
         if (!done && ready && setsDiffer(masked, initial) && !confirm("Fermer sans valider ? Le masquage enregistré reste celui d'avant.")) return;

@@ -1157,7 +1157,11 @@ def assemble_pptx(data, template_path, output_path):
                     if massing_match:
                         data.setdefault('_massing_slide_idx', {})[massing_match.group(1)] = slide_idx
                     img_path = downloaded_images.get(img_key)
-                    if img_path:
+                    # v13.8 : vue opposée du bâtiment (cap + 180°) à côté de la vue principale
+                    back_path = downloaded_images.get(img_key + '_back') if massing_match else None
+                    if img_path and back_path:
+                        replace_shape_with_multiple_images(slide, shape, [img_path, back_path], maintain_aspect_ratio=True)
+                    elif img_path:
                         # v73.2.1 : maintain_aspect_ratio=True pour TOUTES les images
                         # (axo brute slide 4, axo enhanced slide 5, massings A/B/C)
                         # Evite la deformation horizontale (homothetie respectee)

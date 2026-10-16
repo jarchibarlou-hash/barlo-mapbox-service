@@ -11298,7 +11298,7 @@ async function buildPptxPayloadV13(p) {
       // Texts MUST be nested under 'texts' key (generate_pptx.py line 379)
       texts: { ...generatedTexts },
       // Images MUST be nested under 'images' key (generate_pptx.py line 369)
-      images: p.images || {},
+      images: withOppositeViews(p.images),   // v13.8 : + vue opposée de chaque image 3D
       // Scenarios with all keys mapped for charts (generate_charts.py)
       scenarios: {
         A: mapScenarioForPython(sA),
@@ -11534,6 +11534,26 @@ function getLeadUnitsSupabase() {
 // v13.1 — Planche d'implantation (plan du RDC + axonométrie + coupe, generate_pptx.py → plans_v13.py) :
 // parcelle, zone constructible et côtés dans le repère du cockpit (mètres, y = nord), unités avec leurs
 // altitudes (même calcul que l'image 3D). Scénario dont une unité n'est pas dessinée : ancien plan.
+// v13.8 — Vue opposée de chaque image 3D (cap + 180°) : même nom de fichier + « _opposee », rendue avec
+// la vue principale par /api/regen-massing-from-units. Le PPT la retrouve à partir de l'image principale ;
+// pour une image d'avant la v13.8, le téléchargement échoue sans bruit et le PPT garde une seule vue.
+const OPPOSITE_VIEW_SUFFIX = "_opposee";
+function oppositeViewUrl(url) {
+  return typeof url === "string" && /\/hektar\/.+_massing_multi_\d+\.png(\?.*)?$/.test(url)
+    ? url.replace(/\.png(\?.*)?$/, `${OPPOSITE_VIEW_SUFFIX}.png`) : null;
+}
+function withOppositeViews(images) {
+  const out = Object.assign({}, images || {});
+  for (const l of ["A", "B", "C"]) {
+    const k = `scenario_${l}_massing`;
+    if (out[k] && !out[`${k}_back`]) {
+      const back = oppositeViewUrl(out[k]);
+      if (back) out[`${k}_back`] = back;
+    }
+  }
+  return out;
+}
+
 // v13.7 — Une couleur par typologie (Jeremy 16/10/2026 : « que chaque unité ait sa propre couleur, pour
 // repérer et identifier chaque typologie »). Avant : tous les logements T1 à T5 dans le même bleu.
 // MÊME palette partout : aperçu 3D du cockpit et image 3D du PPT (bordure des étiquettes comprise),
@@ -11698,7 +11718,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "13.7";   // v13.7 : une couleur par typologie ; v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
+const V12_ENGINE_VERSION = "13.8";   // v13.8 : dalles visibles, niveau vide signalé, vue opposée ; v13.7 : une couleur par typologie ; v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -12708,6 +12728,29 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     });
   });
   const unitsGeoJSON = { type: "FeatureCollection", features: unitsFeatures };
+  // v13.8 — Dalles : une fine bande claire (30 cm), qui déborde de 25 cm, à chaque plancher — sous une
+  // unité posée sur une autre et entre ses propres niveaux. Sans elle, une unité au R+1 posée sur le RDC
+  // se confondait avec lui (Jeremy 16/10/2026), d'où des R+1 laissés vides et des étages qui flottent.
+  const slabFeatures = [];
+  unitsData.forEach(u => {
+    const floors = Math.max(1, Math.round(Number(u.floors) || 1));
+    const base = Number(u.baseM) || 0, top = Number(u.topM) || base + 3;
+    const fh = (top - base) / floors;
+    const heights = [];
+    if (base > 0.05) heights.push(base);
+    for (let k = 1; k < floors; k++) heights.push(base + k * fh);
+    if (!heights.length || !(u.polygonGeo || []).length) return;
+    let coords = ring(u.polygonGeo);
+    try {
+      const b = turf.buffer({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: coords } }, 0.25, { units: "meters" });
+      if (b && b.geometry && b.geometry.type === "Polygon") coords = b.geometry.coordinates;
+    } catch (_) { /* pas de débord : la dalle reste au nu de la façade */ }
+    heights.forEach(h => slabFeatures.push({
+      type: "Feature", properties: { base: Math.max(0, h - 0.15), height: h + 0.15 },
+      geometry: { type: "Polygon", coordinates: coords }
+    }));
+  });
+  const slabsGeoJSON = { type: "FeatureCollection", features: slabFeatures };
   // Collecte tous les vertices pour les afficher comme cercles (repères sommets)
   const vertexFeatures = [];
   unitsData.forEach((u, uIdx) => {
@@ -12824,6 +12867,18 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
         'fill-extrusion-base': ['get', 'base'],
         'fill-extrusion-opacity': 0.92,
         'fill-extrusion-vertical-gradient': true
+      }
+    });
+    // v13.8 — dalles claires à chaque plancher (voir slabFeatures) : on lit les niveaux empilés
+    map.addSource('unit-slabs', { type: 'geojson', data: ${JSON.stringify(slabsGeoJSON)} });
+    map.addLayer({
+      id: 'units-slabs', type: 'fill-extrusion', source: 'unit-slabs',
+      paint: {
+        'fill-extrusion-color': '#f7f5f0',
+        'fill-extrusion-height': ['get', 'height'],
+        'fill-extrusion-base': ['get', 'base'],
+        'fill-extrusion-opacity': 0.95,
+        'fill-extrusion-vertical-gradient': false
       }
     });
     // Contour footprint (base sol) — noir fin pour lisibilité
@@ -12948,7 +13003,49 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     });
     window.__LABEL_DIAG.labels = items.length;
   }
-  map.once('load', function () { try { drawUnitLabels(); } catch (e) { window.__LABEL_DIAG.error = e.message; } });
+  // v13.8 — repère de vue dans l'image : « Vue depuis le sud » + flèche du nord (deux vues opposées dans le PPT).
+  // Placé à 13 % / 11 % du bord : il reste visible quand le PPT recadre l'image (zoom 1,25).
+  function viewName(bearing) {
+    const from = ((Number(bearing) || 0) + 180) % 360;
+    const names = ['le nord', 'le nord-est', "l'est", 'le sud-est', 'le sud', 'le sud-ouest', "l'ouest", 'le nord-ouest'];
+    return 'Vue depuis ' + names[Math.round(from / 45) % 8];
+  }
+  function drawViewBadge(bearing) {
+    const old = document.getElementById('view-badge');
+    if (old) old.remove();
+    const b = document.createElement('div');
+    b.id = 'view-badge';
+    b.style.cssText = 'position:absolute;left:13%;top:11%;z-index:6;display:flex;align-items:center;gap:12px;'
+      + 'background:rgba(255,255,255,0.95);border-radius:8px;padding:8px 16px 8px 10px;box-shadow:0 1px 6px rgba(0,0,0,0.25);'
+      + 'font:600 22px Arial,Helvetica,sans-serif;color:#1f2a37;pointer-events:none';
+    b.innerHTML = '<svg width="34" height="34" viewBox="-17 -17 34 34" style="transform:rotate(' + (-(Number(bearing) || 0)) + 'deg)">'
+      + '<polygon points="0,-15 7,9 0,4 -7,9" fill="#c04020"/><text x="0" y="16" font-size="9" text-anchor="middle" fill="#1f2a37" font-weight="700">N</text></svg>'
+      + '<span>' + viewName(bearing) + '</span>';
+    document.body.appendChild(b);
+  }
+  map.once('load', function () {
+    try { drawUnitLabels(); } catch (e) { window.__LABEL_DIAG.error = e.message; }
+    try { drawViewBadge(${Number(bearing) || 0}); } catch (_) {}
+  });
+  // v13.8 — Vue opposée : la caméra tourne (cap donné), puis étiquettes et repère sont redessinés pour la
+  // nouvelle vue. Rendu final : appelé par le serveur avant la 2e capture ; aperçu : bouton du cockpit.
+  window.__setView = function (bearing) {
+    return new Promise(function (resolve) {
+      let done = false;
+      const finish = function () {
+        if (done) return; done = true;
+        const old = document.getElementById('unit-labels-layer');
+        if (old) old.remove();
+        try { drawUnitLabels(); } catch (e) { window.__LABEL_DIAG.error = e.message; }
+        try { drawViewBadge(bearing); } catch (_) {}
+        setTimeout(resolve, 800);
+      };
+      map.once('idle', finish);
+      setTimeout(finish, 15000);   // tuiles lentes : on capture quand même
+      map.jumpTo({ bearing: Number(bearing) || 0 });
+      map.triggerRepaint();
+    });
+  };
   // v11.23 : detection intersect robuste (querySourceFeatures + composite ID synthetique)
   // v11.32 : hiddenLabels = numeros 1,2,3,4 des batis a masquer (ancien cockpit)
   // v12.22 : maskSpec = masquage valide du terrain (centres des batis masques / gardes visibles) ;
@@ -13210,7 +13307,13 @@ function generateMultiUnitMassingHTML(center, zoom, bearing, parcelCoords, units
     window.addEventListener('message', function (e) {
       if (e.source !== window.parent) return;
       const m = e.data || {};
-      if (m.source !== 'barlo-studio' || m.type !== 'set-mask' || !intersectDone) return;
+      if (m.source !== 'barlo-studio') return;
+      // v13.8 — bouton « Vue opposée » du cockpit
+      if (m.type === 'set-view') {
+        window.__setView(m.bearing).then(function () { postToStudio({ type: 'view', bearing: Number(m.bearing) || 0 }); });
+        return;
+      }
+      if (m.type !== 'set-mask' || !intersectDone) return;
       applyMask(Array.isArray(m.masked) ? m.masked : []);
       postToStudio({ type: 'applied', masked: window.__MASKED_IDS });
     });
@@ -13558,8 +13661,23 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
       console.log(`[REGEN-3D] Screenshot OK (${screenshotBuf.length} bytes)`);
 
+      // v13.8 — 2e capture : vue opposée (cap + 180°), pour voir le bâtiment des deux côtés dans le PPT.
+      // Échec sans conséquence : le PPT garde alors une seule vue.
+      const backBearing = ((Number(bearing) || 0) + 180) % 360;
+      let backBuf = null;
+      try {
+        await Promise.race([
+          page.evaluate(b => window.__setView(b), backBearing),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (25 s)")), 25000))
+        ]);
+        backBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+        console.log(`[REGEN-3D] Vue opposée (${backBearing}°) OK (${backBuf.length} bytes)`);
+      } catch (e) {
+        console.warn(`[REGEN-3D] Vue opposée non rendue : ${e.message}`);
+      }
+
       // 7. Upload Supabase Storage
-      let publicUrl = null;
+      let publicUrl = null, publicUrlBack = null;
       if (upload && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         const ts = Date.now();
         const path = `hektar/${lead_ref}/scenario_${scen}_massing_multi_${ts}.png`;
@@ -13572,6 +13690,17 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
           const { data: pub } = sb.storage.from("massing-images").getPublicUrl(path);
           publicUrl = pub && pub.publicUrl ? pub.publicUrl : null;
           console.log(`[REGEN-3D] Uploaded → ${publicUrl}`);
+          // Vue opposée : même nom + « _opposee » — le PPT la retrouve à partir de l'image principale
+          // (oppositeViewUrl), sans colonne de plus dans PIPELINE
+          if (backBuf) {
+            const pathBack = path.replace(/\.png$/, `${OPPOSITE_VIEW_SUFFIX}.png`);
+            const upB = await sb.storage.from("massing-images").upload(pathBack, backBuf, { contentType: "image/png", upsert: false });
+            if (upB.error) console.warn(`[REGEN-3D] Upload vue opposée échoué : ${upB.error.message}`);
+            else {
+              const { data: pubB } = sb.storage.from("massing-images").getPublicUrl(pathBack);
+              publicUrlBack = pubB && pubB.publicUrl ? pubB.publicUrl : null;
+            }
+          }
         }
       }
 
@@ -13607,6 +13736,8 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         zoom_used: zoom,
         image_url: publicUrl,
         image_base64: publicUrl ? null : `data:image/png;base64,${screenshotBuf.toString("base64")}`,
+        image_url_back: publicUrlBack,       // v13.8 — vue opposée
+        bearing_back: backBuf ? backBearing : null,
         applied_to_pipeline: appliedToPipeline,
         // v11.22 : liste des bâtiments Mapbox touchant la parcelle + ceux effectivement masqués
         detected_buildings: detectedBuildings,
