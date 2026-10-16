@@ -11298,7 +11298,7 @@ async function buildPptxPayloadV13(p) {
       // Texts MUST be nested under 'texts' key (generate_pptx.py line 379)
       texts: { ...generatedTexts },
       // Images MUST be nested under 'images' key (generate_pptx.py line 369)
-      images: withOppositeViews(p.images),   // v13.8 : + vue opposée de chaque image 3D
+      images: withExtraViews(p.images),   // v13.9 : + points de vue 3D cochés dans le cockpit
       // Scenarios with all keys mapped for charts (generate_charts.py)
       scenarios: {
         A: mapScenarioForPython(sA),
@@ -11534,21 +11534,40 @@ function getLeadUnitsSupabase() {
 // v13.1 — Planche d'implantation (plan du RDC + axonométrie + coupe, generate_pptx.py → plans_v13.py) :
 // parcelle, zone constructible et côtés dans le repère du cockpit (mètres, y = nord), unités avec leurs
 // altitudes (même calcul que l'image 3D). Scénario dont une unité n'est pas dessinée : ancien plan.
-// v13.8 — Vue opposée de chaque image 3D (cap + 180°) : même nom de fichier + « _opposee », rendue avec
-// la vue principale par /api/regen-massing-from-units. Le PPT la retrouve à partir de l'image principale ;
-// pour une image d'avant la v13.8, le téléchargement échoue sans bruit et le PPT garde une seule vue.
-const OPPOSITE_VIEW_SUFFIX = "_opposee";
-function oppositeViewUrl(url) {
-  return typeof url === "string" && /\/hektar\/.+_massing_multi_\d+\.png(\?.*)?$/.test(url)
-    ? url.replace(/\.png(\?.*)?$/, `${OPPOSITE_VIEW_SUFFIX}.png`) : null;
+// v13.9 — Points de vue 3D (Jeremy 16/10/2026 : « garder le point de vue par défaut et ajouter à la
+// présentation les autres points de vue que je coche ») : la vue par défaut (depuis le sud, cap 0°) est
+// toujours dans le PPT ; s'y ajoutent les points de vue cochés dans le cockpit, mémorisés par terrain comme
+// le masquage (sb_lead_rules.rules.massing_views). Cap = direction où regarde la caméra : on voit le
+// bâtiment depuis le côté opposé (cap 45° → « vue depuis le sud-ouest »).
+const EXTRA_VIEW_BEARINGS = [45, 135, 180, 225, 315];   // depuis le sud-ouest, nord-ouest, nord, nord-est, sud-est
+const pad3 = b => String(b).padStart(3, "0");
+function cleanViewBearings(raw) {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map(Number).filter(b => EXTRA_VIEW_BEARINGS.includes(b)))].sort((a, b) => a - b);
 }
-function withOppositeViews(images) {
+// Les vues ajoutées sont inscrites dans le nom de l'image principale (« …_massing_multi_<ts>_vues-045-180.png »)
+// et rangées à côté (« …_massing_multi_<ts>_vue-045.png ») : le PPT les retrouve à partir de l'URL de l'image
+// principale, toujours cohérentes avec elle, sans colonne de plus dans PIPELINE.
+function massingImagePaths(ref, scen, ts, extras) {
+  const base = `hektar/${ref}/scenario_${scen}_massing_multi_${ts}`;
+  return {
+    main: `${base}${extras.length ? "_vues-" + extras.map(pad3).join("-") : ""}.png`,
+    extra: extras.map(b => ({ bearing: b, path: `${base}_vue-${pad3(b)}.png` })),
+  };
+}
+function extraViewUrls(url) {
+  if (typeof url !== "string") return [];
+  const m = url.match(/^(.*\/hektar\/.+_massing_multi_\d+)_vues((?:-\d{3})+)\.png(?:\?.*)?$/);
+  if (!m) return [];
+  return m[2].split("-").filter(Boolean).map(b => ({ bearing: Number(b), url: `${m[1]}_vue-${b}.png` }));
+}
+function withExtraViews(images) {
   const out = Object.assign({}, images || {});
   for (const l of ["A", "B", "C"]) {
     const k = `scenario_${l}_massing`;
-    if (out[k] && !out[`${k}_back`]) {
-      const back = oppositeViewUrl(out[k]);
-      if (back) out[`${k}_back`] = back;
+    for (const v of extraViewUrls(out[k])) {
+      const key = `${k}_vue_${pad3(v.bearing)}`;
+      if (!out[key]) out[key] = v.url;
     }
   }
   return out;
@@ -11718,7 +11737,7 @@ function logV12Missing(err) {
 }
 
 // À incrémenter à chaque changement de logique du moteur : invalide les résultats enregistrés.
-const V12_ENGINE_VERSION = "13.8";   // v13.8 : dalles visibles, niveau vide signalé, vue opposée ; v13.7 : une couleur par typologie ; v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
+const V12_ENGINE_VERSION = "13.9";   // v13.9 : points de vue 3D cochés ajoutés au PPT ; v13.8 : dalles visibles, niveau vide signalé, vue opposée ; v13.7 : une couleur par typologie ; v13.6 : emprise dessinée conservée (plus SDP ÷ niveaux) ; v13.3 : calendrier du projet
 
 // Retraits par côté enregistrés depuis le cockpit (sb_lead_rules.rules.segments), réduits à ce
 // qui compte pour le calcul (l'empreinte des entrées ne doit pas changer pour un horodatage).
@@ -13398,6 +13417,23 @@ async function saveMassingMask(sb, ref, mask, scen) {
   const { error } = await sb.from("sb_lead_rules").upsert({ lead_ref: ref, rules, updated_at: now }, { onConflict: "lead_ref" });
   if (error) throw error;
 }
+// v13.9 — points de vue 3D ajoutés au PPT (caps), mémorisés par terrain : communs aux scénarios A, B, C
+async function loadMassingViews(sb, ref) {
+  try {
+    const v = (await loadLeadRules(sb, ref)).massing_views;
+    return v ? cleanViewBearings(v.bearings) : [];
+  } catch (e) {
+    console.warn(`[VUES 3D] ${ref} : points de vue enregistrés illisibles : ${e.message}`);
+    return [];
+  }
+}
+async function saveMassingViews(sb, ref, bearings, scen) {
+  const prev = await loadLeadRules(sb, ref);
+  const now = new Date().toISOString();
+  const rules = Object.assign({}, prev, { massing_views: { bearings: cleanViewBearings(bearings), validated_at: now, validated_from: scen } });
+  const { error } = await sb.from("sb_lead_rules").upsert({ lead_ref: ref, rules, updated_at: now }, { onConflict: "lead_ref" });
+  if (error) throw error;
+}
 
 // Scène 3D d'un scénario : unités (cockpit ou base), parcelle GPS, origine, zoom. Partagée par
 // l'aperçu en direct du cockpit et le rendu final, pour que les deux cadrent exactement pareil.
@@ -13581,13 +13617,15 @@ app.post("/api/massing-preview-html", async (req, res) => {
     const scene = await prepareMassingScene(body, sb);
     if (scene.error) return res.status(scene.status || 400).json({ ok: false, error: scene.error, rejected: scene.rejected });
     const saved = sb ? await loadMassingMask(sb, body.lead_ref) : null;
+    const savedViews = sb ? await loadMassingViews(sb, body.lead_ref) : [];
     const html = generateMultiUnitMassingHTML(
       { lat: scene.cLat, lon: scene.cLon }, scene.zoom, Number(body.bearing) || 0, scene.parcelCoords, scene.unitsData, MAPBOX_TOKEN,
       null, null, { mask: saved, preview: true }
     );
     res.json({
       ok: true, html, zoom_used: scene.zoom, units_rendered: scene.unitsData.length,
-      saved_mask: saved ? { hidden: (saved.hidden || []).length, visible: (saved.visible || []).length, validated_at: saved.validated_at || null, validated_from: saved.validated_from || null } : null
+      saved_mask: saved ? { hidden: (saved.hidden || []).length, visible: (saved.visible || []).length, validated_at: saved.validated_at || null, validated_from: saved.validated_from || null } : null,
+      saved_views: savedViews   // v13.9 — points de vue ajoutés au PPT (caps)
     });
   } catch (err) {
     console.error(`[MASSING-PREVIEW] ${body.lead_ref}/${body.scenario}: ${err.message}`);
@@ -13607,9 +13645,10 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
     upload = true, apply_to_pipeline = false,
     hidden_building_ids = null,      // v11.22 : IDs Mapbox à masquer (ancien cockpit)
     hidden_building_labels = null,   // v11.32 : numéros 1,2,3,4 (ancien cockpit)
-    mask = null, save_mask = false   // v12.22
+    mask = null, save_mask = false,  // v12.22
+    views = null, save_views = false // v13.9 : caps des points de vue ajoutés (sinon ceux enregistrés)
   } = req.body || {};
-  console.log(`═══ /api/regen-massing-from-units v12.22 ═══ lead=${lead_ref} scen=${scenario}`);
+  console.log(`═══ /api/regen-massing-from-units v13.9 ═══ lead=${lead_ref} scen=${scenario}`);
 
   const sb = getLeadUnitsSupabase();
   try {
@@ -13631,6 +13670,15 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       if (saved) { maskSpec = saved; maskSource = "saved"; }
     }
     console.log(`[REGEN-3D] Masquage : ${maskSource}${maskSpec ? ` (${maskSpec.hidden.length} masqué(s), ${maskSpec.visible.length} visible(s))` : ""}${maskSaved ? " — enregistré" : ""}`);
+    // v13.9 — points de vue ajoutés au PPT : ceux envoyés par le cockpit (enregistrés pour le terrain si
+    // demandé), sinon ceux enregistrés. La vue principale (cap du rendu, 0° = depuis le sud) n'est pas répétée.
+    let extraViews = Array.isArray(views) ? cleanViewBearings(views) : (sb ? await loadMassingViews(sb, lead_ref) : []);
+    extraViews = extraViews.filter(b => b !== ((Number(bearing) || 0) % 360));
+    if (Array.isArray(views) && save_views && sb) {
+      try { await saveMassingViews(sb, lead_ref, extraViews, scen); }
+      catch (e) { console.warn(`[REGEN-3D] points de vue non enregistrés : ${e.message}`); }
+    }
+    console.log(`[REGEN-3D] Points de vue ajoutés : ${extraViews.length ? extraViews.map(b => b + "°").join(", ") : "aucun"}`);
     // Génère HTML + screenshot Puppeteer
     const html = generateMultiUnitMassingHTML(
       { lat: cLat, lon: cLon }, zoom, bearing, parcelCoords, unitsData, MAPBOX_TOKEN,
@@ -13661,26 +13709,38 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
       const screenshotBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
       console.log(`[REGEN-3D] Screenshot OK (${screenshotBuf.length} bytes)`);
 
-      // v13.8 — 2e capture : vue opposée (cap + 180°), pour voir le bâtiment des deux côtés dans le PPT.
-      // Échec sans conséquence : le PPT garde alors une seule vue.
-      const backBearing = ((Number(bearing) || 0) + 180) % 360;
-      let backBuf = null;
-      try {
-        await Promise.race([
-          page.evaluate(b => window.__setView(b), backBearing),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (25 s)")), 25000))
-        ]);
-        backBuf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
-        console.log(`[REGEN-3D] Vue opposée (${backBearing}°) OK (${backBuf.length} bytes)`);
-      } catch (e) {
-        console.warn(`[REGEN-3D] Vue opposée non rendue : ${e.message}`);
+      // v13.9 — une capture de plus par point de vue coché (caméra tournée, étiquettes et repère redessinés).
+      // Une vue en échec est simplement absente du PPT.
+      const extraShots = [];
+      for (const b of extraViews) {
+        try {
+          await Promise.race([
+            page.evaluate(x => window.__setView(x), b),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé (25 s)")), 25000))
+          ]);
+          const buf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: 1280, height: 1280 } });
+          extraShots.push({ bearing: b, buf });
+          console.log(`[REGEN-3D] Point de vue ${b}° OK (${buf.length} bytes)`);
+        } catch (e) {
+          console.warn(`[REGEN-3D] Point de vue ${b}° non rendu : ${e.message}`);
+        }
       }
 
       // 7. Upload Supabase Storage
-      let publicUrl = null, publicUrlBack = null;
+      let publicUrl = null;
+      const extraUrls = [];
       if (upload && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         const ts = Date.now();
-        const path = `hektar/${lead_ref}/scenario_${scen}_massing_multi_${ts}.png`;
+        // Points de vue d'abord : l'image principale n'annonce dans son nom que ceux réellement en ligne
+        const planned = massingImagePaths(lead_ref, scen, ts, extraShots.map(x => x.bearing));
+        for (const shot of extraShots) {
+          const pv = planned.extra.find(e => e.bearing === shot.bearing).path;
+          const upV = await sb.storage.from("massing-images").upload(pv, shot.buf, { contentType: "image/png", upsert: false });
+          if (upV.error) { console.warn(`[REGEN-3D] Upload point de vue ${shot.bearing}° échoué : ${upV.error.message}`); continue; }
+          const { data: pubV } = sb.storage.from("massing-images").getPublicUrl(pv);
+          if (pubV && pubV.publicUrl) extraUrls.push({ bearing: shot.bearing, url: pubV.publicUrl });
+        }
+        const path = massingImagePaths(lead_ref, scen, ts, extraUrls.map(x => x.bearing)).main;
         const up = await sb.storage.from("massing-images").upload(path, screenshotBuf, {
           contentType: "image/png", upsert: false
         });
@@ -13690,17 +13750,6 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
           const { data: pub } = sb.storage.from("massing-images").getPublicUrl(path);
           publicUrl = pub && pub.publicUrl ? pub.publicUrl : null;
           console.log(`[REGEN-3D] Uploaded → ${publicUrl}`);
-          // Vue opposée : même nom + « _opposee » — le PPT la retrouve à partir de l'image principale
-          // (oppositeViewUrl), sans colonne de plus dans PIPELINE
-          if (backBuf) {
-            const pathBack = path.replace(/\.png$/, `${OPPOSITE_VIEW_SUFFIX}.png`);
-            const upB = await sb.storage.from("massing-images").upload(pathBack, backBuf, { contentType: "image/png", upsert: false });
-            if (upB.error) console.warn(`[REGEN-3D] Upload vue opposée échoué : ${upB.error.message}`);
-            else {
-              const { data: pubB } = sb.storage.from("massing-images").getPublicUrl(pathBack);
-              publicUrlBack = pubB && pubB.publicUrl ? pubB.publicUrl : null;
-            }
-          }
         }
       }
 
@@ -13736,8 +13785,7 @@ app.post("/api/regen-massing-from-units", async (req, res) => {
         zoom_used: zoom,
         image_url: publicUrl,
         image_base64: publicUrl ? null : `data:image/png;base64,${screenshotBuf.toString("base64")}`,
-        image_url_back: publicUrlBack,       // v13.8 — vue opposée
-        bearing_back: backBuf ? backBearing : null,
+        extra_views: extraUrls,              // v13.9 — points de vue ajoutés [{ bearing, url }]
         applied_to_pipeline: appliedToPipeline,
         // v11.22 : liste des bâtiments Mapbox touchant la parcelle + ceux effectivement masqués
         detected_buildings: detectedBuildings,

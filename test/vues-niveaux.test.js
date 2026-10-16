@@ -3,9 +3,10 @@ const assert = require("node:assert/strict");
 const G = require("../lib/site-geometry");
 const { loadServer } = require("./harness");
 
-// v13.8 (Jeremy 16/10/2026) : « le R+1 a l'air de flotter au-dessus du RDC » et « une autre vue de
-// l'opposé sur la boussole » — niveau vide signalé, dalles visibles en 3D, vue opposée dans le PPT.
-const S = loadServer(["generateMultiUnitMassingHTML", "oppositeViewUrl", "withOppositeViews"]);
+// v13.8 (Jeremy 16/10/2026) : « le R+1 a l'air de flotter au-dessus du RDC » — niveau vide signalé,
+// dalles visibles en 3D. v13.9 : « garder le point de vue par défaut et ajouter à la présentation les
+// autres points de vue que je coche » (diagonales + nord).
+const S = loadServer(["generateMultiUnitMassingHTML", "cleanViewBearings", "massingImagePaths", "extraViewUrls", "withExtraViews"]);
 const sq = (cx, cy, h) => [{ x: cx - h, y: cy - h }, { x: cx + h, y: cy - h }, { x: cx + h, y: cy + h }, { x: cx - h, y: cy + h }];
 const codes = a => a.checks.map(c => c.code);
 
@@ -61,16 +62,32 @@ test("3D : une dalle à chaque plancher, rien pour une unité de plain-pied au s
   assert.match(html, /m\.type === 'set-view'/);
 });
 
-test("PPT : vue opposée retrouvée à partir de l'image 3D principale", () => {
-  const base = "https://x.supabase.co/storage/v1/object/public/massing-images/hektar/BARLO-T/scenario_A_massing_multi_1792000000000.png";
-  assert.equal(S.oppositeViewUrl(base), base.replace(".png", "_opposee.png"));
-  assert.equal(S.oppositeViewUrl("https://x/hektar/BARLO-T/scenario_A_massing.png"), null, "ancien format : pas de vue opposée");
-  assert.equal(S.oppositeViewUrl(""), null);
-  const imgs = S.withOppositeViews({ scenario_A_massing: base, scenario_B_massing: "https://x/autre.png", slide_4_image: "https://x/s4.png" });
-  assert.equal(imgs.scenario_A_massing_back, base.replace(".png", "_opposee.png"));
-  assert.ok(!("scenario_B_massing_back" in imgs));
-  assert.ok(!("slide_4_image_back" in imgs));
-  const kept = S.withOppositeViews({ scenario_A_massing: base, scenario_A_massing_back: "https://x/choisie.png" });
-  assert.equal(kept.scenario_A_massing_back, "https://x/choisie.png", "une vue opposée fournie n'est pas écrasée");
-  assert.deepEqual(S.withOppositeViews(undefined), {});
+test("points de vue : seuls les caps prévus, nom de l'image principale, retrouvés pour le PPT", () => {
+  // caps acceptés : depuis le sud-ouest 45, nord-ouest 135, nord 180, nord-est 225, sud-est 315
+  assert.deepEqual(S.cleanViewBearings([315, "45", 45, 0, 90, 180, null]), [45, 180, 315]);
+  assert.deepEqual(S.cleanViewBearings("45"), []);
+
+  const p = S.massingImagePaths("BARLO-T", "A", 1792000000000, [45, 180]);
+  assert.equal(p.main, "hektar/BARLO-T/scenario_A_massing_multi_1792000000000_vues-045-180.png");
+  assert.deepEqual(p.extra.map(e => e.path), [
+    "hektar/BARLO-T/scenario_A_massing_multi_1792000000000_vue-045.png",
+    "hektar/BARLO-T/scenario_A_massing_multi_1792000000000_vue-180.png",
+  ]);
+  assert.equal(S.massingImagePaths("BARLO-T", "B", 5, []).main, "hektar/BARLO-T/scenario_B_massing_multi_5.png");
+
+  const host = "https://x.supabase.co/storage/v1/object/public/massing-images/";
+  const main = host + p.main;
+  assert.deepEqual(S.extraViewUrls(main), [
+    { bearing: 45, url: host + p.extra[0].path },
+    { bearing: 180, url: host + p.extra[1].path },
+  ]);
+  assert.deepEqual(S.extraViewUrls(host + "hektar/BARLO-T/scenario_A_massing_multi_5.png"), [], "aucune vue cochée");
+  assert.deepEqual(S.extraViewUrls(host + "hektar/BARLO-T/scenario_A_massing_multi_5_opposee.png"), [], "essai v13.8 ignoré");
+
+  const imgs = S.withExtraViews({ scenario_A_massing: main, scenario_B_massing: "https://x/autre.png", slide_4_image: "https://x/s4.png" });
+  assert.equal(imgs.scenario_A_massing_vue_045, host + p.extra[0].path);
+  assert.equal(imgs.scenario_A_massing_vue_180, host + p.extra[1].path);
+  assert.ok(!Object.keys(imgs).some(k => k.startsWith("scenario_B_massing_vue_")));
+  assert.equal(Object.keys(imgs).length, 5);
+  assert.deepEqual(S.withExtraViews(undefined), {});
 });

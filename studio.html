@@ -7353,7 +7353,10 @@ async function regenMassing3DNow(label, opts) {
                 units_live: geometryUnitsPayload(label),
                 parcel_polygon_string: (currentBody8D && currentBody8D.site_polygon) ? currentBody8D.site_polygon : null,
                 mask: opts.mask || null,
-                save_mask: !!opts.mask
+                save_mask: !!opts.mask,
+                // v13.9 — points de vue ajoutés au PPT (sinon le serveur reprend ceux enregistrés du terrain)
+                views: Array.isArray(opts.views) ? opts.views : undefined,
+                save_views: Array.isArray(opts.views)
             })
         });
         const data = await res.json().catch(() => ({}));
@@ -7402,17 +7405,20 @@ async function openMassingEditor(label) {
             <div class="me-stage" style="position:relative;width:${S}px;height:${S}px;overflow:hidden;border-radius:6px;background:#1E293B">
                 <div class="me-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#94A3B8;font-size:.8rem;text-align:center;padding:1rem;z-index:2">⏳ Chargement de l'aperçu 3D…</div>
             </div>
-            <div class="me-caption" style="color:#94A3B8;margin-top:.5rem;font-size:.68rem;text-align:center;max-width:${S}px">Aperçu en direct, même cadrage que l'image du PPT. Clique un bâtiment ou son numéro pour le masquer ou l'afficher.</div>
-            <button class="me-flip" disabled style="margin-top:.45rem;padding:.35rem .9rem;background:transparent;color:#CBD5E1;border:1px solid #334155;border-radius:4px;cursor:pointer;font-size:.68rem">↻ Voir de l'autre côté (vue depuis le nord)</button>
-        </div>
+            <div class="me-caption" style="color:#94A3B8;margin-top:.5rem;font-size:.68rem;text-align:center;max-width:${S}px">Aperçu en direct, même cadrage que l'image du PPT. Clique un bâtiment ou son numéro pour le masquer ou l'afficher.</div>        </div>
         <div style="width:300px;display:flex;flex-direction:column;gap:.5rem;color:#F8FAFC">
             <div style="font-size:.8rem;font-weight:700;color:#A78BFA">🏢 Bâtiments voisins · scénario ${label}</div>
             <div class="me-saved" style="font-size:.6rem;color:#94A3B8;line-height:1.4"></div>
             <div class="me-counter" style="font-size:.7rem;padding:.35rem .5rem;background:rgba(245,158,11,0.15);border-radius:3px;color:#F59E0B;font-weight:700">—</div>
             <div style="display:flex;gap:.3rem"><button type="button" class="me-all-hide" style="${btn}">Tout masquer</button><button type="button" class="me-all-show" style="${btn}">Tout afficher</button></div>
             <div class="me-list" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem;max-height:48vh;padding-right:.3rem"></div>
+            <div style="border-top:1px solid #1E293B;padding-top:.45rem;display:flex;flex-direction:column;gap:.25rem">
+                <div style="font-size:.74rem;font-weight:700;color:#A78BFA">📷 Points de vue</div>
+                <div style="font-size:.58rem;color:#94A3B8;line-height:1.35">« Voir » tourne la caméra. Coche les vues à ajouter au PPT : la vue depuis le sud y est toujours. Choix commun aux scénarios A, B et C.</div>
+                <div class="me-views" style="display:flex;flex-direction:column;gap:.2rem"></div>
+            </div>
             <div class="me-status" style="font-size:.62rem;color:#94A3B8;line-height:1.4;min-height:1.2em;white-space:pre-line"></div>
-            <button type="button" class="me-validate" disabled style="padding:.6rem;background:#22C55E;color:#0B1120;border:none;border-radius:5px;font-weight:700;cursor:pointer;font-size:.75rem;opacity:.5">✅ Valider ce masquage</button>
+            <button type="button" class="me-validate" disabled style="padding:.6rem;background:#22C55E;color:#0B1120;border:none;border-radius:5px;font-weight:700;cursor:pointer;font-size:.75rem;opacity:.5">✅ Valider masquage et points de vue</button>
             <button type="button" class="me-close" style="padding:.5rem;background:transparent;color:#94A3B8;border:1px solid #333;border-radius:5px;cursor:pointer;font-size:.65rem">Fermer</button>
         </div>
     </div>`;
@@ -7422,6 +7428,43 @@ async function openMassingEditor(label) {
     const statusEl = $(".me-status"), validateBtn = $(".me-validate"), savedEl = $(".me-saved");
     let iframe = null, detected = [], masked = new Set(), initial = new Set(), ready = false, busy = false, done = false;
     const setsDiffer = (a, b) => a.size !== b.size || [...a].some(x => !b.has(x));
+    // v13.9 — points de vue : cap de la caméra (la caméra regarde vers ce cap, on voit depuis l'opposé).
+    // La vue depuis le sud (0°) est la vue principale, toujours dans le PPT ; les autres s'ajoutent si cochées.
+    const VIEWPOINTS = [
+        { b: 0, name: "le sud", main: true }, { b: 45, name: "le sud-ouest" }, { b: 135, name: "le nord-ouest" },
+        { b: 180, name: "le nord" }, { b: 225, name: "le nord-est" }, { b: 315, name: "le sud-est" }
+    ];
+    const viewsEl = $(".me-views");
+    let viewBearing = 0, viewBusy = false, pptViews = new Set(), initialViews = new Set();
+    function renderViews() {
+        const canLook = ready && !!iframe && !viewBusy;
+        viewsEl.innerHTML = VIEWPOINTS.map(v => {
+            const cur = v.b === viewBearing;
+            return `<div style="display:flex;align-items:center;gap:.4rem;padding:.22rem .4rem;border-radius:3px;font-size:.66rem;background:${cur ? "rgba(167,139,250,0.18)" : "rgba(148,163,184,0.06)"};border-left:3px solid ${cur ? "#A78BFA" : "transparent"}">
+                <button type="button" data-look="${v.b}" ${canLook && !cur ? "" : "disabled"} style="padding:.12rem .4rem;background:transparent;color:${cur ? "#A78BFA" : "#CBD5E1"};border:1px solid #334155;border-radius:3px;cursor:${canLook && !cur ? "pointer" : "default"};font-size:.6rem;opacity:${canLook || cur ? 1 : .5}">${cur ? (viewBusy ? "⏳" : "👁 Vue affichée") : "👁 Voir"}</button>
+                <span style="flex:1;color:#E2E8F0">Depuis ${v.name}</span>
+                ${v.main
+                    ? `<span style="font-size:.56rem;color:#22C55E">toujours dans le PPT</span>`
+                    : `<label style="display:flex;align-items:center;gap:.2rem;font-size:.6rem;color:${pptViews.has(v.b) ? "#22C55E" : "#94A3B8"};cursor:pointer"><input type="checkbox" data-ppt="${v.b}" ${pptViews.has(v.b) ? "checked" : ""} ${busy || done ? "disabled" : ""}> PPT</label>`}
+            </div>`;
+        }).join("");
+    }
+    viewsEl.addEventListener("click", e => {
+        const btnLook = e.target.closest("[data-look]");
+        if (!btnLook || btnLook.disabled || !ready || !iframe || !iframe.contentWindow || viewBusy) return;
+        viewBearing = Number(btnLook.getAttribute("data-look"));
+        viewBusy = true;
+        renderViews();
+        iframe.contentWindow.postMessage({ source: "barlo-studio", type: "set-view", bearing: viewBearing }, "*");
+        setTimeout(() => { if (viewBusy) { viewBusy = false; renderViews(); } }, 20000);
+    });
+    viewsEl.addEventListener("change", e => {
+        const box = e.target.closest("[data-ppt]");
+        if (!box || busy || done) return;
+        const b = Number(box.getAttribute("data-ppt"));
+        if (box.checked) pptViews.add(b); else pptViews.delete(b);
+        render();
+    });
     function render() {
         listEl.innerHTML = detected.length === 0
             ? `<div style="color:#94A3B8;font-style:italic;padding:.6rem;background:rgba(148,163,184,0.08);border-radius:3px;font-size:.68rem">${ready ? "Aucun bâtiment Mapbox ne touche la parcelle : rien à masquer." : "Détection des bâtiments…"}</div>`
@@ -7438,11 +7481,12 @@ async function openMassingEditor(label) {
         counterEl.textContent = detected.length
             ? `${nM} masqué${nM > 1 ? "s" : ""} · ${detected.length - nM} visible${detected.length - nM > 1 ? "s" : ""}`
             : "Aucun bâtiment voisin détecté";
-        const dirty = setsDiffer(masked, initial);
+        const dirty = setsDiffer(masked, initial) || setsDiffer(pptViews, initialViews);
         if (!busy && !done) statusEl.textContent = dirty ? "Modifications pas encore validées." : "";
         const canValidate = ready && !busy && !done;
         validateBtn.disabled = !canValidate;
         validateBtn.style.opacity = canValidate ? "1" : ".5";
+        renderViews();
     }
     function send() {
         if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ source: "barlo-studio", type: "set-mask", masked: [...masked] }, "*");
@@ -7469,35 +7513,18 @@ async function openMassingEditor(label) {
             initial = new Set(masked);
             ready = true;
             loading.style.display = "none";
-            flipBtn.disabled = false;
             render();
         } else if (m.type === "toggle") {
             toggle(String(m.id));
         } else if (m.type === "view") {
-            flipBtn.disabled = false;
-            flipLabel();
+            viewBusy = false;   // v13.9 : la caméra a fini de tourner
+            renderViews();
         }
     }
     window.addEventListener("message", onMsg);
-    // v13.8 — Vue opposée : la caméra tourne de 180°, comme la 2e image du PPT (même masquage)
-    let viewBearing = 0;
-    const flipBtn = $(".me-flip");
-    const flipLabel = () => {
-        flipBtn.textContent = viewBearing === 0
-            ? "↻ Voir de l'autre côté (vue depuis le nord)"
-            : "↺ Revenir à la vue principale (vue depuis le sud)";
-    };
-    flipBtn.addEventListener("click", () => {
-        if (!ready || !iframe || !iframe.contentWindow) return;
-        viewBearing = viewBearing === 0 ? 180 : 0;
-        flipBtn.disabled = true;
-        flipBtn.textContent = "⏳ La caméra tourne…";
-        iframe.contentWindow.postMessage({ source: "barlo-studio", type: "set-view", bearing: viewBearing }, "*");
-        setTimeout(() => { if (flipBtn.disabled) { flipBtn.disabled = false; flipLabel(); } }, 20000);
-    });
     function close() { window.removeEventListener("message", onMsg); overlay.remove(); }
     $(".me-close").addEventListener("click", () => {
-        if (!done && ready && setsDiffer(masked, initial) && !confirm("Fermer sans valider ? Le masquage enregistré reste celui d'avant.")) return;
+        if (!done && ready && (setsDiffer(masked, initial) || setsDiffer(pptViews, initialViews)) && !confirm("Fermer sans valider ? Le masquage et les points de vue enregistrés restent ceux d'avant.")) return;
         close();
     });
     render();
@@ -7514,6 +7541,10 @@ async function openMassingEditor(label) {
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        // v13.9 — points de vue déjà ajoutés au PPT pour ce terrain
+        pptViews = new Set((Array.isArray(d.saved_views) ? d.saved_views : []).map(Number));
+        initialViews = new Set(pptViews);
+        renderViews();
         const sm = d.saved_mask;
         savedEl.textContent = sm
             ? `Masquage validé${sm.validated_at ? " le " + new Date(sm.validated_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) : ""} : ${sm.hidden} masqué${sm.hidden > 1 ? "s" : ""}, ${sm.visible} gardé${sm.visible > 1 ? "s" : ""} visible${sm.visible > 1 ? "s" : ""}. Commun aux scénarios A, B et C.`
@@ -7540,7 +7571,7 @@ async function openMassingEditor(label) {
         };
         statusEl.style.color = "#F59E0B";
         statusEl.textContent = "⏳ Masquage enregistré, rendu de l'image finale du PPT (~20 s)…";
-        const data = await regenMassing3D(label, { mask, quiet: true });
+        const data = await regenMassing3D(label, { mask, quiet: true, views: [...pptViews] });
         busy = false;
         if (!data) {
             statusEl.style.color = "#EF4444";
@@ -7576,7 +7607,13 @@ async function openMassingEditor(label) {
         statusEl.textContent = ecarts.length
             ? `⚠ Masquage enregistré, mais le rendu final diffère pour le${ecarts.length > 1 ? "s" : ""} bâtiment${ecarts.length > 1 ? "s" : ""} n° ${ecarts.join(", ")}. Rouvre « 🎨 Régénérer 3D » pour vérifier.`
             : "✅ Masquage validé et enregistré. L'image du PPT correspond à l'aperçu.";
-        validateBtn.textContent = "✅ Masquage validé";
+        // v13.9 — points de vue ajoutés : rendus en plus de la vue principale
+        const nViews = Array.isArray(data.extra_views) ? data.extra_views.length : 0;
+        statusEl.textContent += nViews
+            ? `\n📷 ${nViews} point${nViews > 1 ? "s" : ""} de vue ajouté${nViews > 1 ? "s" : ""} au PPT, en plus de la vue depuis le sud.`
+            : (pptViews.size ? "\n⚠ Points de vue cochés non rendus : réessaie." : "\n📷 PPT : vue depuis le sud seulement.");
+        initialViews = new Set(pptViews);
+        validateBtn.textContent = "✅ Validé";
         render();
         // Même masquage pour les images des autres scénarios validés
         const others = ["A", "B", "C"].filter(x => x !== label && massingReadyV12(x) && v12Models && v12Models[x] && v12Models[x].actual);

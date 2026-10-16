@@ -308,6 +308,37 @@ def _slot_emu(key):
     return Emu(int(x * 914400)), Emu(int(y * 914400)), Emu(int(w * 914400)), Emu(int(h * 914400))
 
 
+def replace_shape_with_image_grid(slide, shape, image_paths):
+    """v13.9 — vues 3D (principale + points de vue cochés, images carrées) en grille dans le cadre de
+    l'image 3D. Nombre de colonnes choisi pour que les images soient les plus grandes possible ;
+    grille centrée dans le cadre."""
+    paths = [p for p in image_paths if p and os.path.exists(p)]
+    if not paths:
+        return
+    if len(paths) == 1:
+        replace_shape_with_image(slide, shape, paths[0], maintain_aspect_ratio=True)
+        return
+    left, top, W, H = shape.left, shape.top, shape.width, shape.height
+    gap = Emu(36000)
+    n = len(paths)
+    best = None
+    for cols in range(1, n + 1):
+        rows = -(-n // cols)
+        side = min((W - gap * (cols - 1)) / cols, (H - gap * (rows - 1)) / rows)
+        if best is None or side > best[0]:
+            best = (side, cols, rows)
+    side, cols, rows = int(best[0]), best[1], best[2]
+    grid_w = cols * side + gap * (cols - 1)
+    grid_h = rows * side + gap * (rows - 1)
+    x0 = left + (W - grid_w) // 2
+    y0 = top + (H - grid_h) // 2
+    sp_element = shape._element
+    sp_element.getparent().remove(sp_element)
+    for i, p in enumerate(paths):
+        r, c = divmod(i, cols)
+        slide.shapes.add_picture(p, int(x0 + c * (side + gap)), int(y0 + r * (side + gap)), side, side)
+
+
 def replace_shape_with_multiple_images(slide, shape, image_paths, maintain_aspect_ratio=True):
     """v74.13 — par défaut maintain_aspect_ratio=True pour eviter la distorsion
     des charts (radar, barres, jauge) inseres cote-a-cote. Calcule pour chaque
@@ -1157,10 +1188,12 @@ def assemble_pptx(data, template_path, output_path):
                     if massing_match:
                         data.setdefault('_massing_slide_idx', {})[massing_match.group(1)] = slide_idx
                     img_path = downloaded_images.get(img_key)
-                    # v13.8 : vue opposée du bâtiment (cap + 180°) à côté de la vue principale
-                    back_path = downloaded_images.get(img_key + '_back') if massing_match else None
-                    if img_path and back_path:
-                        replace_shape_with_multiple_images(slide, shape, [img_path, back_path], maintain_aspect_ratio=True)
+                    # v13.9 : points de vue 3D cochés dans le cockpit (« scenario_A_massing_vue_045 »…),
+                    # en grille avec la vue principale
+                    extra_views = [downloaded_images[k] for k in sorted(downloaded_images)
+                                   if massing_match and k.startswith(img_key + '_vue_')]
+                    if img_path and extra_views:
+                        replace_shape_with_image_grid(slide, shape, [img_path] + extra_views)
                     elif img_path:
                         # v73.2.1 : maintain_aspect_ratio=True pour TOUTES les images
                         # (axo brute slide 4, axo enhanced slide 5, massings A/B/C)
